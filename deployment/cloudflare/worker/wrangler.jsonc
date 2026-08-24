@@ -5,23 +5,34 @@
   "compatibility_date": "2026-08-24",
   "workers_dev": true,
   "observability": { "enabled": true },
-  "vars": {},
+  "vars": {
+    "APP_ENV": "production",
+    "TRADING_MODE": "TESTNET",
+    "AUTO_START_RUNTIME": "true",
+    "LIVE_TRADING_ENABLED": "false",
+    "BINANCE_TESTNET": "true"
+  },
   "containers": [
     {
       "name": "crypto-trading-primary",
-      "class_name": "TradingContainer",
+      "class_name": "TradingContainerV2",
       "image": "../container/Dockerfile",
-      "image_build_context": "..",
+      "image_build_context": "../../..",
       "max_instances": 1,
       "instance_type": "standard-1"
     }
   ],
   "durable_objects": {
     "bindings": [
-      { "name": "TRADING_CONTAINER", "class_name": "TradingContainer" }
+      { "name": "TRADING_CONTAINER", "class_name": "TradingContainerV2" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_classes": ["TradingContainer"] }
-  ]
+    { "tag": "v1", "new_classes": ["TradingContainer"] },
+    { "tag": "v2", "new_sqlite_classes": ["TradingContainerV2"] }
+  ],
+  "r2_buckets": [
+    { "binding": "BACKUPS", "bucket_name": "crypto-trading-backups" }
+  ],
+  "triggers": { "crons": ["* * * * *"] }
 }

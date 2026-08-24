@@ -6,7 +6,9 @@
   "region": "auto",
   "env": {
     "TRADING_MODE": "TESTNET",
+    "AUTO_START_RUNTIME": "true",
     "LIVE_TRADING_ENABLED": "false",
+    "BINANCE_TESTNET": "true",
     "DATABASE_URL": "{{secrets.DATABASE_URL}}"
   },
   "graceful_shutdown_seconds": 30,

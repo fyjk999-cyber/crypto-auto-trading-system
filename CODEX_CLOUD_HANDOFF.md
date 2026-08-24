@@ -1,15 +1,30 @@
 # CODEX CLOUD HANDOFF
 
-- Environment: TESTNET
+- Deployment status: BLOCKED / NOT COMPLETE
+- Environment: TESTNET, safely normalized to PAPER execution
+- Existing Worker URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev
 - API Base URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1
-- WebSocket URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws
+- WebSocket URL: wss://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws
 - OpenAPI URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/openapi.json
 - Swagger URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/docs
-- Git SHA: 92320083378b229816114f639b29dea5f15b33dd
-- Cloudflare Access required: yes (service token)
-- Codex token header names: CF-Access-Client-Id, CF-Access-Client-Secret
-- Read-only endpoints: GET /api/v1/*, HEAD /api/v1/*, /openapi.json, /docs
-- Control endpoints are denied for Codex.
-- WebSocket events: market, regime, signal, position, margin, order, fill, PnL, risk, review, alert, runtime, exchange-health.
-- Frontend constraints: Codex may call read APIs and WebSocket; no direct trading-core imports required.
-- Real secrets must never be embedded; use environment variables.
+- Repository base SHA: 3aa2d1442bbc38851550c3fe016fe9be8f8a96dc
+- Existing Worker version: 3a5d6997-89fe-4573-af8a-866cfaa9343e
+- Candidate changes deployed: no
+- Container: not deployed; Workers Paid plan and Docker required
+- PostgreSQL provider: unprovisioned; Neon preferred
+- R2: not enabled
+- Cron: candidate configured, not deployed
+- Cloudflare Access: not configured
+- 24-hour soak: PENDING
+- LIVE_TRADING_ENABLED: false
+- Application blocker: `AUTO_START_RUNTIME` is not yet consumed by FastAPI startup; no autonomous
+  runtime may be claimed until this is implemented and verified against PostgreSQL.
+
+Codex access must use a Cloudflare Access service token and remains GET/HEAD-only. Control
+endpoints are denied. Human JWT validation additionally requires `ACCESS_TEAM_DOMAIN` and
+`ACCESS_POLICY_AUD`; the JWT signature, issuer, and audience must all validate.
+
+Do not treat the existing `/health` 200 response as runtime health. The deployed version returns
+404 for `/ready` and `/internal/runtime-health` and does not prove a Container or database exists.
+
+See `CLOUDFLARE_FINAL_REPORT.md`, `24X7_RUNTIME_REPORT.md`, and `SOAK_STATUS.md` before resuming.

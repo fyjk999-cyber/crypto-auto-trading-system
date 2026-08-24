@@ -1,12 +1,25 @@
 {
   "environment": "testnet",
+  "deployment_status": "blocked_not_complete",
   "api_base_url": "https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1",
-  "websocket_url": "https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws",
+  "websocket_url": "wss://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws",
   "openapi_url": "https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/openapi.json",
-  "git_sha": "92320083378b229816114f639b29dea5f15b33dd",
+  "repository_base_git_sha": "3aa2d1442bbc38851550c3fe016fe9be8f8a96dc",
+  "existing_worker_version": "3a5d6997-89fe-4573-af8a-866cfaa9343e",
+  "candidate_changes_deployed": false,
+  "container": "not_deployed",
+  "postgresql_provider": "unprovisioned",
+  "r2": "not_enabled",
+  "cron": "configured_locally_not_deployed",
+  "soak_24h": "pending",
+  "live_trading_enabled": false,
   "access": {
+    "status": "not_configured",
     "type": "cloudflare_access_service_token",
     "client_id_env": "CF_ACCESS_CLIENT_ID",
-    "client_secret_env": "CF_ACCESS_CLIENT_SECRET"
+    "client_secret_env": "CF_ACCESS_CLIENT_SECRET",
+    "team_domain_worker_env": "ACCESS_TEAM_DOMAIN",
+    "policy_aud_worker_env": "ACCESS_POLICY_AUD",
+    "codex_methods": ["GET", "HEAD"]
   }
 }

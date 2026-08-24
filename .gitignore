@@ -13,3 +13,5 @@ data/*.db-*
 .DS_Store
 .ruff_cache/
 node_modules/
+.wrangler/
+.dev.vars*

@@ -4,13 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --allowJs --checkJs --noEmit --target es2022 --module es2022 src/index.js",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --target es2022 --module es2022 --moduleResolution bundler --lib es2022 --skipLibCheck worker-configuration.d.ts src/index.js src/gateway.js",
     "test": "node --test test/index.test.js",
-    "check": "wrangler check",
-    "deploy:dry": "wrangler deploy --dry-run"
+    "check": "wrangler types --check && wrangler deploy --dry-run --containers-rollout=none",
+    "deploy:dry": "wrangler deploy --dry-run --containers-rollout=none"
   },
   "devDependencies": {
     "typescript": "5.9.3",
     "wrangler": "4.125.0"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "jose": "^6.2.10"
   }
 }

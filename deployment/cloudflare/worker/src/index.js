@@ -1,219 +1,128 @@
-/**
- * Crypto Trading Gateway Worker.
- * Edge-only: auth, routing, rate limiting, security headers, request IDs,
- * WebSocket forwarding. No trading/risk/ledger/order logic.
- */
+/** Cloudflare edge gateway. Trading, risk, ledger, and order logic stay in Python. */
+import { Container, getContainer } from "@cloudflare/containers";
+import { env as workerEnv } from "cloudflare:workers";
 
-const CONTROL_ENDPOINTS = [
-  "/api/v1/runtime/start",
-  "/api/v1/runtime/stop",
-  "/api/v1/kill-switch/on",
-  "/api/v1/kill-switch/off",
-  "/api/v1/reviews/",
-];
+import {
+  allowedByRole,
+  authorize,
+  classifyRequest,
+  containerPath,
+  requiredRuntimeSecrets,
+  routePath,
+  runtimeIsHealthy,
+  securityHeaders,
+} from "./gateway.js";
 
-export async function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  const enc = new TextEncoder();
-  const ab = enc.encode(a);
-  const bb = enc.encode(b);
-  let diff = 0;
-  for (let i = 0; i < ab.length; i += 1) diff |= ab[i] ^ bb[i];
-  return diff === 0;
-}
+const CONTAINER_NAME = "crypto-trading-primary";
 
-export function securityHeaders(requestId) {
-  return {
-    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
-    "x-content-type-options": "nosniff",
-    "referrer-policy": "no-referrer",
-    "x-request-id": requestId || "unknown",
-  };
-}
-
-export class SlidingWindowRateLimiter {
-  constructor(maxRequests = 120, windowMs = 60_000) {
-    this.maxRequests = maxRequests;
-    this.windowMs = windowMs;
-    this.hits = new Map();
-  }
-  allow(key, now = Date.now()) {
-    const windowStart = now - this.windowMs;
-    let timestamps = this.hits.get(key) || [];
-    timestamps = timestamps.filter((t) => t > windowStart);
-    if (timestamps.length >= this.maxRequests) {
-      this.hits.set(key, timestamps);
-      return false;
-    }
-    timestamps.push(now);
-    this.hits.set(key, timestamps);
-    return true;
-  }
-}
-
-export function classifyRequest(method, pathname) {
-  if (method === "GET" || method === "HEAD") return "READ";
-  if (CONTROL_ENDPOINTS.some((prefix) => pathname.startsWith(prefix))) return "CONTROL";
-  return "WRITE";
-}
-
-export async function authorize(request, env) {
-  const clientId = request.headers.get("CF-Access-Client-Id") || "";
-  const clientSecret = request.headers.get("CF-Access-Client-Secret") || "";
-  if (clientId && clientSecret) {
-    if (env.CODEX_CLIENT_ID && (await timingSafeEqual(clientId, env.CODEX_CLIENT_ID))
-        && (await timingSafeEqual(clientSecret, env.CODEX_CLIENT_SECRET))) return "codex";
-    if (env.HARNESS_CLIENT_ID && (await timingSafeEqual(clientId, env.HARNESS_CLIENT_ID))
-        && (await timingSafeEqual(clientSecret, env.HARNESS_CLIENT_SECRET))) return "harness";
-  }
-  const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
-  if (jwt) return "human";
-  return "anonymous";
-}
-
-export function routePath(pathname) {
-  if (pathname.startsWith("/api/v1/") || pathname.startsWith("/openapi.json")
-      || pathname.startsWith("/docs")) return "api";
-  if (pathname.startsWith("/ws")) return "ws";
-  if (pathname === "/health") return "health";
-  return "not_found";
-}
-
-export function allowedByRole(role, requestClass, pathname) {
-  if (role === "harness") return true;
-  if (role === "human") return requestClass !== "CONTROL";
-  if (role === "codex") {
-    if (requestClass === "CONTROL") return false;
-    if (requestClass === "WRITE" && pathname.startsWith("/api/v1/reviews/")) return false;
-    return true;
-  }
-  return false;
-}
-
-export async function handleRequest(request, env, ctx) {
-  const requestId = crypto.randomUUID();
-  const url = new URL(request.url);
-  const pathname = url.pathname;
-  const route = routePath(pathname);
-  const baseHeaders = () => ({ "content-type": "application/json", ...securityHeaders(requestId) });
-  if (route === "not_found") {
-    return new Response(JSON.stringify({ error: { code: "NOT_FOUND", message: "not found" } }),
-      { status: 404, headers: baseHeaders() });
-  }
-  if (route === "health") {
-    return new Response(JSON.stringify({ ok: true, request_id: requestId }), {
-      status: 200, headers: baseHeaders(),
-    });
-  }
-  const role = await authorize(request, env);
-  const requestClass = classifyRequest(request.method, pathname);
-  if (!allowedByRole(role, requestClass, pathname)) {
-    return new Response(JSON.stringify({ error: { code: "FORBIDDEN", message: "access denied" } }),
-      { status: 403, headers: baseHeaders() });
-  }
-  const limiter = ctx.rateLimiter;
-  if (limiter && !limiter.allow(role || "anonymous")) {
-    return new Response(JSON.stringify({ error: { code: "RATE_LIMITED", message: "slow down" } }),
-      { status: 429, headers: baseHeaders() });
-  }
-  const container = env.TRADING_CONTAINER;
-  if (container) {
-    return container.fetch(request);
-  }
-  const backend = new URL(env.BACKEND_URL);
-  if (pathname.startsWith("/api/v1/")) {
-    backend.pathname = pathname.replace("/api/v1", "");
-  } else {
-    backend.pathname = pathname;
-  }
-  backend.search = url.search;
-
-  if (route === "ws") {
-    const upgrade = request.headers.get("Upgrade") || "";
-    if (upgrade.toLowerCase() !== "websocket") {
-      return new Response("websocket required", { status: 426, headers: securityHeaders(requestId) });
-    }
-    const backendWs = backend.toString().replace(/^http/, "ws");
-    // @ts-ignore - Cloudflare WebSocketPair global
-    const pair = new WebSocketPair();
-    const [clientSocket, serverSocket] = Object.values(pair);
-    serverSocket.accept();
-    clientSocket.accept();
-    ctx.waitUntil(proxyWebSocket(serverSocket, backendWs, request));
-    // @ts-ignore - Cloudflare ResponseInit.webSocket extension
-    return new Response(null, { status: 101, webSocket: clientSocket });
-  }
-
-  const headers = new Headers(request.headers);
-  headers.set("x-request-id", requestId);
-  headers.set("x-cf-role", role);
-  headers.delete("CF-Access-Client-Secret");
-  return fetch(backend.toString(), { method: request.method, headers, body: request.body, redirect: "manual" });
-}
-
-async function proxyWebSocket(localSocket, backendUrl, _request) {
-  try {
-    const backendSocket = await fetchWebSocket(backendUrl);
-    await Promise.all([forward(localSocket, backendSocket), forward(backendSocket, localSocket)]);
-  } catch {
-    localSocket.close(1011, "backend unavailable");
-  }
-}
-
-async function fetchWebSocket(url) {
-  const response = await fetch(url, { headers: { Upgrade: "websocket" } });
-  // @ts-ignore - Cloudflare Response.webSocket extension
-  return response.webSocket;
-}
-
-async function forward(from, to) {
-  const reader = from.readable.getReader();
-  const writer = to.writable.getWriter();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await writer.write(value);
-    }
-  } finally {
-    try { await writer.close(); } catch { /* noop */ }
-  }
-}
-
-export class TradingContainer {
-  async fetch(_request) {
-    // Cloudflare Container connected to this Durable Object class.
-    // Trading logic lives in the Python container image.
-    return new Response(JSON.stringify({ ok: false, container: "crypto-trading-primary" }), {
-      status: 502,
-      headers: { "content-type": "application/json" },
-    });
-  }
-}
-
-export async function scheduled(_event, env, _ctx) {
-  const container = env.TRADING_CONTAINER;
-  if (container) {
-    const response = await container.fetch(new Request("https://container/health"));
-    return new Response(JSON.stringify({ ok: response.ok, container: "crypto-trading-primary" }), {
-      status: response.ok ? 200 : 503,
-      headers: { "content-type": "application/json" },
-    });
-  }
-  const backendUrl = env.BACKEND_URL || "https://container-backend.example.internal";
-  const response = await fetch(new URL("/health", backendUrl));
-  return new Response(JSON.stringify({ ok: response.ok, container: "crypto-trading-primary" }), {
-    status: response.ok ? 200 : 503,
-    headers: { "content-type": "application/json" },
+function jsonResponse(body, status, requestId) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...securityHeaders(requestId) },
   });
 }
 
+function toContainerRequest(request, role, requestId) {
+  const source = new URL(request.url);
+  source.pathname = containerPath(source.pathname);
+  const headers = new Headers(request.headers);
+  headers.delete("CF-Access-Client-Secret");
+  headers.delete("Cf-Access-Jwt-Assertion");
+  headers.set("x-cf-role", role);
+  headers.set("x-request-id", requestId);
+  return new Request(source, { method: request.method, headers, body: request.body, redirect: "manual" });
+}
+
+async function handleRequest(request, env) {
+  const requestId = crypto.randomUUID();
+  const pathname = new URL(request.url).pathname;
+  const route = routePath(pathname);
+  if (route === "not_found") {
+    return jsonResponse({ error: { code: "NOT_FOUND", message: "not found" } }, 404, requestId);
+  }
+
+  if (requiredRuntimeSecrets(env).length) {
+    return jsonResponse({
+      ok: false,
+      error: { code: "RUNTIME_NOT_CONFIGURED", message: "required runtime secrets are missing" },
+    }, 503, requestId);
+  }
+
+  let role = "anonymous";
+  if (pathname !== "/health") {
+    role = await authorize(request, env);
+    const requestClass = classifyRequest(request.method, pathname);
+    if (!allowedByRole(role, requestClass, pathname)) {
+      return jsonResponse({ error: { code: "FORBIDDEN", message: "access denied" } }, 403, requestId);
+    }
+  }
+
+  const container = getContainer(env.TRADING_CONTAINER, CONTAINER_NAME);
+  const response = await container.fetch(toContainerRequest(request, role, requestId));
+  if (route === "ws") return response;
+
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders(requestId))) headers.set(name, value);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+const runtimeEnv = /** @type {Cloudflare.Env & {
+ * DATABASE_URL: string,
+ * BINANCE_TESTNET_API_KEY: string,
+ * BINANCE_TESTNET_API_SECRET: string,
+ * INTERNAL_API_SECRET: string,
+ * }} */ (workerEnv);
+
+export class TradingContainerV2 extends Container {
+  defaultPort = 8080;
+  requiredPorts = [8080];
+  sleepAfter = "10m";
+  pingEndpoint = "/health";
+  enableInternet = true;
+  envVars = {
+    APP_ENV: "production",
+    TRADING_MODE: "TESTNET",
+    AUTO_START_RUNTIME: "true",
+    LIVE_TRADING_ENABLED: "false",
+    BINANCE_TESTNET: "true",
+    DATABASE_URL: runtimeEnv.DATABASE_URL,
+    BINANCE_API_KEY: runtimeEnv.BINANCE_TESTNET_API_KEY,
+    BINANCE_API_SECRET: runtimeEnv.BINANCE_TESTNET_API_SECRET,
+    INTERNAL_API_SECRET: runtimeEnv.INTERNAL_API_SECRET,
+  };
+}
+
+async function runWatchdog(_event, env) {
+  if (requiredRuntimeSecrets(env).length) {
+    throw new Error("watchdog blocked: required runtime secrets are missing");
+  }
+
+  const container = getContainer(env.TRADING_CONTAINER, CONTAINER_NAME);
+  await container.startAndWaitForPorts({
+    ports: [8080],
+    cancellationOptions: { portReadyTimeoutMS: 30_000 },
+  });
+  const response = await container.fetch(new Request("https://container/internal/runtime-health"));
+  const payload = await response.json().catch(() => null);
+  if (!runtimeIsHealthy(response.ok, payload)) {
+    await container.stop("SIGTERM");
+    await container.startAndWaitForPorts({
+      ports: [8080],
+      cancellationOptions: { portReadyTimeoutMS: 30_000 },
+    });
+    const recovered = await container.fetch(new Request("https://container/internal/runtime-health"));
+    const recoveredPayload = await recovered.json().catch(() => null);
+    if (!runtimeIsHealthy(recovered.ok, recoveredPayload)) {
+      throw new Error(`watchdog recovery failed: HTTP ${recovered.status}`);
+    }
+  }
+}
+
 export default {
-  async fetch(request, env, ctx) {
-    if (!ctx.rateLimiter) ctx.rateLimiter = new SlidingWindowRateLimiter();
-    return handleRequest(request, env, ctx);
+  fetch(request, env) {
+    return handleRequest(request, env);
   },
-  async scheduled(event, env, ctx) {
-    return scheduled(event, env, ctx);
+  scheduled(event, env) {
+    return runWatchdog(event, env);
   },
 };

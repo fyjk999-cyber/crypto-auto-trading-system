@@ -22,6 +22,16 @@ alembic upgrade head
 uvicorn crypto_trader.api.app:app --reload
 ```
 
+## Local Chinese trading console
+```bash
+cd "/Users/huhongjie/Documents/ChatGPT/虚拟货币交易系统"
+./scripts/start-local-system.sh
+```
+
+The launcher waits for backend readiness on port `8000`, starts Vite strictly on
+port `5173`, verifies HTTP 200, and opens the console on macOS. Run
+`./scripts/status-ui.sh` in another terminal to inspect both services.
+
 ## Layout
 ```
 src/crypto_trader/

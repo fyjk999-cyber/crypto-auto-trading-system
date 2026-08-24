@@ -31,6 +31,8 @@ def test_container_is_non_root_with_healthcheck():
     assert "HEALTHCHECK" in dockerfile
     container = json.loads((ROOT / "deployment/cloudflare/container/container.json").read_text())
     assert container["desired_state"] == "RUNNING"
+    assert container["env"]["TRADING_MODE"] == "TESTNET"
+    assert container["env"]["AUTO_START_RUNTIME"] == "true"
     assert container["env"]["LIVE_TRADING_ENABLED"] == "false"
 
 
@@ -74,10 +76,11 @@ def test_cloudflare_docs_exist():
 
 
 def test_worker_gateway_control_endpoints_deny_codex():
-    source = (ROOT / "deployment/cloudflare/worker/src/index.js").read_text()
+    source = (ROOT / "deployment/cloudflare/worker/src/gateway.js").read_text()
     assert "allowedByRole" in source
     assert "/api/v1/kill-switch/off" in source
-    assert 'requestClass === "CONTROL"' in source
+    assert 'role === "codex"' in source
+    assert 'requestClass === "READ"' in source
 
 
 def test_wrangler_container_durable_object_config():
@@ -86,7 +89,23 @@ def test_wrangler_container_durable_object_config():
     # Check raw markers to avoid parser complications.
     assert '"containers"' in text
     assert '"crypto-trading-primary"' in text
-    assert '"class_name": "TradingContainer"' in text
+    assert '"class_name": "TradingContainerV2"' in text
+    assert '"new_sqlite_classes": ["TradingContainerV2"]' in text
+    assert '"crons": ["* * * * *"]' in text
     worker_source = (ROOT / "deployment/cloudflare/worker/src/index.js").read_text()
-    assert "export class TradingContainer" in worker_source
-    assert "export async function scheduled" in worker_source
+    assert "export class TradingContainerV2 extends Container" in worker_source
+    assert "getContainer(env.TRADING_CONTAINER" in worker_source
+    assert "async function runWatchdog" in worker_source
+
+
+def test_container_build_context_is_repository_root():
+    config = (ROOT / "deployment/cloudflare/worker/wrangler.jsonc").read_text()
+    assert '"image_build_context": "../../.."' in config
+
+
+def test_gateway_has_no_placeholder_backend_or_header_only_jwt_trust():
+    source = (ROOT / "deployment/cloudflare/worker/src/index.js").read_text()
+    gateway = (ROOT / "deployment/cloudflare/worker/src/gateway.js").read_text()
+    assert "BACKEND_URL" not in source
+    assert "container-backend.example.internal" not in source
+    assert "jwtVerify" in gateway

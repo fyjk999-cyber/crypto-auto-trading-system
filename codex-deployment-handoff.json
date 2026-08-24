@@ -1,5 +1,6 @@
 {
   "environment": "testnet",
+  "deployment_status": "blocked_not_complete",
   "worker": "crypto-trading-gateway",
   "container": "crypto-trading-primary",
   "r2_bucket": "crypto-trading-backups",
@@ -19,7 +20,9 @@
     "HARNESS_CLIENT_ID",
     "HARNESS_CLIENT_SECRET"
   ],
-  "deploy_command": "cd deployment/cloudflare/worker && npx wrangler deploy --containers-rollout=none",
+  "access_settings": ["ACCESS_TEAM_DOMAIN", "ACCESS_POLICY_AUD"],
+  "validation_command": "cd deployment/cloudflare/worker && npm run check",
+  "deploy_command_after_all_gates_pass": "cd deployment/cloudflare/worker && npx wrangler deploy",
   "verification": [
     "curl https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/health",
     "curl https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1/version"

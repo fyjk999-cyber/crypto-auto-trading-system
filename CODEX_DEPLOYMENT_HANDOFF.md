@@ -1,5 +1,9 @@
 # CODEX DEPLOYMENT HANDOFF
 
+> Current status (2026-08-24): BLOCKED. Containers requires a Workers Paid plan, R2 is not
+> enabled, Docker is unavailable, PostgreSQL is unprovisioned, and Access is not configured.
+> Do not deploy the Worker alone and interpret it as a completed system.
+
 ## Required Cloudflare resources
 - Worker: crypto-trading-gateway
 - Container: crypto-trading-primary (TradingContainer Durable Object)
@@ -18,6 +22,10 @@
 - CODEX_CLIENT_ID / CODEX_CLIENT_SECRET
 - HARNESS_CLIENT_ID / HARNESS_CLIENT_SECRET
 
+## Required non-secret Access settings
+- ACCESS_TEAM_DOMAIN
+- ACCESS_POLICY_AUD
+
 ## PostgreSQL requirements
 - Managed PostgreSQL (recommend Neon/Supabase/PlanetScale)
 - SQLAlchemy async URL
@@ -25,9 +33,9 @@
 
 ## Deploy commands
 ```bash
-# Worker only (no container rollout when Docker unavailable locally)
+# Validation only while infrastructure is blocked
 cd deployment/cloudflare/worker
-npx wrangler deploy --containers-rollout=none
+npm run check
 
 # With Docker/Cloudflare Containers available
 npx wrangler deploy

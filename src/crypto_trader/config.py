@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from crypto_trader.domain.enums import TradingMode
@@ -38,6 +39,14 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = "INFO"
     structured_logs: bool = True
+
+    @field_validator("trading_mode", mode="before")
+    @classmethod
+    def normalize_testnet_mode(cls, value):
+        """TESTNET is a deployment environment; its safe execution mode is PAPER."""
+        if isinstance(value, str) and value.upper() == "TESTNET":
+            return TradingMode.PAPER
+        return value
 
     @property
     def live_enabled(self) -> bool:
