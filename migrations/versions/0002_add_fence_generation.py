@@ -4,8 +4,9 @@ Revision ID: 0002addfence
 Revises: 43c806e64582
 Create Date: 2026-08-24
 """
-from alembic import op
+
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0002addfence"
 down_revision = "43c806e64582"
@@ -14,7 +15,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("runtime_leases", sa.Column("fence_generation", sa.Integer(), nullable=False, server_default="1"))
+    op.add_column(
+        "runtime_leases",
+        sa.Column("fence_generation", sa.Integer(), nullable=False, server_default="1"),
+    )
 
 
 def downgrade() -> None:

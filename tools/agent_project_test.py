@@ -5,6 +5,7 @@ Runs code test (ruff), functional/unit tests, integration tests, regression
 tests (chaos + e2e), and SPAC requirement coverage sequentially. Any failure
 stops the gate.
 """
+
 import subprocess
 import sys
 
@@ -18,7 +19,10 @@ def run(name: str, args: list[str]) -> bool:
 def main() -> int:
     steps = [
         ("code test (lint)", [sys.executable, "-m", "ruff", "check", "src", "tests"]),
-        ("functional/unit test", [sys.executable, "-m", "pytest", "tests/unit", "tests/runtime_unit", "-q"]),
+        (
+            "functional/unit test",
+            [sys.executable, "-m", "pytest", "tests/unit", "tests/runtime_unit", "-q"],
+        ),
         ("integration test", [sys.executable, "-m", "pytest", "tests/integration", "-q"]),
         (
             "regression test (chaos + e2e)",

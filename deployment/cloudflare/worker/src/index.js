@@ -68,8 +68,6 @@ async function handleRequest(request, env) {
 
 const runtimeEnv = /** @type {Cloudflare.Env & {
  * DATABASE_URL: string,
- * BINANCE_TESTNET_API_KEY: string,
- * BINANCE_TESTNET_API_SECRET: string,
  * INTERNAL_API_SECRET: string,
  * }} */ (workerEnv);
 
@@ -81,13 +79,12 @@ export class TradingContainerV2 extends Container {
   enableInternet = true;
   envVars = {
     APP_ENV: "production",
-    TRADING_MODE: "TESTNET",
+    TRADING_MODE: "PAPER",
+    PAPER_MODE: "PAPER_REAL_MARKET",
     AUTO_START_RUNTIME: "true",
     LIVE_TRADING_ENABLED: "false",
-    BINANCE_TESTNET: "true",
+    BINANCE_TESTNET: "false",
     DATABASE_URL: runtimeEnv.DATABASE_URL,
-    BINANCE_API_KEY: runtimeEnv.BINANCE_TESTNET_API_KEY,
-    BINANCE_API_SECRET: runtimeEnv.BINANCE_TESTNET_API_SECRET,
     INTERNAL_API_SECRET: runtimeEnv.INTERNAL_API_SECRET,
   };
 }

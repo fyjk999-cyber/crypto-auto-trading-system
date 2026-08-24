@@ -7,10 +7,11 @@
   "observability": { "enabled": true },
   "vars": {
     "APP_ENV": "production",
-    "TRADING_MODE": "TESTNET",
+    "TRADING_MODE": "PAPER",
+    "PAPER_MODE": "PAPER_REAL_MARKET",
     "AUTO_START_RUNTIME": "true",
     "LIVE_TRADING_ENABLED": "false",
-    "BINANCE_TESTNET": "true"
+    "BINANCE_TESTNET": "false"
   },
   "containers": [
     {

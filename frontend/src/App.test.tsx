@@ -41,7 +41,7 @@ const candle = (close = "101") => ({
 });
 
 function backend(overrides: Record<string, unknown | Response> = {}) {
-  return vi.fn(async (input: string | URL | Request) => {
+  return vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input);
     const path = url.replace(/^.*\/local-api/, "");
     if (path in overrides) {
@@ -193,10 +193,14 @@ describe("中文加密交易终端 V2", () => {
     expect(marketPanel?.textContent).not.toContain("99999");
   });
 
-  it("OKX 凭据面板使用密码字段且后端接口缺失时不持久化或提交", async () => {
+  it("OKX 凭据面板使用密码字段，仅将 DEMO 凭据提交至后端且不持久化浏览器", async () => {
     window.location.hash = "#/system";
     const setItem = vi.spyOn(Storage.prototype, "setItem");
-    setup();
+    const fetchMock = backend({
+      "/exchange/okx/status": { configured: false, authenticated: false, health: "NOT_CONFIGURED" },
+      "/exchange/okx/credentials": { saved: true, demo: true, key_suffix: "demo" },
+    });
+    setup(fetchMock);
     await waitFor(() => expect(screen.getByRole("heading", { name: "OKX 交易所连接" })).toBeTruthy());
     expect(screen.getByText("模拟盘 DEMO")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "配置 API" }));
@@ -206,9 +210,14 @@ describe("中文加密交易终端 V2", () => {
     expect((screen.getByLabelText("OKX Passphrase") as HTMLInputElement).type).toBe("password");
     fireEvent.change(apiKey, { target: { value: "never-persist" } });
     expect(setItem).not.toHaveBeenCalled();
-    expect(screen.getByText("后端安全凭据接口尚未开放。此表单不会保存、发送或记录任何凭据。")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "保存配置" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "验证连接" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("OKX Secret Key"), { target: { value: "secret" } });
+    fireEvent.change(screen.getByLabelText("OKX Passphrase"), { target: { value: "passphrase" } });
+    fireEvent.submit(screen.getByRole("button", { name: "保存配置" }).closest("form")!);
+    await waitFor(() => expect(screen.getByText("DEMO 凭据已提交至受保护后端，浏览器未保存凭据。")).toBeTruthy());
+    expect(setItem).not.toHaveBeenCalled();
+    const credentialCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/local-api/exchange/okx/credentials"));
+    expect(credentialCall?.[1]).toMatchObject({ method: "POST" });
+    expect(String(credentialCall?.[1]?.body)).toContain('"demo":true');
   });
 
   it("移动端宽度仍保留价格、判断、持仓、PnL 和 K线区域", async () => {

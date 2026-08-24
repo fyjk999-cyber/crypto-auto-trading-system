@@ -105,8 +105,6 @@ export function containerPath(pathname) {
 export function requiredRuntimeSecrets(env) {
   return [
     "DATABASE_URL",
-    "BINANCE_TESTNET_API_KEY",
-    "BINANCE_TESTNET_API_SECRET",
     "INTERNAL_API_SECRET",
   ].filter((name) => !env[name]);
 }

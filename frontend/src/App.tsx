@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { MarketChart } from "./components/MarketChart";
-import { API_BASE_URL, WS_URL } from "./api/client";
+import { API_BASE_URL, getJson, sendJson, WS_URL } from "./api/client";
 import { useKlines } from "./hooks/useKlines";
 import { useTradingSnapshot } from "./hooks/useTradingSnapshot";
 import type { ApiState, KlineInterval, Order, Position, TradingSnapshot } from "./types/api";
@@ -100,17 +100,72 @@ function Metric({ label, value, tone = "" }: { label: string; value: string; ton
 
 function OkxConnectionCard() {
   const [configuring, setConfiguring] = useState(false);
+  const [status, setStatus] = useState<JsonRecord>({});
+  const [message, setMessage] = useState("正在读取连接状态…");
+  const [busy, setBusy] = useState(false);
+
+  const refreshStatus = async () => {
+    const response = await getJson<JsonRecord>("/exchange/okx/status");
+    if (response.status === "ready" && response.data) {
+      setStatus(response.data);
+      setMessage("");
+    } else {
+      setMessage(response.status === "unavailable" ? "当前后端未提供 OKX 凭据接口。" : "无法读取 OKX 连接状态。");
+    }
+  };
+
+  useEffect(() => { void refreshStatus(); }, []);
+
+  const saveCredentials = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setBusy(true);
+    setMessage("");
+    const response = await sendJson<JsonRecord>("/exchange/okx/credentials", "POST", {
+      api_key: form.get("api_key"),
+      api_secret: form.get("api_secret"),
+      api_passphrase: form.get("api_passphrase"),
+      base_url: form.get("api_base_url"),
+      demo: true,
+    });
+    setBusy(false);
+    if (response.status === "ready") {
+      formElement.reset();
+      setConfiguring(false);
+      await refreshStatus();
+      setMessage("DEMO 凭据已提交至受保护后端，浏览器未保存凭据。");
+    } else {
+      setMessage(response.status === "unavailable" ? "当前后端未提供 OKX 凭据接口。" : "保存失败；请确认后端连接和 Access 权限。");
+    }
+  };
+
+  const validateCredentials = async () => {
+    setBusy(true);
+    const response = await sendJson<JsonRecord>("/exchange/okx/validate", "POST");
+    setBusy(false);
+    if (response.status === "ready" && response.data) {
+      setStatus((current) => ({ ...current, ...response.data }));
+      setMessage(response.data.authenticated === true ? "OKX DEMO 验证成功。" : `OKX DEMO 未通过验证：${text(response.data.reason_code, "UNKNOWN")}`);
+    } else {
+      setMessage("验证失败；请确认后端连接和 Access 权限。");
+    }
+  };
+
+  const configured = status.configured === true;
+  const health = text(status.health, configured ? "未验证" : "未配置");
   return <Panel title="OKX 交易所连接" className="okx-panel">
-    <dl className="system-list okx-status"><div><dt>执行交易所</dt><dd>OKX</dd></div><div><dt>环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">未配置</dd></div><div><dt>API Key</dt><dd>未配置</dd></div></dl>
-    {!configuring ? <button className="primary-button" type="button" onClick={() => setConfiguring(true)}>配置 API</button> : <form className="okx-form" onSubmit={(event) => event.preventDefault()}>
-      <label>API Key<input aria-label="OKX API Key" name="api_key" autoComplete="off" type="password" /></label>
-      <label>Secret Key<input aria-label="OKX Secret Key" name="api_secret" autoComplete="off" type="password" /></label>
-      <label>Passphrase<input aria-label="OKX Passphrase" name="api_passphrase" autoComplete="off" type="password" /></label>
+    <dl className="system-list okx-status"><div><dt>执行交易所</dt><dd>OKX</dd></div><div><dt>环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">{health}</dd></div><div><dt>API Key</dt><dd>{configured ? `已配置（…${text(status.key_suffix)}）` : "未配置"}</dd></div></dl>
+    {!configuring ? <div className="form-actions"><button className="primary-button" type="button" onClick={() => setConfiguring(true)}>配置 API</button>{configured && <button className="secondary-button" type="button" disabled={busy} onClick={() => void validateCredentials()}>验证连接</button>}</div> : <form className="okx-form" onSubmit={(event) => void saveCredentials(event)}>
+      <label>API Key<input aria-label="OKX API Key" name="api_key" autoComplete="off" type="password" required /></label>
+      <label>Secret Key<input aria-label="OKX Secret Key" name="api_secret" autoComplete="off" type="password" required /></label>
+      <label>Passphrase<input aria-label="OKX Passphrase" name="api_passphrase" autoComplete="off" type="password" required /></label>
       <label>API Base URL<input aria-label="OKX API Base URL" name="api_base_url" type="url" defaultValue="https://openapi.okx.com" /></label>
-      <p className="form-notice">后端安全凭据接口尚未开放。此表单不会保存、发送或记录任何凭据。</p>
+      <p className="form-notice">仅 DEMO。凭据只提交到受 Cloudflare Access 保护的后端；浏览器不会保存或记录。</p>
       <p className="form-hint">建议权限：读取 + 交易；禁止提现。</p>
-      <div className="form-actions"><button className="primary-button" type="submit" disabled>保存配置</button><button className="secondary-button" type="button" disabled>验证连接</button><button className="text-button" type="button" onClick={() => setConfiguring(false)}>取消</button></div>
+      <div className="form-actions"><button className="primary-button" type="submit" disabled={busy}>保存配置</button><button className="text-button" type="button" disabled={busy} onClick={() => setConfiguring(false)}>取消</button></div>
     </form>}
+    {message && <p className="form-hint" role="status">{message}</p>}
   </Panel>;
 }
 

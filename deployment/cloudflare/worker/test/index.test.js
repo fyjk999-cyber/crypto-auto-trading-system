@@ -97,14 +97,10 @@ test("api prefix is removed before container forwarding", () => {
 test("runtime configuration fails closed when secrets are missing", () => {
   assert.deepEqual(requiredRuntimeSecrets({}), [
     "DATABASE_URL",
-    "BINANCE_TESTNET_API_KEY",
-    "BINANCE_TESTNET_API_SECRET",
     "INTERNAL_API_SECRET",
   ]);
   assert.deepEqual(requiredRuntimeSecrets({
     DATABASE_URL: "set",
-    BINANCE_TESTNET_API_KEY: "set",
-    BINANCE_TESTNET_API_SECRET: "set",
     INTERNAL_API_SECRET: "set",
   }), []);
 });

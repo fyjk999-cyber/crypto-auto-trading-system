@@ -1,14 +1,15 @@
 {
   "name": "crypto-trading-primary",
-  "image": "ghcr.io/fyjk999-cyber/crypto-auto-trading-system/trading-core:testnet",
+  "image": "ghcr.io/fyjk999-cyber/crypto-auto-trading-system/trading-core:paper-real-market",
   "desired_state": "RUNNING",
   "instance_type": "standard-1",
   "region": "auto",
   "env": {
-    "TRADING_MODE": "TESTNET",
+    "TRADING_MODE": "PAPER",
+    "PAPER_MODE": "PAPER_REAL_MARKET",
     "AUTO_START_RUNTIME": "true",
     "LIVE_TRADING_ENABLED": "false",
-    "BINANCE_TESTNET": "true",
+    "BINANCE_TESTNET": "false",
     "DATABASE_URL": "{{secrets.DATABASE_URL}}"
   },
   "graceful_shutdown_seconds": 30,

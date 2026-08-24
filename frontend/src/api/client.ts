@@ -28,3 +28,18 @@ export async function getJson<T>(path: string): Promise<ApiState<T>> {
     return { status: "offline", message: "Backend Offline" };
   }
 }
+
+export async function sendJson<T>(path: string, method: "POST" | "DELETE", body?: unknown): Promise<ApiState<T>> {
+  try {
+    const response = await fetch(requestUrl(path), {
+      method,
+      headers: { accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (response.status === 404) return { status: "unavailable", message: "Backend endpoint unavailable" };
+    if (!response.ok) return { status: "error", message: `Backend returned HTTP ${response.status}` };
+    return { status: "ready", data: await response.json() as T };
+  } catch {
+    return { status: "offline", message: "Backend Offline" };
+  }
+}

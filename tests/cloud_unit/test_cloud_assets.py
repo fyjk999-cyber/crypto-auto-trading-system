@@ -31,7 +31,8 @@ def test_container_is_non_root_with_healthcheck():
     assert "HEALTHCHECK" in dockerfile
     container = json.loads((ROOT / "deployment/cloudflare/container/container.json").read_text())
     assert container["desired_state"] == "RUNNING"
-    assert container["env"]["TRADING_MODE"] == "TESTNET"
+    assert container["env"]["TRADING_MODE"] == "PAPER"
+    assert container["env"]["PAPER_MODE"] == "PAPER_REAL_MARKET"
     assert container["env"]["AUTO_START_RUNTIME"] == "true"
     assert container["env"]["LIVE_TRADING_ENABLED"] == "false"
 
