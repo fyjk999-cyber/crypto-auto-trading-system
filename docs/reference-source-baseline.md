@@ -1425,3 +1425,20 @@ b803543631662817d5e5cf0a3598830a171c0dc1b18732bab532af88eec8f67f  tests/v3-optim
 7f2e4956bd5684b32fd0104200f8d4e0b8c12a6b615ebb9f9332031318bfbeaa  vite.config.ts
 5785dcc71d48d9a157e5306fe623310d62f4465d0c3a42aaf201856d30ff8208  worker/index.ts
 ```
+
+## 4. AFTER-BUILD VERIFICATION (SOURCE_REPOS_BEFORE == SOURCE_REPOS_AFTER)
+
+Verified at completion time (2026-08-24 UTC) by recomputing sha256 manifests and git status.
+
+- SilverQuant full-file sha256 manifest: **IDENTICAL** (251 files)
+- Kalshi v1 full-worktree sha256 manifest: **IDENTICAL** (266 entries)
+- Kalshi v2 full-worktree sha256 manifest: **IDENTICAL** (254 entries)
+- Kalshi v1 `git status --porcelain`: same two pre-existing untracked files, no new changes
+- Kalshi v2 `git status --porcelain`: still empty
+- Kalshi v1 HEAD: `fadb6dd2ab7767829948d2ce7a9c5f49bf392c85` (unchanged)
+- Kalshi v2 HEAD: `7cc5d25ca770be03e4098cdcc1b5da38659a398c` (unchanged)
+
+Conclusion:
+- SilverQuant modified: NO
+- Kalshi v1 modified: NO
+- Kalshi v2 modified: NO
