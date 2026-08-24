@@ -1,0 +1,23 @@
+{
+  "policy_name": "crypto-trading-access",
+  "allow": [
+    {
+      "identity": "human",
+      "paths": ["/api/v1/*", "/ws/*"],
+      "methods": ["GET", "HEAD", "POST"],
+      "control_endpoints": false
+    },
+    {
+      "identity": "codex",
+      "paths": ["/api/v1/*", "/ws/*"],
+      "methods": ["GET", "HEAD"],
+      "control_endpoints": false
+    },
+    {
+      "identity": "harness",
+      "paths": ["/api/v1/*", "/ws/*"],
+      "methods": ["GET", "HEAD", "POST", "PUT", "DELETE"],
+      "control_endpoints": true
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "crypto-trading-primary",
+  "image": "ghcr.io/fyjk999-cyber/crypto-auto-trading-system/trading-core:testnet",
+  "desired_state": "RUNNING",
+  "instance_type": "standard-1",
+  "region": "auto",
+  "env": {
+    "TRADING_MODE": "TESTNET",
+    "LIVE_TRADING_ENABLED": "false",
+    "DATABASE_URL": "{{secrets.DATABASE_URL}}"
+  },
+  "graceful_shutdown_seconds": 30,
+  "sleepAfter": 0
+}

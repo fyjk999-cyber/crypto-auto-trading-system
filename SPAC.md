@@ -163,3 +163,22 @@ second source of financial truth.
   Self-modifying production code and self-modifying risk authority are forbidden.
 - Backtest reuses the real MarketState/Alpha/Risk/Margin/Ledger interfaces.
 - Defaults remain TRADING_MODE=PAPER and LIVE_TRADING_ENABLED=false.
+
+## 18. Cloudflare Deployment (CLOUD PHASE)
+
+- Cloudflare Worker `crypto-trading-gateway` is an edge gateway only: auth,
+  routing, rate limiting, security headers, request IDs, WebSocket forwarding.
+  No trading/risk/ledger/order logic in the Worker.
+- Python trading core runs in a Cloudflare Container (`crypto-trading-primary`).
+  DB Run Lease remains the single-writer guard; duplicate containers cannot both
+  trade.
+- Financial persistence remains PostgreSQL + Alembic. Ledger stays the single
+  financial truth. D1 is not used for money facts.
+- Cloudflare R2 stores backups only, never transactional data.
+- Cloudflare Access protects the API. Codex receives a read-only service token
+  (`crypto-codex-readonly`) limited to GET/HEAD/read WS; control endpoints are denied.
+- Cron/Workflows only trigger backend endpoints idempotently; they never
+  reimplement DailyReview, Learning, or Ledger logic.
+- Environment: TESTNET. `LIVE_TRADING_ENABLED=false`. Real-money orders are forbidden.
+- Worker/Container configs must match current Wrangler v4+ and Cloudflare
+  Container lifecycle semantics (validated against official docs at implementation time).

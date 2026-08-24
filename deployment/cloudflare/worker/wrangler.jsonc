@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crypto-trading-gateway",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-24",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "vars": {
+    "BACKEND_URL": "https://container-backend.example.internal"
+  },
+  "secret_names": {
+    "DATABASE_URL": "DATABASE_URL",
+    "BINANCE_TESTNET_API_KEY": "BINANCE_TESTNET_API_KEY",
+    "BINANCE_TESTNET_API_SECRET": "BINANCE_TESTNET_API_SECRET",
+    "INTERNAL_API_SECRET": "INTERNAL_API_SECRET",
+    "CODEX_CLIENT_ID": "CODEX_CLIENT_ID",
+    "CODEX_CLIENT_SECRET": "CODEX_CLIENT_SECRET",
+    "HARNESS_CLIENT_ID": "HARNESS_CLIENT_ID",
+    "HARNESS_CLIENT_SECRET": "HARNESS_CLIENT_SECRET"
+  },
+  "rate_limiter": { "enabled": true }
+}

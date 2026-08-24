@@ -30,4 +30,24 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --dev
-      - run: uv run pytest tests/integration tests/e2e tests/chaos -q
+      - run: uv run pytest tests/integration tests/e2e tests/chaos tests/cloud_unit tests/perpetual_unit tests/perpetual_integration tests/governance_unit tests/alpha_unit tests/alpha_integration -q
+
+  cloudflare-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: deployment/cloudflare/worker
+      - run: npm run typecheck
+        working-directory: deployment/cloudflare/worker
+      - run: npm test
+        working-directory: deployment/cloudflare/worker
+
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t crypto-trading-core:ci -f deployment/cloudflare/container/Dockerfile .

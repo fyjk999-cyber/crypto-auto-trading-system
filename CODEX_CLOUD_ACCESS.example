@@ -1,0 +1,7 @@
+# Codex Cloud Access - example placeholders only. Never commit real secrets.
+
+CF_ACCESS_CLIENT_ID=<placeholder>
+CF_ACCESS_CLIENT_SECRET=<placeholder>
+API_BASE_URL=<placeholder>
+WEBSOCKET_URL=<placeholder>
+OPENAPI_URL=<placeholder>

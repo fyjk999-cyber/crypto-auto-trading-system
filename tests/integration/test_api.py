@@ -70,6 +70,15 @@ async def test_api_financial_endpoints_return_strings_not_floats(database):
     assert any(row["action"] == "TEST_API" for row in audit)
 
 
+async def test_api_version_endpoint(database):
+    state = make_state(database)
+    client = TestClient(create_app(state))
+    response = client.get("/version")
+    assert response.status_code == 200
+    assert response.json()["api_version"] == "v1"
+    assert response.json()["environment"] == "test"
+
+
 async def test_api_killswitch_route(database):
     state = make_state(database)
     client = TestClient(create_app(state))

@@ -1,0 +1,16 @@
+{
+  "name": "crypto-trading-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --allowJs --checkJs --noEmit --target es2022 --module es2022 src/index.js",
+    "test": "node --test test/index.test.js",
+    "check": "wrangler check",
+    "deploy:dry": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "wrangler": "4.125.0"
+  }
+}

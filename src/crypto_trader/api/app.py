@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -61,6 +62,28 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
         return {"ready": True, "mode": state.settings.effective_mode().value}
+
+    @app.get("/version")
+    async def version():
+        import os
+
+        return {
+            "git_sha": os.environ.get("GIT_SHA", "0dc4884ae3e416dc1df22f96620f55e8e4f41734"),
+            "api_version": "v1",
+            "schema_version": "1",
+            "deployment_id": os.environ.get("DEPLOYMENT_ID", "local"),
+            "environment": state.settings.app_env,
+            "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
+        }
+
+    @app.get("/cloud-status")
+    async def cloud_status():
+        return {
+            "status": "OK",
+            "environment": state.settings.app_env,
+            "trading_mode": state.settings.effective_mode().value,
+            "live_trading_enabled": state.settings.live_trading_enabled,
+        }
 
     @app.get("/runtime")
     async def runtime():
@@ -155,6 +178,28 @@ def create_app(state: AppState) -> FastAPI:
         if decision is not None and decision.decision.value != "APPROVE":
             return {"decision": decision.model_dump(mode="json")}
         return {"decision": "APPROVE", "client_order_id": body.client_order_id}
+
+    @app.websocket("/ws")
+    async def websocket_events(websocket: WebSocket):
+        await websocket.accept()
+        while True:
+            await websocket.send_json(
+                {
+                    "event_type": "runtime",
+                    "event_version": "v1",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "payload": {
+                        "state": state.engine.state_machine.state.value
+                        if state.engine
+                        else "STOPPED",
+                        "mode": state.settings.effective_mode().value,
+                    },
+                }
+            )
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            except TimeoutError:
+                continue
 
     return app
 
