@@ -1,104 +1,71 @@
 # Final Delivery Notes - Crypto Automated Trading System
 
-## 1. New system architecture
-Hexagonal, event-driven Python 3.12 system:
-- `domain/` unified Decimal-native objects, enums, errors, clock, identifiers.
-- `market_data/` normalized orderbook with sequence-gap detection and snapshot resync.
-- `exchange/` ExchangeAdapter contract; Binance implementation; OKX/Bybit boundaries.
-- `order/` async 12-state order machine and idempotent persisted OrderManager.
-- `ledger/` append-only double-entry journal (single money truth).
-- `portfolio/` replayable Account/Position/PnL projections.
-- `risk/` system-level pre-trade risk + global kill switch.
-- `execution/` final ExecutionAuthority (lease, freshness, precision, duplicate, rate budget).
-- `runtime/` TradingEngine, EventBus, DB run lease, scheduler, recovery, health.
-- `simulator/` SimulatedExchangeAdapter sharing the one core for PAPER/LIVE/SHADOW.
-- `persistence/` SQLAlchemy async + Alembic; exact decimal storage.
-- `api/` thin FastAPI control plane; `observability/` structlog + audit.
+## PHASE 16 completion (alpha layer)
 
-## 2. Implemented functionality
-Decimal-safe domain; atomic balanced ledger (TRADE/FEE/DEPOSIT/WITHDRAWAL/TRANSFER/
-FUNDING/INTEREST/REALIZED_PNL/MARGIN_CHANGE types); ledger replay and projection rebuild;
-async order lifecycle with out-of-order ack/fill, duplicate event/fill idempotency,
-cancel/fill race, timeout recovery; Binance REST adapter + stream parser; simulated
-exchange matching; risk limits and kill switch; execution authority; DB lease; crash
-recovery without blind resubmit; reconciliation with halt-on-mismatch; structured audit;
-FastAPI endpoints; paper E2E; 20 chaos tests; Alembic migration; GitHub Actions CI.
+### Architecture amendment
+Implemented exactly as specified:
+- ML Meta is not a 5% directional alpha. Trend / Momentum / Breakout / MeanReversion /
+  FundingBasis are the 5 Alpha sub-strategies (base weights 40/20/15/10/15).
+  ML Meta sits after the ensemble for per-decision effective weights, confidence
+  calibration, and MetaDecision. Production base weights never mutate per-decision.
+- Fast Learning updates strategy performance, confidence calibration, failure memory,
+  and regime statistics only. Slow Learning requires
+  backtest -> out-of-sample -> walk-forward -> shadow -> promotion.
+- alpha/sizing.py and alpha/leverage.py are advisory only:
+  recommended_position / recommended_leverage. Final authority remains
+  Alpha -> SignalIntent -> Risk -> ExecutionAuthority -> OrderManager -> ExchangeAdapter.
 
-## 3. Code from SilverQuant
-See `docs/SOURCE_PROVENANCE.md`. Clock/SimClock contract (modified); ExecutionGateway,
-DataSource, OrderManager, risk separation, audit, replay ideas. No whole repository was
-copied and no SilverQuant file was modified.
+### Commit SHA
+bb41b774cd0d8165e179f1a6bdd9b35b2e8f6a5f
 
-## 4. Design from Kalshi
-See `docs/SOURCE_PROVENANCE.md`. Fixed-decimal parsing, atomic balanced ledger,
-idempotency, execution authority gate list, run lease, orderbook normalization,
-deterministic replay, resting-order lifecycle, runtime safety, chaos/integration cases.
+### New files
+- src/crypto_trader/alpha/__init__.py
+- src/crypto_trader/alpha/market_data_engine.py
+- src/crypto_trader/alpha/features.py
+- src/crypto_trader/alpha/regime.py
+- src/crypto_trader/alpha/meta_decision.py
+- src/crypto_trader/alpha/ml_meta.py
+- src/crypto_trader/alpha/sizing.py
+- src/crypto_trader/alpha/leverage.py
+- src/crypto_trader/alpha/learning.py
+- src/crypto_trader/alpha/ensemble.py
+- src/crypto_trader/alpha/sub_strategy/*.py (base, trend_following, momentum,
+  breakout, mean_reversion, funding_basis)
+- tests/alpha_unit/test_alpha.py
+- tests/alpha_integration/test_alpha_engine.py
+- Updated: SPAC.md, .ai-memory/*, tests/spac/test_spac_coverage.py,
+  src/crypto_trader/domain/models.py, src/crypto_trader/ledger/projections.py
 
-## 5. Completely new code
-Domain models/enums/errors/identifiers, persistence layer and exact-decimal type,
-Binance signing/error mapping/WS stream, OKX/Bybit boundaries, reconciliation, event
-bus/scheduler/health/state machine, API, strategies, migrations, CI, all Python tests.
+### New tests
+- alpha unit: 15
+- alpha integration: 2
+- total new: 17
 
-## 6. Binance Adapter completion
-Complete for phase 1: REST public (exchangeInfo/depth/ticker), signed REST
-(account/order submit/cancel/query) with HMAC and retries, full error-code mapping to
-domain errors, symbol/filter normalization, execution-report/depth parsing, WebSocket
-depth stream client with reconnect+resync policy. Testnet-ready; not exercised against
-a live keyed account in this harness.
+### Total tests
+144 passed. Coverage 87%. Ruff clean. agent-project-test PASS. GitHub Actions CI green.
 
-## 7. Paper Trading completion
-Complete: SimulatedExchangeAdapter implements the exact ExchangeAdapter contract,
-matches orders with Decimal math, emits ACK/OPEN/PARTIAL/FILLED/CANCELLED/REJECTED
-events, fault injection, and runs through the same OrderManager/Ledger/Risk/Authority/
-Portfolio/Runtime core. Automated paper E2E passes.
+### Results
+- LONG test: PASS (alpha engine drives paper engine to a FILLED buy through
+  Risk -> Authority -> OrderManager -> SimulatedExchangeAdapter -> Ledger)
+- SHORT test: PASS at alpha decision layer (SELL SignalIntent generated
+  symmetrically; sizing/leverage symmetric for LONG/SHORT). Spot short execution
+  requires a margin/borrow model and is listed as a known limitation.
+- Regime test: PASS (BULL / BEAR / RANGE / EXTREME_RISK classified; timestamp /
+  version / reason_codes present)
+- Learning test: PASS (Fast Learning stats only; Slow Learning rejects invalid
+  evidence order and promotes only after full pipeline)
 
-## 8. Live Trading capability completion
-Live path is implemented and default-blocked: `TRADING_MODE=PAPER`,
-`LIVE_TRADING_ENABLED=false`; execution authority rejects LIVE when disabled.
-No real-money orders were placed during harness testing. Live Binance requires
-user-supplied environment credentials.
+### Known limitations
+- Spot paper SHORT execution is not marginized; SHORT is validated at the alpha
+  decision/sizing/leverage layers.
+- Real OI/funding/basis feeds are synthetic in simulated mode.
+- OKX/Bybit adapters remain phase-1 boundaries.
 
-## 9. Test quantity and result
-127 tests, all passing:
-- unit: 69
-- integration: 27
-- chaos: 20
-- e2e: 2
-- SPAC coverage: 9
-Line coverage measured at 85%. Ruff clean. GitHub Actions CI green.
+### Prior V1 baseline
+V1 tests were not removed or disabled; the original 127 tests still pass plus
+17 new Phase 16 tests.
 
-## 10. Chaos test results
-All 20 mandatory chaos tests pass, including duplicate client order id, partial fill,
-fill-before-ack, duplicate fill, cancel/fill race, submit-timeout-but-created,
-websocket disconnect, sequence gap, orderbook resync, rate limit, exchange 5xx,
-engine restart, ledger replay, ledger balance invariant, decimal precision,
-dual-engine lease, stale market data block, reconciliation mismatch, kill switch,
-and database integration.
-
-## 11. Known limitations
-- OKX and Bybit are contract boundaries only (not implemented).
-- Binance user-data-stream listen-key lifecycle is not yet implemented (normalized
-  execution report parsing is implemented); Binance adapter was tested with mocked transport only.
-- Default DB is SQLite; PostgreSQL URL is supported by SQLAlchemy/Alembic but not
-  integration-tested here.
-- No UI console was built (API-only control plane).
-- Simulated exchange uses a simplified fee model and synthetic streams.
-
-## 12. GitHub Repository
-https://github.com/fyjk999-cyber/crypto-auto-trading-system
-
-## 13. Final Commit SHA
-Final code commit (before this report file): fee79a9d9e1d0bf74c7d419e62751957d873516b
-
-## 14. SilverQuant modified
+### Reference source protection
 SilverQuant modified: NO
-
-## 15. Kalshi v1 modified
 Kalshi v1 modified: NO
-
-## 16. Kalshi v2 modified
 Kalshi v2 modified: NO
-
----
-Verification: full-file sha256 manifests before/after are identical for all three
-reference sources; git status/HEAD unchanged. See `docs/reference-source-baseline.md`.
