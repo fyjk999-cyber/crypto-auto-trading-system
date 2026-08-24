@@ -307,8 +307,58 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/market/klines")
     async def market_klines(symbol: str = "BTCUSDT", interval: str = "1m", limit: int = 500):
-        if interval not in ("1m", "5m", "15m", "1h", "4h", "1d"):
+        interval_map = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1D"}
+        if interval not in interval_map:
             return {"status": "INVALID_INTERVAL", "candles": []}
+        limit = max(1, min(limit, 500))
+        if state.settings.kline_provider.upper() == "OKX":
+            provider_symbol = "BTC-USDT-SWAP" if symbol.upper() == "BTCUSDT" else symbol.upper()
+            client = OKXAdapter(base_url=state.settings.okx_base_url)
+            try:
+                rows = await client.get_candles(provider_symbol, interval_map[interval], limit)
+                by_open_time: dict[str, dict] = {}
+                for row in rows:
+                    try:
+                        open_time = datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC).isoformat()
+                        by_open_time[open_time] = {
+                            "symbol": symbol.upper(),
+                            "provider_symbol": provider_symbol,
+                            "interval": interval,
+                            "open_time": open_time,
+                            "open": str(row[1]),
+                            "high": str(row[2]),
+                            "low": str(row[3]),
+                            "close": str(row[4]),
+                            "volume": str(row[5]),
+                            "closed": str(row[8]) == "1",
+                            "source": "OKX",
+                        }
+                    except (TypeError, ValueError, IndexError) as exc:
+                        raise OKXDiagnosticError(
+                            "MALFORMED_RESPONSE", "OKX candle response contains invalid values"
+                        ) from exc
+                return {
+                    "symbol": symbol.upper(),
+                    "provider_symbol": provider_symbol,
+                    "interval": interval,
+                    "source": "OKX",
+                    "status": "HEALTHY",
+                    "supported_intervals": list(interval_map),
+                    "candles": [by_open_time[key] for key in sorted(by_open_time)],
+                }
+            except OKXDiagnosticError as exc:
+                return {
+                    "symbol": symbol.upper(),
+                    "provider_symbol": provider_symbol,
+                    "interval": interval,
+                    "source": "OKX",
+                    "status": "UNAVAILABLE",
+                    "candles": [],
+                    "last_error": exc.safe_message,
+                    "reason_code": exc.reason_code,
+                }
+            finally:
+                await client.disconnect()
         client = BinanceUSDMFuturesPublicClient()
         try:
             raw = await client.get_klines(symbol, interval=interval, limit=limit)

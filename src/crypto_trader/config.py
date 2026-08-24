@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     paper_mode: str = (
         "PAPER_REAL_MARKET"  # PAPER_REAL_MARKET default; PAPER_SYNTHETIC explicit dev/test only
     )
+    # Display-only public candle feed.  This is deliberately independent from
+    # the Binance strategy market-data provider and from OKX credentials.
+    kline_provider: str = "OKX"
     paper_initial_equity: str = "100000"
     paper_settlement_asset: str = "USDT"
     daily_review_time_utc: str = "00:05"

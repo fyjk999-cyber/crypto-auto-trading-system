@@ -314,6 +314,22 @@ class OKXAdapter(ExchangeAdapter):
             "mark": raw.get("markPx", "0"),
         }
 
+    async def get_candles(self, inst_id: str, bar: str, limit: int = 500) -> list[list[str]]:
+        """Fetch public OKX candles; no credentials or demo headers are used."""
+        data = await self._public_request(
+            "GET",
+            "/api/v5/market/candles",
+            params={"instId": inst_id, "bar": bar, "limit": limit},
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX candle response is incomplete")
+        if not all(isinstance(row, list) and len(row) >= 9 for row in rows):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX candle response contains invalid rows"
+            )
+        return rows
+
     def _cl_ord_id(self, client_order_id: str) -> str:
         digest = hashlib.sha256(client_order_id.encode()).hexdigest()[:28].upper()
         return f"C{digest}"

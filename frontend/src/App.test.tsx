@@ -176,11 +176,12 @@ describe("中文加密交易终端 V2", () => {
     expect(marketPanel?.textContent).not.toContain("99999");
   });
 
-  it("明确显示 Binance 行情源与 OKX 模拟执行，不混淆交易所职责", async () => {
+  it("明确显示 OKX K线行情与 OKX 模拟执行，不混淆策略 Binance 状态", async () => {
     setup(backend({
       "/market": { symbol: "BTCUSDT", status: "HEALTHY", price: "100", mark_price: "99", index_price: "98", best_bid: "99.5", best_ask: "100.5", spread: "1", basis: "0.01", health: "HEALTHY" },
+      "/market/klines?symbol=BTCUSDT&interval=1m&limit=500": { symbol: "BTCUSDT", interval: "1m", source: "OKX", status: "HEALTHY", supported_intervals: ["1m"], candles: [candle()] },
     }));
-    await waitFor(() => expect(screen.getByText("行情源：Binance USDⓈ-M · 实时")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("行情源：OKX · 实时")).toBeTruthy());
     expect(screen.getByText("执行交易所：OKX 模拟盘 DEMO")).toBeTruthy();
     expect(screen.getByText("指数价格")).toBeTruthy();
     expect(screen.getByText("买一")).toBeTruthy();

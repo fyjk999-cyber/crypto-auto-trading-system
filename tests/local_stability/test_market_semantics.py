@@ -8,6 +8,7 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.domain.errors import MarketDataUnhealthy
 from crypto_trader.exchange.binance_futures_public import BinancePublicDataUnavailable
+from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -82,14 +83,48 @@ async def test_real_market_adapter_does_not_silent_fallback():
         await adapter.get_orderbook("BTCUSDT")
 
 
-async def test_klines_geo_restricted_status(database, monkeypatch):
+async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):
+    async def candles(self, inst_id, bar, limit=500):
+        assert inst_id == "BTC-USDT-SWAP"
+        assert bar == "1H"
+        return [
+            ["1722470400000", "2", "3", "1", "2.5", "10", "0", "0", "1"],
+            ["1722466800000", "1", "2", "0.5", "1.5", "9", "0", "0", "0"],
+            ["1722470400000", "2", "3", "1", "2.6", "11", "0", "0", "1"],
+        ]
+
+    monkeypatch.setattr(OKXAdapter, "get_candles", candles)
+    client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
+    data = client.get("/market/klines?symbol=BTCUSDT&interval=1h&limit=100").json()
+    assert data["source"] == "OKX"
+    assert data["status"] == "HEALTHY"
+    assert data["provider_symbol"] == "BTC-USDT-SWAP"
+    assert [row["close"] for row in data["candles"]] == ["1.5", "2.6"]
+    assert data["candles"][0]["closed"] is False
+
+
+async def test_okx_kline_failure_returns_empty_unavailable_data(database, monkeypatch):
+    async def unavailable(self, inst_id, bar, limit=500):
+        raise OKXDiagnosticError("NETWORK_ERROR", "Unable to connect to OKX")
+
+    monkeypatch.setattr(OKXAdapter, "get_candles", unavailable)
+    client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
+    data = client.get("/market/klines?symbol=BTCUSDT&interval=1m&limit=100").json()
+    assert data["source"] == "OKX"
+    assert data["status"] == "UNAVAILABLE"
+    assert data["candles"] == []
+
+
+async def test_binance_compatibility_branch_retains_geo_restricted_status(database, monkeypatch):
     from crypto_trader.exchange.binance_futures_public import BinanceUSDMFuturesPublicClient
 
     async def fail_get_klines(self, symbol, interval="1m", limit=500):
         raise BinancePublicDataUnavailable("HTTP_451_GEO_RESTRICTED")
 
     monkeypatch.setattr(BinanceUSDMFuturesPublicClient, "get_klines", fail_get_klines)
-    client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
+    state = make_state(database, "PAPER_REAL_MARKET")
+    state.settings.kline_provider = "BINANCE"
+    client = TestClient(create_app(state))
     data = client.get("/market/klines?symbol=BTCUSDT&interval=1m&limit=100").json()
     assert data["source"] == "BINANCE_USDM"
     assert data["status"] == "GEO_RESTRICTED"
