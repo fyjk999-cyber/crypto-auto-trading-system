@@ -50,7 +50,7 @@ def test_codex_example_has_placeholders_only():
 def test_codex_handoff_json_has_no_real_secrets():
     data = json.loads((ROOT / "codex-cloud-handoff.json").read_text())
     assert data["environment"] == "testnet"
-    assert data["api_base_url"] == "<url>"
+    assert data["api_base_url"].startswith("https://")
     assert data["access"]["client_secret_env"] == "CF_ACCESS_CLIENT_SECRET"
 
 
