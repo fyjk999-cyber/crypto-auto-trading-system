@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from crypto_trader.domain.errors import MarketDataUnhealthy
 from crypto_trader.exchange.binance_futures_public import (
     BinancePublicDataUnavailable,
     BinanceUSDMFuturesPublicClient,
@@ -39,9 +40,11 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             book = OrderBook(symbol=symbol, exchange="BINANCE")
             book.apply_snapshot(norm["sequence"], norm["bids"], norm["asks"], now=datetime.now(UTC))
             return book
-        except BinancePublicDataUnavailable:
-            # Fall back to simulated book only for execution/paper continuity.
-            return await super().get_orderbook(symbol, limit=limit)
+        except BinancePublicDataUnavailable as exc:
+            # NO silent synthetic fallback in PAPER_REAL_MARKET.
+            raise MarketDataUnhealthy(
+                f"Binance public market unavailable for {symbol}: {exc}"
+            ) from exc
 
     async def refresh_market_state(self, symbol: str) -> MarketState:
         state = await self.feed.refresh()

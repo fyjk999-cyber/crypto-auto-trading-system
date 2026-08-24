@@ -235,14 +235,27 @@ def create_app(state: AppState) -> FastAPI:
                 ms = await get_market_state("BTCUSDT")
                 return ms.model_dump(mode="json")
             except Exception as exc:
-                return {"status": "UNAVAILABLE", "error": str(exc)}
+                return {
+                    "provider": "BINANCE_USDM",
+                    "source": "BINANCE_USDM",
+                    "status": "UNAVAILABLE",
+                    "data_source": "REAL",
+                    "last_error": str(exc),
+                }
+        if state.settings.paper_mode == "PAPER_SYNTHETIC":
+            return {
+                "provider": "SYNTHETIC",
+                "source": "SYNTHETIC",
+                "status": "SYNTHETIC",
+                "data_source": "SYNTHETIC",
+                "symbol": "BTCUSDT",
+            }
         return {
+            "provider": "BINANCE_USDM",
+            "source": "BINANCE_USDM",
+            "status": "UNAVAILABLE",
+            "data_source": "REAL",
             "symbol": "BTCUSDT",
-            "status": "SYNTHETIC",
-            "data_source": "PAPER_SYNTHETIC",
-            "funding_rate": None,
-            "open_interest": None,
-            "basis": None,
         }
 
     @app.get("/market/klines")
@@ -260,13 +273,19 @@ def create_app(state: AppState) -> FastAPI:
                 "status": "HEALTHY",
                 "candles": candles,
             }
-        except BinancePublicDataUnavailable:
+        except BinancePublicDataUnavailable as exc:
+            status = (
+                "GEO_RESTRICTED"
+                if ("451" in str(exc) or "restricted" in str(exc).lower())
+                else "UNAVAILABLE"
+            )
             return {
                 "symbol": symbol,
                 "interval": interval,
                 "source": "BINANCE_USDM",
-                "status": "UNAVAILABLE",
+                "status": status,
                 "candles": [],
+                "last_error": str(exc),
             }
         finally:
             await client.close()
@@ -280,8 +299,26 @@ def create_app(state: AppState) -> FastAPI:
                 ms = await get_market_state("BTCUSDT")
                 return {k: v.model_dump(mode="json") for k, v in ms.sources.items()}
             except Exception as exc:
-                return {"status": "UNAVAILABLE", "error": str(exc)}
-        return {"status": "SYNTHETIC", "sources": {}}
+                return {
+                    "provider": "BINANCE_USDM",
+                    "source": "BINANCE_USDM",
+                    "status": "UNAVAILABLE",
+                    "data_source": "REAL",
+                    "last_error": str(exc),
+                }
+        if state.settings.paper_mode == "PAPER_SYNTHETIC":
+            return {
+                "provider": "SYNTHETIC",
+                "source": "SYNTHETIC",
+                "status": "SYNTHETIC",
+                "data_source": "SYNTHETIC",
+            }
+        return {
+            "provider": "BINANCE_USDM",
+            "source": "BINANCE_USDM",
+            "status": "UNAVAILABLE",
+            "data_source": "REAL",
+        }
 
     @app.get("/regime")
     async def regime():
@@ -387,9 +424,10 @@ def create_app(state: AppState) -> FastAPI:
         return {
             "market_data": {
                 "provider": "BINANCE_USDM",
-                "status": "UNAVAILABLE"
-                if state.settings.paper_mode != "PAPER_REAL_MARKET"
-                else "DEGRADED",
+                "mode": "REAL" if state.settings.paper_mode == "PAPER_REAL_MARKET" else "SYNTHETIC",
+                "status": "DEGRADED"
+                if state.settings.paper_mode == "PAPER_REAL_MARKET"
+                else "SYNTHETIC",
             },
             "execution": {
                 "provider": "OKX",

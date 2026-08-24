@@ -36,7 +36,9 @@ class Settings(BaseSettings):
     # Local paper runtime
     auto_start_runtime: bool = True
     scanner_enabled: bool = True
-    paper_mode: str = "PAPER_SYNTHETIC"  # PAPER_SYNTHETIC | PAPER_REAL_MARKET
+    paper_mode: str = (
+        "PAPER_REAL_MARKET"  # PAPER_REAL_MARKET default; PAPER_SYNTHETIC explicit dev/test only
+    )
     paper_initial_equity: str = "100000"
     paper_settlement_asset: str = "USDT"
     daily_review_time_utc: str = "00:05"

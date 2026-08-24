@@ -10,7 +10,13 @@ python -m pip install -e '.[dev]' -q
 mkdir -p data
 alembic upgrade head >/dev/null 2>&1 || true
 export TRADING_MODE=PAPER
+export PAPER_MODE=PAPER_REAL_MARKET
 export LIVE_TRADING_ENABLED=false
+echo "Trading Mode: PAPER"
+echo "Market Data Mode: PAPER_REAL_MARKET"
+echo "Market Provider: BINANCE_USDM"
+echo "Execution: PAPER / OKX_DEMO"
+echo "Live Trading: DISABLED"
 export AUTO_START_RUNTIME=true
 nohup python -m crypto_trader.runtime.local_runner --host 127.0.0.1 --port 8000 > data/paper-runtime.log 2>&1 &
 echo $! > data/paper-runtime.pid
