@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getJson, websocketUrl } from "../api/client";
 import type { Account, KillSwitch, Order, Position, RuntimeHealth, TradingSnapshot } from "../types/api";
 
-const optionalPaths = ["/market", "/market/sources", "/regime", "/signals", "/strategies", "/risk", "/margin", "/reviews", "/daily-reviews", "/learning", "/exchange-health", "/version"] as const;
+const optionalPaths = ["/market", "/market/sources", "/regime", "/signals", "/strategies", "/risk", "/margin", "/reviews", "/daily-reviews", "/learning", "/exchange/okx/status", "/exchange-health", "/version"] as const;
 
 const loading = { status: "loading" } as const;
 const initial: TradingSnapshot = {
@@ -30,6 +30,12 @@ export function useTradingSnapshot() {
     void refresh();
     const poll = window.setInterval(() => void refresh(), 10_000);
     return () => window.clearInterval(poll);
+  }, [refresh]);
+
+  useEffect(() => {
+    const sync = () => void refresh();
+    window.addEventListener("okx-status-changed", sync);
+    return () => window.removeEventListener("okx-status-changed", sync);
   }, [refresh]);
 
   useEffect(() => {

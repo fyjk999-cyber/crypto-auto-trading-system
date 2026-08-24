@@ -147,6 +147,7 @@ function OkxConnectionCard() {
       formElement.reset();
       setConfiguring(false);
       await refreshStatus();
+      window.dispatchEvent(new Event("okx-status-changed"));
       setMessage("DEMO 凭据已提交至受保护后端，浏览器未保存凭据。");
     } else {
       setMessage(response.status === "unavailable" ? "当前后端未提供 OKX 凭据接口。" : "保存失败；请确认后端连接和 Access 权限。");
@@ -159,6 +160,7 @@ function OkxConnectionCard() {
     setBusy(false);
     if (response.status === "ready" && response.data) {
       setStatus((current) => ({ ...current, ...response.data }));
+      window.dispatchEvent(new Event("okx-status-changed"));
       const reason = String(response.data.reason_code ?? "OKX_REJECTED");
       const stage = response.data.stage ? `验证失败：${response.data.stage}\n` : "";
       setMessage(response.data.authenticated === true ? "OKX DEMO 验证成功。" : `${stage}${okxValidationLabels[reason] ?? "OKX 拒绝请求"}`);
@@ -312,7 +314,10 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const exchange = record(snapshot.optional["/exchange-health"]?.data);
   const version = record(snapshot.optional["/version"]?.data);
   const source = marketSource(snapshot);
-  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>Binance 行情</dt><dd>{sourceLabels[source] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">未配置</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
+  const execution = record(exchange.execution);
+  const marketStatus = String(pick(record(exchange.market_data), "status") ?? source).toUpperCase();
+  const okxOverview = execution.authenticated === true && execution.status === "HEALTHY" ? "已连接" : execution.configured === true ? "已配置" : execution.status === "DEGRADED" ? "异常" : "未配置";
+  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>Binance 行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">{okxOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
 function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot }) {

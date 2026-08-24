@@ -15,7 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
-from crypto_trader.credentials import EnvCredentialStore, credential_summary
+from crypto_trader.credentials import EnvCredentialStore
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.binance_futures_public import (
@@ -56,6 +56,11 @@ class OKXCredentialRequest(BaseModel):
 
 
 def create_app(state: AppState) -> FastAPI:
+    initial_credentials = EnvCredentialStore().read()
+    state.okx_connection.configure(
+        initial_credentials, EnvCredentialStore.key_suffix(initial_credentials.get("OKX_API_KEY"))
+    )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if state.engine is not None:
@@ -123,6 +128,7 @@ def create_app(state: AppState) -> FastAPI:
                 "OKX_DEMO": "true",
             }
         )
+        state.okx_connection.configure(store.read(), EnvCredentialStore.key_suffix(body.api_key))
         return {
             "saved": True,
             "demo": True,
@@ -131,11 +137,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/exchange/okx/status")
     async def okx_status():
-        values = EnvCredentialStore().read()
-        summary = credential_summary(values)
-        summary["authenticated"] = False
-        summary["health"] = "UNVERIFIED"
-        return summary
+        return state.okx_connection.snapshot()
 
     @app.post("/exchange/okx/validate")
     async def validate_okx_credentials():
@@ -145,12 +147,14 @@ def create_app(state: AppState) -> FastAPI:
             and values.get("OKX_API_SECRET")
             and values.get("OKX_API_PASSPHRASE")
         ):
-            return {
+            result = {
                 "authenticated": False,
                 "health": "NOT_CONFIGURED",
                 "stage": "CREDENTIALS",
                 "reason_code": "NOT_CONFIGURED",
             }
+            state.okx_connection.validation(result)
+            return result
         adapter = OKXAdapter(
             base_url=values.get("OKX_BASE_URL", "https://openapi.okx.com"),
             api_key=values["OKX_API_KEY"],
@@ -163,12 +167,14 @@ def create_app(state: AppState) -> FastAPI:
         try:
             time_result = await adapter.sync_server_time()
             if abs(time_result["offset_ms"]) > 1500:
-                return {
+                result = {
                     "authenticated": False,
                     "health": "DEGRADED",
                     "stage": "PUBLIC_TIME",
                     "reason_code": "TIME_OFFSET",
                 }
+                state.okx_connection.validation(result)
+                return result
             stage = "ACCOUNT_CONFIG"
             account_config = await adapter.get_account_config()
             config_rows = account_config.get("data") if isinstance(account_config, dict) else None
@@ -177,20 +183,22 @@ def create_app(state: AppState) -> FastAPI:
                 or not config_rows
                 or not isinstance(config_rows[0], dict)
             ):
-                return {
+                result = {
                     "authenticated": False,
                     "health": "DEGRADED",
                     "stage": "ACCOUNT_CONFIG",
                     "reason_code": "MALFORMED_RESPONSE",
                     "message": "OKX account configuration response is incomplete",
                 }
+                state.okx_connection.validation(result)
+                return result
             stage = "BALANCE"
             balances = await adapter.get_balances()
             stage = "POSITIONS"
             positions = await adapter.get_positions()
             stage = "PENDING_ORDERS"
             pending = await adapter.get_pending_orders()
-            return {
+            result = {
                 "authenticated": True,
                 "health": "HEALTHY",
                 "stage": "COMPLETE",
@@ -202,8 +210,10 @@ def create_app(state: AppState) -> FastAPI:
                 "positions": len(positions),
                 "pending_orders": len(pending.get("data", [])),
             }
+            state.okx_connection.validation(result)
+            return result
         except OKXDiagnosticError as exc:
-            return {
+            result = {
                 "authenticated": False,
                 "health": "DEGRADED",
                 "stage": stage,
@@ -211,13 +221,16 @@ def create_app(state: AppState) -> FastAPI:
                 "exchange_code": exc.exchange_code,
                 "message": exc.safe_message,
             }
+            state.okx_connection.validation(result)
+            return result
         finally:
             await adapter.disconnect()
 
     @app.delete("/exchange/okx/credentials")
     async def delete_okx_credentials():
         EnvCredentialStore().clear()
-        return {"configured": False, "authenticated": False}
+        state.okx_connection.configure({}, None)
+        return state.okx_connection.snapshot()
 
     def _perpetual_engine():
         contract = PerpetualContract(
@@ -452,20 +465,17 @@ def create_app(state: AppState) -> FastAPI:
         adapter_connected = (
             getattr(state.engine, "adapter", None).connected if state.engine else False
         )
+        market_snapshot = await market()
         return {
             "market_data": {
                 "provider": "BINANCE_USDM",
                 "mode": "REAL" if state.settings.paper_mode == "PAPER_REAL_MARKET" else "SYNTHETIC",
-                "status": "DEGRADED"
-                if state.settings.paper_mode == "PAPER_REAL_MARKET"
-                else "SYNTHETIC",
+                "status": market_snapshot.get("status", "UNAVAILABLE"),
             },
             "execution": {
                 "provider": "OKX",
-                "environment": "DEMO"
-                if state.settings.paper_mode == "PAPER_REAL_MARKET"
-                else "NOT_CONFIGURED",
-                "status": "not_configured",
+                **state.okx_connection.snapshot(),
+                "status": state.okx_connection.health,
             },
             "adapter": "connected" if adapter_connected else "disconnected",
             "mode": state.settings.effective_mode().value,
