@@ -124,12 +124,8 @@ class TradingRuntimeSupervisor:
         while not self._stopping:
             await asyncio.sleep(self.renew_interval)
             self.status.scanner_heartbeat += 1
-            # reference pattern: long-running scanning renews ownership continuously
-            if self._lease is not None:
-                if await self.lease_manager.renew(
-                    self.lease_key, self._lease.token, ttl_seconds=30
-                ):
-                    self.status.lease_renew_count += 1
+            # Lease renewal is owned by the single _lease_renew_loop below to
+            # avoid concurrent SQLite writers in local/CI runs.
             if self.scanner_callback:
                 await self.scanner_callback()
 
