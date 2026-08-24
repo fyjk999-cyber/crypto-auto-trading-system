@@ -23,7 +23,7 @@ def make_settings(db_url):
         trading_mode="PAPER",
         live_trading_enabled=False,
         database_url=db_url,
-        engine_tick_seconds=0.05,
+        engine_tick_seconds=3600,
         run_lease_ttl_seconds=30,
         run_lease_renew_interval_seconds=60,
         reconciliation_interval_seconds=3600,
