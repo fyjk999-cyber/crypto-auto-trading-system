@@ -14,11 +14,22 @@ OKX
 - OKX timestamp: PASS (ISO8601 UTC ms)
 - OKX GET query signing: PASS (full requestPath signed)
 - OKX Demo header: PASS (demo only; LIVE never)
-- OKX credential: NOT CONFIGURED
+- OKX public time: PASS (server/local offset 646ms)
+- OKX credential: NOT CONFIGURED (no .env / env vars)
 - OKX Auth: UNVERIFIED (BLOCKED_EXTERNAL_CREDENTIAL)
+- Account Mode: NOT_READ (BLOCKED_EXTERNAL_CREDENTIAL)
+- Position Mode: NOT_READ (BLOCKED_EXTERNAL_CREDENTIAL)
+- BTC-USDT-SWAP: NOT_READ (BLOCKED_EXTERNAL_CREDENTIAL)
 - OKX Demo Read: BLOCKED_CREDENTIAL
-- OKX Demo LONG: BLOCKED_CREDENTIAL / BLOCKED_BINANCE_NETWORK
-- OKX Demo SHORT: BLOCKED_CREDENTIAL / BLOCKED_BINANCE_NETWORK
+- LONG Demo: BLOCKED_CREDENTIAL
+- SHORT Demo: BLOCKED_CREDENTIAL
+- CANCEL Demo: BLOCKED_CREDENTIAL
+- REDUCE Demo: BLOCKED_CREDENTIAL
+- CLOSE Demo: BLOCKED_CREDENTIAL
+- Ledger: PASS (existing tests)
+- Trade Memory: PASS (existing tests)
+- Binance Market: GEO_RESTRICTED
+- Full Cross-Exchange E2E: BLOCKED_BINANCE_NETWORK
 
 ## Status
 - Binance Kline REST: IMPLEMENTED (/market/klines) — real network UNVERIFIED (GEO_RESTRICTED)
