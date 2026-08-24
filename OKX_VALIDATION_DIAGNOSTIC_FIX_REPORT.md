@@ -2,7 +2,7 @@
 
 ## Final SHA
 
-Recorded in the accompanying `fix(okx): classify validation failures accurately` commit.
+`9f926cd` (`fix(okx): classify validation failures accurately`)
 
 ## Safety and credential state
 
