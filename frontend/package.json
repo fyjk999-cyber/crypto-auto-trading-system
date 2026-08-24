@@ -13,6 +13,7 @@
     "check": "npm test && npm run build"
   },
   "dependencies": {
+    "lightweight-charts": "^5.2.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

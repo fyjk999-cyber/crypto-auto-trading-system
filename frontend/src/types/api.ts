@@ -39,6 +39,28 @@ export type Order = {
 export type RuntimeHealth = Record<string, unknown>;
 export type KillSwitch = Record<string, unknown>;
 
+export type KlineInterval = "1m" | "5m" | "15m" | "1h" | "4h" | "1d";
+
+export type KlineCandle = {
+  open_time: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  close_time?: string;
+  closed?: boolean;
+};
+
+export type KlineResponse = {
+  symbol: string;
+  interval: KlineInterval;
+  source: string;
+  status: string;
+  supported_intervals?: KlineInterval[];
+  candles: KlineCandle[];
+};
+
 export type TradingSnapshot = {
   health: ApiState<Record<string, unknown>>;
   ready: ApiState<Record<string, unknown>>;
@@ -49,5 +71,5 @@ export type TradingSnapshot = {
   killswitch: ApiState<KillSwitch>;
   optional: Record<string, ApiState<unknown>>;
   websocket: "connecting" | "connected" | "disconnected";
-  lastEvent?: { event_type?: string; payload?: Record<string, unknown> };
+  lastEvent?: { event_type?: string; payload?: Record<string, unknown>; timestamp?: string };
 };

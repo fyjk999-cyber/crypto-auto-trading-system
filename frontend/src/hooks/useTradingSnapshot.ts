@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getJson, websocketUrl } from "../api/client";
 import type { Account, KillSwitch, Order, Position, RuntimeHealth, TradingSnapshot } from "../types/api";
 
-const optionalPaths = ["/regime", "/signals", "/strategies", "/risk", "/margin", "/daily-reviews", "/learning", "/exchange-health"] as const;
+const optionalPaths = ["/market", "/market/sources", "/regime", "/signals", "/strategies", "/risk", "/margin", "/reviews", "/daily-reviews", "/learning", "/exchange-health", "/version"] as const;
 
 const loading = { status: "loading" } as const;
 const initial: TradingSnapshot = {
@@ -42,7 +42,7 @@ export function useTradingSnapshot() {
       socket.onopen = () => setSnapshot((previous) => ({ ...previous, websocket: "connected" }));
       socket.onmessage = (event) => {
         try {
-          const parsed = JSON.parse(event.data) as { event_type?: string; payload?: Record<string, unknown> };
+          const parsed = JSON.parse(event.data) as { event_type?: string; payload?: Record<string, unknown>; timestamp?: string };
           setSnapshot((previous) => ({ ...previous, lastEvent: parsed }));
         } catch { /* Ignore malformed backend frames without breaking the UI. */ }
       };
