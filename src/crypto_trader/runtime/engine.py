@@ -259,17 +259,17 @@ class TradingEngine:
     async def _strategy_context(self) -> StrategyContext | None:
         symbol = getattr(self.strategies[0], "symbol", "BTCUSDT") if self.strategies else "BTCUSDT"
         book = self.market_data.books.get(symbol)
-        if book is None:
-            try:
-                fetched = await self.adapter.get_orderbook(symbol)
-                await self.market_data.ingest_snapshot(
-                    symbol,
-                    fetched.sequence,
-                    [(level.price, level.quantity) for level in fetched.bids.values()],
-                    [(level.price, level.quantity) for level in fetched.asks.values()],
-                )
-                book = self.market_data.books[symbol]
-            except Exception:
+        try:
+            fetched = await self.adapter.get_orderbook(symbol)
+            await self.market_data.ingest_snapshot(
+                symbol,
+                fetched.sequence,
+                [(level.price, level.quantity) for level in fetched.bids.values()],
+                [(level.price, level.quantity) for level in fetched.asks.values()],
+            )
+            book = self.market_data.books[symbol]
+        except Exception:
+            if book is None:
                 return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
@@ -34,7 +35,15 @@ def serialize_order(order) -> dict:
 
 
 def create_app(state: AppState) -> FastAPI:
-    app = FastAPI(title="Crypto Automated Trading System", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if state.engine is not None:
+            await state.engine.start()
+        yield
+        if state.engine is not None:
+            await state.engine.stop()
+
+    app = FastAPI(title="Crypto Automated Trading System", version="0.1.0", lifespan=lifespan)
     app.state.ctx = state
 
     def ctx() -> AppState:
@@ -62,6 +71,107 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
         return {"ready": True, "mode": state.settings.effective_mode().value}
+
+    def _alpha_from_state():
+        if state.engine is None:
+            return None
+        for strategy in state.engine.strategies:
+            if getattr(strategy, "name", None) == "multi_strategy_alpha":
+                return strategy
+        return None
+
+    @app.get("/regime")
+    async def regime():
+        alpha = _alpha_from_state()
+        if alpha is None or alpha.last_meta is None:
+            return {"status": "NO_DATA", "regime": None, "reasons": []}
+        return {
+            "status": "OK",
+            "regime": alpha.last_meta.regime,
+            "confidence": str(alpha.last_meta.confidence),
+            "reasons": alpha.last_meta.reason_codes,
+        }
+
+    @app.get("/signals")
+    async def signals(limit: int = 50):
+        alpha = _alpha_from_state()
+        if alpha is None or alpha.last_meta is None:
+            return {"signals": []}
+        return {
+            "signals": [
+                {
+                    "symbol": alpha.last_meta.symbol,
+                    "side": alpha.last_meta.side.value,
+                    "confidence": str(alpha.last_meta.confidence),
+                    "reasons": alpha.last_meta.reason_codes,
+                    "regime": alpha.last_meta.regime,
+                }
+            ],
+            "count": 1,
+        }
+
+    @app.get("/strategies")
+    async def strategies():
+        if state.engine is None:
+            return {"strategies": []}
+        return {
+            "strategies": [{"name": s.name, "version": s.version} for s in state.engine.strategies]
+        }
+
+    @app.get("/risk")
+    async def risk():
+        return {
+            "trading_mode": state.settings.effective_mode().value,
+            "live_trading_enabled": state.settings.live_trading_enabled,
+            "kill_switch": state.risk.kill_switch.snapshot(),
+            "risk_config": state.risk.config.model_dump(mode="json"),
+        }
+
+    @app.get("/margin")
+    async def margin():
+        account = await state.portfolio.get_account(state.settings.effective_mode())
+        positions = await state.portfolio.get_positions()
+        return {
+            "equity": str(account.equity),
+            "balances": {k: v.model_dump(mode="json") for k, v in account.balances.items()},
+            "positions": {k: v.model_dump(mode="json") for k, v in positions.items()},
+        }
+
+    @app.get("/reviews")
+    async def reviews(limit: int = 50):
+        # Structured reviews are emitted by governance runtime; persisted
+        # review storage is not yet implemented, so this is intentionally empty.
+        return {"reviews": [], "count": 0}
+
+    @app.get("/stress-tests")
+    async def stress_tests(limit: int = 50):
+        return {"stress_tests": [], "count": 0}
+
+    @app.get("/daily-reviews")
+    async def daily_reviews(limit: int = 50):
+        return {"daily_reviews": [], "count": 0}
+
+    @app.get("/learning")
+    async def learning():
+        alpha = _alpha_from_state()
+        if alpha is None:
+            return {"status": "NO_ALPHA", "fast_learning": {}}
+        return {
+            "status": "OK",
+            "fast_learning": alpha.fast_learning.snapshot(),
+            "slow_learning_candidates": list(alpha.slow_learning.candidates.keys()),
+        }
+
+    @app.get("/exchange-health")
+    async def exchange_health():
+        adapter_connected = (
+            getattr(state.engine, "adapter", None).connected if state.engine else False
+        )
+        return {
+            "adapter": "connected" if adapter_connected else "disconnected",
+            "mode": state.settings.effective_mode().value,
+            "paper_mode": state.settings.paper_mode,
+        }
 
     @app.get("/version")
     async def version():
@@ -190,22 +300,36 @@ def create_app(state: AppState) -> FastAPI:
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket):
         await websocket.accept()
+        queue: asyncio.Queue = asyncio.Queue()
+        if state.engine is not None:
+            state.engine.event_bus.subscribe("*", lambda event: queue.put_nowait(event))
         while True:
-            await websocket.send_json(
-                {
+            event = None
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+            except TimeoutError:
+                event = None
+            if event is None:
+                payload = {
+                    "state": state.engine.state_machine.state.value if state.engine else "STOPPED",
+                    "mode": state.settings.effective_mode().value,
+                }
+                envelope = {
                     "event_type": "runtime",
                     "event_version": "v1",
                     "timestamp": datetime.now(UTC).isoformat(),
-                    "payload": {
-                        "state": state.engine.state_machine.state.value
-                        if state.engine
-                        else "STOPPED",
-                        "mode": state.settings.effective_mode().value,
-                    },
+                    "payload": payload,
                 }
-            )
+            else:
+                envelope = {
+                    "event_type": "runtime",
+                    "event_version": "v1",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "payload": str(event),
+                }
+            await websocket.send_json(envelope)
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
             except TimeoutError:
                 continue
 

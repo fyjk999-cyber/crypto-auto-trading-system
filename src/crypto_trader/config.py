@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     binance_api_secret: str | None = None
     binance_testnet: bool = True
 
+    # Local paper runtime
+    auto_start_runtime: bool = True
+    scanner_enabled: bool = True
+    paper_mode: str = "PAPER_SYNTHETIC"  # PAPER_SYNTHETIC | PAPER_REAL_MARKET
+    paper_initial_equity: str = "100000"
+    paper_settlement_asset: str = "USDT"
+    daily_review_time_utc: str = "00:05"
+
     # Runtime
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3

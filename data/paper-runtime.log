@@ -1,0 +1,16 @@
+INFO:     Started server process [24564]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:49195 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49196 - "POST /manual-orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49197 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49198 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49202 - "POST /manual-orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49204 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49205 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49206 - "GET /ledger?limit=6 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [24564]
