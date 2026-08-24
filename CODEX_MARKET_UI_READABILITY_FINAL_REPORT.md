@@ -33,9 +33,8 @@ delivery revision for this report.
 - `npm test`
 - `npm run typecheck`
 - `npm run build`
-- backend `pytest`: first full run was 206/207 because an existing SQLite
-  supervisor lock test was intermittent; isolated `test_supervisor.py` retry
-  passed 5/5. This report does not treat the initial lock failure as a UI pass.
+- backend `pytest`: 207 passed (one FastAPI/Starlette dependency deprecation
+  warning only).
 
 ## Safety boundary
 
