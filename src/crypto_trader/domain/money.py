@@ -4,9 +4,10 @@ Python port of the semantic ideas in Kalshi v2 lib/v2/decimal.mjs
 (string-only parsing, explicit precision, no binary float) implemented with
 Python decimal.Decimal. Binary float is forbidden in core financial fields.
 """
+
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP, localcontext
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Annotated, Any
 
 from pydantic import BeforeValidator

@@ -3,13 +3,13 @@
 Supports out-of-order ACK/fill delivery, cancel/fill races, duplicate events,
 and recovery transitions. Pure function of (current_status, event_type).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from crypto_trader.domain.enums import OrderEventType, OrderStatus
 from crypto_trader.domain.errors import InvalidStateTransition
-
 
 # canonical transitions. A late event that should not move the state maps to
 # the same status with changed=False; an invalid event raises.
@@ -43,7 +43,10 @@ _TRANSITIONS: dict[tuple[OrderStatus, OrderEventType], OrderStatus] = {
     (OrderStatus.OPEN, OrderEventType.ORDER_REJECTED): OrderStatus.REJECTED,
     (OrderStatus.OPEN, OrderEventType.ORDER_EXPIRED): OrderStatus.EXPIRED,
     (OrderStatus.OPEN, OrderEventType.ORDER_UNKNOWN): OrderStatus.UNKNOWN,
-    (OrderStatus.PARTIALLY_FILLED, OrderEventType.ORDER_PARTIALLY_FILLED): OrderStatus.PARTIALLY_FILLED,
+    (
+        OrderStatus.PARTIALLY_FILLED,
+        OrderEventType.ORDER_PARTIALLY_FILLED,
+    ): OrderStatus.PARTIALLY_FILLED,
     (OrderStatus.PARTIALLY_FILLED, OrderEventType.ORDER_FILLED): OrderStatus.FILLED,
     (OrderStatus.PARTIALLY_FILLED, OrderEventType.ORDER_CANCEL_PENDING): OrderStatus.CANCEL_PENDING,
     (OrderStatus.PARTIALLY_FILLED, OrderEventType.ORDER_REJECTED): OrderStatus.REJECTED,
@@ -51,7 +54,10 @@ _TRANSITIONS: dict[tuple[OrderStatus, OrderEventType], OrderStatus] = {
     (OrderStatus.PARTIALLY_FILLED, OrderEventType.ORDER_UNKNOWN): OrderStatus.UNKNOWN,
     (OrderStatus.CANCEL_PENDING, OrderEventType.ORDER_CANCELLED): OrderStatus.CANCELLED,
     # cancel/fill race: exchange truth wins
-    (OrderStatus.CANCEL_PENDING, OrderEventType.ORDER_PARTIALLY_FILLED): OrderStatus.PARTIALLY_FILLED,
+    (
+        OrderStatus.CANCEL_PENDING,
+        OrderEventType.ORDER_PARTIALLY_FILLED,
+    ): OrderStatus.PARTIALLY_FILLED,
     (OrderStatus.CANCEL_PENDING, OrderEventType.ORDER_FILLED): OrderStatus.FILLED,
     (OrderStatus.CANCELLED, OrderEventType.ORDER_PARTIALLY_FILLED): OrderStatus.PARTIALLY_FILLED,
     (OrderStatus.CANCELLED, OrderEventType.ORDER_FILLED): OrderStatus.FILLED,
@@ -94,4 +100,6 @@ class OrderStateMachine:
             return TransitionResult(_TRANSITIONS[key], _TRANSITIONS[key] != current)
         if key in _NOOP_EVENTS:
             return TransitionResult(current, changed=False, noop=True)
-        raise InvalidStateTransition(f"invalid order transition {current.value} -> {event_type.value}")
+        raise InvalidStateTransition(
+            f"invalid order transition {current.value} -> {event_type.value}"
+        )

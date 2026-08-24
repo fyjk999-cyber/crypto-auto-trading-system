@@ -7,7 +7,9 @@ import structlog
 
 
 def configure_logging(level: str = "INFO", structured: bool = True) -> None:
-    logging.basicConfig(format="%(message)s", stream=sys.stdout, level=getattr(logging, level.upper(), logging.INFO))
+    logging.basicConfig(
+        format="%(message)s", stream=sys.stdout, level=getattr(logging, level.upper(), logging.INFO)
+    )
     processors = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -21,7 +23,9 @@ def configure_logging(level: str = "INFO", structured: bool = True) -> None:
         processors.append(structlog.dev.ConsoleRenderer())
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(getattr(logging, level.upper(), logging.INFO)),
+        wrapper_class=structlog.make_filtering_bound_logger(
+            getattr(logging, level.upper(), logging.INFO)
+        ),
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )

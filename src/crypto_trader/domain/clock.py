@@ -7,10 +7,11 @@ decision paths, deterministic SimClock with step()) is kept. All A-share/HK
 session logic and T+1 settlement rules are intentionally removed: crypto is
 24/7 and session rules belong to adapters.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 
 class Clock:
@@ -20,12 +21,12 @@ class Clock:
         raise NotImplementedError
 
     def utc_now(self) -> datetime:
-        return self.now().astimezone(timezone.utc)
+        return self.now().astimezone(UTC)
 
 
 class SystemClock(Clock):
     def now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 class SimClock(Clock):

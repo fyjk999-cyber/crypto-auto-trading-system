@@ -1,4 +1,5 @@
 """Unified domain objects. Exchange-specific JSON never crosses the adapter boundary."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,8 +9,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from crypto_trader.domain.enums import (
-    ExecutionDecision,
     ExchangeEventType,
+    ExecutionDecision,
     LedgerDirection,
     LedgerEntryType,
     MarketDataStatus,
@@ -22,11 +23,23 @@ from crypto_trader.domain.enums import (
 )
 from crypto_trader.domain.money import (
     Balance as BalanceValue,
+)
+from crypto_trader.domain.money import (
     CostBasis as CostBasisValue,
+)
+from crypto_trader.domain.money import (
     Fee as FeeValue,
+)
+from crypto_trader.domain.money import (
     Margin as MarginValue,
+)
+from crypto_trader.domain.money import (
     Money as MoneyValue,
+)
+from crypto_trader.domain.money import (
     Price as PriceValue,
+)
+from crypto_trader.domain.money import (
     Quantity as QuantityValue,
 )
 

@@ -3,22 +3,27 @@
 Implements the exact same ExchangeAdapter contract as Binance. Paper, shadow,
 and tests run through this adapter; the core never branches on simulation.
 """
+
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Awaitable, Callable
 
 from crypto_trader.domain.enums import (
     ExchangeEventType,
     OrderSide,
     OrderStatus,
     OrderType,
-    TimeInForce,
-    TradingMode,
 )
-from crypto_trader.domain.errors import InvalidOrder, OrderNotFound, OrderRejected, RateLimited, UnknownExecutionState
+from crypto_trader.domain.errors import (
+    InvalidOrder,
+    OrderNotFound,
+    OrderRejected,
+    RateLimited,
+    UnknownExecutionState,
+)
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Instrument, Order, Position
 from crypto_trader.domain.money import D, format_decimal
@@ -29,9 +34,13 @@ from crypto_trader.market_data.orderbook import OrderBook
 class SimulatedExchangeAdapter(ExchangeAdapter):
     name = "SIMULATED"
 
-    def __init__(self, *, initial_balances: dict[str, Decimal] | None = None,
-                 instruments: list[Instrument] | None = None,
-                 fee_rate: Decimal = Decimal("0.001")) -> None:
+    def __init__(
+        self,
+        *,
+        initial_balances: dict[str, Decimal] | None = None,
+        instruments: list[Instrument] | None = None,
+        fee_rate: Decimal = Decimal("0.001"),
+    ) -> None:
         self.balances: dict[str, Decimal] = {
             k: D(v) for k, v in (initial_balances or {"USDT": Decimal("100000")}).items()
         }
@@ -59,9 +68,15 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self.disconnected: bool = False
 
         self.default_instrument = Instrument(
-            symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT",
-            tick_size="0.01", step_size="0.00001", min_qty="0.00001",
-            min_notional="5", price_precision=2, quantity_precision=5,
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            tick_size="0.01",
+            step_size="0.00001",
+            min_qty="0.00001",
+            min_notional="5",
+            price_precision=2,
+            quantity_precision=5,
             exchange=self.name,
         )
         self.instruments = {i.symbol: i for i in (instruments or [self.default_instrument])}
@@ -94,13 +109,19 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self._handlers[sub_id] = handler
         return sub_id
 
-    async def subscribe_market_data(self, symbol: str, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str:
+    async def subscribe_market_data(
+        self, symbol: str, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str:
         return await self._subscribe(handler)
 
-    async def subscribe_order_updates(self, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str:
+    async def subscribe_order_updates(
+        self, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str:
         return await self._subscribe(handler)
 
-    async def subscribe_account_updates(self, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str:
+    async def subscribe_account_updates(
+        self, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str:
         return await self._subscribe(handler)
 
     # ------------------------------------------------------------- market data
@@ -113,7 +134,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             self.seed_book(symbol)
         return self.books[symbol]
 
-    def seed_book(self, symbol: str, mid: str = "100", spread: str = "0.05", depth: int = 5) -> OrderBook:
+    def seed_book(
+        self, symbol: str, mid: str = "100", spread: str = "0.05", depth: int = 5
+    ) -> OrderBook:
         mid_d = D(mid)
         spread_d = D(spread)
         book = OrderBook(symbol=symbol, exchange=self.name)
@@ -124,10 +147,11 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self.books[symbol] = book
         return book
 
-    async def emit_market_delta(self, symbol: str, bids: list[tuple[Decimal, Decimal]],
-                                asks: list[tuple[Decimal, Decimal]]) -> None:
+    async def emit_market_delta(
+        self, symbol: str, bids: list[tuple[Decimal, Decimal]], asks: list[tuple[Decimal, Decimal]]
+    ) -> None:
         self._ensure_connected()
-        book = await self.get_orderbook(symbol)
+        await self.get_orderbook(symbol)
         if self.sequence_gap_next_delta:
             self.sequence_gap_next_delta = False
             self.sequence[symbol] += 2  # create a gap
@@ -135,11 +159,15 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             self.sequence[symbol] += 1
         await self._emit(
             ExchangeEvent(
-                event_id=new_id("exevt"), event_type=ExchangeEventType.MARKET_DELTA,
-                symbol=symbol, timestamp=datetime.now(timezone.utc),
-                payload={"sequence": self.sequence[symbol],
-                         "bids": [[format_decimal(p), format_decimal(q)] for p, q in bids],
-                         "asks": [[format_decimal(p), format_decimal(q)] for p, q in asks]},
+                event_id=new_id("exevt"),
+                event_type=ExchangeEventType.MARKET_DELTA,
+                symbol=symbol,
+                timestamp=datetime.now(UTC),
+                payload={
+                    "sequence": self.sequence[symbol],
+                    "bids": [[format_decimal(p), format_decimal(q)] for p, q in bids],
+                    "asks": [[format_decimal(p), format_decimal(q)] for p, q in asks],
+                },
             )
         )
 
@@ -204,8 +232,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 f"submit timeout after order reached exchange: {local.exchange_order_id}"
             )
 
-        ack_event = self._order_event(ExchangeEventType.ORDER_ACK, local,
-                                      payload={"status": "ACK"})
+        ack_event = self._order_event(ExchangeEventType.ORDER_ACK, local, payload={"status": "ACK"})
         fill_events = self._match_order(local)
 
         # Ordering hooks: normal = ack first; chaos = fill before ack
@@ -217,28 +244,35 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 await self._emit(fill_events[0])
         else:
             await self._emit(ack_event)
-            await self._emit(self._order_event(ExchangeEventType.ORDER_OPENED, local,
-                                               payload={"status": "OPEN"}))
+            await self._emit(
+                self._order_event(ExchangeEventType.ORDER_OPENED, local, payload={"status": "OPEN"})
+            )
             for fill_event in fill_events:
                 await self._emit(fill_event)
                 if self.duplicate_fill:
                     await self._emit(fill_event)
         return self.orders[local.exchange_order_id]
 
-    def _order_event(self, event_type: ExchangeEventType, order: Order, payload: dict | None = None) -> ExchangeEvent:
+    def _order_event(
+        self, event_type: ExchangeEventType, order: Order, payload: dict | None = None
+    ) -> ExchangeEvent:
         return ExchangeEvent(
-            event_id=new_id("exevt"), event_type=event_type, symbol=order.symbol,
-            timestamp=datetime.now(timezone.utc),
-            payload={"exchange_order_id": order.exchange_order_id,
-                     "client_order_id": order.client_order_id,
-                     "order_id": order.internal_order_id,
-                     "symbol": order.symbol,
-                     "side": order.side.value,
-                     "price": format_decimal(order.price) if order.price is not None else "0",
-                     "quantity": format_decimal(order.quantity),
-                     "filled_quantity": format_decimal(order.filled_quantity),
-                     **({"status": payload["status"]} if payload and "status" in payload else {}),
-                     **(payload or {})},
+            event_id=new_id("exevt"),
+            event_type=event_type,
+            symbol=order.symbol,
+            timestamp=datetime.now(UTC),
+            payload={
+                "exchange_order_id": order.exchange_order_id,
+                "client_order_id": order.client_order_id,
+                "order_id": order.internal_order_id,
+                "symbol": order.symbol,
+                "side": order.side.value,
+                "price": format_decimal(order.price) if order.price is not None else "0",
+                "quantity": format_decimal(order.quantity),
+                "filled_quantity": format_decimal(order.filled_quantity),
+                **({"status": payload["status"]} if payload and "status" in payload else {}),
+                **(payload or {}),
+            },
         )
 
     def _match_order(self, order: Order) -> list[ExchangeEvent]:
@@ -273,19 +307,21 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 quantity=qty,
                 fee=fee,
                 fee_currency=instrument.quote_asset,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
             remaining -= qty
             order.filled_quantity += qty
             if order.filled_quantity == order.quantity:
                 order.status = OrderStatus.FILLED
                 order.avg_fill_price = (
-                    (order.avg_fill_price or Decimal("0")) * (order.filled_quantity - qty) + price * qty
+                    (order.avg_fill_price or Decimal("0")) * (order.filled_quantity - qty)
+                    + price * qty
                 ) / order.filled_quantity
             else:
                 order.status = OrderStatus.PARTIALLY_FILLED
                 order.avg_fill_price = (
-                    (order.avg_fill_price or Decimal("0")) * (order.filled_quantity - qty) + price * qty
+                    (order.avg_fill_price or Decimal("0")) * (order.filled_quantity - qty)
+                    + price * qty
                 ) / order.filled_quantity
             self._apply_fill_to_balances(fill, instrument)
             # consume book level
@@ -294,20 +330,25 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             if qty == level.quantity:
                 side_book.pop(key, None)
             else:
-                side_book[key] = side_book[key].model_copy(update={"quantity": level.quantity - qty})
-            fill_events.append(self._order_event(
-                ExchangeEventType.ORDER_FILLED if order.status == OrderStatus.FILLED
-                else ExchangeEventType.ORDER_PARTIALLY_FILLED,
-                order,
-                payload={
-                    "fill_id": fill.fill_id,
-                    "trade_id": fill.trade_id,
-                    "fill_price": format_decimal(fill.price),
-                    "fill_quantity": format_decimal(fill.quantity),
-                    "fee": format_decimal(fill.fee),
-                    "fee_currency": fill.fee_currency,
-                },
-            ))
+                side_book[key] = side_book[key].model_copy(
+                    update={"quantity": level.quantity - qty}
+                )
+            fill_events.append(
+                self._order_event(
+                    ExchangeEventType.ORDER_FILLED
+                    if order.status == OrderStatus.FILLED
+                    else ExchangeEventType.ORDER_PARTIALLY_FILLED,
+                    order,
+                    payload={
+                        "fill_id": fill.fill_id,
+                        "trade_id": fill.trade_id,
+                        "fill_price": format_decimal(fill.price),
+                        "fill_quantity": format_decimal(fill.quantity),
+                        "fee": format_decimal(fill.fee),
+                        "fee_currency": fill.fee_currency,
+                    },
+                )
+            )
         return fill_events
 
     def _apply_fill_to_balances(self, fill: Fill, instrument: Instrument) -> None:
@@ -360,19 +401,29 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 quantity=order.remaining_quantity,
                 fee=Decimal("0"),
                 fee_currency=None,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
             order.filled_quantity = order.quantity
             order.status = OrderStatus.FILLED
-            await self._emit(self._order_event(
-                ExchangeEventType.ORDER_FILLED, order,
-                payload={"fill_id": fill.fill_id, "fill_price": format_decimal(fill.price),
-                         "fill_quantity": format_decimal(fill.quantity), "fee": "0"},
-            ))
+            await self._emit(
+                self._order_event(
+                    ExchangeEventType.ORDER_FILLED,
+                    order,
+                    payload={
+                        "fill_id": fill.fill_id,
+                        "fill_price": format_decimal(fill.price),
+                        "fill_quantity": format_decimal(fill.quantity),
+                        "fee": "0",
+                    },
+                )
+            )
             return order
         order.status = OrderStatus.CANCELLED
-        await self._emit(self._order_event(ExchangeEventType.ORDER_CANCELLED, order,
-                                           payload={"status": "CANCELED"}))
+        await self._emit(
+            self._order_event(
+                ExchangeEventType.ORDER_CANCELLED, order, payload={"status": "CANCELED"}
+            )
+        )
         return order
 
     async def get_order(self, symbol: str, exchange_order_id: str) -> Order:
@@ -406,11 +457,18 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
     def normalize_fill(self, raw: dict) -> Fill:
         return Fill(
-            fill_id=raw["fill_id"], trade_id=raw.get("trade_id"), order_id=raw.get("order_id", ""),
-            client_order_id=raw.get("client_order_id"), exchange_order_id=raw.get("exchange_order_id"),
-            symbol=raw["symbol"], side=OrderSide(raw["side"]), price=D(raw["fill_price"]),
-            quantity=D(raw["fill_quantity"]), fee=D(raw.get("fee", "0")),
-            fee_currency=raw.get("fee_currency"), timestamp=datetime.now(timezone.utc),
+            fill_id=raw["fill_id"],
+            trade_id=raw.get("trade_id"),
+            order_id=raw.get("order_id", ""),
+            client_order_id=raw.get("client_order_id"),
+            exchange_order_id=raw.get("exchange_order_id"),
+            symbol=raw["symbol"],
+            side=OrderSide(raw["side"]),
+            price=D(raw["fill_price"]),
+            quantity=D(raw["fill_quantity"]),
+            fee=D(raw.get("fee", "0")),
+            fee_currency=raw.get("fee_currency"),
+            timestamp=datetime.now(UTC),
         )
 
     async def emit_order_rejected(self, exchange_order_id: str, reason: str) -> None:
@@ -418,6 +476,10 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         if order is None:
             return
         order.status = OrderStatus.REJECTED
-        await self._emit(self._order_event(
-            ExchangeEventType.ORDER_REJECTED, order, payload={"status": "REJECTED", "reason": reason},
-        ))
+        await self._emit(
+            self._order_event(
+                ExchangeEventType.ORDER_REJECTED,
+                order,
+                payload={"status": "REJECTED", "reason": reason},
+            )
+        )

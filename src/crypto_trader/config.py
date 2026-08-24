@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     orderbook_max_age_seconds: float = 2.0
     max_websocket_reconnect_attempts: int = 5
 
+    # API
+    api_key: str | None = None
+
     # Observability
     log_level: str = "INFO"
     structured_logs: bool = True

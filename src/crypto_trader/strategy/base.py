@@ -1,10 +1,10 @@
 """StrategyPlugin contract. Strategy logic must never enter the core."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
 
 from crypto_trader.domain.models import Account, Position, SignalIntent
 from crypto_trader.market_data.orderbook import OrderBook

@@ -4,16 +4,17 @@ Local balances/positions are ledger projections. Exchange truth comes through
 an ExchangeAdapter. Severe mismatches pause new orders (execution authority
 consults reconciliation health).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
+from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.persistence.models import ReconciliationRunORM
-from crypto_trader.domain.identifiers import new_id
 
 
 @dataclass
@@ -44,7 +45,8 @@ class ReconciliationService:
             right = D(exchange_balances.get(currency, "0"))
             if left != right:
                 alerts.append(
-                    f"BALANCE_MISMATCH {currency}: local={format_decimal(left)} exchange={format_decimal(right)}"
+                    f"BALANCE_MISMATCH {currency}: local={format_decimal(left)} "
+                    f"exchange={format_decimal(right)}"
                 )
 
         exchange_positions = {p.symbol: p for p in (await adapter.get_positions())}
@@ -58,14 +60,20 @@ class ReconciliationService:
                     "exchange_quantity": format_decimal(ex_qty),
                 }
                 alerts.append(
-                    f"POSITION_MISMATCH {symbol}: local={format_decimal(pos.quantity)} exchange={format_decimal(ex_qty)}"
+                    f"POSITION_MISMATCH {symbol}: local={format_decimal(pos.quantity)} "
+                    f"exchange={format_decimal(ex_qty)}"
                 )
         for symbol in set(exchange_positions) - set(local.positions):
             ex = exchange_positions[symbol]
-            positions_diff[symbol] = {"local_quantity": "0", "exchange_quantity": format_decimal(ex.quantity)}
+            positions_diff[symbol] = {
+                "local_quantity": "0",
+                "exchange_quantity": format_decimal(ex.quantity),
+            }
             alerts.append(f"POSITION_ONLY_ON_EXCHANGE {symbol}: {format_decimal(ex.quantity)}")
 
-        halt = any(a.startswith("BALANCE_MISMATCH") or a.startswith("POSITION_MISMATCH") for a in alerts)
+        halt = any(
+            a.startswith("BALANCE_MISMATCH") or a.startswith("POSITION_MISMATCH") for a in alerts
+        )
         report = ReconciliationReport(
             run_id=run_id,
             ok=not alerts,
@@ -79,7 +87,7 @@ class ReconciliationService:
             session.add(
                 ReconciliationRunORM(
                     run_id=run_id,
-                    compared_at=datetime.now(timezone.utc),
+                    compared_at=datetime.now(UTC),
                     status="OK" if report.ok else "ALERT",
                     local_balances_json=local_balances,
                     exchange_balances_json=exchange_balances,

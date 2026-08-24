@@ -1,8 +1,9 @@
 """MarketDataService: snapshot + continuous delta with gap detection and resync."""
+
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.enums import MarketDataStatus
@@ -31,9 +32,13 @@ class MarketDataService:
         if symbol in self.books:
             self.books[symbol].status = status
 
-    async def ingest_snapshot(self, symbol: str, sequence: int,
-                              bids: list[tuple[Decimal, Decimal]],
-                              asks: list[tuple[Decimal, Decimal]]) -> OrderBook:
+    async def ingest_snapshot(
+        self,
+        symbol: str,
+        sequence: int,
+        bids: list[tuple[Decimal, Decimal]],
+        asks: list[tuple[Decimal, Decimal]],
+    ) -> OrderBook:
         book = self.ensure_symbol(symbol)
         book.apply_snapshot(sequence, bids, asks)
         self._set_status(symbol, MarketDataStatus.HEALTHY)
@@ -48,9 +53,13 @@ class MarketDataService:
                 raise
         return book
 
-    async def ingest_delta(self, symbol: str, sequence: int,
-                           bids: list[tuple[Decimal, Decimal]],
-                           asks: list[tuple[Decimal, Decimal]]) -> OrderBook:
+    async def ingest_delta(
+        self,
+        symbol: str,
+        sequence: int,
+        bids: list[tuple[Decimal, Decimal]],
+        asks: list[tuple[Decimal, Decimal]],
+    ) -> OrderBook:
         book = self.ensure_symbol(symbol)
         if book.status == MarketDataStatus.RESYNCING:
             self.resync_buffers[symbol].append((sequence, bids, asks))
@@ -101,9 +110,11 @@ class MarketDataService:
             book.bids = snapshot.bids
             book.asks = snapshot.asks
             book.sequence = snapshot.sequence
-            book.updated_at = datetime.now(timezone.utc)
+            book.updated_at = datetime.now(UTC)
         else:
-            await self.ingest_snapshot(symbol, snapshot["sequence"], snapshot["bids"], snapshot["asks"])
+            await self.ingest_snapshot(
+                symbol, snapshot["sequence"], snapshot["bids"], snapshot["asks"]
+            )
         self._set_status(symbol, MarketDataStatus.HEALTHY)
         return book
 
@@ -118,7 +129,7 @@ class MarketDataService:
             return False
         if book.updated_at is None:
             return False
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         return (now - book.updated_at).total_seconds() <= max_age_seconds
 
     def health(self) -> dict:

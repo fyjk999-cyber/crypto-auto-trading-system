@@ -1,5 +1,4 @@
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from datetime import UTC, datetime, timedelta
 
 from crypto_trader.domain.enums import ExecutionDecision, OrderSide, OrderStatus, TradingMode
 from crypto_trader.domain.models import Instrument, OrderIntent, RiskDecision
@@ -10,7 +9,7 @@ from crypto_trader.risk.kill_switch import KillSwitch
 
 def ctx(**kw):
     base = dict(
-        now=datetime.now(timezone.utc),
+        now=datetime.now(UTC),
         trading_mode=TradingMode.PAPER,
         live_enabled=False,
         lease_held=True,
@@ -23,12 +22,24 @@ def ctx(**kw):
         exchange_connected=True,
         balance_fresh=True,
         risk_decision=RiskDecision(
-            risk_decision_id="r1", client_order_id="c1", symbol="BTCUSDT",
-            side=OrderSide.BUY, decision=ExecutionDecision.APPROVE,
-            reason="RISK_PASS", checks={}, timestamp=datetime.now(timezone.utc),
+            risk_decision_id="r1",
+            client_order_id="c1",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            decision=ExecutionDecision.APPROVE,
+            reason="RISK_PASS",
+            checks={},
+            timestamp=datetime.now(UTC),
         ),
-        instrument=Instrument(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT",
-                              tick_size="0.01", step_size="0.001", min_qty="0.001", min_notional="5"),
+        instrument=Instrument(
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            tick_size="0.01",
+            step_size="0.001",
+            min_qty="0.001",
+            min_notional="5",
+        ),
         rate_limiter=RateLimiter(100, 10),
     )
     base.update(kw)
@@ -36,8 +47,9 @@ def ctx(**kw):
 
 
 def make_intent():
-    return OrderIntent(client_order_id="c1", symbol="BTCUSDT", side=OrderSide.BUY,
-                       price="100.01", quantity="0.1")
+    return OrderIntent(
+        client_order_id="c1", symbol="BTCUSDT", side=OrderSide.BUY, price="100.01", quantity="0.1"
+    )
 
 
 async def test_authority_approves_clean_order():
@@ -76,14 +88,21 @@ async def test_unhealthy_orderbook_holds():
 
 
 async def test_duplicate_client_order_holds():
-    decision, _ = await ExecutionAuthority().authorize(make_intent(), ctx(duplicate_client_order=True))
+    decision, _ = await ExecutionAuthority().authorize(
+        make_intent(), ctx(duplicate_client_order=True)
+    )
     assert decision == ExecutionDecision.HOLD
 
 
 async def test_price_precision_rejects():
     decision, _ = await ExecutionAuthority().authorize(
-        OrderIntent(client_order_id="c1", symbol="BTCUSDT", side=OrderSide.BUY,
-                    price="100.001", quantity="0.01"),
+        OrderIntent(
+            client_order_id="c1",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price="100.001",
+            quantity="0.01",
+        ),
         ctx(),
     )
     assert decision == ExecutionDecision.REJECT
@@ -91,15 +110,20 @@ async def test_price_precision_rejects():
 
 async def test_min_quantity_rejects():
     decision, _ = await ExecutionAuthority().authorize(
-        OrderIntent(client_order_id="c1", symbol="BTCUSDT", side=OrderSide.BUY,
-                    price="100.01", quantity="0.0001"),
+        OrderIntent(
+            client_order_id="c1",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price="100.01",
+            quantity="0.0001",
+        ),
         ctx(),
     )
     assert decision == ExecutionDecision.REJECT
 
 
 async def test_expired_order_rejects():
-    past = datetime.now(timezone.utc) - timedelta(seconds=1)
+    past = datetime.now(UTC) - timedelta(seconds=1)
     intent = make_intent()
     intent.expires_at = past
     decision, _ = await ExecutionAuthority().authorize(intent, ctx())
@@ -107,5 +131,7 @@ async def test_expired_order_rejects():
 
 
 async def test_rate_limit_budget_holds():
-    decision, _ = await ExecutionAuthority().authorize(make_intent(), ctx(rate_limiter=RateLimiter(0, 0)))
+    decision, _ = await ExecutionAuthority().authorize(
+        make_intent(), ctx(rate_limiter=RateLimiter(0, 0))
+    )
     assert decision == ExecutionDecision.HOLD

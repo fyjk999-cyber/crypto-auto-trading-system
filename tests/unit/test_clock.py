@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -10,7 +10,7 @@ def test_system_clock_is_utc_aware():
 
 
 def test_sim_clock_deterministic_sequence():
-    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
     ticks = [t0 + timedelta(seconds=i) for i in range(3)]
     clock = SimClock(ticks)
     with pytest.raises(RuntimeError):

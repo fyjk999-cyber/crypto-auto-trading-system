@@ -1,4 +1,5 @@
 """Bybit adapter boundary. See okx.py boundary policy."""
+
 from __future__ import annotations
 
 from crypto_trader.exchange.base import ExchangeAdapter

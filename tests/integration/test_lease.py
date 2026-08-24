@@ -26,6 +26,7 @@ async def test_expired_lease_can_be_recovered(database):
     first = await mgr.acquire("exec", "engine_a", ttl_seconds=0.001)
     assert first is not None
     import asyncio
+
     await asyncio.sleep(0.01)
     second = await mgr.acquire("exec", "engine_b", ttl_seconds=30)
     assert second is not None

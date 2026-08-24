@@ -5,9 +5,10 @@ PORTED from Kalshi v2 lib/v2/orderbook.mjs normalization ideas:
 - a book has an explicit sequence and staleness state
 - any sequence gap invalidates the book before consumers can use it
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,18 +50,30 @@ class OrderBook(BaseModel):
     def _sorted(self, levels: dict[str, BookLevel], *, reverse: bool) -> list[BookLevel]:
         return sorted(levels.values(), key=lambda level: level.price, reverse=reverse)
 
-    def apply_snapshot(self, sequence: int, bids: list[tuple[Decimal, Decimal]], asks: list[tuple[Decimal, Decimal]],
-                       *, now: datetime | None = None) -> None:
+    def apply_snapshot(
+        self,
+        sequence: int,
+        bids: list[tuple[Decimal, Decimal]],
+        asks: list[tuple[Decimal, Decimal]],
+        *,
+        now: datetime | None = None,
+    ) -> None:
         self.sequence = int(sequence)
         self.bids.clear()
         self.asks.clear()
         self._upsert(self.bids, bids)
         self._upsert(self.asks, asks)
         self.status = MarketDataStatus.HEALTHY
-        self.updated_at = now or datetime.now(timezone.utc)
+        self.updated_at = now or datetime.now(UTC)
 
-    def apply_delta(self, sequence: int, bids: list[tuple[Decimal, Decimal]], asks: list[tuple[Decimal, Decimal]],
-                    *, now: datetime | None = None) -> None:
+    def apply_delta(
+        self,
+        sequence: int,
+        bids: list[tuple[Decimal, Decimal]],
+        asks: list[tuple[Decimal, Decimal]],
+        *,
+        now: datetime | None = None,
+    ) -> None:
         if self.sequence is not None and int(sequence) != self.sequence + 1:
             raise SequenceGap(
                 f"{self.symbol} sequence gap: expected {self.sequence + 1}, got {sequence}"
@@ -68,21 +81,21 @@ class OrderBook(BaseModel):
         self._upsert(self.bids, bids)
         self._upsert(self.asks, asks)
         self.sequence = int(sequence)
-        self.updated_at = now or datetime.now(timezone.utc)
+        self.updated_at = now or datetime.now(UTC)
 
     def invalidate(self) -> None:
         self.status = MarketDataStatus.UNHEALTHY
         self.sequence = None
         self.bids.clear()
         self.asks.clear()
-        self.updated_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(UTC)
 
     def ensure_fresh(self, max_age_seconds: float, now: datetime | None = None) -> None:
         if self.status != MarketDataStatus.HEALTHY:
             raise StaleMarketData(f"{self.symbol} orderbook status {self.status.value}")
         if self.updated_at is None:
             raise StaleMarketData(f"{self.symbol} orderbook has no snapshot")
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         if (now - self.updated_at).total_seconds() > max_age_seconds:
             raise StaleMarketData(f"{self.symbol} orderbook older than {max_age_seconds}s")
 
@@ -107,6 +120,12 @@ class OrderBook(BaseModel):
             "sequence": self.sequence,
             "status": self.status.value,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "bids": [[format_decimal(l.price), format_decimal(l.quantity)] for l in self._sorted(self.bids, reverse=True)[:25]],
-            "asks": [[format_decimal(l.price), format_decimal(l.quantity)] for l in self._sorted(self.asks, reverse=False)[:25]],
+            "bids": [
+                [format_decimal(level.price), format_decimal(level.quantity)]
+                for level in self._sorted(self.bids, reverse=True)[:25]
+            ],
+            "asks": [
+                [format_decimal(level.price), format_decimal(level.quantity)]
+                for level in self._sorted(self.asks, reverse=False)[:25]
+            ],
         }

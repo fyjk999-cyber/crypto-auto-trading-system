@@ -7,7 +7,11 @@ from crypto_trader.domain.errors import InvalidStateTransition
 class RuntimeStateMachine:
     TRANSITIONS = {
         RuntimeState.STOPPED: {RuntimeState.STARTING, RuntimeState.RECOVERING},
-        RuntimeState.STARTING: {RuntimeState.RUNNING, RuntimeState.RECOVERING, RuntimeState.STOPPED},
+        RuntimeState.STARTING: {
+            RuntimeState.RUNNING,
+            RuntimeState.RECOVERING,
+            RuntimeState.STOPPED,
+        },
         RuntimeState.RECOVERING: {RuntimeState.RUNNING, RuntimeState.STOPPED},
         RuntimeState.RUNNING: {RuntimeState.HALTED, RuntimeState.STOPPING},
         RuntimeState.HALTED: {RuntimeState.RUNNING, RuntimeState.STOPPING},

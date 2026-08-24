@@ -3,15 +3,16 @@
 Never blind resubmit. Orders stuck in SUBMITTING/SUBMITTED are resolved by
 querying the exchange, not by creating new orders.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from crypto_trader.domain.enums import OrderEventType, OrderSide, OrderStatus
+from crypto_trader.domain.enums import OrderEventType, OrderStatus
 from crypto_trader.domain.errors import OrderNotFound
 from crypto_trader.domain.identifiers import new_id
-from crypto_trader.domain.models import Fill, Order
+from crypto_trader.domain.models import Fill
 
 
 def event_type_for_exchange_status(status: OrderStatus) -> OrderEventType:
@@ -60,9 +61,15 @@ class RecoveryService:
 
             status = exchange_order.status
             # Fill reconciliation first (exchange truth wins)
-            if status == OrderStatus.FILLED and local.filled_quantity < exchange_order.filled_quantity:
+            if (
+                status == OrderStatus.FILLED
+                and local.filled_quantity < exchange_order.filled_quantity
+            ):
                 fill = Fill(
-                    fill_id=f"recovery_{exchange_order.exchange_order_id}_{format(exchange_order.filled_quantity, 'f').replace('.', '_')}",
+                    fill_id=(
+                        f"recovery_{exchange_order.exchange_order_id}_"
+                        f"{format(exchange_order.filled_quantity, 'f').replace('.', '_')}"
+                    ),
                     trade_id=new_id("trade"),
                     order_id=local.internal_order_id,
                     client_order_id=local.client_order_id,
@@ -72,12 +79,15 @@ class RecoveryService:
                     price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
                     quantity=exchange_order.filled_quantity - local.filled_quantity,
                     fee=Decimal("0"),
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     payload={"recovery": True},
                 )
                 await self.order_manager.apply_fill(fill)
                 actions.append(f"{local.client_order_id}: recovery fill {fill.quantity}")
-            if status == OrderStatus.PARTIALLY_FILLED and local.filled_quantity < exchange_order.filled_quantity:
+            if (
+                status == OrderStatus.PARTIALLY_FILLED
+                and local.filled_quantity < exchange_order.filled_quantity
+            ):
                 fill = Fill(
                     fill_id=f"recovery_{exchange_order.exchange_order_id}_partial",
                     trade_id=new_id("trade"),
@@ -89,7 +99,7 @@ class RecoveryService:
                     price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
                     quantity=exchange_order.filled_quantity - local.filled_quantity,
                     fee=Decimal("0"),
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     payload={"recovery": True},
                 )
                 await self.order_manager.apply_fill(fill)
@@ -98,12 +108,15 @@ class RecoveryService:
                 event_type = event_type_for_exchange_status(status)
                 if status in (OrderStatus.OPEN, OrderStatus.ACKNOWLEDGED):
                     await self.order_manager.transition(
-                        local.internal_order_id, event_type,
+                        local.internal_order_id,
+                        event_type,
                         event_id=new_id("evt"),
                         exchange_order_id=exchange_order.exchange_order_id,
                     )
                 elif status == OrderStatus.CANCELLED:
-                    await self.order_manager.cancel_confirm(local.internal_order_id, event_id=new_id("evt"))
+                    await self.order_manager.cancel_confirm(
+                        local.internal_order_id, event_id=new_id("evt")
+                    )
                 elif status == OrderStatus.REJECTED:
                     await self.order_manager.reject(
                         local.internal_order_id,

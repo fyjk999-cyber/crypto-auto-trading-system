@@ -14,7 +14,9 @@ class RateLimiter:
 
     def allow(self, cost: int = 1) -> bool:
         now = time.monotonic()
-        self.tokens = min(float(self.capacity), self.tokens + (now - self.updated) * self.refill_per_second)
+        self.tokens = min(
+            float(self.capacity), self.tokens + (now - self.updated) * self.refill_per_second
+        )
         self.updated = now
         if self.tokens >= cost:
             self.tokens -= cost

@@ -1,15 +1,15 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderSide, OrderStatus, OrderType, TimeInForce, TradingMode
 from crypto_trader.domain.models import OrderIntent
 from crypto_trader.order.manager import OrderManager
 from crypto_trader.runtime.recovery import RecoveryService
-from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 
 
 class StubRecoveryAdapter:
     """Exchange view that says the submitted order is FILLED."""
+
     def __init__(self):
         self.view = None
 
@@ -21,14 +21,25 @@ class StubRecoveryAdapter:
 
     async def get_balances(self):
         from crypto_trader.domain.models import Balance
-        return [Balance(currency="USDT", total=Decimal("0"), available=Decimal("0"), frozen=Decimal("0"))]
+
+        return [
+            Balance(
+                currency="USDT", total=Decimal("0"), available=Decimal("0"), frozen=Decimal("0")
+            )
+        ]
 
 
 async def test_recovery_never_blind_resubmits_and_applies_exchange_fill(database):
     mgr = OrderManager(database.session_factory)
-    intent = OrderIntent(client_order_id="c_rec", symbol="BTCUSDT", side=OrderSide.BUY,
-                         order_type=OrderType.LIMIT, time_in_force=TimeInForce.GTC,
-                         price="100", quantity="1")
+    intent = OrderIntent(
+        client_order_id="c_rec",
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price="100",
+        quantity="1",
+    )
     local = await mgr.create_from_intent(intent, trading_mode=TradingMode.PAPER)
     await mgr.validate(local.internal_order_id)
     await mgr.submitting(local.internal_order_id)
@@ -36,15 +47,25 @@ async def test_recovery_never_blind_resubmits_and_applies_exchange_fill(database
     await mgr.ack(local.internal_order_id, "sim_999")
 
     adapter = StubRecoveryAdapter()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     from crypto_trader.domain.models import Order
+
     adapter.view = Order(
-        internal_order_id=local.internal_order_id, client_order_id="c_rec",
-        exchange_order_id="sim_999", symbol="BTCUSDT", side=OrderSide.BUY,
-        order_type=OrderType.LIMIT, time_in_force=TimeInForce.GTC,
-        price="100", quantity="1", filled_quantity="1", avg_fill_price="100",
-        status=OrderStatus.FILLED, trading_mode=TradingMode.PAPER,
-        created_at=now, updated_at=now,
+        internal_order_id=local.internal_order_id,
+        client_order_id="c_rec",
+        exchange_order_id="sim_999",
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price="100",
+        quantity="1",
+        filled_quantity="1",
+        avg_fill_price="100",
+        status=OrderStatus.FILLED,
+        trading_mode=TradingMode.PAPER,
+        created_at=now,
+        updated_at=now,
     )
     actions = await RecoveryService(mgr, adapter).recover("run_rec")
     restored = await mgr.get(local.internal_order_id)
@@ -57,9 +78,15 @@ async def test_recovery_never_blind_resubmits_and_applies_exchange_fill(database
 
 async def test_recovery_rejects_order_missing_from_exchange(database):
     mgr = OrderManager(database.session_factory)
-    intent = OrderIntent(client_order_id="c_lost", symbol="BTCUSDT", side=OrderSide.BUY,
-                         order_type=OrderType.LIMIT, time_in_force=TimeInForce.GTC,
-                         price="100", quantity="1")
+    intent = OrderIntent(
+        client_order_id="c_lost",
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price="100",
+        quantity="1",
+    )
     local = await mgr.create_from_intent(intent, trading_mode=TradingMode.PAPER)
     await mgr.validate(local.internal_order_id)
     await mgr.submitting(local.internal_order_id)

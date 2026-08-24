@@ -1,21 +1,38 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
-from crypto_trader.domain.enums import ExchangeEventType, OrderSide, OrderStatus, OrderType, TimeInForce, TradingMode
+from crypto_trader.domain.enums import (
+    ExchangeEventType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TimeInForce,
+    TradingMode,
+)
 from crypto_trader.domain.errors import OrderRejected, RateLimited, UnknownExecutionState
 from crypto_trader.domain.models import Order
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 
 
 def make_order(cid="c1", qty="0.1", price="100"):
-    now = datetime.now(timezone.utc)
-    return Order(internal_order_id="ord_1", client_order_id=cid, symbol="BTCUSDT",
-                 side=OrderSide.BUY, order_type=OrderType.LIMIT, time_in_force=TimeInForce.GTC,
-                 price=price, quantity=qty, status=OrderStatus.SUBMITTING,
-                 trading_mode=TradingMode.PAPER, strategy_id="test",
-                 created_at=now, updated_at=now)
+    now = datetime.now(UTC)
+    return Order(
+        internal_order_id="ord_1",
+        client_order_id=cid,
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price=price,
+        quantity=qty,
+        status=OrderStatus.SUBMITTING,
+        trading_mode=TradingMode.PAPER,
+        strategy_id="test",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 async def test_simulator_connects_and_implements_contract():
@@ -34,7 +51,10 @@ async def test_non_marketable_limit_rests_open():
     await sim.subscribe_order_updates(lambda e: events.append(e) or _noop())
     order = await sim.submit_order(make_order(price="1"))
     assert order.status == OrderStatus.ACKNOWLEDGED or order.status == OrderStatus.OPEN
-    assert [e.event_type for e in events] == [ExchangeEventType.ORDER_ACK, ExchangeEventType.ORDER_OPENED]
+    assert [e.event_type for e in events] == [
+        ExchangeEventType.ORDER_ACK,
+        ExchangeEventType.ORDER_OPENED,
+    ]
 
 
 async def test_marketable_limit_fills_and_updates_balance():

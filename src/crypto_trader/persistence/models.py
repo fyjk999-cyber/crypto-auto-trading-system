@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -21,11 +21,12 @@ from crypto_trader.domain.money import D, format_decimal
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class ExactDecimal(TypeDecorator):
     """Decimal stored as canonical string to guarantee exact round-trip on SQLite and PostgreSQL."""
+
     impl = String(80)
     cache_ok = True
 
@@ -65,16 +66,14 @@ class RuntimeLeaseORM(Base):
     token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     # epoch seconds for exact cross-database CAS comparisons
     expires_at: Mapped[float] = mapped_column(Float, nullable=False)
-    acquired_at: Mapped[float] = mapped_column(Float, default=lambda: datetime.now(timezone.utc).timestamp())
+    acquired_at: Mapped[float] = mapped_column(Float, default=lambda: datetime.now(UTC).timestamp())
     renewed_at: Mapped[float | None] = mapped_column(Float)
     version: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class OrderORM(Base):
     __tablename__ = "orders"
-    __table_args__ = (
-        UniqueConstraint("client_order_id", name="uq_orders_client_order_id"),
-    )
+    __table_args__ = (UniqueConstraint("client_order_id", name="uq_orders_client_order_id"),)
 
     internal_order_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     client_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -97,14 +96,14 @@ class OrderORM(Base):
     rejection_reason: Mapped[str | None] = mapped_column(String(255))
     last_event_id: Mapped[str | None] = mapped_column(String(64))
 
-    events: Mapped[list["OrderEventORM"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    events: Mapped[list[OrderEventORM]] = relationship(
+        back_populates="order", cascade="all, delete-orphan"
+    )
 
 
 class OrderEventORM(Base):
     __tablename__ = "order_events"
-    __table_args__ = (
-        UniqueConstraint("event_id", name="uq_order_events_event_id"),
-    )
+    __table_args__ = (UniqueConstraint("event_id", name="uq_order_events_event_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -171,7 +170,9 @@ class LedgerTransactionORM(Base):
     event_id: Mapped[str | None] = mapped_column(String(64))
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
-    entries: Mapped[list["LedgerEntryORM"]] = relationship(back_populates="transaction", cascade="all, delete-orphan")
+    entries: Mapped[list[LedgerEntryORM]] = relationship(
+        back_populates="transaction", cascade="all, delete-orphan"
+    )
 
 
 class LedgerEntryORM(Base):
@@ -280,9 +281,7 @@ class RiskDecisionORM(Base):
 
 class AuditEventORM(Base):
     __tablename__ = "audit_events"
-    __table_args__ = (
-        UniqueConstraint("event_id", name="uq_audit_events_event_id"),
-    )
+    __table_args__ = (UniqueConstraint("event_id", name="uq_audit_events_event_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     audit_event_id: Mapped[str] = mapped_column(String(64), index=True)

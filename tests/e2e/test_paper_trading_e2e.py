@@ -7,7 +7,6 @@ from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.order.manager import OrderManager
-from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
@@ -63,7 +62,7 @@ async def test_dummy_strategy_never_trades(database):
     sim = SimulatedExchangeAdapter()
     await sim.connect()
     engine = build_engine(database, sim, DummyStrategy())
-    run_id = await engine.start()
+    await engine.start()
     decisions = await engine.tick()
     assert decisions == []
     open_orders = await engine.order_manager.list_open()
@@ -88,10 +87,6 @@ async def test_full_paper_automated_chain(database):
         await asyncio.sleep(0.01)
     await engine.wait_for_event_queue()
 
-    orders = await engine.order_manager.list_open()
-    all_orders = []
-    for oid in []:
-        pass
     # list_open excludes FILLED, so find by client order id
     client_id = f"test_{engine.strategies[0].signal_id}"[:60]
     order = await engine.order_manager.get_by_client(client_id)
@@ -123,7 +118,9 @@ async def test_full_paper_automated_chain(database):
 
 async def _all_orders(engine):
     from sqlalchemy import select
+
     from crypto_trader.persistence.models import OrderORM
+
     async with engine.database.session_factory() as session:
         rows = (await session.execute(select(OrderORM))).scalars().all()
         return rows

@@ -4,25 +4,23 @@ Market Event -> StrategyPlugin -> SignalIntent -> PreTrade Risk
 -> ExecutionAuthority -> OrderManager -> ExchangeAdapter -> Exchange Events
 -> Order State Machine -> Ledger -> Portfolio Projection -> Audit
 """
+
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.config import Settings
 from crypto_trader.domain.clock import Clock, SystemClock
 from crypto_trader.domain.enums import (
-    ExecutionDecision,
     ExchangeEventType,
+    ExecutionDecision,
     LedgerDirection,
     LedgerEntryType,
-    OrderEventType,
     OrderSide,
     OrderStatus,
-    OrderType,
     RuntimeState,
-    TimeInForce,
     TradingMode,
 )
 from crypto_trader.domain.errors import (
@@ -35,11 +33,17 @@ from crypto_trader.domain.errors import (
     UnknownExecutionState,
 )
 from crypto_trader.domain.identifiers import new_id
-from crypto_trader.domain.models import Account, ExchangeEvent, Fill, OrderIntent, Position, RiskDecision, SignalIntent
+from crypto_trader.domain.models import (
+    ExchangeEvent,
+    Fill,
+    OrderIntent,
+    RiskDecision,
+    SignalIntent,
+)
 from crypto_trader.domain.money import D
-from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
 from crypto_trader.exchange.base import ExchangeAdapter
-from crypto_trader.ledger.projections import rebuild_projections, replay_projections
+from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
+from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -53,7 +57,6 @@ from crypto_trader.runtime.event_bus import EventBus
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.recovery import RecoveryService
-from crypto_trader.runtime.scheduler import IntervalScheduler
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 
@@ -176,7 +179,7 @@ class TradingEngine:
     async def _persist_run(self, state: RuntimeState) -> None:
         async with self.database.session_factory() as session:
             row = await session.get(EngineRunORM, self.run_id)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if row is None:
                 session.add(
                     EngineRunORM(
@@ -262,16 +265,22 @@ class TradingEngine:
                 await self.market_data.ingest_snapshot(
                     symbol,
                     fetched.sequence,
-                    [(l.price, l.quantity) for l in fetched.bids.values()],
-                    [(l.price, l.quantity) for l in fetched.asks.values()],
+                    [(level.price, level.quantity) for level in fetched.bids.values()],
+                    [(level.price, level.quantity) for level in fetched.asks.values()],
                 )
                 book = self.market_data.books[symbol]
             except Exception:
                 return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
-        return StrategyContext(symbol=symbol, book=book, account=account, positions=positions,
-                               clock_time=self.clock.now(), run_id=self.run_id)
+        return StrategyContext(
+            symbol=symbol,
+            book=book,
+            account=account,
+            positions=positions,
+            clock_time=self.clock.now(),
+            run_id=self.run_id,
+        )
 
     # --------------------------------------------------------------- signals
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
@@ -281,8 +290,11 @@ class TradingEngine:
         existing = await self.order_manager.get_by_client(client_order_id)
         if existing is not None:
             await self.audit.log(
-                "SIGNAL_IDEMPOTENT_RETRY", target=client_order_id, run_id=run_id,
-                client_order_id=client_order_id, order_id=existing.internal_order_id,
+                "SIGNAL_IDEMPOTENT_RETRY",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=existing.internal_order_id,
             )
             return None
 
@@ -307,16 +319,21 @@ class TradingEngine:
         await self._persist_risk(risk_decision)
         if risk_decision.decision != ExecutionDecision.APPROVE:
             await self.audit.log(
-                "RISK_REJECT", target=client_order_id, run_id=run_id,
-                client_order_id=client_order_id, before={"signal": signal.model_dump(mode="json")},
+                "RISK_REJECT",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                before={"signal": signal.model_dump(mode="json")},
                 after={"reason": risk_decision.reason},
             )
             self.health.set("risk", True)
             return risk_decision
 
         instrument = self._instruments.get(symbol)
-        lease_held = self.require_lease and self.lease is not None and await self.lease_manager.is_held(
-            self.lease_key, self.lease.token
+        lease_held = (
+            self.require_lease
+            and self.lease is not None
+            and await self.lease_manager.is_held(self.lease_key, self.lease.token)
         )
         intent = OrderIntent(
             client_order_id=client_order_id,
@@ -339,8 +356,12 @@ class TradingEngine:
             kill_switch=self.risk_engine.kill_switch,
             order_status=OrderStatus.CREATED,
             expires_at=intent.expires_at,
-            market_data_fresh=self.market_data.is_fresh(symbol, self.settings.market_data_max_age_seconds),
-            orderbook_fresh=self.market_data.is_fresh(symbol, self.settings.orderbook_max_age_seconds),
+            market_data_fresh=self.market_data.is_fresh(
+                symbol, self.settings.market_data_max_age_seconds
+            ),
+            orderbook_fresh=self.market_data.is_fresh(
+                symbol, self.settings.orderbook_max_age_seconds
+            ),
             orderbook_healthy=self.market_data.is_healthy(symbol),
             symbol_tradeable=instrument is not None and instrument.status == "TRADING",
             exchange_connected=self.adapter.connected,
@@ -353,8 +374,11 @@ class TradingEngine:
         decision, notes = await self.authority.authorize(intent, auth_ctx)
         if decision != ExecutionDecision.APPROVE:
             await self.audit.log(
-                f"AUTHORITY_{decision.value}", target=client_order_id, run_id=run_id,
-                client_order_id=client_order_id, after={"notes": notes},
+                f"AUTHORITY_{decision.value}",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                after={"notes": notes},
             )
             return risk_decision
 
@@ -370,8 +394,11 @@ class TradingEngine:
         except UnknownExecutionState as exc:
             await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
             await self.audit.log(
-                "SUBMIT_TIMEOUT_UNKNOWN", target=client_order_id, run_id=run_id,
-                client_order_id=client_order_id, order_id=order.internal_order_id,
+                "SUBMIT_TIMEOUT_UNKNOWN",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=order.internal_order_id,
                 after={"error": str(exc)},
             )
             await RecoveryService(self.order_manager, self.adapter, self.audit).recover(run_id)
@@ -379,16 +406,24 @@ class TradingEngine:
         except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
             await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
             await self.audit.log(
-                "SUBMIT_TRANSIENT_FAILURE", target=client_order_id, run_id=run_id,
-                client_order_id=client_order_id, order_id=order.internal_order_id,
+                "SUBMIT_TRANSIENT_FAILURE",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=order.internal_order_id,
                 after={"error": type(exc).__name__},
             )
             return risk_decision
         except OrderRejected as exc:
-            await self.order_manager.reject(order.internal_order_id, str(exc), event_id=new_id("evt"))
+            await self.order_manager.reject(
+                order.internal_order_id, str(exc), event_id=new_id("evt")
+            )
             await self.audit.log(
-                "ORDER_REJECTED", target=client_order_id, run_id=run_id,
-                client_order_id=client_order_id, order_id=order.internal_order_id,
+                "ORDER_REJECTED",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=order.internal_order_id,
                 after={"reason": str(exc)},
             )
             return risk_decision
@@ -409,8 +444,11 @@ class TradingEngine:
         # FILLED/PARTIALLY_FILLED are applied exclusively through the event
         # stream to guarantee fill_id uniqueness; recovery reconciles later.
         await self.audit.log(
-            "ORDER_SUBMITTED", target=client_order_id, run_id=run_id,
-            client_order_id=client_order_id, order_id=order.internal_order_id,
+            "ORDER_SUBMITTED",
+            target=client_order_id,
+            run_id=run_id,
+            client_order_id=client_order_id,
+            order_id=order.internal_order_id,
             exchange_order_id=exchange_order.exchange_order_id,
             before={"status": OrderStatus.SUBMITTED.value},
             after={"status": exchange_order.status.value},
@@ -432,7 +470,7 @@ class TradingEngine:
             price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
             quantity=exchange_order.filled_quantity - local.filled_quantity,
             fee=Decimal("0"),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         await self.order_manager.apply_fill(fill)
 
@@ -469,7 +507,9 @@ class TradingEngine:
             return
         event_id = event.event_id
         if event.event_type == ExchangeEventType.ORDER_ACK:
-            await self.order_manager.ack(local.internal_order_id, str(exchange_order_id), event_id=event_id)
+            await self.order_manager.ack(
+                local.internal_order_id, str(exchange_order_id), event_id=event_id
+            )
         elif event.event_type == ExchangeEventType.ORDER_OPENED:
             await self.order_manager.opened(local.internal_order_id, event_id=event_id)
         elif event.event_type in (
@@ -482,7 +522,9 @@ class TradingEngine:
             await self.order_manager.cancel_confirm(local.internal_order_id, event_id=event_id)
         elif event.event_type == ExchangeEventType.ORDER_REJECTED:
             await self.order_manager.reject(
-                local.internal_order_id, payload.get("reason", "exchange rejection"), event_id=event_id
+                local.internal_order_id,
+                payload.get("reason", "exchange rejection"),
+                event_id=event_id,
             )
         elif event.event_type == ExchangeEventType.BALANCE_UPDATE:
             await self.portfolio.refresh(initial_balances=self._initial_balances)
@@ -494,11 +536,17 @@ class TradingEngine:
         try:
             if event.event_type == ExchangeEventType.MARKET_SNAPSHOT:
                 await self.market_data.ingest_snapshot(
-                    symbol, int(payload["sequence"]), payload.get("bids", []), payload.get("asks", [])
+                    symbol,
+                    int(payload["sequence"]),
+                    payload.get("bids", []),
+                    payload.get("asks", []),
                 )
             else:
                 await self.market_data.ingest_delta(
-                    symbol, int(payload["sequence"]), payload.get("bids", []), payload.get("asks", [])
+                    symbol,
+                    int(payload["sequence"]),
+                    payload.get("bids", []),
+                    payload.get("asks", []),
                 )
             self.health.set("market_data", True)
         except MarketDataUnhealthy:
@@ -518,7 +566,7 @@ class TradingEngine:
             quantity=D(payload.get("fill_quantity") or "0"),
             fee=D(payload.get("fee") or "0"),
             fee_currency=payload.get("fee_currency"),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
 
     # ----------------------------------------------------------------- ledger
@@ -531,7 +579,9 @@ class TradingEngine:
         if order.side == OrderSide.SELL:
             if position is None or position.quantity < fill.quantity:
                 # conservative: use current average cost for the filled slice
-                cost_released = (position.avg_entry_price if position else Decimal("0")) * fill.quantity
+                cost_released = (
+                    position.avg_entry_price if position else Decimal("0")
+                ) * fill.quantity
             else:
                 cost_released = (position.avg_entry_price or Decimal("0")) * fill.quantity
         postings, metadata = build_trade_entries(
@@ -554,8 +604,11 @@ class TradingEngine:
         )
         await self.portfolio.refresh(initial_balances=self._initial_balances)
         await self.audit.log(
-            "FILL_SETTLED", target=fill.fill_id, run_id=self.run_id,
-            order_id=order.internal_order_id, client_order_id=order.client_order_id,
+            "FILL_SETTLED",
+            target=fill.fill_id,
+            run_id=self.run_id,
+            order_id=order.internal_order_id,
+            client_order_id=order.client_order_id,
             exchange_order_id=order.exchange_order_id,
             before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
             after={"transaction_id": fill.fill_id},
@@ -575,8 +628,12 @@ class TradingEngine:
                 await self.ledger.record(
                     LedgerEntryType.DEPOSIT,
                     [
-                        LedgerPosting("CASH", LedgerDirection.DEBIT, balance.total, balance.currency),
-                        LedgerPosting("EQUITY", LedgerDirection.CREDIT, balance.total, balance.currency),
+                        LedgerPosting(
+                            "CASH", LedgerDirection.DEBIT, balance.total, balance.currency
+                        ),
+                        LedgerPosting(
+                            "EQUITY", LedgerDirection.CREDIT, balance.total, balance.currency
+                        ),
                     ],
                     metadata={"amount": str(balance.total), "currency": balance.currency},
                 )

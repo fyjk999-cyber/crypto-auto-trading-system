@@ -3,12 +3,13 @@
 PORTED from Kalshi v2 runtime-safety semantics (reconnect instead of blind
 resubmit; backoff; after reconnect, resync snapshots).
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +27,20 @@ class WebSocketReconnectPolicy:
 
     def on_connected(self) -> None:
         self.attempts = 0
-        self.last_connected_at = datetime.now(timezone.utc)
+        self.last_connected_at = datetime.now(UTC)
         self.history.append({"event": "connected", "at": self.last_connected_at.isoformat()})
 
     def on_disconnected(self) -> None:
         self.attempts += 1
-        self.last_disconnected_at = datetime.now(timezone.utc)
+        self.last_disconnected_at = datetime.now(UTC)
         self.resync_required = True
-        self.history.append({"event": "disconnected", "attempt": self.attempts,
-                             "at": self.last_disconnected_at.isoformat()})
+        self.history.append(
+            {
+                "event": "disconnected",
+                "attempt": self.attempts,
+                "at": self.last_disconnected_at.isoformat(),
+            }
+        )
 
     def should_reconnect(self) -> bool:
         return self.attempts <= self.max_attempts

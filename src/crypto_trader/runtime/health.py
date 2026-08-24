@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from crypto_trader.domain.enums import HealthStatus
 
@@ -13,7 +13,7 @@ class HealthRegistry:
         self.components[name] = {
             "ok": ok,
             "detail": detail,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": datetime.now(UTC).isoformat(),
         }
 
     def overall(self) -> HealthStatus:

@@ -1,4 +1,5 @@
 """DummyStrategy: never emits an intent. Exists to prove plugin boundaries."""
+
 from __future__ import annotations
 
 from crypto_trader.domain.models import SignalIntent

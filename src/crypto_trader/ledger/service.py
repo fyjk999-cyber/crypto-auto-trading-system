@@ -8,10 +8,11 @@ PORTED from Kalshi v2 lib/v2/ledger.mjs:
 Ported as semantics in Python/SQLAlchemy; Kalshi-specific paper settlement
 legs were replaced by crypto spot trade journals defined in SPAC section 6.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -36,7 +37,9 @@ class LedgerPosting:
 
 def journal_balanced(postings: list[LedgerPosting]) -> bool:
     debits = sum((p.amount for p in postings if p.direction == LedgerDirection.DEBIT), Decimal("0"))
-    credits = sum((p.amount for p in postings if p.direction == LedgerDirection.CREDIT), Decimal("0"))
+    credits = sum(
+        (p.amount for p in postings if p.direction == LedgerDirection.CREDIT), Decimal("0")
+    )
     return debits == credits
 
 
@@ -65,7 +68,9 @@ def build_trade_entries(
         "fee": str(fee),
     }
     if side == OrderSide.BUY:
-        postings.append(LedgerPosting(f"POSITION_ASSET:{symbol}", LedgerDirection.DEBIT, gross, quote_currency))
+        postings.append(
+            LedgerPosting(f"POSITION_ASSET:{symbol}", LedgerDirection.DEBIT, gross, quote_currency)
+        )
         postings.append(LedgerPosting("FEE_EXPENSE", LedgerDirection.DEBIT, fee, quote_currency))
         postings.append(LedgerPosting("CASH", LedgerDirection.CREDIT, gross + fee, quote_currency))
         metadata["gross_cost"] = str(gross)
@@ -73,11 +78,19 @@ def build_trade_entries(
         cost_released = D(cost_released if cost_released is not None else Decimal("0"))
         realized = gross - cost_released
         postings.append(LedgerPosting("CASH", LedgerDirection.DEBIT, gross, quote_currency))
-        postings.append(LedgerPosting(f"POSITION_ASSET:{symbol}", LedgerDirection.CREDIT, cost_released, quote_currency))
+        postings.append(
+            LedgerPosting(
+                f"POSITION_ASSET:{symbol}", LedgerDirection.CREDIT, cost_released, quote_currency
+            )
+        )
         if realized > 0:
-            postings.append(LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, realized, quote_currency))
+            postings.append(
+                LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, realized, quote_currency)
+            )
         elif realized < 0:
-            postings.append(LedgerPosting("REALIZED_PNL", LedgerDirection.DEBIT, -realized, quote_currency))
+            postings.append(
+                LedgerPosting("REALIZED_PNL", LedgerDirection.DEBIT, -realized, quote_currency)
+            )
         postings.append(LedgerPosting("FEE_EXPENSE", LedgerDirection.DEBIT, fee, quote_currency))
         postings.append(LedgerPosting("CASH", LedgerDirection.CREDIT, fee, quote_currency))
         metadata["gross_proceeds"] = str(gross)
@@ -110,7 +123,9 @@ class LedgerService:
         # engine crashes after order update but before/after ledger commit.
         if fill_id or event_id:
             async with self.session_factory() as check_session:
-                existing = await self._find_transaction(check_session, fill_id=fill_id, event_id=event_id)
+                existing = await self._find_transaction(
+                    check_session, fill_id=fill_id, event_id=event_id
+                )
             if existing is not None:
                 async with self.session_factory() as load_session:
                     row = (
@@ -124,11 +139,15 @@ class LedgerService:
         if not postings:
             raise JournalUnbalanced("ledger transaction requires at least one posting")
         if not journal_balanced(postings):
-            debits = sum((p.amount for p in postings if p.direction == LedgerDirection.DEBIT), Decimal("0"))
-            credits = sum((p.amount for p in postings if p.direction == LedgerDirection.CREDIT), Decimal("0"))
+            debits = sum(
+                (p.amount for p in postings if p.direction == LedgerDirection.DEBIT), Decimal("0")
+            )
+            credits = sum(
+                (p.amount for p in postings if p.direction == LedgerDirection.CREDIT), Decimal("0")
+            )
             raise JournalUnbalanced(f"journal unbalanced: debit={debits} credit={credits}")
         transaction_id = transaction_id or new_id("txn")
-        created_at = created_at or datetime.now(timezone.utc)
+        created_at = created_at or datetime.now(UTC)
         async with self.session_factory() as session:
             txn = LedgerTransactionORM(
                 transaction_id=transaction_id,
@@ -184,8 +203,9 @@ class LedgerService:
         )
 
     @staticmethod
-    async def _find_transaction(session: AsyncSession, *, fill_id: str | None = None,
-                                event_id: str | None = None) -> LedgerTransactionORM | None:
+    async def _find_transaction(
+        session: AsyncSession, *, fill_id: str | None = None, event_id: str | None = None
+    ) -> LedgerTransactionORM | None:
         query = select(LedgerTransactionORM)
         if fill_id:
             query = query.where(LedgerTransactionORM.fill_id == fill_id)
@@ -194,6 +214,34 @@ class LedgerService:
         if not fill_id and not event_id:
             return None
         return (await session.execute(query)).scalars().first()
+
+    async def list_entries_recent(self, limit: int = 200) -> list[LedgerEntry]:
+        async with self.session_factory() as session:
+            from crypto_trader.persistence.models import LedgerEntryORM as E
+
+            rows = (
+                (await session.execute(select(E).order_by(E.id.desc()).limit(limit)))
+                .scalars()
+                .all()
+            )
+            return [
+                LedgerEntry(
+                    entry_id=r.entry_id,
+                    transaction_id=r.transaction_id,
+                    seq=r.seq,
+                    entry_type=LedgerEntryType(r.entry_type),
+                    account=r.account,
+                    direction=LedgerDirection(r.direction),
+                    amount=r.amount,
+                    currency=r.currency,
+                    created_at=r.created_at,
+                    order_id=r.order_id,
+                    fill_id=r.fill_id,
+                    event_id=r.event_id,
+                    metadata=r.metadata_json or {},
+                )
+                for r in rows
+            ]
 
     async def list_transactions(self, session: AsyncSession) -> list[LedgerTransactionORM]:
         result = await session.execute(

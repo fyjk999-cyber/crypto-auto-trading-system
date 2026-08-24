@@ -8,11 +8,12 @@ PORTED from Kalshi v2 run-lease semantics:
 Implemented with an atomic CAS UPDATE so concurrent engine instances cannot
 both acquire an expired lease.
 """
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -22,7 +23,7 @@ from crypto_trader.persistence.models import RuntimeLeaseORM
 
 
 def _epoch(dt: datetime | None = None) -> float:
-    return (dt or datetime.now(timezone.utc)).timestamp()
+    return (dt or datetime.now(UTC)).timestamp()
 
 
 @dataclass
@@ -59,8 +60,12 @@ class LeaseManager:
             if row is None:
                 session.add(
                     RuntimeLeaseORM(
-                        lease_key=lease_key, owner_id=owner_id, token=token,
-                        expires_at=expires_at, acquired_at=now, version=1,
+                        lease_key=lease_key,
+                        owner_id=owner_id,
+                        token=token,
+                        expires_at=expires_at,
+                        acquired_at=now,
+                        version=1,
                     )
                 )
                 try:
@@ -76,8 +81,14 @@ class LeaseManager:
                     RuntimeLeaseORM.lease_key == lease_key,
                     RuntimeLeaseORM.expires_at <= now,
                 )
-                .values(owner_id=owner_id, token=token, expires_at=expires_at,
-                        acquired_at=now, renewed_at=None, version=RuntimeLeaseORM.version + 1)
+                .values(
+                    owner_id=owner_id,
+                    token=token,
+                    expires_at=expires_at,
+                    acquired_at=now,
+                    renewed_at=None,
+                    version=RuntimeLeaseORM.version + 1,
+                )
             )
             await session.commit()
             if result.rowcount == 1:

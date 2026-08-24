@@ -3,6 +3,7 @@
 All Binance-specific JSON, error codes, symbols, and transport stay here.
 Core receives only domain objects and normalized errors.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -10,14 +11,20 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Awaitable, Callable
 
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
-from crypto_trader.domain.enums import ExchangeEventType, OrderSide, OrderStatus, OrderType, TimeInForce, TradingMode
+from crypto_trader.domain.enums import (
+    ExchangeEventType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TimeInForce,
+)
 from crypto_trader.domain.errors import (
     AuthenticationError,
     ExchangeUnavailable,
@@ -29,8 +36,8 @@ from crypto_trader.domain.errors import (
     TemporaryNetworkError,
     UnknownExecutionState,
 )
-from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Instrument, Order, Position
+from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exchange.base import ExchangeAdapter, make_exchange_event
 from crypto_trader.market_data.orderbook import OrderBook
 
@@ -44,10 +51,15 @@ def _dec(raw: object) -> Decimal:
 class BinanceAdapter(ExchangeAdapter):
     name = "BINANCE"
 
-    def __init__(self, *, base_url: str = "https://testnet.binance.vision",
-                 ws_base_url: str = "wss://testnet.binance.vision",
-                 api_key: str | None = None, api_secret: str | None = None,
-                 client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str = "https://testnet.binance.vision",
+        ws_base_url: str = "wss://testnet.binance.vision",
+        api_key: str | None = None,
+        api_secret: str | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.ws_base_url = ws_base_url.rstrip("/")
         self.api_key = api_key
@@ -80,7 +92,9 @@ class BinanceAdapter(ExchangeAdapter):
         params["signature"] = signature
         return params
 
-    async def _request(self, method: str, path: str, params: dict | None = None, signed: bool = False):
+    async def _request(
+        self, method: str, path: str, params: dict | None = None, signed: bool = False
+    ):
         if not self.connected:
             await self.connect()
         if signed:
@@ -89,7 +103,9 @@ class BinanceAdapter(ExchangeAdapter):
             params = self._signed_params(params or {})
         for attempt in range(3):
             try:
-                response = await self._client.request(method, path, params=params, headers=self._headers())
+                response = await self._client.request(
+                    method, path, params=params, headers=self._headers()
+                )
             except httpx.TimeoutException as exc:
                 if attempt == 2:
                     raise TemporaryNetworkError("Binance request timed out") from exc
@@ -136,7 +152,9 @@ class BinanceAdapter(ExchangeAdapter):
             raise ExchangeUnavailable(f"Binance error {code}: {msg}")
         if response.status_code in (400, 401, 403, 404):
             raise OrderRejected(f"Binance rejected request ({response.status_code}, {code}): {msg}")
-        raise UnknownExecutionState(f"Binance unexpected response {response.status_code} code={code}: {msg}")
+        raise UnknownExecutionState(
+            f"Binance unexpected response {response.status_code} code={code}: {msg}"
+        )
 
     async def get_exchange_info(self, symbol: str | None = None) -> list[Instrument]:
         data = await self._request("GET", "/api/v3/exchangeInfo")
@@ -169,7 +187,7 @@ class BinanceAdapter(ExchangeAdapter):
 
     async def get_balances(self) -> list[Balance]:
         data = await self._request("GET", "/api/v3/account", signed=True)
-        self.last_balance_update = datetime.now(timezone.utc)
+        self.last_balance_update = datetime.now(UTC)
         return [self._normalize_balance(raw) for raw in data.get("balances", [])]
 
     def _normalize_balance(self, raw: dict) -> Balance:
@@ -186,7 +204,9 @@ class BinanceAdapter(ExchangeAdapter):
         return []
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
-        data = await self._request("GET", "/api/v3/depth", params={"symbol": symbol, "limit": limit})
+        data = await self._request(
+            "GET", "/api/v3/depth", params={"symbol": symbol, "limit": limit}
+        )
         book = OrderBook(symbol=symbol, exchange=self.name)
         book.apply_snapshot(
             int(data.get("lastUpdateId", 0)),
@@ -224,7 +244,8 @@ class BinanceAdapter(ExchangeAdapter):
 
     async def cancel_order(self, symbol: str, exchange_order_id: str) -> Order:
         raw = await self._request(
-            "DELETE", "/api/v3/order",
+            "DELETE",
+            "/api/v3/order",
             params={"symbol": symbol, "origClientOrderId": exchange_order_id},
             signed=True,
         )
@@ -232,7 +253,8 @@ class BinanceAdapter(ExchangeAdapter):
 
     async def get_order(self, symbol: str, exchange_order_id: str) -> Order:
         raw = await self._request(
-            "GET", "/api/v3/order",
+            "GET",
+            "/api/v3/order",
             params={"symbol": symbol, "origClientOrderId": exchange_order_id},
             signed=True,
         )
@@ -258,15 +280,18 @@ class BinanceAdapter(ExchangeAdapter):
             "EXPIRED_IN_MATCH": OrderStatus.EXPIRED,
         }
         fallback = fallback or Order(
-            internal_order_id="unknown", client_order_id=str(raw.get("clientOrderId") or "unknown"),
-            symbol=str(raw.get("symbol", "")), side=OrderSide(str(raw.get("side", "BUY"))),
+            internal_order_id="unknown",
+            client_order_id=str(raw.get("clientOrderId") or "unknown"),
+            symbol=str(raw.get("symbol", "")),
+            side=OrderSide(str(raw.get("side", "BUY"))),
             order_type=OrderType(str(raw.get("type", "LIMIT"))),
             time_in_force=TimeInForce(str(raw.get("timeInForce", "GTC"))),
             price=_dec(raw.get("price", "0")) if raw.get("price") else None,
             quantity=_dec(raw.get("origQty", "0")),
             filled_quantity=_dec(raw.get("executedQty", "0")),
             status=status_map.get(str(raw.get("status", "NEW")), OrderStatus.UNKNOWN),
-            created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
         return Order(
             internal_order_id=fallback.internal_order_id,
@@ -279,14 +304,16 @@ class BinanceAdapter(ExchangeAdapter):
             price=_dec(raw.get("price", "0")) if raw.get("price") else fallback.price,
             quantity=_dec(raw.get("origQty", fallback.quantity)),
             filled_quantity=_dec(raw.get("executedQty", fallback.filled_quantity)),
-            avg_fill_price=_dec(raw.get("cummulativeQuoteQty", "0")) / _dec(raw.get("executedQty", "0"))
-            if _dec(raw.get("executedQty", "0")) > 0 else fallback.avg_fill_price,
+            avg_fill_price=_dec(raw.get("cummulativeQuoteQty", "0"))
+            / _dec(raw.get("executedQty", "0"))
+            if _dec(raw.get("executedQty", "0")) > 0
+            else fallback.avg_fill_price,
             status=status_map.get(str(raw.get("status", "NEW")), fallback.status),
             trading_mode=fallback.trading_mode,
             strategy_id=fallback.strategy_id,
             run_id=fallback.run_id,
             created_at=fallback.created_at,
-            updated_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(UTC),
             expires_at=fallback.expires_at,
             rejection_reason=str(raw.get("rejectReason", "")) or fallback.rejection_reason,
             last_event_id=fallback.last_event_id,
@@ -303,28 +330,36 @@ class BinanceAdapter(ExchangeAdapter):
             client_order_id=raw.get("clientOrderId", raw.get("c")),
             exchange_order_id=str(raw.get("orderId", raw.get("i", None))),
             symbol=str(raw.get("symbol", raw.get("s", ""))),
-            side=OrderSide.BUY if str(raw.get("side", raw.get("S", "BUY"))) == "BUY" else OrderSide.SELL,
+            side=OrderSide.BUY
+            if str(raw.get("side", raw.get("S", "BUY"))) == "BUY"
+            else OrderSide.SELL,
             price=price,
             quantity=quantity,
             fee=fee,
             fee_currency=raw.get("commissionAsset", None),
             timestamp=datetime.fromtimestamp(
-                float(raw.get("time", raw.get("T", time.time()))) / 1000.0, tz=timezone.utc
+                float(raw.get("time", raw.get("T", time.time()))) / 1000.0, tz=UTC
             ),
             payload={"raw_type": "binance_fill"},
         )
 
-    async def subscribe_market_data(self, symbol: str, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str:
+    async def subscribe_market_data(
+        self, symbol: str, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str:
         sub_id = f"binance_md_{symbol}_{id(handler)}"
         self._subscriptions[sub_id] = handler
         return sub_id
 
-    async def subscribe_order_updates(self, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str:
+    async def subscribe_order_updates(
+        self, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str:
         sub_id = f"binance_order_{id(handler)}"
         self._subscriptions[sub_id] = handler
         return sub_id
 
-    async def subscribe_account_updates(self, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str:
+    async def subscribe_account_updates(
+        self, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str:
         sub_id = f"binance_account_{id(handler)}"
         self._subscriptions[sub_id] = handler
         return sub_id
@@ -335,11 +370,11 @@ class BinanceAdapter(ExchangeAdapter):
         symbol = raw.get("s")
         if event_type == "executionReport":
             status = str(raw.get("X", ""))
-            event = make_exchange_event(
-                ExchangeEventType.ORDER_ACK, symbol, {"raw": raw}
-            )
+            event = make_exchange_event(ExchangeEventType.ORDER_ACK, symbol, {"raw": raw})
             if status == "PARTIALLY_FILLED":
-                event = make_exchange_event(ExchangeEventType.ORDER_PARTIALLY_FILLED, symbol, {"raw": raw})
+                event = make_exchange_event(
+                    ExchangeEventType.ORDER_PARTIALLY_FILLED, symbol, {"raw": raw}
+                )
             elif status == "FILLED":
                 event = make_exchange_event(ExchangeEventType.ORDER_FILLED, symbol, {"raw": raw})
             elif status in ("CANCELED",):

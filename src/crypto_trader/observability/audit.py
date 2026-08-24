@@ -1,7 +1,8 @@
 """Structured audit trail persisted to audit_events."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from crypto_trader.domain.identifiers import new_id
@@ -42,7 +43,7 @@ class AuditService:
                     exchange_order_id=exchange_order_id,
                     before_json=before or {},
                     after_json=after or {},
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                 )
             )
             await session.commit()
@@ -55,6 +56,8 @@ class AuditService:
 
         async with self.session_factory() as session:
             rows = (
-                await session.execute(select(ORM).order_by(ORM.id.desc()).limit(limit))
-            ).scalars().all()
+                (await session.execute(select(ORM).order_by(ORM.id.desc()).limit(limit)))
+                .scalars()
+                .all()
+            )
             return [row for row in rows]

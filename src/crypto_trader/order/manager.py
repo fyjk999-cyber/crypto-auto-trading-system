@@ -5,11 +5,12 @@
 - REST timeout -> UNKNOWN -> query exchange -> recover; never blind resubmit.
 - settlement callback receives each unique fill exactly once.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Awaitable, Callable
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -25,7 +26,6 @@ from crypto_trader.domain.enums import (
 from crypto_trader.domain.errors import IdempotencyConflict, InvalidStateTransition, OrderNotFound
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill, Order, OrderEvent, OrderIntent
-from crypto_trader.domain.money import D
 from crypto_trader.order.state_machine import OrderStateMachine
 from crypto_trader.persistence.models import FillORM, OrderEventORM, OrderORM
 
@@ -89,12 +89,14 @@ def _orm_to_fill(row: FillORM) -> Fill:
 
 
 class OrderManager:
-    def __init__(self, session_factory, settlement_callback: SettlementCallback | None = None) -> None:
+    def __init__(
+        self, session_factory, settlement_callback: SettlementCallback | None = None
+    ) -> None:
         self.session_factory = session_factory
         self.settlement_callback = settlement_callback
 
     async def create_from_intent(self, intent: OrderIntent, *, trading_mode: TradingMode) -> Order:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         async with self.session_factory() as session:
             existing = await self.get_by_client(intent.client_order_id)
             if existing is not None:
@@ -182,25 +184,42 @@ class OrderManager:
     async def list_open(self) -> list[Order]:
         async with self.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(OrderORM).where(
-                        OrderORM.status.in_(
-                            [
-                                OrderStatus.SUBMITTED.value,
-                                OrderStatus.ACKNOWLEDGED.value,
-                                OrderStatus.OPEN.value,
-                                OrderStatus.PARTIALLY_FILLED.value,
-                                OrderStatus.CANCEL_PENDING.value,
-                                OrderStatus.UNKNOWN.value,
-                            ]
+                (
+                    await session.execute(
+                        select(OrderORM).where(
+                            OrderORM.status.in_(
+                                [
+                                    OrderStatus.SUBMITTED.value,
+                                    OrderStatus.ACKNOWLEDGED.value,
+                                    OrderStatus.OPEN.value,
+                                    OrderStatus.PARTIALLY_FILLED.value,
+                                    OrderStatus.CANCEL_PENDING.value,
+                                    OrderStatus.UNKNOWN.value,
+                                ]
+                            )
                         )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return [_orm_to_order(r) for r in rows]
 
     async def count_open(self) -> int:
         return len(await self.list_open())
+
+    async def list_all(self, limit: int = 200) -> list[Order]:
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OrderORM).order_by(OrderORM.created_at.desc()).limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [_orm_to_order(r) for r in rows]
 
     async def _record_event(
         self,
@@ -214,7 +233,7 @@ class OrderManager:
         rejection_reason: str | None = None,
         now: datetime | None = None,
     ) -> OrderEvent:
-        now = now or datetime.now(timezone.utc)
+        now = now or datetime.now(UTC)
         event_id = event_id or new_id("evt")
         async with self.session_factory() as session:
             row = await session.get(OrderORM, order.internal_order_id)
@@ -244,7 +263,9 @@ class OrderManager:
                 await session.rollback()
                 async with self.session_factory() as s2:
                     existing = (
-                        await s2.execute(select(OrderEventORM).where(OrderEventORM.event_id == event_id))
+                        await s2.execute(
+                            select(OrderEventORM).where(OrderEventORM.event_id == event_id)
+                        )
                     ).scalar_one_or_none()
                 if existing is not None:
                     return _orm_to_event(existing)
@@ -268,7 +289,7 @@ class OrderManager:
         if result.noop and not result.changed:
             await self._record_event(order, event_type, order.status, **kwargs)
             return order
-        event = await self._record_event(order, event_type, result.new_status, **kwargs)
+        await self._record_event(order, event_type, result.new_status, **kwargs)
         return await self.get(order_id)
 
     async def validate(self, order_id: str) -> Order:
@@ -280,10 +301,14 @@ class OrderManager:
     async def submitted(self, order_id: str) -> Order:
         return await self.transition(order_id, OrderEventType.ORDER_SUBMITTED)
 
-    async def ack(self, order_id: str, exchange_order_id: str, event_id: str | None = None) -> Order:
+    async def ack(
+        self, order_id: str, exchange_order_id: str, event_id: str | None = None
+    ) -> Order:
         return await self.transition(
-            order_id, OrderEventType.ORDER_ACKNOWLEDGED,
-            event_id=event_id, exchange_order_id=exchange_order_id,
+            order_id,
+            OrderEventType.ORDER_ACKNOWLEDGED,
+            event_id=event_id,
+            exchange_order_id=exchange_order_id,
         )
 
     async def opened(self, order_id: str, event_id: str | None = None) -> Order:
@@ -299,8 +324,11 @@ class OrderManager:
 
     async def reject(self, order_id: str, reason: str, event_id: str | None = None) -> Order:
         return await self.transition(
-            order_id, OrderEventType.ORDER_REJECTED,
-            event_id=event_id, rejection_reason=reason, payload={"reason": reason},
+            order_id,
+            OrderEventType.ORDER_REJECTED,
+            event_id=event_id,
+            rejection_reason=reason,
+            payload={"reason": reason},
         )
 
     async def expire(self, order_id: str) -> Order:
@@ -338,15 +366,22 @@ class OrderManager:
             new_filled = order_row.filled_quantity + fill.quantity
             if new_filled > order_row.quantity:
                 raise InvalidStateTransition(
-                    f"fill quantity {fill.quantity} exceeds remaining {order_row.quantity - order_row.filled_quantity}"
+                    f"fill quantity {fill.quantity} exceeds remaining "
+                    f"{order_row.quantity - order_row.filled_quantity}"
                 )
             fully_filled = new_filled == order_row.quantity
-            event_type = OrderEventType.ORDER_FILLED if fully_filled else OrderEventType.ORDER_PARTIALLY_FILLED
+            event_type = (
+                OrderEventType.ORDER_FILLED
+                if fully_filled
+                else OrderEventType.ORDER_PARTIALLY_FILLED
+            )
             current = OrderStatus(order_row.status)
             result = OrderStateMachine.transition(current, event_type)
             previous_total = order_row.filled_quantity * (order_row.avg_fill_price or Decimal("0"))
             incremental = fill.price * fill.quantity
-            new_avg = (previous_total + incremental) / new_filled if new_filled > 0 else Decimal("0")
+            new_avg = (
+                (previous_total + incremental) / new_filled if new_filled > 0 else Decimal("0")
+            )
 
             order_row.filled_quantity = new_filled
             order_row.avg_fill_price = new_avg
@@ -412,10 +447,14 @@ class OrderManager:
     async def list_events(self, order_id: str) -> list[OrderEvent]:
         async with self.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(OrderEventORM)
-                    .where(OrderEventORM.order_id == order_id)
-                    .order_by(OrderEventORM.id)
+                (
+                    await session.execute(
+                        select(OrderEventORM)
+                        .where(OrderEventORM.order_id == order_id)
+                        .order_by(OrderEventORM.id)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return [_orm_to_event(r) for r in rows]

@@ -3,15 +3,16 @@
 Every exchange-specific JSON/error/transport detail stays behind an adapter.
 Core only ever sees domain objects and normalized errors.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from uuid import uuid4
 
-from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Instrument, Order, Position
 from crypto_trader.domain.enums import ExchangeEventType
+from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Instrument, Order, Position
 
 
 class ExchangeAdapter(ABC):
@@ -48,13 +49,19 @@ class ExchangeAdapter(ABC):
     async def get_order(self, symbol: str, exchange_order_id: str) -> object: ...
 
     @abstractmethod
-    async def subscribe_market_data(self, symbol: str, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str: ...
+    async def subscribe_market_data(
+        self, symbol: str, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str: ...
 
     @abstractmethod
-    async def subscribe_order_updates(self, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str: ...
+    async def subscribe_order_updates(
+        self, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str: ...
 
     @abstractmethod
-    async def subscribe_account_updates(self, handler: Callable[[ExchangeEvent], Awaitable[None]]) -> str: ...
+    async def subscribe_account_updates(
+        self, handler: Callable[[ExchangeEvent], Awaitable[None]]
+    ) -> str: ...
 
     @abstractmethod
     def normalize_symbol(self, raw: object) -> str: ...
@@ -66,11 +73,13 @@ class ExchangeAdapter(ABC):
     def normalize_fill(self, raw: dict) -> Fill: ...
 
 
-def make_exchange_event(event_type: ExchangeEventType, symbol: str | None = None, payload: dict | None = None) -> ExchangeEvent:
+def make_exchange_event(
+    event_type: ExchangeEventType, symbol: str | None = None, payload: dict | None = None
+) -> ExchangeEvent:
     return ExchangeEvent(
         event_id=f"exevt_{uuid4().hex}",
         event_type=event_type,
         symbol=symbol,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         payload=payload or {},
     )

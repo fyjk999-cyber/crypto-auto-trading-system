@@ -4,9 +4,10 @@ Phase 1 intentionally provides only the adapter boundary and normalization
 entry points. Binance-specific logic must never leak into core; when OKX is
 implemented, all OKX-specific transport/auth/error mapping lives here.
 """
+
 from __future__ import annotations
 
-from crypto_trader.exchange.base import ExchangeAdapter, make_exchange_event
+from crypto_trader.exchange.base import ExchangeAdapter
 
 
 class OKXAdapter(ExchangeAdapter):

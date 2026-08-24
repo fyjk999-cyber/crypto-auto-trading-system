@@ -4,13 +4,13 @@ Every critical condition is checked; any failure returns HOLD (transient) or
 REJECT (permanent invalid request). No order may pass while kill switch is on,
 the execution lease is not held, or market data is unhealthy.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from crypto_trader.domain.enums import ExecutionDecision, OrderStatus, TradingMode
-from crypto_trader.domain.errors import KillSwitchEngaged, LeaseNotHeld, MarketDataUnhealthy
 from crypto_trader.domain.models import Instrument, OrderIntent, RiskDecision
 from crypto_trader.domain.money import D, floor_to_step, round_tick
 from crypto_trader.execution.rate_limiter import RateLimiter
@@ -50,7 +50,7 @@ class ExecutionAuthority:
         self, intent: OrderIntent, ctx: AuthorizationContext
     ) -> tuple[ExecutionDecision, list[str]]:
         """Return final gate decision with ordered failure notes."""
-        now = ctx.now or datetime.now(timezone.utc)
+        now = ctx.now or datetime.now(UTC)
         notes: list[str] = []
 
         def hold(reason: str) -> tuple[ExecutionDecision, list[str]]:

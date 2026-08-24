@@ -3,6 +3,7 @@
 Used only to verify Strategy -> SignalIntent -> Risk -> Execution -> Fill ->
 Ledger. It contains no alpha/indicator logic and never enters core modules.
 """
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -20,8 +21,9 @@ class TestStrategy(StrategyPlugin):
     __test__ = False
     symbol = "BTCUSDT"
 
-    def __init__(self, quantity: str = "0.1", limit_price: str | None = None,
-                 signal_id: str | None = None) -> None:
+    def __init__(
+        self, quantity: str = "0.1", limit_price: str | None = None, signal_id: str | None = None
+    ) -> None:
         self.quantity = D(quantity)
         self.limit_price = D(limit_price) if limit_price else None
         self.signal_id = signal_id or new_id("signal")

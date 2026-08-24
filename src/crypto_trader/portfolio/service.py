@@ -1,11 +1,11 @@
 """Portfolio read model. Account and Position are projections of the ledger."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from crypto_trader.domain.enums import TradingMode
 from crypto_trader.domain.models import Account, Balance, Position
@@ -28,11 +28,16 @@ class PortfolioService:
                 account_id=snap.account_id,
                 mode=mode,
                 balances={
-                    currency: Balance(currency=currency, total=row["total"], available=row["available"], frozen=row["frozen"])
+                    currency: Balance(
+                        currency=currency,
+                        total=row["total"],
+                        available=row["available"],
+                        frozen=row["frozen"],
+                    )
                     for currency, row in snap.balances.items()
                 },
                 equity=snap.equity,
-                updated_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(UTC),
             )
 
     async def get_positions(self) -> dict[str, Position]:

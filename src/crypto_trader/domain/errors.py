@@ -1,4 +1,5 @@
 """Unified domain error model. Core never parses exchange-specific error codes."""
+
 from __future__ import annotations
 
 

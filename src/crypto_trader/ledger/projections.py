@@ -3,15 +3,16 @@
 The ledger is the only source of money truth. Account/Position/PnL projections
 are rebuilt by deterministic replay. Direct balance mutation is forbidden.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import delete, select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType, OrderSide
 from crypto_trader.domain.money import D
@@ -52,13 +53,20 @@ class ProjectionSnapshot:
     def as_plain(self) -> dict:
         return {
             "account_id": self.account_id,
-            "balances": {k: {kk: str(vv) for kk, vv in v.items()} for k, v in self.balances.items()},
-            "positions": {k: {
-                "quantity": str(v.quantity),
-                "avg_entry_price": str(v.avg_entry_price) if v.avg_entry_price is not None else None,
-                "cost_basis": str(v.cost_basis),
-                "realized_pnl": str(v.realized_pnl),
-            } for k, v in self.positions.items()},
+            "balances": {
+                k: {kk: str(vv) for kk, vv in v.items()} for k, v in self.balances.items()
+            },
+            "positions": {
+                k: {
+                    "quantity": str(v.quantity),
+                    "avg_entry_price": str(v.avg_entry_price)
+                    if v.avg_entry_price is not None
+                    else None,
+                    "cost_basis": str(v.cost_basis),
+                    "realized_pnl": str(v.realized_pnl),
+                }
+                for k, v in self.positions.items()
+            },
             "realized_pnl": str(self.realized_pnl),
             "total_fees": str(self.total_fees),
             "equity": str(self.equity),
@@ -66,14 +74,20 @@ class ProjectionSnapshot:
 
 
 class ProjectionBuilder:
-    def __init__(self, initial_balances: dict[str, Decimal] | None = None, account_id: str = "default") -> None:
+    def __init__(
+        self, initial_balances: dict[str, Decimal] | None = None, account_id: str = "default"
+    ) -> None:
         self.account_id = account_id
         self.snapshot = ProjectionSnapshot(account_id=account_id)
         for currency, amount in (initial_balances or {}).items():
             self._set_balance(currency, D(amount))
 
     def _set_balance(self, currency: str, total: Decimal) -> None:
-        self.snapshot.balances[currency] = {"total": total, "available": total, "frozen": Decimal("0")}
+        self.snapshot.balances[currency] = {
+            "total": total,
+            "available": total,
+            "frozen": Decimal("0"),
+        }
 
     def _get_balance(self, currency: str) -> Decimal:
         return self.snapshot.balance(currency)
@@ -150,9 +164,9 @@ async def replay_projections(
     account_id: str = "default",
 ) -> ProjectionSnapshot:
     result = await session.execute(
-        select(LedgerTransactionORM).options(selectinload(LedgerTransactionORM.entries)).order_by(
-            LedgerTransactionORM.created_at, LedgerTransactionORM.transaction_id
-        )
+        select(LedgerTransactionORM)
+        .options(selectinload(LedgerTransactionORM.entries))
+        .order_by(LedgerTransactionORM.created_at, LedgerTransactionORM.transaction_id)
     )
     builder = ProjectionBuilder(initial_balances=initial_balances, account_id=account_id)
     for txn in result.scalars().all():
@@ -167,9 +181,13 @@ async def rebuild_projections(
 ) -> ProjectionSnapshot:
     """Replay ledger and atomically replace persisted projection tables."""
     snapshot = await replay_projections(session, initial_balances, account_id)
-    await session.execute(delete(AccountProjectionORM).where(AccountProjectionORM.account_id == account_id))
-    await session.execute(delete(PositionProjectionORM).where(PositionProjectionORM.account_id == account_id))
-    now = datetime.now(timezone.utc)
+    await session.execute(
+        delete(AccountProjectionORM).where(AccountProjectionORM.account_id == account_id)
+    )
+    await session.execute(
+        delete(PositionProjectionORM).where(PositionProjectionORM.account_id == account_id)
+    )
+    now = datetime.now(UTC)
     for currency, row in snapshot.balances.items():
         session.add(
             AccountProjectionORM(

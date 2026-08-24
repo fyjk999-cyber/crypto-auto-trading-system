@@ -3,14 +3,15 @@
 Only system-level limits are implemented (SPAC section 8). Strategy-specific
 risk preference is intentionally out of scope.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from crypto_trader.domain.enums import ExecutionDecision, OrderSide
+from crypto_trader.domain.enums import ExecutionDecision
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Account, OrderIntent, Position, RiskDecision, SignalIntent
 from crypto_trader.domain.money import D
@@ -33,7 +34,9 @@ class RiskConfig(BaseModel):
 
 
 class RiskEngine:
-    def __init__(self, config: RiskConfig | None = None, kill_switch: KillSwitch | None = None) -> None:
+    def __init__(
+        self, config: RiskConfig | None = None, kill_switch: KillSwitch | None = None
+    ) -> None:
         self.config = config or RiskConfig()
         self.kill_switch = kill_switch or KillSwitch()
 
@@ -51,8 +54,12 @@ class RiskEngine:
         run_id: str | None = None,
         order_id: str | None = None,
     ) -> RiskDecision:
-        now = datetime.now(timezone.utc)
-        client_order_id = getattr(intent, "client_order_id", None) or getattr(intent, "signal_id", None) or "unknown"
+        now = datetime.now(UTC)
+        client_order_id = (
+            getattr(intent, "client_order_id", None)
+            or getattr(intent, "signal_id", None)
+            or "unknown"
+        )
         checks: dict[str, bool | str] = {}
 
         def fail(reason: str) -> RiskDecision:

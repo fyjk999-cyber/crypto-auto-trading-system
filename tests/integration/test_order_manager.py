@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -11,18 +11,31 @@ from crypto_trader.order.manager import OrderManager
 
 def make_intent(cid="client_1", symbol="BTCUSDT", qty="1"):
     return OrderIntent(
-        client_order_id=cid, symbol=symbol, side=OrderSide.BUY,
-        order_type=OrderType.LIMIT, time_in_force=TimeInForce.GTC,
-        price="100", quantity=qty, strategy_id="test",
+        client_order_id=cid,
+        symbol=symbol,
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price="100",
+        quantity=qty,
+        strategy_id="test",
     )
 
 
 def make_fill(order, fill_id="fill_1", qty="0.4", price="100", ts=None, exchange_order_id=None):
     return Fill(
-        fill_id=fill_id, trade_id=None, order_id=order.internal_order_id,
-        client_order_id=order.client_order_id, exchange_order_id=exchange_order_id or order.exchange_order_id,
-        symbol=order.symbol, side=order.side, price=price, quantity=qty,
-        fee="0.01", fee_currency="USDT", timestamp=ts or datetime.now(timezone.utc),
+        fill_id=fill_id,
+        trade_id=None,
+        order_id=order.internal_order_id,
+        client_order_id=order.client_order_id,
+        exchange_order_id=exchange_order_id or order.exchange_order_id,
+        symbol=order.symbol,
+        side=order.side,
+        price=price,
+        quantity=qty,
+        fee="0.01",
+        fee_currency="USDT",
+        timestamp=ts or datetime.now(UTC),
     )
 
 
@@ -64,7 +77,9 @@ async def test_fill_before_ack(database):
     await mgr.validate(order.internal_order_id)
     await mgr.submitting(order.internal_order_id)
     await mgr.submitted(order.internal_order_id)
-    order, fill, applied = await mgr.apply_fill(make_fill(order, exchange_order_id="ex_early", qty="0.5"))
+    order, fill, applied = await mgr.apply_fill(
+        make_fill(order, exchange_order_id="ex_early", qty="0.5")
+    )
     assert applied is True
     assert order.status == OrderStatus.PARTIALLY_FILLED
     # ack arrives late: recorded, no regression
@@ -89,8 +104,10 @@ async def test_partial_then_full_fill(database):
 
 async def test_duplicate_fill_is_single_application(database):
     applied = []
+
     async def settle(fill):
         applied.append(fill.fill_id)
+
     mgr = OrderManager(database.session_factory, settlement_callback=settle)
     order = await mgr.create_from_intent(make_intent(), trading_mode=TradingMode.PAPER)
     await mgr.validate(order.internal_order_id)
@@ -128,5 +145,10 @@ async def test_unknown_recovery(database):
     await mgr.submitted(order.internal_order_id)
     await mgr.mark_unknown(order.internal_order_id, "rest timeout")
     assert (await mgr.get(order.internal_order_id)).status == OrderStatus.UNKNOWN
-    order = await mgr.transition(order.internal_order_id, __import__("crypto_trader.domain.enums", fromlist=["OrderEventType"]).OrderEventType.ORDER_OPENED)
+    order = await mgr.transition(
+        order.internal_order_id,
+        __import__(
+            "crypto_trader.domain.enums", fromlist=["OrderEventType"]
+        ).OrderEventType.ORDER_OPENED,
+    )
     assert order.status == OrderStatus.OPEN

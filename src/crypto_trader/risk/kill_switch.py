@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class KillSwitch:
@@ -22,7 +22,7 @@ class KillSwitch:
     def engage(self, reason: str) -> None:
         self._enabled = True
         self._reason = reason
-        self._engaged_at = datetime.now(timezone.utc)
+        self._engaged_at = datetime.now(UTC)
 
     def disengage(self, reason: str | None = None) -> None:
         self._enabled = False
