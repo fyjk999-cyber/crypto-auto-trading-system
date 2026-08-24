@@ -115,3 +115,57 @@ class BinanceUSDMFuturesPublicClient:
             "bids": [(D(b[0]), D(b[1])) for b in raw.get("bids", [])],
             "asks": [(D(a[0]), D(a[1])) for a in raw.get("asks", [])],
         }
+
+    @staticmethod
+    def normalize_kline(raw: dict) -> dict:
+        return {
+            "symbol": raw.get("symbol"),
+            "interval": raw.get("interval", "1m"),
+            "open_time": datetime.fromtimestamp(int(raw["openTime"]) / 1000.0, tz=UTC)
+            if isinstance(raw.get("openTime"), (int, float))
+            else None,
+            "open": D(raw["open"]),
+            "high": D(raw["high"]),
+            "low": D(raw["low"]),
+            "close": D(raw["close"]),
+            "volume": D(raw["volume"]),
+            "close_time": datetime.fromtimestamp(int(raw["closeTime"]) / 1000.0, tz=UTC)
+            if isinstance(raw.get("closeTime"), (int, float))
+            else None,
+            "closed": bool(raw.get("closed", True)),
+            "source": "BINANCE_USDM",
+        }
+
+    @staticmethod
+    def normalize_kline_stream(raw: dict) -> dict:
+        k = raw.get("k", raw)
+        return BinanceUSDMFuturesPublicClient.normalize_kline(k)
+
+    @staticmethod
+    def normalize_kline_array(rows: list[dict], symbol: str, interval: str) -> list[dict]:
+        out = []
+        for row in rows:
+            try:
+                out.append(
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "open_time": datetime.fromtimestamp(int(row[0]) / 1000.0, tz=UTC),
+                        "open": D(row[1]),
+                        "high": D(row[2]),
+                        "low": D(row[3]),
+                        "close": D(row[4]),
+                        "volume": D(row[5]),
+                        "close_time": datetime.fromtimestamp(int(row[6]) / 1000.0, tz=UTC),
+                        "closed": True,
+                        "source": "BINANCE_USDM",
+                    }
+                )
+            except Exception:
+                continue
+        return out
+
+    async def get_basis(self, symbol: str, period: str = "1h", limit: int = 10) -> list[dict]:
+        return await self._get(
+            "/futures/data/basis", {"symbol": symbol, "period": period, "limit": limit}
+        )

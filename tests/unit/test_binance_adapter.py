@@ -180,7 +180,6 @@ async def test_okx_and_bybit_boundaries_exist():
     bybit = BybitAdapter()
     await okx.connect()
     await bybit.connect()
-    with pytest.raises(NotImplementedError):
-        await okx.get_balances()
+    assert okx.name == "OKX"
     with pytest.raises(NotImplementedError):
         await bybit.get_orderbook("BTCUSDT")

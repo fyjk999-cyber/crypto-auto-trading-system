@@ -17,6 +17,10 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
+from crypto_trader.exchange.binance_futures_public import (
+    BinancePublicDataUnavailable,
+    BinanceUSDMFuturesPublicClient,
+)
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
@@ -152,6 +156,32 @@ def create_app(state: AppState) -> FastAPI:
             "basis": None,
         }
 
+    @app.get("/market/klines")
+    async def market_klines(symbol: str = "BTCUSDT", interval: str = "1m", limit: int = 500):
+        if interval not in ("1m", "5m", "15m", "1h", "4h", "1d"):
+            return {"status": "INVALID_INTERVAL", "candles": []}
+        client = BinanceUSDMFuturesPublicClient()
+        try:
+            raw = await client.get_klines(symbol, interval=interval, limit=limit)
+            candles = BinanceUSDMFuturesPublicClient.normalize_kline_array(raw, symbol, interval)
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "source": "BINANCE_USDM",
+                "status": "HEALTHY",
+                "candles": candles,
+            }
+        except BinancePublicDataUnavailable:
+            return {
+                "symbol": symbol,
+                "interval": interval,
+                "source": "BINANCE_USDM",
+                "status": "UNAVAILABLE",
+                "candles": [],
+            }
+        finally:
+            await client.close()
+
     @app.get("/market/sources")
     async def market_sources():
         adapter = getattr(state.engine, "adapter", None) if state.engine else None
@@ -266,6 +296,19 @@ def create_app(state: AppState) -> FastAPI:
             getattr(state.engine, "adapter", None).connected if state.engine else False
         )
         return {
+            "market_data": {
+                "provider": "BINANCE_USDM",
+                "status": "UNAVAILABLE"
+                if state.settings.paper_mode != "PAPER_REAL_MARKET"
+                else "DEGRADED",
+            },
+            "execution": {
+                "provider": "OKX",
+                "environment": "DEMO"
+                if state.settings.paper_mode == "PAPER_REAL_MARKET"
+                else "NOT_CONFIGURED",
+                "status": "not_configured",
+            },
             "adapter": "connected" if adapter_connected else "disconnected",
             "mode": state.settings.effective_mode().value,
             "paper_mode": state.settings.paper_mode,
