@@ -14,10 +14,11 @@ OKX
 - OKX timestamp: PASS (ISO8601 UTC ms)
 - OKX GET query signing: PASS (full requestPath signed)
 - OKX Demo header: PASS (demo only; LIVE never)
-- OKX public time: PASS (server/local offset 646ms)
+- OKX public time: PASS (server/local offset 695ms)
 - OKX credential: NOT CONFIGURED (no .env / env vars)
 - OKX Auth: UNVERIFIED (BLOCKED_EXTERNAL_CREDENTIAL)
 - Account Mode: NOT_READ (BLOCKED_EXTERNAL_CREDENTIAL)
+- Latest attempt: public time PASS; credentials still missing from .env and environment.
 - Position Mode: NOT_READ (BLOCKED_EXTERNAL_CREDENTIAL)
 - BTC-USDT-SWAP: NOT_READ (BLOCKED_EXTERNAL_CREDENTIAL)
 - OKX Demo Read: BLOCKED_CREDENTIAL
