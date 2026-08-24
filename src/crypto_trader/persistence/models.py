@@ -63,9 +63,10 @@ class RuntimeLeaseORM(Base):
     lease_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False)
     token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    renewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # epoch seconds for exact cross-database CAS comparisons
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+    acquired_at: Mapped[float] = mapped_column(Float, default=lambda: datetime.now(timezone.utc).timestamp())
+    renewed_at: Mapped[float | None] = mapped_column(Float)
     version: Mapped[int] = mapped_column(Integer, default=1)
 
 

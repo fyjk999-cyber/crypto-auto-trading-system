@@ -16,6 +16,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType, OrderSide
 from crypto_trader.domain.errors import JournalUnbalanced
@@ -105,6 +106,21 @@ class LedgerService:
         metadata: dict | None = None,
         created_at: datetime | None = None,
     ) -> LedgerTransaction:
+        # Idempotent write: a fill/event is settled at most once even if the
+        # engine crashes after order update but before/after ledger commit.
+        if fill_id or event_id:
+            async with self.session_factory() as check_session:
+                existing = await self._find_transaction(check_session, fill_id=fill_id, event_id=event_id)
+            if existing is not None:
+                async with self.session_factory() as load_session:
+                    row = (
+                        await load_session.execute(
+                            select(LedgerTransactionORM)
+                            .options(selectinload(LedgerTransactionORM.entries))
+                            .where(LedgerTransactionORM.transaction_id == existing.transaction_id)
+                        )
+                    ).scalar_one()
+                return await _txn_to_domain(row)
         if not postings:
             raise JournalUnbalanced("ledger transaction requires at least one posting")
         if not journal_balanced(postings):
@@ -166,6 +182,18 @@ class LedgerService:
                 for i, p in enumerate(postings, start=1)
             ],
         )
+
+    @staticmethod
+    async def _find_transaction(session: AsyncSession, *, fill_id: str | None = None,
+                                event_id: str | None = None) -> LedgerTransactionORM | None:
+        query = select(LedgerTransactionORM)
+        if fill_id:
+            query = query.where(LedgerTransactionORM.fill_id == fill_id)
+        if event_id:
+            query = query.where(LedgerTransactionORM.event_id == event_id)
+        if not fill_id and not event_id:
+            return None
+        return (await session.execute(query)).scalars().first()
 
     async def list_transactions(self, session: AsyncSession) -> list[LedgerTransactionORM]:
         result = await session.execute(
