@@ -297,3 +297,44 @@ class AuditEventORM(Base):
     before_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     after_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TradeMemoryRecordORM(Base):
+    __tablename__ = "trade_memory_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    side: Mapped[str] = mapped_column(String(8))
+    regime: Mapped[str] = mapped_column(String(16))
+    raw_confidence: Mapped[Decimal] = mapped_column(ExactDecimal())
+    calibrated_confidence: Mapped[Decimal] = mapped_column(ExactDecimal())
+    recommended_position: Mapped[Decimal] = mapped_column(ExactDecimal())
+    approved_position: Mapped[Decimal] = mapped_column(ExactDecimal())
+    recommended_leverage: Mapped[Decimal] = mapped_column(ExactDecimal())
+    approved_leverage: Mapped[Decimal] = mapped_column(ExactDecimal())
+    entry: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    exit: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    mae: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    mfe: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    fees: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    funding_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    realized_pnl: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    r_multiple: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    failure_class: Mapped[str | None] = mapped_column(String(32))
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DailyReviewRunORM(Base):
+    __tablename__ = "daily_review_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_date: Mapped[str] = mapped_column(String(16), unique=True)
+    daily_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    long_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    short_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    trade_count: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    profit_factor: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    expectancy: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

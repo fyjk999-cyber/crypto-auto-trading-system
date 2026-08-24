@@ -273,6 +273,13 @@ class TradingEngine:
                 return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
+        market_state = None
+        get_market_state = getattr(self.adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                market_state = await get_market_state(symbol)
+            except Exception:
+                market_state = None
         return StrategyContext(
             symbol=symbol,
             book=book,
@@ -280,6 +287,11 @@ class TradingEngine:
             positions=positions,
             clock_time=self.clock.now(),
             run_id=self.run_id,
+            mark_price=market_state.mark_price if market_state else None,
+            index_price=market_state.index_price if market_state else None,
+            funding=market_state.funding_rate if market_state else None,
+            oi=market_state.open_interest if market_state else None,
+            basis=market_state.basis if market_state else None,
         )
 
     # --------------------------------------------------------------- signals

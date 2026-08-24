@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from pydantic import BaseModel
@@ -14,6 +15,9 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
+from crypto_trader.governance.memory_persistence import MemoryPersistence
+from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
+from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
 
 
@@ -79,6 +83,75 @@ def create_app(state: AppState) -> FastAPI:
             if getattr(strategy, "name", None) == "multi_strategy_alpha":
                 return strategy
         return None
+
+    def _perpetual_engine():
+        contract = PerpetualContract(
+            symbol="BTCUSDT_PERP",
+            base="BTC",
+            quote="USDT",
+            settlement_asset="USDT",
+            max_leverage=Decimal("6"),
+            taker_fee_rate=Decimal("0.0005"),
+        )
+        return PerpetualPaperEngine(state.database.session_factory, contract)
+
+    @app.post("/paper/perpetual/open")
+    async def paper_perpetual_open(body: dict):
+        engine = _perpetual_engine()
+        side = PositionSide(body["side"])
+        pos = await engine.open_position(
+            side,
+            Decimal(body.get("quantity", "0.1")),
+            Decimal(body.get("price", "100")),
+            Decimal(body.get("leverage", "3")),
+        )
+        return pos.model_dump(mode="json")
+
+    @app.post("/paper/perpetual/close")
+    async def paper_perpetual_close(body: dict):
+        engine = _perpetual_engine()
+        side = PositionSide(body["side"])
+        pos = await engine.close_position(
+            side, Decimal(body.get("quantity", "0.1")), Decimal(body.get("price", "100"))
+        )
+        return pos.model_dump(mode="json") if pos else {"closed": True}
+
+    @app.get("/paper/perpetual/positions")
+    async def paper_perpetual_positions():
+        engine = _perpetual_engine()
+        state = await engine.load_state()
+        return {"positions": {k: v.model_dump(mode="json") for k, v in state.positions.items()}}
+
+    @app.get("/market")
+    async def market():
+        adapter = getattr(state.engine, "adapter", None) if state.engine else None
+        get_market_state = getattr(adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                ms = await get_market_state("BTCUSDT")
+                return ms.model_dump(mode="json")
+            except Exception as exc:
+                return {"status": "UNAVAILABLE", "error": str(exc)}
+        return {
+            "symbol": "BTCUSDT",
+            "status": "SYNTHETIC",
+            "data_source": "PAPER_SYNTHETIC",
+            "funding_rate": None,
+            "open_interest": None,
+            "basis": None,
+        }
+
+    @app.get("/market/sources")
+    async def market_sources():
+        adapter = getattr(state.engine, "adapter", None) if state.engine else None
+        get_market_state = getattr(adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                ms = await get_market_state("BTCUSDT")
+                return {k: v.model_dump(mode="json") for k, v in ms.sources.items()}
+            except Exception as exc:
+                return {"status": "UNAVAILABLE", "error": str(exc)}
+        return {"status": "SYNTHETIC", "sources": {}}
 
     @app.get("/regime")
     async def regime():
@@ -149,7 +222,9 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/daily-reviews")
     async def daily_reviews(limit: int = 50):
-        return {"daily_reviews": [], "count": 0}
+        persistence = MemoryPersistence(state.database.session_factory)
+        rows = await persistence.load_daily_reviews(limit=limit)
+        return {"daily_reviews": rows, "count": len(rows)}
 
     @app.get("/learning")
     async def learning():

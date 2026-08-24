@@ -31,6 +31,9 @@ class FeatureSnapshot(BaseModel):
     oi: Decimal = Decimal("0")
     funding: Decimal = Decimal("0")
     basis: Decimal = Decimal("0")
+    funding_available: bool = False
+    basis_available: bool = False
+    oi_available: bool = False
 
 
 def compute_features(mde: MarketDataEngine, symbol: str, ts: datetime) -> FeatureSnapshot:
@@ -66,7 +69,10 @@ def compute_features(mde: MarketDataEngine, symbol: str, ts: datetime) -> Featur
         zscore_20=mde.zscore(20) or Decimal("0"),
         donchian_low_50=low or price,
         donchian_high_50=high or price,
-        oi=latest.oi,
-        funding=latest.funding,
-        basis=latest.basis,
+        oi=latest.oi or Decimal("0"),
+        funding=latest.funding or Decimal("0"),
+        basis=latest.basis or Decimal("0"),
+        funding_available=latest.funding is not None,
+        basis_available=latest.basis is not None,
+        oi_available=latest.oi is not None,
     )

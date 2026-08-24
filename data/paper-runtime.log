@@ -1,16 +1,256 @@
-INFO:     Started server process [24564]
+INFO:     Started server process [33294]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:49195 - "GET /ready HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49196 - "POST /manual-orders HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49197 - "GET /positions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49198 - "GET /orders HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49202 - "POST /manual-orders HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49204 - "GET /positions HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49205 - "GET /orders HTTP/1.1" 200 OK
-INFO:     127.0.0.1:49206 - "GET /ledger?limit=6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49884 - "GET /market HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49885 - "GET /market/sources HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49898 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49900 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49905 - "WebSocket /ws" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:49907 - "WebSocket /ws" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:49909 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49910 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49913 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49914 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49899 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49903 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49904 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49918 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49922 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49902 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49925 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49930 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49931 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49932 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49921 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49936 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49938 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49939 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49920 - "GET /margin HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49946 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49940 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49949 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49943 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49953 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49945 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49954 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49950 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49956 - "GET /margin HTTP/1.1" 200 OK
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/websockets.py", line 86, in send
+    await self._send(message)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 39, in sender
+    await send(message)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_sansio_impl.py", line 436, in send
+    raise ClientDisconnected()
+uvicorn.protocols.utils.ClientDisconnected
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_sansio_impl.py", line 409, in run_asgi
+    result = await self.app(self.scope, self.receive, self.send)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/routing.py", line 670, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2734, in app
+    await route.handle(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/routing.py", line 354, in handle
+    await self.app(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 184, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 181, in app
+    await func(session)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 796, in app
+    await dependant.call(**solved_result.values)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/src/crypto_trader/api/app.py", line 405, in websocket_events
+    await websocket.send_json(envelope)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/websockets.py", line 176, in send_json
+    await self.send({"type": "websocket.send", "text": text})
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/websockets.py", line 89, in send
+    raise WebSocketDisconnect(code=1006)
+starlette.websockets.WebSocketDisconnect
+INFO:     127.0.0.1:49958 - "POST /paper/perpetual/open HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49959 - "GET /paper/perpetual/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49960 - "POST /paper/perpetual/close HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49961 - "GET /ledger?limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49965 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49970 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49978 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49979 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49968 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49982 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49984 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49974 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49985 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49976 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49992 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49993 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49971 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49990 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49987 - "GET /margin HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49997 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49998 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49999 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50000 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50001 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50004 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50008 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50006 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50016 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50017 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50021 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50022 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50023 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50013 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50014 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50030 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50031 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50011 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50027 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50025 - "GET /margin HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50038 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50044 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50049 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50051 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50041 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50053 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50056 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50057 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50048 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50047 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50063 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50065 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50046 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50061 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50060 - "GET /margin HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50071 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50076 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50073 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50084 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50085 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50088 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50090 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50091 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50097 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50083 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50077 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50081 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50099 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50096 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50093 - "GET /margin HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50106 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50111 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50117 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50119 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50109 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50121 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50124 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50125 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50131 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50116 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50115 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50133 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50113 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50130 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50127 - "GET /margin HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50142 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50147 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50155 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50156 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50144 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50159 - "GET /signals HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50161 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50162 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50168 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50152 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50154 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50170 - "GET /exchange-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50149 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50166 - "GET /daily-reviews HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50164 - "GET /margin HTTP/1.1" 200 OK
 INFO:     Shutting down
+INFO:     Waiting for background tasks to complete. (CTRL+C to force quit)
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/websockets.py", line 86, in send
+    await self._send(message)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 39, in sender
+    await send(message)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_sansio_impl.py", line 436, in send
+    raise ClientDisconnected()
+uvicorn.protocols.utils.ClientDisconnected
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_sansio_impl.py", line 409, in run_asgi
+    result = await self.app(self.scope, self.receive, self.send)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1163, in __call__
+    await super().__call__(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/routing.py", line 670, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2734, in app
+    await route.handle(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/routing.py", line 354, in handle
+    await self.app(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 184, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 181, in app
+    await func(session)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 796, in app
+    await dependant.call(**solved_result.values)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/src/crypto_trader/api/app.py", line 405, in websocket_events
+    await websocket.send_json(envelope)
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/websockets.py", line 176, in send_json
+    await self.send({"type": "websocket.send", "text": text})
+  File "/Users/huhongjie/Desktop/crypto-auto-trading-system/.venv/lib/python3.12/site-packages/starlette/websockets.py", line 89, in send
+    raise WebSocketDisconnect(code=1006)
+starlette.websockets.WebSocketDisconnect
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
-INFO:     Finished server process [24564]
+INFO:     Finished server process [33294]

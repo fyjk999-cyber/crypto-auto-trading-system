@@ -26,6 +26,7 @@ from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
+from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.strategy.dummy import DummyStrategy
 
 
@@ -63,9 +64,18 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
     # Paper is default. SimulatedExchangeAdapter implements the same contract
     # as a live adapter, so LIVE/PAPER/SHADOW share one core.
-    adapter = SimulatedExchangeAdapter(
-        initial_balances={settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)}
-    )
+    if settings.paper_mode == "PAPER_REAL_MARKET":
+        adapter = PaperRealMarketAdapter(
+            initial_balances={
+                settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
+            }
+        )
+    else:
+        adapter = SimulatedExchangeAdapter(
+            initial_balances={
+                settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
+            }
+        )
 
     alpha = MultiStrategyAlpha(
         symbol="BTCUSDT",
