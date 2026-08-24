@@ -25,6 +25,8 @@ class SourceStatus(BaseModel):
     status: DataHealth = DataHealth.UNAVAILABLE
     age_seconds: float = -1.0
     updated_at: datetime | None = None
+    last_error: str | None = None
+    data_source: str = "BINANCE_USDM_PUBLIC"
 
 
 class MarketState(BaseModel):

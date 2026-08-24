@@ -8,14 +8,17 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
+from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.governance.memory_persistence import MemoryPersistence
+from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
@@ -48,6 +51,14 @@ def create_app(state: AppState) -> FastAPI:
             await state.engine.stop()
 
     app = FastAPI(title="Crypto Automated Trading System", version="0.1.0", lifespan=lifespan)
+    if state.settings.app_env == "development":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.state.ctx = state
 
     def ctx() -> AppState:
@@ -220,6 +231,18 @@ def create_app(state: AppState) -> FastAPI:
     async def stress_tests(limit: int = 50):
         return {"stress_tests": [], "count": 0}
 
+    @app.post("/dev/daily-review/run")
+    async def dev_daily_review_run():
+        if state.settings.app_env != "development":
+            raise HTTPException(status_code=403, detail="development only")
+        if state.settings.effective_mode().value != "PAPER":
+            raise HTTPException(status_code=403, detail="paper only")
+        scheduler = DailyReviewScheduler(
+            state.database.session_factory, review_time_utc=state.settings.daily_review_time_utc
+        )
+        result = await scheduler.run_once()
+        return result
+
     @app.get("/daily-reviews")
     async def daily_reviews(limit: int = 50):
         persistence = MemoryPersistence(state.database.session_factory)
@@ -376,37 +399,61 @@ def create_app(state: AppState) -> FastAPI:
     async def websocket_events(websocket: WebSocket):
         await websocket.accept()
         queue: asyncio.Queue = asyncio.Queue()
+
+        def _enqueue(event):
+            queue.put_nowait(event)
+
         if state.engine is not None:
-            state.engine.event_bus.subscribe("*", lambda event: queue.put_nowait(event))
-        while True:
-            event = None
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
-            except TimeoutError:
+            state.engine.event_bus.subscribe("*", _enqueue)
+        try:
+            while True:
                 event = None
-            if event is None:
-                payload = {
-                    "state": state.engine.state_machine.state.value if state.engine else "STOPPED",
-                    "mode": state.settings.effective_mode().value,
-                }
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except TimeoutError:
+                    event = None
+                if event is None:
+                    event_type = "runtime"
+                    payload = {
+                        "state": state.engine.state_machine.state.value
+                        if state.engine
+                        else "STOPPED",
+                        "mode": state.settings.effective_mode().value,
+                    }
+                else:
+                    event_type, payload = _envelope_from_event(event)
                 envelope = {
-                    "event_type": "runtime",
+                    "event_type": event_type,
                     "event_version": "v1",
                     "timestamp": datetime.now(UTC).isoformat(),
                     "payload": payload,
                 }
-            else:
-                envelope = {
-                    "event_type": "runtime",
-                    "event_version": "v1",
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "payload": str(event),
-                }
-            await websocket.send_json(envelope)
-            try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
-            except TimeoutError:
-                continue
+                await websocket.send_json(envelope)
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
+                except TimeoutError:
+                    continue
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            if state.engine is not None:
+                state.engine.event_bus.unsubscribe(_enqueue)
+
+    def _envelope_from_event(event):
+        if isinstance(event, dict):
+            return event.get("event_type", "runtime"), event.get("payload", event)
+        event_type = getattr(event, "event_type", None)
+        if event_type is None:
+            event_type = getattr(event, "type", None)
+        if event_type is None:
+            event_type = "runtime"
+        if hasattr(event, "model_dump"):
+            payload = event.model_dump(mode="json")
+        elif isinstance(event, str):
+            payload = {"message": event}
+        else:
+            payload = repr(event)
+        return str(event_type), payload
 
     return app
 

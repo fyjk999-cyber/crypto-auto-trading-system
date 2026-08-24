@@ -43,6 +43,8 @@ from crypto_trader.domain.models import (
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.base import ExchangeAdapter
 from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
+from crypto_trader.governance.memory import TradeMemoryRecord
+from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
 from crypto_trader.market_data.service import MarketDataService
@@ -586,6 +588,32 @@ class TradingEngine:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return
+        try:
+            persistence = MemoryPersistence(self.database.session_factory)
+            await persistence.save_trade_memory(
+                TradeMemoryRecord(
+                    decision_id=fill.fill_id,
+                    symbol=fill.symbol,
+                    side=order.side.value,
+                    regime="UNKNOWN",
+                    strategy_scores={},
+                    effective_weights={},
+                    raw_confidence=Decimal("0"),
+                    calibrated_confidence=Decimal("0"),
+                    recommended_position=fill.quantity,
+                    approved_position=fill.quantity,
+                    recommended_leverage=Decimal("1"),
+                    approved_leverage=Decimal("1"),
+                    entry=fill.price,
+                    exit=fill.price,
+                    fees=fill.fee,
+                    funding_pnl=Decimal("0"),
+                    realized_pnl=Decimal("0"),
+                    r_multiple=Decimal("0"),
+                )
+            )
+        except Exception:
+            pass
         position = await self.portfolio.get_position(fill.symbol)
         cost_released = None
         if order.side == OrderSide.SELL:
