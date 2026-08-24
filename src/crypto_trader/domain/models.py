@@ -20,7 +20,15 @@ from crypto_trader.domain.enums import (
     TimeInForce,
     TradingMode,
 )
-from crypto_trader.domain.money import Balance, CostBasis, Fee, Margin, Money, Price, Quantity
+from crypto_trader.domain.money import (
+    Balance as BalanceValue,
+    CostBasis as CostBasisValue,
+    Fee as FeeValue,
+    Margin as MarginValue,
+    Money as MoneyValue,
+    Price as PriceValue,
+    Quantity as QuantityValue,
+)
 
 
 class Instrument(BaseModel):
@@ -30,10 +38,10 @@ class Instrument(BaseModel):
     base_asset: str
     quote_asset: str
     status: str = "TRADING"
-    tick_size: Price = Decimal("0.00000001")
-    step_size: Quantity = Decimal("0.00000001")
-    min_qty: Quantity = Decimal("0.00000001")
-    min_notional: Money = Decimal("0.00000001")
+    tick_size: PriceValue = Decimal("0.00000001")
+    step_size: QuantityValue = Decimal("0.00000001")
+    min_qty: QuantityValue = Decimal("0.00000001")
+    min_notional: MoneyValue = Decimal("0.00000001")
     price_precision: int = 8
     quantity_precision: int = 8
     exchange: str = "UNKNOWN"
@@ -51,9 +59,9 @@ class OrderIntent(BaseModel):
     side: OrderSide
     order_type: OrderType = OrderType.LIMIT
     time_in_force: TimeInForce = TimeInForce.GTC
-    price: Price | None = None
-    quantity: Quantity
-    quote_order_qty: Money | None = None
+    price: PriceValue | None = None
+    quantity: QuantityValue
+    quote_order_qty: MoneyValue | None = None
     strategy_id: str = "manual"
     run_id: str | None = None
     expires_at: datetime | None = None
@@ -83,10 +91,10 @@ class Order(BaseModel):
     side: OrderSide
     order_type: OrderType
     time_in_force: TimeInForce
-    price: Price | None = None
-    quantity: Quantity
-    filled_quantity: Quantity = Decimal("0")
-    avg_fill_price: Price | None = None
+    price: PriceValue | None = None
+    quantity: QuantityValue
+    filled_quantity: QuantityValue = Decimal("0")
+    avg_fill_price: PriceValue | None = None
     status: OrderStatus = OrderStatus.CREATED
     trading_mode: TradingMode = TradingMode.PAPER
     strategy_id: str = "manual"
@@ -112,9 +120,9 @@ class Fill(BaseModel):
     exchange_order_id: str | None = None
     symbol: str
     side: OrderSide
-    price: Price
-    quantity: Quantity
-    fee: Fee = Decimal("0")
+    price: PriceValue
+    quantity: QuantityValue
+    fee: FeeValue = Decimal("0")
     fee_currency: str | None = None
     timestamp: datetime
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -128,15 +136,15 @@ class Trade(BaseModel):
     fill_id: str
     symbol: str
     side: OrderSide
-    price: Price
-    quantity: Quantity
-    fee: Fee = Decimal("0")
+    price: PriceValue
+    quantity: QuantityValue
+    fee: FeeValue = Decimal("0")
     fee_currency: str | None = None
     timestamp: datetime
 
 
 class Fee(BaseModel):
-    amount: Fee = Decimal("0")
+    amount: FeeValue = Decimal("0")
     currency: str
 
 
@@ -146,10 +154,10 @@ class Position(BaseModel):
     symbol: str
     base_asset: str
     quote_asset: str
-    quantity: Quantity = Decimal("0")
-    avg_entry_price: Price | None = None
-    cost_basis: CostBasis = Decimal("0")
-    realized_pnl: Money = Decimal("0")
+    quantity: QuantityValue = Decimal("0")
+    avg_entry_price: PriceValue | None = None
+    cost_basis: CostBasisValue = Decimal("0")
+    realized_pnl: MoneyValue = Decimal("0")
     updated_at: datetime | None = None
 
 
@@ -157,9 +165,9 @@ class Balance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     currency: str
-    total: Balance = Decimal("0")
-    available: Balance = Decimal("0")
-    frozen: Balance = Decimal("0")
+    total: BalanceValue = Decimal("0")
+    available: BalanceValue = Decimal("0")
+    frozen: BalanceValue = Decimal("0")
 
 
 class Account(BaseModel):
@@ -168,8 +176,8 @@ class Account(BaseModel):
     account_id: str = "default"
     mode: TradingMode = TradingMode.PAPER
     balances: dict[str, Balance] = Field(default_factory=dict)
-    equity: Money = Decimal("0")
-    margin_used: Margin = Decimal("0")
+    equity: MoneyValue = Decimal("0")
+    margin_used: MarginValue = Decimal("0")
     updated_at: datetime | None = None
 
 
@@ -182,7 +190,7 @@ class LedgerEntry(BaseModel):
     entry_type: LedgerEntryType
     account: str
     direction: LedgerDirection
-    amount: Money
+    amount: MoneyValue
     currency: str
     created_at: datetime
     order_id: str | None = None
@@ -235,8 +243,8 @@ class SignalIntent(BaseModel):
     strategy_id: str
     symbol: str
     side: OrderSide
-    quantity: Quantity
-    limit_price: Price | None = None
+    quantity: QuantityValue
+    limit_price: PriceValue | None = None
     order_type: OrderType = OrderType.LIMIT
     time_in_force: TimeInForce = TimeInForce.GTC
     expires_at: datetime | None = None
@@ -249,7 +257,7 @@ class MarketSnapshot(BaseModel):
 
     symbol: str
     sequence: int
-    bids: list[tuple[Price, Quantity]]
-    asks: list[tuple[Price, Quantity]]
+    bids: list[tuple[PriceValue, QuantityValue]]
+    asks: list[tuple[PriceValue, QuantityValue]]
     timestamp: datetime
     status: MarketDataStatus = MarketDataStatus.HEALTHY
