@@ -44,6 +44,7 @@ class TradingRuntimeSupervisor:
         lease_key: str = "crypto_engine_execution",
         owner_id: str = "crypto-trading-primary",
         interval_seconds: float = 0.1,
+        renew_interval: float = 0.5,
         scanner_callback: Callable[[], Awaitable[None]] | None = None,
         execution_callback: Callable[[], Awaitable[None]] | None = None,
         order_event_callback: Callable[[], Awaitable[None]] | None = None,
@@ -55,6 +56,7 @@ class TradingRuntimeSupervisor:
         self.lease_key = lease_key
         self.owner_id = owner_id
         self.interval = interval_seconds
+        self.renew_interval = renew_interval
         self.scanner_callback = scanner_callback
         self.execution_callback = execution_callback
         self.order_event_callback = order_event_callback
@@ -120,7 +122,7 @@ class TradingRuntimeSupervisor:
 
     async def _scanner_loop(self) -> None:
         while not self._stopping:
-            await asyncio.sleep(self.interval)
+            await asyncio.sleep(self.renew_interval)
             self.status.scanner_heartbeat += 1
             # reference pattern: long-running scanning renews ownership continuously
             if self._lease is not None:
@@ -169,7 +171,7 @@ class TradingRuntimeSupervisor:
 
     async def _lease_renew_loop(self) -> None:
         while not self._stopping:
-            await asyncio.sleep(self.interval)
+            await asyncio.sleep(self.renew_interval)
             if self._lease is not None:
                 if await self.lease_manager.renew(
                     self.lease_key, self._lease.token, ttl_seconds=30
