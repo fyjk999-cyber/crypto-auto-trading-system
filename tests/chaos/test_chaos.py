@@ -299,7 +299,13 @@ async def test_engine_restart_test(database):
     await sim.connect()
     sim.timeout_but_created = True
     strategy = TestStrategy(quantity="0.1", limit_price="101")
-    engine = make_paper_engine(database, strategy=strategy, simulator=sim)
+    engine = make_paper_engine(
+        database,
+        strategy=strategy,
+        simulator=sim,
+        engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600,
+    )
     await engine.start()
     await engine.tick()
     await engine.wait_for_event_queue()
@@ -309,7 +315,13 @@ async def test_engine_restart_test(database):
 
     # "process restart": a new engine instance on the same DB/adapter
     await sim.connect()
-    engine2 = make_paper_engine(database, strategy=DummyStrategy(), simulator=sim)
+    engine2 = make_paper_engine(
+        database,
+        strategy=DummyStrategy(),
+        simulator=sim,
+        engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600,
+    )
     await engine2.start()
     restored = await engine2.order_manager.get_by_client(f"test_{strategy.signal_id}"[:60])
     assert restored.status == OrderStatus.ACKNOWLEDGED
