@@ -279,12 +279,15 @@ def create_app(state: AppState) -> FastAPI:
                 ms = await get_market_state("BTCUSDT")
                 return ms.model_dump(mode="json")
             except Exception as exc:
+                detail = str(exc)
                 return {
                     "provider": "BINANCE_USDM",
                     "source": "BINANCE_USDM",
-                    "status": "UNAVAILABLE",
+                    "status": "GEO_RESTRICTED"
+                    if "451" in detail or "restricted" in detail.lower()
+                    else "UNAVAILABLE",
                     "data_source": "REAL",
-                    "last_error": str(exc),
+                    "last_error": detail,
                 }
         if state.settings.paper_mode == "PAPER_SYNTHETIC":
             return {
