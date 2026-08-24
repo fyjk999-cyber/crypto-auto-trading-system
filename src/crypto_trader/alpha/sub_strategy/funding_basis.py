@@ -18,6 +18,13 @@ class FundingBasisStrategy(AlphaSubStrategy):
 
     def evaluate(self, ctx: AlphaContext) -> AlphaSignal:
         f = ctx.feature
+        if not f.funding_available or not f.basis_available:
+            reasons = []
+            if not f.funding_available:
+                reasons.append("FUNDING_DATA_UNAVAILABLE")
+            if not f.basis_available:
+                reasons.append("BASIS_DATA_UNAVAILABLE")
+            return self._signal(ctx, AlphaSide.NO_TRADE, Decimal("0"), reasons)
         score = f.funding + f.basis
         if score < -self.funding_threshold:
             side, confidence, reasons = (

@@ -86,7 +86,14 @@ class MultiStrategyAlpha(StrategyPlugin):
         # prevent duplicate/out-of-order ingestion for the same timestamp
         latest = self.mde.latest()
         if latest is None or ts > latest.ts:
-            self.mde.ingest(ts, mid, max(volume, Decimal("0.0001")), oi="0", funding="0", basis="0")
+            self.mde.ingest(
+                ts,
+                mid,
+                max(volume, Decimal("0.0001")),
+                oi=str(ctx.oi) if ctx.oi is not None else None,
+                funding=str(ctx.funding) if ctx.funding is not None else None,
+                basis=str(ctx.basis) if ctx.basis is not None else None,
+            )
         feature = compute_features(self.mde, self.symbol, ts)
         regime = self.regime_engine.classify(feature)
         alpha_ctx = AlphaContext(

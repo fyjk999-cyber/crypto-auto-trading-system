@@ -13,6 +13,11 @@ class EventBus:
     def subscribe(self, event_type: str, handler: Callable[[object], Awaitable[None]]) -> None:
         self._subscribers[event_type].append(handler)
 
+    def unsubscribe(self, handler: Callable[[object], Awaitable[None]]) -> None:
+        for handlers in self._subscribers.values():
+            if handler in handlers:
+                handlers.remove(handler)
+
     async def publish(self, event_type: str, event: object) -> None:
         for handler in list(self._subscribers.get(event_type, [])):
             await handler(event)

@@ -43,6 +43,8 @@ from crypto_trader.domain.models import (
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.base import ExchangeAdapter
 from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
+from crypto_trader.governance.memory import TradeMemoryRecord
+from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
 from crypto_trader.market_data.service import MarketDataService
@@ -259,20 +261,27 @@ class TradingEngine:
     async def _strategy_context(self) -> StrategyContext | None:
         symbol = getattr(self.strategies[0], "symbol", "BTCUSDT") if self.strategies else "BTCUSDT"
         book = self.market_data.books.get(symbol)
-        if book is None:
-            try:
-                fetched = await self.adapter.get_orderbook(symbol)
-                await self.market_data.ingest_snapshot(
-                    symbol,
-                    fetched.sequence,
-                    [(level.price, level.quantity) for level in fetched.bids.values()],
-                    [(level.price, level.quantity) for level in fetched.asks.values()],
-                )
-                book = self.market_data.books[symbol]
-            except Exception:
+        try:
+            fetched = await self.adapter.get_orderbook(symbol)
+            await self.market_data.ingest_snapshot(
+                symbol,
+                fetched.sequence,
+                [(level.price, level.quantity) for level in fetched.bids.values()],
+                [(level.price, level.quantity) for level in fetched.asks.values()],
+            )
+            book = self.market_data.books[symbol]
+        except Exception:
+            if book is None:
                 return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
+        market_state = None
+        get_market_state = getattr(self.adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                market_state = await get_market_state(symbol)
+            except Exception:
+                market_state = None
         return StrategyContext(
             symbol=symbol,
             book=book,
@@ -280,6 +289,11 @@ class TradingEngine:
             positions=positions,
             clock_time=self.clock.now(),
             run_id=self.run_id,
+            mark_price=market_state.mark_price if market_state else None,
+            index_price=market_state.index_price if market_state else None,
+            funding=market_state.funding_rate if market_state else None,
+            oi=market_state.open_interest if market_state else None,
+            basis=market_state.basis if market_state else None,
         )
 
     # --------------------------------------------------------------- signals
@@ -574,6 +588,32 @@ class TradingEngine:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return
+        try:
+            persistence = MemoryPersistence(self.database.session_factory)
+            await persistence.save_trade_memory(
+                TradeMemoryRecord(
+                    decision_id=fill.fill_id,
+                    symbol=fill.symbol,
+                    side=order.side.value,
+                    regime="UNKNOWN",
+                    strategy_scores={},
+                    effective_weights={},
+                    raw_confidence=Decimal("0"),
+                    calibrated_confidence=Decimal("0"),
+                    recommended_position=fill.quantity,
+                    approved_position=fill.quantity,
+                    recommended_leverage=Decimal("1"),
+                    approved_leverage=Decimal("1"),
+                    entry=fill.price,
+                    exit=fill.price,
+                    fees=fill.fee,
+                    funding_pnl=Decimal("0"),
+                    realized_pnl=Decimal("0"),
+                    r_multiple=Decimal("0"),
+                )
+            )
+        except Exception:
+            pass
         position = await self.portfolio.get_position(fill.symbol)
         cost_released = None
         if order.side == OrderSide.SELL:

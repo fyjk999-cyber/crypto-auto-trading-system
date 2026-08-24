@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from crypto_trader.domain.models import Account, Position, SignalIntent
 from crypto_trader.market_data.orderbook import OrderBook
@@ -18,6 +19,11 @@ class StrategyContext:
     positions: dict[str, Position]
     clock_time: datetime
     run_id: str | None = None
+    mark_price: Decimal | None = None
+    index_price: Decimal | None = None
+    funding: Decimal | None = None
+    oi: Decimal | None = None
+    basis: Decimal | None = None
 
 
 class StrategyPlugin(ABC):

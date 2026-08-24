@@ -43,13 +43,11 @@ if [[ -n "$(listener_pids || true)" ]]; then
   print_port_conflict
   exit 1
 fi
-
 cd "$TASK_ROOT/frontend"
 
 if [[ ! -d node_modules ]]; then
   npm install
 fi
-
 trap cleanup EXIT INT TERM
 
 npm run dev -- --host "$UI_HOST" --port "$UI_PORT" --strictPort &

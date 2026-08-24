@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
+from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
+from crypto_trader.governance.memory_persistence import MemoryPersistence
+from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
+from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
 
 
@@ -34,7 +42,23 @@ def serialize_order(order) -> dict:
 
 
 def create_app(state: AppState) -> FastAPI:
-    app = FastAPI(title="Crypto Automated Trading System", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        if state.engine is not None:
+            await state.engine.start()
+        yield
+        if state.engine is not None:
+            await state.engine.stop()
+
+    app = FastAPI(title="Crypto Automated Trading System", version="0.1.0", lifespan=lifespan)
+    if state.settings.app_env == "development":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+            allow_credentials=False,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.state.ctx = state
 
     def ctx() -> AppState:
@@ -62,6 +86,190 @@ def create_app(state: AppState) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
         return {"ready": True, "mode": state.settings.effective_mode().value}
+
+    def _alpha_from_state():
+        if state.engine is None:
+            return None
+        for strategy in state.engine.strategies:
+            if getattr(strategy, "name", None) == "multi_strategy_alpha":
+                return strategy
+        return None
+
+    def _perpetual_engine():
+        contract = PerpetualContract(
+            symbol="BTCUSDT_PERP",
+            base="BTC",
+            quote="USDT",
+            settlement_asset="USDT",
+            max_leverage=Decimal("6"),
+            taker_fee_rate=Decimal("0.0005"),
+        )
+        return PerpetualPaperEngine(state.database.session_factory, contract)
+
+    @app.post("/paper/perpetual/open")
+    async def paper_perpetual_open(body: dict):
+        engine = _perpetual_engine()
+        side = PositionSide(body["side"])
+        pos = await engine.open_position(
+            side,
+            Decimal(body.get("quantity", "0.1")),
+            Decimal(body.get("price", "100")),
+            Decimal(body.get("leverage", "3")),
+        )
+        return pos.model_dump(mode="json")
+
+    @app.post("/paper/perpetual/close")
+    async def paper_perpetual_close(body: dict):
+        engine = _perpetual_engine()
+        side = PositionSide(body["side"])
+        pos = await engine.close_position(
+            side, Decimal(body.get("quantity", "0.1")), Decimal(body.get("price", "100"))
+        )
+        return pos.model_dump(mode="json") if pos else {"closed": True}
+
+    @app.get("/paper/perpetual/positions")
+    async def paper_perpetual_positions():
+        engine = _perpetual_engine()
+        state = await engine.load_state()
+        return {"positions": {k: v.model_dump(mode="json") for k, v in state.positions.items()}}
+
+    @app.get("/market")
+    async def market():
+        adapter = getattr(state.engine, "adapter", None) if state.engine else None
+        get_market_state = getattr(adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                ms = await get_market_state("BTCUSDT")
+                return ms.model_dump(mode="json")
+            except Exception as exc:
+                return {"status": "UNAVAILABLE", "error": str(exc)}
+        return {
+            "symbol": "BTCUSDT",
+            "status": "SYNTHETIC",
+            "data_source": "PAPER_SYNTHETIC",
+            "funding_rate": None,
+            "open_interest": None,
+            "basis": None,
+        }
+
+    @app.get("/market/sources")
+    async def market_sources():
+        adapter = getattr(state.engine, "adapter", None) if state.engine else None
+        get_market_state = getattr(adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                ms = await get_market_state("BTCUSDT")
+                return {k: v.model_dump(mode="json") for k, v in ms.sources.items()}
+            except Exception as exc:
+                return {"status": "UNAVAILABLE", "error": str(exc)}
+        return {"status": "SYNTHETIC", "sources": {}}
+
+    @app.get("/regime")
+    async def regime():
+        alpha = _alpha_from_state()
+        if alpha is None or alpha.last_meta is None:
+            return {"status": "NO_DATA", "regime": None, "reasons": []}
+        return {
+            "status": "OK",
+            "regime": alpha.last_meta.regime,
+            "confidence": str(alpha.last_meta.confidence),
+            "reasons": alpha.last_meta.reason_codes,
+        }
+
+    @app.get("/signals")
+    async def signals(limit: int = 50):
+        alpha = _alpha_from_state()
+        if alpha is None or alpha.last_meta is None:
+            return {"signals": []}
+        return {
+            "signals": [
+                {
+                    "symbol": alpha.last_meta.symbol,
+                    "side": alpha.last_meta.side.value,
+                    "confidence": str(alpha.last_meta.confidence),
+                    "reasons": alpha.last_meta.reason_codes,
+                    "regime": alpha.last_meta.regime,
+                }
+            ],
+            "count": 1,
+        }
+
+    @app.get("/strategies")
+    async def strategies():
+        if state.engine is None:
+            return {"strategies": []}
+        return {
+            "strategies": [{"name": s.name, "version": s.version} for s in state.engine.strategies]
+        }
+
+    @app.get("/risk")
+    async def risk():
+        return {
+            "trading_mode": state.settings.effective_mode().value,
+            "live_trading_enabled": state.settings.live_trading_enabled,
+            "kill_switch": state.risk.kill_switch.snapshot(),
+            "risk_config": state.risk.config.model_dump(mode="json"),
+        }
+
+    @app.get("/margin")
+    async def margin():
+        account = await state.portfolio.get_account(state.settings.effective_mode())
+        positions = await state.portfolio.get_positions()
+        return {
+            "equity": str(account.equity),
+            "balances": {k: v.model_dump(mode="json") for k, v in account.balances.items()},
+            "positions": {k: v.model_dump(mode="json") for k, v in positions.items()},
+        }
+
+    @app.get("/reviews")
+    async def reviews(limit: int = 50):
+        # Structured reviews are emitted by governance runtime; persisted
+        # review storage is not yet implemented, so this is intentionally empty.
+        return {"reviews": [], "count": 0}
+
+    @app.get("/stress-tests")
+    async def stress_tests(limit: int = 50):
+        return {"stress_tests": [], "count": 0}
+
+    @app.post("/dev/daily-review/run")
+    async def dev_daily_review_run():
+        if state.settings.app_env != "development":
+            raise HTTPException(status_code=403, detail="development only")
+        if state.settings.effective_mode().value != "PAPER":
+            raise HTTPException(status_code=403, detail="paper only")
+        scheduler = DailyReviewScheduler(
+            state.database.session_factory, review_time_utc=state.settings.daily_review_time_utc
+        )
+        result = await scheduler.run_once()
+        return result
+
+    @app.get("/daily-reviews")
+    async def daily_reviews(limit: int = 50):
+        persistence = MemoryPersistence(state.database.session_factory)
+        rows = await persistence.load_daily_reviews(limit=limit)
+        return {"daily_reviews": rows, "count": len(rows)}
+
+    @app.get("/learning")
+    async def learning():
+        alpha = _alpha_from_state()
+        if alpha is None:
+            return {"status": "NO_ALPHA", "fast_learning": {}}
+        return {
+            "status": "OK",
+            "fast_learning": alpha.fast_learning.snapshot(),
+            "slow_learning_candidates": list(alpha.slow_learning.candidates.keys()),
+        }
+
+    @app.get("/exchange-health")
+    async def exchange_health():
+        adapter_connected = (
+            getattr(state.engine, "adapter", None).connected if state.engine else False
+        )
+        return {
+            "adapter": "connected" if adapter_connected else "disconnected",
+            "mode": state.settings.effective_mode().value,
+            "paper_mode": state.settings.paper_mode,
+        }
 
     @app.get("/version")
     async def version():
@@ -190,24 +398,62 @@ def create_app(state: AppState) -> FastAPI:
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket):
         await websocket.accept()
-        while True:
-            await websocket.send_json(
-                {
-                    "event_type": "runtime",
-                    "event_version": "v1",
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "payload": {
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _enqueue(event):
+            queue.put_nowait(event)
+
+        if state.engine is not None:
+            state.engine.event_bus.subscribe("*", _enqueue)
+        try:
+            while True:
+                event = None
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except TimeoutError:
+                    event = None
+                if event is None:
+                    event_type = "runtime"
+                    payload = {
                         "state": state.engine.state_machine.state.value
                         if state.engine
                         else "STOPPED",
                         "mode": state.settings.effective_mode().value,
-                    },
+                    }
+                else:
+                    event_type, payload = _envelope_from_event(event)
+                envelope = {
+                    "event_type": event_type,
+                    "event_version": "v1",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "payload": payload,
                 }
-            )
-            try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-            except TimeoutError:
-                continue
+                await websocket.send_json(envelope)
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
+                except TimeoutError:
+                    continue
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            if state.engine is not None:
+                state.engine.event_bus.unsubscribe(_enqueue)
+
+    def _envelope_from_event(event):
+        if isinstance(event, dict):
+            return event.get("event_type", "runtime"), event.get("payload", event)
+        event_type = getattr(event, "event_type", None)
+        if event_type is None:
+            event_type = getattr(event, "type", None)
+        if event_type is None:
+            event_type = "runtime"
+        if hasattr(event, "model_dump"):
+            payload = event.model_dump(mode="json")
+        elif isinstance(event, str):
+            payload = {"message": event}
+        else:
+            payload = repr(event)
+        return str(event_type), payload
 
     return app
 

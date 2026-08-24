@@ -19,9 +19,9 @@ class AlphaBar:
     ts: datetime
     price: Decimal
     volume: Decimal
-    oi: Decimal = Decimal("0")
-    funding: Decimal = Decimal("0")
-    basis: Decimal = Decimal("0")
+    oi: Decimal | None = None
+    funding: Decimal | None = None
+    basis: Decimal | None = None
 
 
 class MarketDataEngine:
@@ -31,9 +31,14 @@ class MarketDataEngine:
         self.bars: deque[AlphaBar] = deque(maxlen=max_bars)
         self._version = 0
 
-    def ingest(self, ts: datetime, price, volume, oi="0", funding="0", basis="0") -> AlphaBar:
+    def ingest(self, ts: datetime, price, volume, oi=None, funding=None, basis=None) -> AlphaBar:
         bar = AlphaBar(
-            ts=ts, price=D(price), volume=D(volume), oi=D(oi), funding=D(funding), basis=D(basis)
+            ts=ts,
+            price=D(price),
+            volume=D(volume),
+            oi=D(oi) if oi is not None else None,
+            funding=D(funding) if funding is not None else None,
+            basis=D(basis) if basis is not None else None,
         )
         if self.bars and ts <= self.bars[-1].ts:
             raise ValueError("market data must be monotonic (no future/duplicate bars)")
