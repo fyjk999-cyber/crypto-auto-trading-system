@@ -51,6 +51,41 @@ class CrossExchangeExecutionGuard:
         self.reject_bps = D(reject_bps)
         self.max_age_seconds = max_age_seconds
 
+    def evaluate_same_exchange(
+        self,
+        quote: ExecutionQuote,
+        *,
+        max_age_seconds: float | None = None,
+        max_spread_bps: str = "50",
+        max_slippage_bps: str = "25",
+    ) -> CrossExchangeDecision:
+        now = datetime.now(UTC)
+        age = max(0.0, (now - quote.timestamp).total_seconds())
+        max_age = max_age_seconds or self.max_age_seconds
+        spread = abs(D(quote.best_ask) - D(quote.best_bid))
+        mid = (D(quote.best_bid) + D(quote.best_ask)) / D("2")
+        spread_bps = spread / mid * D("10000") if mid > 0 else D("999")
+        slippage_bps = spread_bps / D("2")
+        reasons: list[str] = []
+        decision = ExecutionDecision.APPROVE
+        if age > max_age:
+            decision = ExecutionDecision.REJECT
+            reasons.append("EXECUTION_QUOTE_STALE")
+        if spread_bps > D(max_spread_bps):
+            decision = ExecutionDecision.REJECT
+            reasons.append("SPREAD_TOO_WIDE")
+        if slippage_bps > D(max_slippage_bps) and decision == ExecutionDecision.APPROVE:
+            decision = ExecutionDecision.HOLD
+            reasons.append("EXCESS_SLIPPAGE")
+        return CrossExchangeDecision(
+            decision=decision,
+            mid_deviation_bps=D("0"),
+            mark_deviation_bps=D("0"),
+            execution_slippage_bps=slippage_bps,
+            market_age_ms=age * 1000,
+            reason_codes=reasons or ["SAME_EXCHANGE_PASS"],
+        )
+
     def evaluate(self, signal: ExecutionQuote, execution: ExecutionQuote) -> CrossExchangeDecision:
         reasons: list[str] = []
         now = datetime.now(UTC)

@@ -58,6 +58,26 @@ class MarketState(BaseModel):
     health: DataHealth = DataHealth.UNAVAILABLE
     version: int = 0
     sources: dict[str, SourceStatus] = Field(default_factory=dict)
+    generation: int = 0
+    new_risk_allowed: bool = False
+    new_risk_block_reason: str = "MARKET_STATE_NO_GENERATION"
+
+    def invalidate(self, reason: str = "PROVIDER_FAILURE") -> None:
+        self.generation += 1
+        self.health = DataHealth.UNAVAILABLE
+        self.freshness = DataHealth.UNAVAILABLE
+        self.new_risk_allowed = False
+        self.new_risk_block_reason = reason
+        for source in self.sources.values():
+            source.status = DataHealth.UNAVAILABLE
+            source.updated_at = None
+
+    def mark_healthy_from_sources(self) -> None:
+        self.health = self.overall_health()
+        self.freshness = self.health
+        self.new_risk_allowed = self.health == DataHealth.HEALTHY
+        if not self.new_risk_allowed:
+            self.new_risk_block_reason = self.health.value
 
     def compute_basis(self) -> None:
         if self.index_price and self.index_price > 0:

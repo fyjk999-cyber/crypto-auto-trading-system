@@ -271,8 +271,11 @@ class TradingEngine:
             )
             book = self.market_data.books[symbol]
         except Exception:
-            if book is None:
-                return None
+            # P0: never let a stale cached orderbook authorize new risk.
+            if book is not None:
+                book.invalidate()
+                self.health.set("market_data", False, f"{symbol} invalidated")
+            return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
         market_state = None
