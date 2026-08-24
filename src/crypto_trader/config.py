@@ -17,6 +17,15 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = False
     database_url: str = "sqlite+aiosqlite:///./data/crypto_trader.db"
 
+    # OKX
+    okx_base_url: str = "https://openapi.okx.com"
+    okx_demo: bool = True
+    okx_api_key: str | None = None
+    okx_api_secret: str | None = None
+    okx_api_passphrase: str | None = None
+    okx_time_offset_ms: int = 0
+    okx_time_sync_max_ms: int = 1500
+
     # Binance
     binance_base_url: str = "https://testnet.binance.vision"
     binance_ws_base_url: str = "wss://testnet.binance.vision"

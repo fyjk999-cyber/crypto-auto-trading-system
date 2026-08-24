@@ -1,7 +1,10 @@
 """OKX adapter: execution provider.
 
-Signs requests with API key/secret/passphrase when configured. OKX DEMO
-requests set the x-simulated-trading header. LIVE is disabled by default.
+Correct OKX REST authentication:
+- ISO8601 UTC millisecond timestamp (deterministic-testable)
+- GET query string is part of the signed requestPath, byte-for-byte
+- POST body is serialized once and shared by signing and request
+- OKX Demo uses x-simulated-trading:1; LIVE never adds it
 """
 
 from __future__ import annotations
@@ -10,10 +13,8 @@ import base64
 import hashlib
 import hmac
 import json
-import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from decimal import Decimal
 
 import httpx
 
@@ -21,6 +22,7 @@ from crypto_trader.domain.enums import OrderSide, OrderStatus, OrderType, TimeIn
 from crypto_trader.domain.errors import (
     AuthenticationError,
     ExchangeUnavailable,
+    InsufficientBalance,
     InvalidOrder,
     OrderNotFound,
     OrderRejected,
@@ -32,13 +34,37 @@ from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exchange.base import ExchangeAdapter
 
 
+def okx_timestamp() -> str:
+    """OKX REST requires ISO 8601 UTC with milliseconds."""
+    return (
+        datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.")
+        + f"{datetime.now(UTC).microsecond // 1000:03d}Z"
+    )
+
+
+def okx_prehash(timestamp: str, method: str, request_path: str, body: str) -> str:
+    return f"{timestamp}{method}{request_path}{body}"
+
+
+def okx_signature(secret: str, prehash: str) -> str:
+    return base64.b64encode(
+        hmac.new(secret.encode(), prehash.encode(), hashlib.sha256).digest()
+    ).decode()
+
+
+def canonical_query_string(params: dict) -> str:
+    if not params:
+        return ""
+    return "&".join(f"{k}={params[k]}" for k in sorted(params))
+
+
 class OKXAdapter(ExchangeAdapter):
     name = "OKX"
 
     def __init__(
         self,
         *,
-        base_url: str = "https://www.okx.com",
+        base_url: str = "https://openapi.okx.com",
         api_key: str | None = None,
         api_secret: str | None = None,
         api_passphrase: str | None = None,
@@ -53,6 +79,8 @@ class OKXAdapter(ExchangeAdapter):
         self._client = client or httpx.AsyncClient(base_url=self.base_url, timeout=10.0)
         self._owns_client = client is None
         self.connected = False
+        self.time_offset_ms = 0
+        self.auth_status = "NOT_CONFIGURED"
         self._handlers: dict[str, Callable[[ExchangeEvent], Awaitable[None]]] = {}
         self._sub_counter = 0
 
@@ -66,22 +94,34 @@ class OKXAdapter(ExchangeAdapter):
         if self._owns_client:
             await self._client.aclose()
 
-    def _headers(self, method: str, path: str, body: str = "") -> dict:
+    async def sync_server_time(self) -> dict:
+        data = await self._public_request("GET", "/api/v5/public/time")
+        server_ms = int(data["data"][0]["ts"])
+        local_ms = int(datetime.now(UTC).timestamp() * 1000)
+        self.time_offset_ms = server_ms - local_ms
+        return {"server_ms": server_ms, "local_ms": local_ms, "offset_ms": self.time_offset_ms}
+
+    async def _public_request(self, method: str, path: str, params: dict | None = None):
+        if not self.connected:
+            await self.connect()
+        response = await self._client.request(method, path, params=params)
+        if response.status_code != 200:
+            raise ExchangeUnavailable(f"OKX public {path} status={response.status_code}")
+        return response.json()
+
+    def _build_headers(self, method: str, request_path: str, body: str) -> dict:
         headers = {"Content-Type": "application/json"}
         if self.demo:
             headers["x-simulated-trading"] = "1"
-        if self.api_key:
-            timestamp = str(int(time.time() * 1000))
-            message = f"{timestamp}{method}{path}{body}"
-            signature = base64.b64encode(
-                hmac.new(self.api_secret.encode(), message.encode(), hashlib.sha256).digest()
-            ).decode()
+        if self.api_key and self.api_secret and self.api_passphrase:
+            timestamp = okx_timestamp()
+            prehash = okx_prehash(timestamp, method, request_path, body)
             headers.update(
                 {
                     "OK-ACCESS-KEY": self.api_key,
-                    "OK-ACCESS-SIGN": signature,
+                    "OK-ACCESS-SIGN": okx_signature(self.api_secret, prehash),
                     "OK-ACCESS-TIMESTAMP": timestamp,
-                    "OK-ACCESS-PASSPHRASE": self.api_passphrase or "",
+                    "OK-ACCESS-PASSPHRASE": self.api_passphrase,
                 }
             )
         return headers
@@ -95,29 +135,29 @@ class OKXAdapter(ExchangeAdapter):
         signed: bool = False,
     ):
         if signed and not (self.api_key and self.api_secret and self.api_passphrase):
+            self.auth_status = "NOT_CONFIGURED"
             raise AuthenticationError("OKX credentials are not configured")
         if not self.connected:
             await self.connect()
-        body_str = json.dumps(body) if body is not None else ""
+        body_str = json.dumps(body, separators=(",", ":")) if body is not None else ""
+        query = canonical_query_string(params or {})
+        request_path = f"{path}?{query}" if query else path
+        headers = self._build_headers(method, request_path, body_str)
         for attempt in range(3):
             try:
                 response = await self._client.request(
-                    method,
-                    path,
-                    params=params,
-                    content=body_str or None,
-                    headers=self._headers(method, path, body_str),
+                    method, path, params=params, content=body_str or None, headers=headers
                 )
             except httpx.HTTPError as exc:
                 if attempt == 2:
                     raise ExchangeUnavailable(f"OKX transport error: {exc}") from exc
-                await __import__("asyncio").sleep(0.2 * (attempt + 1))
                 continue
             if response.status_code == 200:
                 return response.json()
             if response.status_code == 429:
                 raise RateLimited("OKX rate limited")
             if response.status_code in (401, 403):
+                self.auth_status = "AUTH_FAILED"
                 raise AuthenticationError("OKX authentication failed")
             if response.status_code >= 500:
                 raise ExchangeUnavailable(f"OKX 5xx {response.status_code}")
@@ -129,12 +169,27 @@ class OKXAdapter(ExchangeAdapter):
                 code, msg = "", response.text
             if code in ("51000", "51001", "51002"):
                 raise InvalidOrder(f"OKX invalid order {code}: {msg}")
+            if code == "51008":
+                raise InsufficientBalance(f"OKX insufficient margin: {msg}")
             if code == "51603":
                 raise OrderNotFound(f"OKX order not found: {msg}")
             if code in ("1", "30014", "50004", "50005"):
                 raise TemporaryNetworkError(f"OKX transient {code}: {msg}")
             raise OrderRejected(f"OKX rejected {code}: {msg}")
         raise ExchangeUnavailable("OKX request failed after retries")
+
+    async def validate_credentials(self) -> dict:
+        if not (self.api_key and self.api_secret and self.api_passphrase):
+            self.auth_status = "NOT_CONFIGURED"
+            return {"status": "NOT_CONFIGURED"}
+        try:
+            await self.get_balances()
+            await self.get_positions()
+            self.auth_status = "VERIFIED"
+            return {"status": "VERIFIED"}
+        except AuthenticationError:
+            self.auth_status = "AUTH_FAILED"
+            return {"status": "AUTH_FAILED"}
 
     async def get_exchange_info(self, symbol: str | None = None):
         return []
@@ -159,34 +214,39 @@ class OKXAdapter(ExchangeAdapter):
         return [self._normalize_position(raw) for raw in data.get("data", [])]
 
     def _normalize_position(self, raw: dict) -> Position:
+        from crypto_trader.exchange.symbol_mapper import SymbolMapper
+
         return Position(
-            symbol=raw.get("instId", ""),
+            symbol=SymbolMapper().to_canonical(str(raw.get("instId", ""))),
             base_asset=raw.get("ccy", ""),
             quote_asset="USDT",
             quantity=D(raw.get("pos", "0")),
             avg_entry_price=D(raw.get("avgPx", "0")),
-            cost_basis=Decimal("0"),
-            realized_pnl=D(raw.get("realizedPnl", "0")),
+            realized_pnl=D(raw.get("upl", "0")),
             updated_at=datetime.now(UTC),
         )
 
     async def get_orderbook(self, symbol: str, limit: int = 100):
-        data = await self._request(
+        data = await self._public_request(
             "GET", "/api/v5/market/books", params={"instId": symbol, "sz": limit}
         )
         return data
 
     async def get_ticker(self, symbol: str):
-        data = await self._request("GET", "/api/v5/market/ticker", params={"instId": symbol})
+        data = await self._public_request("GET", "/api/v5/market/ticker", params={"instId": symbol})
         if not data.get("data"):
             raise OrderNotFound(symbol)
         raw = data["data"][0]
         return {
             "symbol": raw["instId"],
-            "bid": format_decimal(D(raw.get("bidPx", "0"))),
-            "ask": format_decimal(D(raw.get("askPx", "0"))),
-            "mark": format_decimal(D(raw.get("markPx", "0"))),
+            "bid": raw.get("bidPx", "0"),
+            "ask": raw.get("askPx", "0"),
+            "mark": raw.get("markPx", "0"),
         }
+
+    def _cl_ord_id(self, client_order_id: str) -> str:
+        digest = hashlib.sha256(client_order_id.encode()).hexdigest()[:28].upper()
+        return f"C{digest}"
 
     async def submit_order(self, order: Order):
         from crypto_trader.exchange.symbol_mapper import SymbolMapper
@@ -195,6 +255,7 @@ class OKXAdapter(ExchangeAdapter):
         body = {
             "instId": inst_id,
             "tdMode": "cross",
+            "clOrdId": self._cl_ord_id(order.client_order_id),
             "side": "buy" if order.side == OrderSide.BUY else "sell",
             "ordType": "limit" if order.order_type == OrderType.LIMIT else "market",
             "sz": format_decimal(order.quantity),
@@ -265,7 +326,7 @@ class OKXAdapter(ExchangeAdapter):
             internal_order_id=fallback.internal_order_id,
             client_order_id=str(raw.get("clOrdId", fallback.client_order_id)),
             exchange_order_id=str(raw.get("ordId", fallback.exchange_order_id)),
-            symbol=fallback.symbol,
+            symbol=SymbolMapper().to_canonical(str(raw.get("instId", fallback.symbol))),
             side=OrderSide(str(raw.get("side", fallback.side.value)).upper()),
             order_type=OrderType(str(raw.get("ordType", fallback.order_type.value)).upper()),
             time_in_force=TimeInForce.GTC,
@@ -291,11 +352,11 @@ class OKXAdapter(ExchangeAdapter):
             exchange_order_id=str(raw.get("ordId", "")),
             symbol=SymbolMapper().to_canonical(str(raw.get("instId", ""))),
             side=OrderSide(str(raw.get("side", "buy")).upper()),
-            price=D(raw.get("fillPx", raw.get("fillPx", "0"))),
+            price=D(raw.get("fillPx", "0")),
             quantity=D(raw.get("fillSz", "0")),
             fee=D(raw.get("fee", "0")),
             fee_currency=raw.get("feeCcy"),
-            timestamp=datetime.fromtimestamp(int(raw.get("ts", time.time())) / 1000.0, tz=UTC),
+            timestamp=datetime.fromtimestamp(int(raw.get("ts", 0)) / 1000.0, tz=UTC),
             payload={"raw_type": "okx_fill"},
         )
 

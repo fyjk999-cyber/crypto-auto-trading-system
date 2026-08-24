@@ -1,13 +1,24 @@
 # BINANCE MARKET + OKX EXECUTION FINAL REPORT
 
 ## Final SHA
-ab86ee0561f8c20ec486f27f5996fefe8ceae82c
+(to update after final commit)
 
 ## Market Data Provider
 BINANCE_USDM
 
 ## Execution Provider
 OKX
+
+## OKX Auth Correction Status
+- OKX REST signing: PASS
+- OKX timestamp: PASS (ISO8601 UTC ms)
+- OKX GET query signing: PASS (full requestPath signed)
+- OKX Demo header: PASS (demo only; LIVE never)
+- OKX credential: NOT CONFIGURED
+- OKX Auth: UNVERIFIED (BLOCKED_EXTERNAL_CREDENTIAL)
+- OKX Demo Read: BLOCKED_CREDENTIAL
+- OKX Demo LONG: BLOCKED_CREDENTIAL / BLOCKED_BINANCE_NETWORK
+- OKX Demo SHORT: BLOCKED_CREDENTIAL / BLOCKED_BINANCE_NETWORK
 
 ## Status
 - Binance Kline REST: IMPLEMENTED (/market/klines) — real network UNVERIFIED (GEO_RESTRICTED)
