@@ -1,7 +1,7 @@
 # LOCAL STABILIZATION FINAL REPORT
 
 ## Final SHA
-(to be filled after final commit)
+ee379579ca3bd93f4d6ffafd43a1b368fb1a2841
 
 ## CODE IMPLEMENTED vs REAL ENVIRONMENT VERIFIED
 - Local backend: CODE IMPLEMENTED and locally verified (API, Engine, WS, CORS, scheduler tests).
