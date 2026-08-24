@@ -1,4 +1,4 @@
-# FINAL  Crypto Automated Trading System
+# Final Delivery Notes - Crypto Automated Trading System
 
 ## 1. New system architecture
 Hexagonal, event-driven Python 3.12 system:
