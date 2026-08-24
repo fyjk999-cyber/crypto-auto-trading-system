@@ -1,7 +1,7 @@
 # OKX MARKET P0 SAFETY FINAL REPORT
 
 ## Final SHA
-(to update after final commit)
+9f239f278201fbaf16cd25e507a951687bd1d855
 
 ## Status
 - Primary Market Provider: OKX (contract ready; local runtime may still use adapter)
