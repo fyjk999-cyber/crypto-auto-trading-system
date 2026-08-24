@@ -1,7 +1,7 @@
 # BINANCE MARKET + OKX EXECUTION FINAL REPORT
 
 ## Final SHA
-(to update after final commit)
+2e1b32e2d4b1c42a1b70c75b8e7a04bfae1087f9
 
 ## Market Data Provider
 BINANCE_USDM
