@@ -226,6 +226,12 @@ class OKXAdapter(ExchangeAdapter):
             updated_at=datetime.now(UTC),
         )
 
+    async def get_pending_orders(self):
+        return await self._request("GET", "/api/v5/trade/orders-pending", signed=True)
+
+    async def get_account_config(self):
+        return await self._request("GET", "/api/v5/account/config", signed=True)
+
     async def get_orderbook(self, symbol: str, limit: int = 100):
         data = await self._public_request(
             "GET", "/api/v5/market/books", params={"instId": symbol, "sz": limit}

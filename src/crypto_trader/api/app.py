@@ -15,12 +15,14 @@ from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
+from crypto_trader.credentials import EnvCredentialStore, credential_summary
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.binance_futures_public import (
     BinancePublicDataUnavailable,
     BinanceUSDMFuturesPublicClient,
 )
+from crypto_trader.exchange.okx import OKXAdapter
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
@@ -43,6 +45,14 @@ class ManualOrderBody(BaseModel):
 
 def serialize_order(order) -> dict:
     return order.model_dump(mode="json")
+
+
+class OKXCredentialRequest(BaseModel):
+    api_key: str
+    api_secret: str
+    api_passphrase: str
+    base_url: str = "https://openapi.okx.com"
+    demo: bool = True
 
 
 def create_app(state: AppState) -> FastAPI:
@@ -98,6 +108,85 @@ def create_app(state: AppState) -> FastAPI:
             if getattr(strategy, "name", None) == "multi_strategy_alpha":
                 return strategy
         return None
+
+    @app.post("/exchange/okx/credentials")
+    async def save_okx_credentials(body: OKXCredentialRequest):
+        if not body.demo:
+            raise HTTPException(status_code=403, detail="LIVE is forbidden")
+        store = EnvCredentialStore()
+        store.write(
+            {
+                "OKX_API_KEY": body.api_key,
+                "OKX_API_SECRET": body.api_secret,
+                "OKX_API_PASSPHRASE": body.api_passphrase,
+                "OKX_BASE_URL": body.base_url,
+                "OKX_DEMO": "true",
+            }
+        )
+        return {
+            "saved": True,
+            "demo": True,
+            "key_suffix": EnvCredentialStore.key_suffix(body.api_key),
+        }
+
+    @app.get("/exchange/okx/status")
+    async def okx_status():
+        values = EnvCredentialStore().read()
+        summary = credential_summary(values)
+        summary["authenticated"] = False
+        summary["health"] = "UNVERIFIED"
+        return summary
+
+    @app.post("/exchange/okx/validate")
+    async def validate_okx_credentials():
+        values = EnvCredentialStore().read()
+        if not (
+            values.get("OKX_API_KEY")
+            and values.get("OKX_API_SECRET")
+            and values.get("OKX_API_PASSPHRASE")
+        ):
+            return {
+                "authenticated": False,
+                "health": "NOT_CONFIGURED",
+                "reason_code": "NOT_CONFIGURED",
+            }
+        adapter = OKXAdapter(
+            base_url=values.get("OKX_BASE_URL", "https://openapi.okx.com"),
+            api_key=values["OKX_API_KEY"],
+            api_secret=values["OKX_API_SECRET"],
+            api_passphrase=values["OKX_API_PASSPHRASE"],
+            demo=values.get("OKX_DEMO", "true") == "true",
+        )
+        await adapter.connect()
+        try:
+            time_result = await adapter.sync_server_time()
+            if abs(time_result["offset_ms"]) > 1500:
+                return {"authenticated": False, "health": "DEGRADED", "reason_code": "TIME_OFFSET"}
+            balances = await adapter.get_balances()
+            positions = await adapter.get_positions()
+            pending = await adapter.get_pending_orders()
+            account_config = await adapter.get_account_config()
+            return {
+                "authenticated": True,
+                "health": "HEALTHY",
+                "account_mode": account_config.get("data", [{}])[0].get("acctLv", "unknown"),
+                "position_mode": account_config.get("data", [{}])[0].get("posMode", "unknown"),
+                "instrument": "BTC-USDT-SWAP",
+                "balances": len(balances),
+                "positions": len(positions),
+                "pending_orders": len(pending.get("data", [])),
+            }
+        except Exception as exc:
+            if "authentication" in str(exc).lower() or "auth" in str(exc).lower():
+                return {"authenticated": False, "health": "DEGRADED", "reason_code": "AUTH_FAILED"}
+            return {"authenticated": False, "health": "DEGRADED", "reason_code": "NETWORK_ERROR"}
+        finally:
+            await adapter.disconnect()
+
+    @app.delete("/exchange/okx/credentials")
+    async def delete_okx_credentials():
+        EnvCredentialStore().clear()
+        return {"configured": False, "authenticated": False}
 
     def _perpetual_engine():
         contract = PerpetualContract(
