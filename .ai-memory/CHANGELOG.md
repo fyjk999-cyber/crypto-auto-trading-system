@@ -14,3 +14,7 @@
 - 2026-08-24: PHASE 11 API + migrations + CI.
 - 2026-08-24: PHASE 12 strategies + paper E2E.
 - 2026-08-24: PHASE 13 mandatory chaos suite (20/20).
+- 2026-08-24: PHASE 14 agent-project-test full audit PASS.
+- 2026-08-24: PHASE 15 GitHub repo + push.
+- 2026-08-24: PHASE 16 alpha layer: features, regime, 5 alpha sub-strategies,
+  ML Meta ensemble, meta decision, sizing/leverage, Fast/Slow Learning, tests.

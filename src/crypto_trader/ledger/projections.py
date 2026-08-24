@@ -88,9 +88,15 @@ class ProjectionBuilder:
             "available": total,
             "frozen": Decimal("0"),
         }
+        self._refresh_equity()
 
     def _get_balance(self, currency: str) -> Decimal:
         return self.snapshot.balance(currency)
+
+    def _refresh_equity(self) -> None:
+        self.snapshot.equity = sum(
+            (row["total"] for row in self.snapshot.balances.values()), Decimal("0")
+        ) + sum((p.cost_basis for p in self.snapshot.positions.values()), Decimal("0"))
 
     def apply_transaction(self, txn: LedgerTransactionORM) -> None:
         entry_type = LedgerEntryType(txn.entry_type)
@@ -114,6 +120,7 @@ class ProjectionBuilder:
             self.snapshot.total_withdrawals += amount
         elif entry_type == LedgerEntryType.TRADE:
             self._apply_trade(metadata)
+        self._refresh_equity()
 
     def _apply_trade(self, metadata: dict) -> None:
         symbol = metadata["symbol"]
@@ -149,10 +156,7 @@ class ProjectionBuilder:
                 pos.cost_basis = Decimal("0")
             else:
                 pos.avg_entry_price = (pos.cost_basis / pos.quantity) if pos.quantity > 0 else None
-        # positions don't create equity; equity is cash + cost basis of open positions
-        self.snapshot.equity = self.snapshot.balance("USDT") + sum(
-            (p.cost_basis for p in self.snapshot.positions.values()), Decimal("0")
-        )
+        self._refresh_equity()
 
     def finalize(self) -> ProjectionSnapshot:
         return self.snapshot

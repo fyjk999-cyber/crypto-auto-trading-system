@@ -27,6 +27,7 @@ def test_required_package_boundaries_exist():
         "observability",
         "strategy",
         "api",
+        "alpha",
     }
     for name in required:
         assert (ROOT / "src" / "crypto_trader" / name).is_dir(), name

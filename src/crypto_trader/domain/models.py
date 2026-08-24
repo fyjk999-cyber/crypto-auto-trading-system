@@ -263,6 +263,7 @@ class SignalIntent(BaseModel):
     expires_at: datetime | None = None
     reason: str = ""
     run_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MarketSnapshot(BaseModel):

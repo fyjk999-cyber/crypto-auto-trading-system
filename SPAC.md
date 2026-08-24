@@ -105,3 +105,31 @@ Default mode PAPER_TRADING. LIVE_TRADING_ENABLED defaults to false. No real-mone
 
 ## 15. Definition of Done
 All SPAC requirements implemented; pytest (unit + integration + chaos) green; decimal precision tests green; ledger invariants green; duplicate order protection green; partial fill, crash recovery, WebSocket resync, run lease, reconciliation, kill switch all green; paper automated E2E green; no real-money orders; no secrets committed; SOURCE_PROVENANCE complete; reference repos unchanged (SilverQuant modified: NO, Kalshi v1 modified: NO, Kalshi v2 modified: NO); GitHub repository created and main pushed; FINAL_REPORT.md written.
+
+## 16. Alpha Layer (PHASE 16 amendment)
+
+The strategy/alpha layer sits exclusively behind the `StrategyPlugin` boundary and
+only emits `SignalIntent` / `TradeProposal`. It must never import or touch
+Ledger, OrderManager, submit_order, cancel_order, or private exchange execution APIs.
+
+Pipeline:
+Exchange Market Data -> Market Data Engine -> Feature Engine -> Regime Engine
+-> Multi-Strategy Alpha (Trend 40% / Momentum 20% / Breakout 15% / MeanReversion 10% / FundingBasis 15%)
+-> ML Meta (ensemble weights, confidence calibration, meta decision)
+-> Meta Decision -> Confidence -> Position Sizing -> Dynamic Leverage
+-> SignalIntent -> Risk -> High-Risk Review -> ExecutionAuthority -> OrderManager -> ExchangeAdapter
+-> Trade Result -> Performance / Memory / Learning.
+
+Rules:
+- ML Meta is not a 5% directional sub-strategy. It operates after the ensemble.
+- Base weights: Trend 40%, Momentum 20%, Breakout 15%, MeanReversion 10%, FundingBasis 15%.
+  Per-decision effective weights may be adjusted by Regime + Performance + ML Meta;
+  production base weights only change via the Slow Learning promotion pipeline.
+- Fast Learning updates strategy performance, confidence calibration, failure memory,
+  and regime statistics only. It must not directly modify production strategy parameters.
+- Slow Learning candidates must pass: backtest -> out-of-sample -> walk-forward -> shadow -> promotion.
+- alpha/sizing.py and alpha/leverage.py only output recommended_position and
+  recommended_leverage. Final authority remains Risk -> ExecutionAuthority.
+- LONG/SHORT are fully symmetric; NO_TRADE is a first-class decision.
+- All financial values Decimal-only; no future leakage; every regime/feature/strategy
+  output carries timestamp/version/reason_codes; every decision is replayable/auditable.
