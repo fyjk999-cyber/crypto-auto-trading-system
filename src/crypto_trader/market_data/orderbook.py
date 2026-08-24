@@ -1,6 +1,6 @@
 """Decimal-native normalized orderbook with sequence validation.
 
-PORTED from Kalshi v2 lib/v2/orderbook.mjs normalization ideas:
+PORTED from the reference v2 orderbook module normalization ideas:
 - levels are (price, quantity) with Decimal amounts
 - a book has an explicit sequence and staleness state
 - any sequence gap invalidates the book before consumers can use it

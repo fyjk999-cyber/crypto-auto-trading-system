@@ -1,6 +1,6 @@
 """Decimal-safe financial arithmetic.
 
-Python port of the semantic ideas in Kalshi v2 lib/v2/decimal.mjs
+Python port of the semantic ideas in the reference v2 decimal module
 (string-only parsing, explicit precision, no binary float) implemented with
 Python decimal.Decimal. Binary float is forbidden in core financial fields.
 """

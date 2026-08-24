@@ -1,6 +1,6 @@
 """WebSocket reconnect policy.
 
-PORTED from Kalshi v2 runtime-safety semantics (reconnect instead of blind
+PORTED from the reference v2 runtime-safety semantics (reconnect instead of blind
 resubmit; backoff; after reconnect, resync snapshots).
 """
 

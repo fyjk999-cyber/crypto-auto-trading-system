@@ -61,6 +61,7 @@ _TRANSITIONS: dict[tuple[OrderStatus, OrderEventType], OrderStatus] = {
     (OrderStatus.CANCEL_PENDING, OrderEventType.ORDER_FILLED): OrderStatus.FILLED,
     (OrderStatus.CANCELLED, OrderEventType.ORDER_PARTIALLY_FILLED): OrderStatus.PARTIALLY_FILLED,
     (OrderStatus.CANCELLED, OrderEventType.ORDER_FILLED): OrderStatus.FILLED,
+    (OrderStatus.UNKNOWN, OrderEventType.ORDER_ACKNOWLEDGED): OrderStatus.ACKNOWLEDGED,
     (OrderStatus.UNKNOWN, OrderEventType.ORDER_OPENED): OrderStatus.OPEN,
     (OrderStatus.UNKNOWN, OrderEventType.ORDER_PARTIALLY_FILLED): OrderStatus.PARTIALLY_FILLED,
     (OrderStatus.UNKNOWN, OrderEventType.ORDER_FILLED): OrderStatus.FILLED,

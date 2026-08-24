@@ -1,6 +1,6 @@
 """Database-backed single-writer run lease.
 
-PORTED from Kalshi v2 run-lease semantics:
+PORTED from the reference v2 run-lease semantics:
 - exactly one live execution lease per lease_key
 - renew/extend/expire/recover
 - all writers must present a valid lease token

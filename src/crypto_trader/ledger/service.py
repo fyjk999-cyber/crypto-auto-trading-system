@@ -1,11 +1,11 @@
 """Append-only double-entry ledger.
 
-PORTED from Kalshi v2 lib/v2/ledger.mjs:
+PORTED from the reference v2 ledger module:
 - atomic multi-entry journals
 - debits == credits invariant before persistence
 - no direct account balance mutation
 
-Ported as semantics in Python/SQLAlchemy; Kalshi-specific paper settlement
+Ported as semantics in Python/SQLAlchemy; reference-specific paper settlement
 legs were replaced by crypto spot trade journals defined in SPAC section 6.
 """
 

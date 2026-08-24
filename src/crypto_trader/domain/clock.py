@@ -4,7 +4,7 @@ PORTED from SilverQuant backend/app/core/clock.py.
 
 The SilverQuant clock contract (one time source, no bare datetime.now() in
 decision paths, deterministic SimClock with step()) is kept. All A-share/HK
-session logic and T+1 settlement rules are intentionally removed: crypto is
+session logic and legacy equity settlement rules are intentionally removed: crypto is
 24/7 and session rules belong to adapters.
 """
 

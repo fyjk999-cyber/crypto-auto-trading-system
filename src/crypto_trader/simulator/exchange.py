@@ -427,8 +427,14 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         return order
 
     async def get_order(self, symbol: str, exchange_order_id: str) -> Order:
+        """Look up by exchange id; also accepts client id like Binance origClientOrderId."""
         self._ensure_connected()
         order = self.orders.get(exchange_order_id)
+        if order is None:
+            for candidate in self.orders.values():
+                if candidate.client_order_id == exchange_order_id:
+                    order = candidate
+                    break
         if order is None:
             raise OrderNotFound(f"simulated order not found: {exchange_order_id}")
         return order

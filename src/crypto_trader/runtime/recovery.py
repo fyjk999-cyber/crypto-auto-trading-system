@@ -38,16 +38,17 @@ class RecoveryService:
     async def recover(self, run_id: str | None = None) -> list[str]:
         actions: list[str] = []
         for local in await self.order_manager.list_open():
-            if not local.exchange_order_id:
+            lookup_key = local.exchange_order_id or local.client_order_id
+            if not lookup_key:
                 await self.order_manager.reject(
                     local.internal_order_id,
-                    "no exchange_order_id during recovery; no blind resubmit",
+                    "no exchange/client order id during recovery; no blind resubmit",
                     event_id=new_id("evt"),
                 )
-                actions.append(f"{local.client_order_id}: REJECTED (missing exchange id)")
+                actions.append(f"{local.client_order_id}: REJECTED (missing order id)")
                 continue
             try:
-                exchange_order = await self.adapter.get_order(local.symbol, local.exchange_order_id)
+                exchange_order = await self.adapter.get_order(local.symbol, lookup_key)
             except OrderNotFound:
                 # The order never reached the exchange or was fully purged.
                 # We must not resubmit; record terminal state and continue.
