@@ -220,6 +220,22 @@ describe("中文加密交易终端 V2", () => {
     expect(String(credentialCall?.[1]?.body)).toContain('"demo":true');
   });
 
+  it("OKX 验证保留 DEGRADED 并显示失败阶段和中文原因，不显示凭据", async () => {
+    window.location.hash = "#/system";
+    const fetchMock = backend({
+      "/exchange/okx/status": { configured: true, key_suffix: "1234", health: "UNVERIFIED" },
+      "/exchange/okx/validate": {
+        authenticated: false, health: "DEGRADED", stage: "ACCOUNT_CONFIG", reason_code: "AUTH_FAILED", exchange_code: "50113", message: "Invalid signature",
+      },
+    });
+    setup(fetchMock);
+    await waitFor(() => expect(screen.getByRole("button", { name: "验证连接" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "验证连接" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("验证失败：ACCOUNT_CONFIG"));
+    expect(screen.getByText("API 凭据验证失败")).toBeTruthy();
+    expect(screen.queryByText("Invalid signature")).toBeNull();
+  });
+
   it("移动端宽度仍保留价格、判断、持仓、PnL 和 K线区域", async () => {
     window.innerWidth = 390;
     fireEvent(window, new Event("resize"));

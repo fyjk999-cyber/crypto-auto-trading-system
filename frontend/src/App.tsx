@@ -24,6 +24,19 @@ const regimeLabels: Record<string, string> = {
   BULL: "上涨趋势", BEAR: "下跌趋势", RANGE: "震荡", HIGH_VOL: "高波动", EXTREME_RISK: "极端风险",
 };
 
+const okxValidationLabels: Record<string, string> = {
+  AUTH_FAILED: "API 凭据验证失败",
+  PERMISSION_DENIED: "API 权限不足，请确认已开启“读取 + 交易”",
+  IP_RESTRICTED: "API IP 白名单限制",
+  DEMO_ENV_MISMATCH: "API Key 与 OKX 模拟盘环境不匹配",
+  TIME_OFFSET: "本机时间与 OKX 服务器时间偏差过大",
+  RATE_LIMITED: "OKX 请求频率受限",
+  OKX_UNAVAILABLE: "OKX 服务暂时不可用",
+  NETWORK_ERROR: "无法连接 OKX",
+  MALFORMED_RESPONSE: "OKX 返回异常数据",
+  OKX_REJECTED: "OKX 拒绝请求",
+};
+
 function resolvePage(hash: string): Page {
   const value = hash.replace(/^#\/?/, "") as Page;
   return pages.some(([page]) => page === value) ? value : "trade";
@@ -146,7 +159,9 @@ function OkxConnectionCard() {
     setBusy(false);
     if (response.status === "ready" && response.data) {
       setStatus((current) => ({ ...current, ...response.data }));
-      setMessage(response.data.authenticated === true ? "OKX DEMO 验证成功。" : `OKX DEMO 未通过验证：${text(response.data.reason_code, "UNKNOWN")}`);
+      const reason = String(response.data.reason_code ?? "OKX_REJECTED");
+      const stage = response.data.stage ? `验证失败：${response.data.stage}\n` : "";
+      setMessage(response.data.authenticated === true ? "OKX DEMO 验证成功。" : `${stage}${okxValidationLabels[reason] ?? "OKX 拒绝请求"}`);
     } else {
       setMessage("验证失败；请确认后端连接和 Access 权限。");
     }
@@ -155,7 +170,7 @@ function OkxConnectionCard() {
   const configured = status.configured === true;
   const health = text(status.health, configured ? "未验证" : "未配置");
   return <Panel title="OKX 交易所连接" className="okx-panel">
-    <dl className="system-list okx-status"><div><dt>执行交易所</dt><dd>OKX</dd></div><div><dt>环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">{health}</dd></div><div><dt>API Key</dt><dd>{configured ? `已配置（…${text(status.key_suffix)}）` : "未配置"}</dd></div></dl>
+    <dl className="system-list okx-status"><div><dt>执行交易所</dt><dd>OKX</dd></div><div><dt>环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">{health}</dd></div><div><dt>API Key</dt><dd>{configured ? `已配置（…${text(status.key_suffix)}）` : "未配置"}</dd></div>{Boolean(status.reason_code) && <div><dt>验证状态</dt><dd className="muted-status">{okxValidationLabels[String(status.reason_code)] ?? "OKX 拒绝请求"}</dd></div>}</dl>
     {!configuring ? <div className="form-actions"><button className="primary-button" type="button" onClick={() => setConfiguring(true)}>配置 API</button>{configured && <button className="secondary-button" type="button" disabled={busy} onClick={() => void validateCredentials()}>验证连接</button>}</div> : <form className="okx-form" onSubmit={(event) => void saveCredentials(event)}>
       <label>API Key<input aria-label="OKX API Key" name="api_key" autoComplete="off" type="password" required /></label>
       <label>Secret Key<input aria-label="OKX Secret Key" name="api_secret" autoComplete="off" type="password" required /></label>

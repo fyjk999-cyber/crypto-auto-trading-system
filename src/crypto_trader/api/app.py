@@ -22,7 +22,7 @@ from crypto_trader.exchange.binance_futures_public import (
     BinancePublicDataUnavailable,
     BinanceUSDMFuturesPublicClient,
 )
-from crypto_trader.exchange.okx import OKXAdapter
+from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
@@ -148,6 +148,7 @@ def create_app(state: AppState) -> FastAPI:
             return {
                 "authenticated": False,
                 "health": "NOT_CONFIGURED",
+                "stage": "CREDENTIALS",
                 "reason_code": "NOT_CONFIGURED",
             }
         adapter = OKXAdapter(
@@ -158,28 +159,58 @@ def create_app(state: AppState) -> FastAPI:
             demo=values.get("OKX_DEMO", "true") == "true",
         )
         await adapter.connect()
+        stage = "PUBLIC_TIME"
         try:
             time_result = await adapter.sync_server_time()
             if abs(time_result["offset_ms"]) > 1500:
-                return {"authenticated": False, "health": "DEGRADED", "reason_code": "TIME_OFFSET"}
-            balances = await adapter.get_balances()
-            positions = await adapter.get_positions()
-            pending = await adapter.get_pending_orders()
+                return {
+                    "authenticated": False,
+                    "health": "DEGRADED",
+                    "stage": "PUBLIC_TIME",
+                    "reason_code": "TIME_OFFSET",
+                }
+            stage = "ACCOUNT_CONFIG"
             account_config = await adapter.get_account_config()
+            config_rows = account_config.get("data") if isinstance(account_config, dict) else None
+            if (
+                not isinstance(config_rows, list)
+                or not config_rows
+                or not isinstance(config_rows[0], dict)
+            ):
+                return {
+                    "authenticated": False,
+                    "health": "DEGRADED",
+                    "stage": "ACCOUNT_CONFIG",
+                    "reason_code": "MALFORMED_RESPONSE",
+                    "message": "OKX account configuration response is incomplete",
+                }
+            stage = "BALANCE"
+            balances = await adapter.get_balances()
+            stage = "POSITIONS"
+            positions = await adapter.get_positions()
+            stage = "PENDING_ORDERS"
+            pending = await adapter.get_pending_orders()
             return {
                 "authenticated": True,
                 "health": "HEALTHY",
-                "account_mode": account_config.get("data", [{}])[0].get("acctLv", "unknown"),
-                "position_mode": account_config.get("data", [{}])[0].get("posMode", "unknown"),
+                "stage": "COMPLETE",
+                "reason_code": None,
+                "account_mode": config_rows[0].get("acctLv", "unknown"),
+                "position_mode": config_rows[0].get("posMode", "unknown"),
                 "instrument": "BTC-USDT-SWAP",
                 "balances": len(balances),
                 "positions": len(positions),
                 "pending_orders": len(pending.get("data", [])),
             }
-        except Exception as exc:
-            if "authentication" in str(exc).lower() or "auth" in str(exc).lower():
-                return {"authenticated": False, "health": "DEGRADED", "reason_code": "AUTH_FAILED"}
-            return {"authenticated": False, "health": "DEGRADED", "reason_code": "NETWORK_ERROR"}
+        except OKXDiagnosticError as exc:
+            return {
+                "authenticated": False,
+                "health": "DEGRADED",
+                "stage": stage,
+                "reason_code": exc.reason_code,
+                "exchange_code": exc.exchange_code,
+                "message": exc.safe_message,
+            }
         finally:
             await adapter.disconnect()
 

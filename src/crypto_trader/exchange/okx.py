@@ -22,16 +22,68 @@ from crypto_trader.domain.enums import OrderSide, OrderStatus, OrderType, TimeIn
 from crypto_trader.domain.errors import (
     AuthenticationError,
     ExchangeUnavailable,
-    InsufficientBalance,
-    InvalidOrder,
     OrderNotFound,
     OrderRejected,
-    RateLimited,
-    TemporaryNetworkError,
 )
 from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Order, Position
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exchange.base import ExchangeAdapter
+
+
+class OKXDiagnosticError(ExchangeUnavailable):
+    """Safe, structured failure returned by an OKX REST response."""
+
+    def __init__(
+        self,
+        reason_code: str,
+        safe_message: str,
+        exchange_code: str | None = None,
+    ) -> None:
+        super().__init__(safe_message)
+        self.reason_code = reason_code
+        self.safe_message = safe_message[:256]
+        self.exchange_code = exchange_code
+
+
+def classify_okx_error(exchange_code: str, message: str) -> str:
+    """Map documented/common OKX failures without exposing request secrets."""
+    normalized = message.lower()
+    if exchange_code in {"50011", "50061"} or "rate limit" in normalized:
+        return "RATE_LIMITED"
+    if (
+        exchange_code in {"50115"}
+        or "ip" in normalized
+        and ("white" in normalized or "restrict" in normalized or "allow" in normalized)
+    ):
+        return "IP_RESTRICTED"
+    if exchange_code in {"50101", "50102"} or any(
+        term in normalized for term in ("simulated", "demo", "testnet", "environment mismatch")
+    ):
+        return "DEMO_ENV_MISMATCH"
+    if "permission" in normalized or "not allowed" in normalized:
+        return "PERMISSION_DENIED"
+    if exchange_code in {"50103", "50113", "50114", "50121"} or any(
+        term in normalized
+        for term in ("api key", "passphrase", "signature", "authentication", "authorization")
+    ):
+        return "AUTH_FAILED"
+    return "OKX_REJECTED"
+
+
+def _okx_payload(response: httpx.Response, *, path: str) -> dict:
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise OKXDiagnosticError(
+            "MALFORMED_RESPONSE", f"OKX returned invalid JSON for {path}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise OKXDiagnosticError("MALFORMED_RESPONSE", f"OKX returned invalid data for {path}")
+    exchange_code = str(payload.get("code", ""))
+    if exchange_code != "0":
+        message = str(payload.get("msg", "OKX rejected request"))
+        raise OKXDiagnosticError(classify_okx_error(exchange_code, message), message, exchange_code)
+    return payload
 
 
 def okx_timestamp() -> str:
@@ -96,7 +148,18 @@ class OKXAdapter(ExchangeAdapter):
 
     async def sync_server_time(self) -> dict:
         data = await self._public_request("GET", "/api/v5/public/time")
-        server_ms = int(data["data"][0]["ts"])
+        rows = data.get("data")
+        if (
+            not isinstance(rows, list)
+            or not rows
+            or not isinstance(rows[0], dict)
+            or "ts" not in rows[0]
+        ):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX public time response is incomplete")
+        try:
+            server_ms = int(rows[0]["ts"])
+        except (TypeError, ValueError) as exc:
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX public time is invalid") from exc
         local_ms = int(datetime.now(UTC).timestamp() * 1000)
         self.time_offset_ms = server_ms - local_ms
         return {"server_ms": server_ms, "local_ms": local_ms, "offset_ms": self.time_offset_ms}
@@ -104,10 +167,19 @@ class OKXAdapter(ExchangeAdapter):
     async def _public_request(self, method: str, path: str, params: dict | None = None):
         if not self.connected:
             await self.connect()
-        response = await self._client.request(method, path, params=params)
+        try:
+            response = await self._client.request(method, path, params=params)
+        except httpx.RequestError as exc:
+            raise OKXDiagnosticError("NETWORK_ERROR", "Unable to connect to OKX") from exc
+        if response.status_code >= 500:
+            raise OKXDiagnosticError(
+                "OKX_UNAVAILABLE", f"OKX public service HTTP {response.status_code}"
+            )
         if response.status_code != 200:
-            raise ExchangeUnavailable(f"OKX public {path} status={response.status_code}")
-        return response.json()
+            raise OKXDiagnosticError(
+                "OKX_REJECTED", f"OKX public request HTTP {response.status_code}"
+            )
+        return _okx_payload(response, path=path)
 
     def _build_headers(self, method: str, request_path: str, body: str) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -148,34 +220,26 @@ class OKXAdapter(ExchangeAdapter):
                 response = await self._client.request(
                     method, path, params=params, content=body_str or None, headers=headers
                 )
+            except UnicodeError as exc:
+                raise OKXDiagnosticError(
+                    "AUTH_FAILED", "OKX credential contains unsupported characters"
+                ) from exc
             except httpx.HTTPError as exc:
                 if attempt == 2:
-                    raise ExchangeUnavailable(f"OKX transport error: {exc}") from exc
+                    raise OKXDiagnosticError("NETWORK_ERROR", "Unable to connect to OKX") from exc
                 continue
             if response.status_code == 200:
-                return response.json()
+                return _okx_payload(response, path=path)
             if response.status_code == 429:
-                raise RateLimited("OKX rate limited")
+                raise OKXDiagnosticError("RATE_LIMITED", "OKX rate limited")
             if response.status_code in (401, 403):
                 self.auth_status = "AUTH_FAILED"
-                raise AuthenticationError("OKX authentication failed")
+                raise OKXDiagnosticError("AUTH_FAILED", "OKX authentication failed")
             if response.status_code >= 500:
-                raise ExchangeUnavailable(f"OKX 5xx {response.status_code}")
-            try:
-                payload = response.json()
-                code = str(payload.get("code", ""))
-                msg = str(payload.get("msg", ""))
-            except Exception:
-                code, msg = "", response.text
-            if code in ("51000", "51001", "51002"):
-                raise InvalidOrder(f"OKX invalid order {code}: {msg}")
-            if code == "51008":
-                raise InsufficientBalance(f"OKX insufficient margin: {msg}")
-            if code == "51603":
-                raise OrderNotFound(f"OKX order not found: {msg}")
-            if code in ("1", "30014", "50004", "50005"):
-                raise TemporaryNetworkError(f"OKX transient {code}: {msg}")
-            raise OrderRejected(f"OKX rejected {code}: {msg}")
+                raise OKXDiagnosticError(
+                    "OKX_UNAVAILABLE", f"OKX service HTTP {response.status_code}"
+                )
+            return _okx_payload(response, path=path)
         raise ExchangeUnavailable("OKX request failed after retries")
 
     async def validate_credentials(self) -> dict:
