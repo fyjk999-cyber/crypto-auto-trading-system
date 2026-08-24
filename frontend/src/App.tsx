@@ -98,6 +98,22 @@ function Metric({ label, value, tone = "" }: { label: string; value: string; ton
   return <article className="metric"><span>{label}</span><strong className={tone}>{value}</strong></article>;
 }
 
+function OkxConnectionCard() {
+  const [configuring, setConfiguring] = useState(false);
+  return <Panel title="OKX 交易所连接" className="okx-panel">
+    <dl className="system-list okx-status"><div><dt>执行交易所</dt><dd>OKX</dd></div><div><dt>环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">未配置</dd></div><div><dt>API Key</dt><dd>未配置</dd></div></dl>
+    {!configuring ? <button className="primary-button" type="button" onClick={() => setConfiguring(true)}>配置 API</button> : <form className="okx-form" onSubmit={(event) => event.preventDefault()}>
+      <label>API Key<input aria-label="OKX API Key" name="api_key" autoComplete="off" type="password" /></label>
+      <label>Secret Key<input aria-label="OKX Secret Key" name="api_secret" autoComplete="off" type="password" /></label>
+      <label>Passphrase<input aria-label="OKX Passphrase" name="api_passphrase" autoComplete="off" type="password" /></label>
+      <label>API Base URL<input aria-label="OKX API Base URL" name="api_base_url" type="url" defaultValue="https://openapi.okx.com" /></label>
+      <p className="form-notice">后端安全凭据接口尚未开放。此表单不会保存、发送或记录任何凭据。</p>
+      <p className="form-hint">建议权限：读取 + 交易；禁止提现。</p>
+      <div className="form-actions"><button className="primary-button" type="submit" disabled>保存配置</button><button className="secondary-button" type="button" disabled>验证连接</button><button className="text-button" type="button" onClick={() => setConfiguring(false)}>取消</button></div>
+    </form>}
+  </Panel>;
+}
+
 function marketSource(snapshot: TradingSnapshot) {
   const market = record(snapshot.optional["/market"]?.data);
   const sources = record(snapshot.optional["/market/sources"]?.data);
@@ -168,7 +184,9 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
     </section>
     <section className="trading-workspace">
       <Panel title="BTCUSDT 行情" className="market-panel" action={<span className={`source-badge ${source.toLowerCase()}`}>{sourceLabel}</span>}>
-        <div className="market-strip"><div><strong>{priceAllowed ? money(pick(market, "price", "last_price")) : "--"}</strong><span>当前价格</span></div><div><b>{priceAllowed ? money(market.mark_price) : "--"}</b><span>标记价格</span></div><div><b>{percent(pick(market, "price_change_percent_24h", "change_24h"))}</b><span>24 小时变化</span></div><div><b>{percent(market.funding_rate)}</b><span>资金费率 Funding</span></div><div><b>{numberText(market.open_interest, 2)}</b><span>未平仓量 OI</span></div></div>
+        <div className="market-source-header"><strong>BTCUSDT</strong><span>行情源：Binance USDⓈ-M · {sourceLabel}</span><span>执行交易所：OKX 模拟盘 DEMO</span></div>
+        <div className="market-strip"><div><strong>{priceAllowed ? money(pick(market, "price", "last_price")) : "--"}</strong><span>当前价格</span></div><div><b>{priceAllowed ? money(market.mark_price) : "--"}</b><span>标记价格</span></div><div><b>{priceAllowed ? money(market.index_price) : "--"}</b><span>指数价格</span></div><div><b>{percent(pick(market, "price_change_percent_24h", "change_24h"))}</b><span>24H 涨跌</span></div><div><b>{percent(market.funding_rate)}</b><span>资金费率</span></div><div><b>{numberText(market.open_interest, 2)}</b><span>未平仓量 OI</span></div></div>
+        <div className="market-details"><span>买一 <b>{priceAllowed ? money(market.best_bid) : "--"}</b></span><span>卖一 <b>{priceAllowed ? money(market.best_ask) : "--"}</b></span><span>Spread <b>{priceAllowed ? numberText(market.spread, 4) : "--"}</b></span><span>Basis <b>{percent(market.basis)}</b></span></div>
         <div className="chart-toolbar"><div>{kline.intervals.map((value) => <button key={value} type="button" aria-pressed={kline.interval === value} disabled={!kline.supportedIntervals.includes(value)} onClick={() => kline.setInterval(value as KlineInterval)}>{value}</button>)}</div><span>{snapshot.websocket === "connected" ? "WebSocket 已连接" : "实时同步中断"}</span></div>
         <MarketChart source={kline.state} websocket={snapshot.websocket} />
       </Panel>
@@ -217,7 +235,7 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const exchange = record(snapshot.optional["/exchange-health"]?.data);
   const version = record(snapshot.optional["/version"]?.data);
   const source = marketSource(snapshot);
-  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>Backend API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>Database</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Market Source</dt><dd>{sourceLabels[source] ?? "状态未知"}</dd></div></dl></Panel><Panel title="运行信息"><dl className="system-list"><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
+  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>Binance 行情</dt><dd>{sourceLabels[source] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">未配置</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
 function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot }) {
@@ -237,7 +255,8 @@ export default function App() {
   const source = marketSource(snapshot);
   const topStates = useMemo(() => [
     { label: String(pick(runtime, "state", "runtime_state", "engine") ?? "").toUpperCase() === "RUNNING" ? "系统运行中" : "系统待机", ok: String(pick(runtime, "state", "runtime_state") ?? "").toUpperCase() === "RUNNING" },
-    { label: source === "HEALTHY" ? "行情正常" : sourceLabels[source] ? `行情${sourceLabels[source]}` : "行情状态未知", ok: source === "HEALTHY" },
+    { label: sourceLabels[source] ? `Binance：${sourceLabels[source]}` : "Binance：状态未知", ok: source === "HEALTHY" },
+    { label: "OKX：未配置", ok: false },
     { label: snapshot.websocket === "connected" ? "WebSocket 已连接" : "WebSocket 未连接", ok: snapshot.websocket === "connected" },
   ], [runtime, snapshot.websocket, source]);
 

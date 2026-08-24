@@ -1,76 +1,71 @@
-# Backend integration status
+# OKX DEMO credential API contract required by the frontend
 
-## UI V2 blocking market contract
+## Current state
 
-The latest backend exposes `/market` and `/market/sources`, but its OpenAPI has
-no historical Kline endpoint and `/ws` currently emits only `runtime` events.
-The V2 UI therefore shows real market summary values when available while the
-candlestick area remains explicitly unavailable.
+The current FastAPI OpenAPI document exposes no OKX credential, status, or
+connection-validation endpoint. The frontend therefore renders the DEMO-only
+configuration form as a non-submitting shell and never persists credentials in
+the browser.
 
-Required REST contract:
+The existing backend also has no historical Kline endpoint and its WebSocket
+does not currently publish the required Kline envelope. The frontend preserves
+the existing `/market/klines` request path and shows the explicit unavailable
+state rather than generating sample candles.
+
+## Existing Binance Kline contract
 
 ```http
 GET /market/klines?symbol=BTCUSDT&interval=1m&limit=500
 ```
 
-```json
-{
-  "symbol": "BTCUSDT",
-  "interval": "1m",
-  "source": "BINANCE_USDM_PUBLIC",
-  "status": "HEALTHY",
-  "supported_intervals": ["1m", "5m", "15m", "1h", "4h", "1d"],
-  "candles": [
-    {
-      "open_time": "ISO-8601 timestamp",
-      "open": "decimal string",
-      "high": "decimal string",
-      "low": "decimal string",
-      "close": "decimal string",
-      "volume": "decimal string",
-      "close_time": "ISO-8601 timestamp"
-    }
-  ]
-}
-```
+The backend response must contain `symbol`, `interval`, `source`, `status`,
+`supported_intervals`, and decimal-string candles with `open_time`, `open`,
+`high`, `low`, `close`, and `volume` fields.
 
-Required incremental WebSocket envelope:
+The WebSocket must emit an envelope with `event_type: "kline"` and a payload
+containing the same symbol, interval, and candle values. Until both interfaces
+are available, frontend status remains `BACKEND_UNAVAILABLE`; it does not
+synthesize price, funding, OI, or candle data.
+
+## Required server-owned contract
+
+The backend must own encryption, secret storage, credential validation, audit
+logging, and all exchange communication. It must never return an API secret or
+passphrase to the browser.
+
+### `POST /exchange/okx/credentials`
+
+Accept only over an authenticated, CSRF-protected transport:
 
 ```json
 {
-  "event_type": "kline",
-  "event_version": "v1",
-  "timestamp": "ISO-8601 timestamp",
-  "payload": {
-    "symbol": "BTCUSDT",
-    "interval": "1m",
-    "open_time": "ISO-8601 timestamp",
-    "open": "decimal string",
-    "high": "decimal string",
-    "low": "decimal string",
-    "close": "decimal string",
-    "volume": "decimal string",
-    "closed": false
-  }
+  "api_key": "...",
+  "api_secret": "...",
+  "api_passphrase": "..."
 }
 ```
 
-Frontend status: `BLOCKED_BACKEND_API` for REST candles and
-`BLOCKED_BACKEND_EVENT` for realtime candle updates. No sample or random
-candles are used.
+The endpoint stores encrypted values server-side for the fixed `DEMO`
+environment. It returns no secrets.
 
-The local UI uses existing read-only endpoints: `/health`, `/ready`, `/runtime`, `/account`,
-`/positions`, `/orders`, `/killswitch`, and `/ws`.
+### `GET /exchange/okx/status`
 
-| Endpoint | UI need | Current result | Expected DTO / impact |
-|---|---|---|---|
-| `/regime` | Current regime | 404 | Regime, source timestamp, confidence. Overview and signal context show `Not available yet`. |
-| `/signals` | Trade evidence / WHY THIS TRADE | 404 | Votes, weights, confidence, leverage path, risk flags, stress result. No client calculation is performed. |
-| `/strategies` | Live strategy status | 404 | Effective weight, direction, confidence, reason codes, ML Meta. |
-| `/risk` | Portfolio risk state | 404 | Drawdown, multiplier, exposure, leverage, rejects. |
-| `/margin` | Position margin and liquidation | 404 | Initial/maintenance margin, liquidation price/distance, funding PnL. |
-| `/daily-reviews` | Daily review | 404 | Performance and failure attribution. |
-| `/learning` | Learning state | 404 | Candidate/promotion state. |
-| `/exchange-health` | Exchange health | 404 | REST/WS health and freshness. |
+```json
+{
+  "provider": "OKX",
+  "environment": "DEMO",
+  "configured": true,
+  "authenticated": true,
+  "key_suffix": "ABCD",
+  "account_mode": "...",
+  "position_mode": "...",
+  "health": "HEALTHY"
+}
+```
 
-The UI does not synthesize values for these interfaces and no backend trading-core file was changed.
+### `POST /exchange/okx/validate`
+
+Validates stored DEMO credentials without returning raw exchange errors or
+credentials. The response may report a safe status and a sanitized message.
+
+No LIVE selector or live-trading enablement is part of this contract.

@@ -168,6 +168,41 @@ describe("中文加密交易终端 V2", () => {
     expect(marketPanel?.textContent).not.toContain("99999");
   });
 
+  it("明确显示 Binance 行情源与 OKX 模拟执行，不混淆交易所职责", async () => {
+    setup(backend({
+      "/market": { symbol: "BTCUSDT", status: "HEALTHY", price: "100", mark_price: "99", index_price: "98", best_bid: "99.5", best_ask: "100.5", spread: "1", basis: "0.01", health: "HEALTHY" },
+    }));
+    await waitFor(() => expect(screen.getByText("行情源：Binance USDⓈ-M · 实时")).toBeTruthy());
+    expect(screen.getByText("执行交易所：OKX 模拟盘 DEMO")).toBeTruthy();
+    expect(screen.getByText("指数价格")).toBeTruthy();
+    expect(screen.getByText("买一")).toBeTruthy();
+  });
+
+  it("市场不可用时保留真实不可用状态，不展示假价格", async () => {
+    setup(backend({ "/market": { symbol: "BTCUSDT", status: "UNAVAILABLE", price: "99999" }, "/market/sources": { status: "UNAVAILABLE", sources: {} } }));
+    await waitFor(() => expect(screen.getByText("不可用")).toBeTruthy());
+    const marketPanel = screen.getByRole("heading", { name: "BTCUSDT 行情" }).closest("section");
+    expect(marketPanel?.textContent).not.toContain("99999");
+  });
+
+  it("OKX 凭据面板使用密码字段且后端接口缺失时不持久化或提交", async () => {
+    window.location.hash = "#/system";
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    setup();
+    await waitFor(() => expect(screen.getByRole("heading", { name: "OKX 交易所连接" })).toBeTruthy());
+    expect(screen.getByText("模拟盘 DEMO")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "配置 API" }));
+    const apiKey = screen.getByLabelText("OKX API Key") as HTMLInputElement;
+    expect(apiKey.type).toBe("password");
+    expect((screen.getByLabelText("OKX Secret Key") as HTMLInputElement).type).toBe("password");
+    expect((screen.getByLabelText("OKX Passphrase") as HTMLInputElement).type).toBe("password");
+    fireEvent.change(apiKey, { target: { value: "never-persist" } });
+    expect(setItem).not.toHaveBeenCalled();
+    expect(screen.getByText("后端安全凭据接口尚未开放。此表单不会保存、发送或记录任何凭据。")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "保存配置" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "验证连接" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("移动端宽度仍保留价格、判断、持仓、PnL 和 K线区域", async () => {
     window.innerWidth = 390;
     fireEvent(window, new Event("resize"));
