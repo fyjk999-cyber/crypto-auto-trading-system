@@ -80,16 +80,15 @@ async def test_full_paper_automated_chain(database):
 
     # drive one strategy tick and wait for the async exchange events + settlement
     await engine.tick()
-    for _ in range(100):
-        orders = await engine.order_manager.list_open()
-        if not orders:
-            break
-        await asyncio.sleep(0.01)
-    await engine.wait_for_event_queue()
-
-    # list_open excludes FILLED, so find by client order id
+    # list_open excludes FILLED, so find by client order id and poll until terminal
     client_id = f"test_{engine.strategies[0].signal_id}"[:60]
-    order = await engine.order_manager.get_by_client(client_id)
+    order = None
+    for _ in range(1000):
+        await asyncio.sleep(0.01)
+        order = await engine.order_manager.get_by_client(client_id)
+        if order is not None and order.status == OrderStatus.FILLED:
+            break
+    await engine.wait_for_event_queue()
     assert order is not None
     assert order.status == OrderStatus.FILLED
     assert order.filled_quantity == Decimal("0.1")
