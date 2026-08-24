@@ -78,7 +78,8 @@ export function MarketChart({ source, websocket }: Props) {
   }, [source]);
 
   if (source.status !== "ready" || !source.data?.candles.length) {
-    return <div className={`chart-fallback ${source.status}`} role="status"><span className="chart-skeleton" />{message[source.status]}</div>;
+    const safeMessage = source.message === "Binance 行情受地区限制" || source.message === "K线暂不可用" ? source.message : message[source.status];
+    return <div className={`chart-fallback ${source.status}`} role="status"><span className="chart-skeleton" />{safeMessage}</div>;
   }
 
   return <div className="chart-stage"><div ref={container} className="chart-canvas" data-testid="market-chart" />{websocket !== "connected" && <span className="sync-warning">实时同步中断</span>}</div>;

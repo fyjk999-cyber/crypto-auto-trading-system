@@ -25,6 +25,14 @@ export function useKlines(lastEvent: TradingSnapshot["lastEvent"], websocket: Tr
 
   const refresh = useCallback(async () => {
     const result = await getJson<KlineResponse>(`/market/klines?symbol=BTCUSDT&interval=${interval}&limit=500`);
+    const sourceStatus = String(result.data?.status ?? "").toUpperCase();
+    if (result.status === "ready" && sourceStatus && sourceStatus !== "HEALTHY") {
+      setState({
+        status: "unavailable",
+        message: sourceStatus === "GEO_RESTRICTED" ? "Binance 行情受地区限制" : "K线暂不可用",
+      });
+      return;
+    }
     if (result.status === "ready" && (!Array.isArray(result.data?.candles) || !result.data.candles.every(validCandle))) {
       setState({ status: "error", message: "K线数据格式异常" });
       return;

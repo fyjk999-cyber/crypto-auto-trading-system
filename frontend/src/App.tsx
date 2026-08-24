@@ -124,6 +124,12 @@ function marketSource(snapshot: TradingSnapshot) {
   return snapshot.optional["/market"]?.status === "offline" ? "UNAVAILABLE" : "UNKNOWN";
 }
 
+function marketProvider(snapshot: TradingSnapshot, source: string) {
+  const market = record(snapshot.optional["/market"]?.data);
+  const dataSource = String(pick(market, "data_source", "source") ?? "").toUpperCase();
+  return source === "SYNTHETIC" || dataSource.includes("SYNTHETIC") ? "后端模拟行情" : "Binance USDⓈ-M";
+}
+
 function StrategyRows({ snapshot }: { snapshot: TradingSnapshot }) {
   const payload = record(snapshot.optional["/strategies"]?.data);
   const strategies = list(payload.strategies);
@@ -163,6 +169,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const market = record(marketState.data);
   const source = marketSource(snapshot);
   const sourceLabel = sourceLabels[source] ?? "状态未知";
+  const provider = marketProvider(snapshot, source);
   const signals = list(record(snapshot.optional["/signals"]?.data).signals);
   const signal = signals[0] ?? {};
   const regime = record(snapshot.optional["/regime"]?.data);
@@ -184,7 +191,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
     </section>
     <section className="trading-workspace">
       <Panel title="BTCUSDT 行情" className="market-panel" action={<span className={`source-badge ${source.toLowerCase()}`}>{sourceLabel}</span>}>
-        <div className="market-source-header"><strong>BTCUSDT</strong><span>行情源：Binance USDⓈ-M · {sourceLabel}</span><span>执行交易所：OKX 模拟盘 DEMO</span></div>
+        <div className="market-source-header"><strong>BTCUSDT</strong><span>行情源：{provider} · {sourceLabel}</span><span>执行交易所：OKX 模拟盘 DEMO</span></div>
         <div className="market-strip"><div><strong>{priceAllowed ? money(pick(market, "price", "last_price")) : "--"}</strong><span>当前价格</span></div><div><b>{priceAllowed ? money(market.mark_price) : "--"}</b><span>标记价格</span></div><div><b>{priceAllowed ? money(market.index_price) : "--"}</b><span>指数价格</span></div><div><b>{percent(pick(market, "price_change_percent_24h", "change_24h"))}</b><span>24H 涨跌</span></div><div><b>{percent(market.funding_rate)}</b><span>资金费率</span></div><div><b>{numberText(market.open_interest, 2)}</b><span>未平仓量 OI</span></div></div>
         <div className="market-details"><span>买一 <b>{priceAllowed ? money(market.best_bid) : "--"}</b></span><span>卖一 <b>{priceAllowed ? money(market.best_ask) : "--"}</b></span><span>Spread <b>{priceAllowed ? numberText(market.spread, 4) : "--"}</b></span><span>Basis <b>{percent(market.basis)}</b></span></div>
         <div className="chart-toolbar"><div>{kline.intervals.map((value) => <button key={value} type="button" aria-pressed={kline.interval === value} disabled={!kline.supportedIntervals.includes(value)} onClick={() => kline.setInterval(value as KlineInterval)}>{value}</button>)}</div><span>{snapshot.websocket === "connected" ? "WebSocket 已连接" : "实时同步中断"}</span></div>
@@ -253,12 +260,13 @@ export default function App() {
   const offline = snapshot.health.status === "offline";
   const runtime = record(snapshot.runtime.data);
   const source = marketSource(snapshot);
+  const provider = marketProvider(snapshot, source);
   const topStates = useMemo(() => [
     { label: String(pick(runtime, "state", "runtime_state", "engine") ?? "").toUpperCase() === "RUNNING" ? "系统运行中" : "系统待机", ok: String(pick(runtime, "state", "runtime_state") ?? "").toUpperCase() === "RUNNING" },
-    { label: sourceLabels[source] ? `Binance：${sourceLabels[source]}` : "Binance：状态未知", ok: source === "HEALTHY" },
+    { label: sourceLabels[source] ? `${provider.replace(" USDⓈ-M", "")}：${sourceLabels[source]}` : `${provider.replace(" USDⓈ-M", "")}：状态未知`, ok: source === "HEALTHY" },
     { label: "OKX：未配置", ok: false },
     { label: snapshot.websocket === "connected" ? "WebSocket 已连接" : "WebSocket 未连接", ok: snapshot.websocket === "connected" },
-  ], [runtime, snapshot.websocket, source]);
+  ], [runtime, snapshot.websocket, source, provider]);
 
   return <div className="terminal-shell"><header className="terminal-topbar"><div className="identity"><span className="logo">CQ</span><div><strong>量化交易</strong><small>自动交易系统</small></div></div><strong className="symbol">BTCUSDT</strong><div className="top-status"><span className="mode">PAPER</span><span>本地</span>{topStates.map((item) => <span className={item.ok ? "ok" : ""} key={item.label}><i />{item.label}</span>)}</div></header><nav className="primary-nav" aria-label="主导航">{pages.map(([id, label]) => <a key={id} href={`#/${id}`} aria-current={page === id ? "page" : undefined}>{label}</a>)}</nav><main>{offline && <section className="offline-notice" role="alert"><div><strong>后端离线</strong><span>本地 API 暂时不可用，页面会自动重试。</span></div><button type="button" onClick={() => void refresh()}>立即重试</button></section>}<PageContent page={page} snapshot={snapshot} /></main><footer>仅用于 PAPER 模拟交易研究，不连接真实资金，不构成投资建议。</footer></div>;
 }

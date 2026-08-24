@@ -108,6 +108,14 @@ describe("中文加密交易终端 V2", () => {
     expect(chartMocks.createChart).not.toHaveBeenCalled();
   });
 
+  it("Kline 后端返回不可用状态时显示真实不可用提示，不渲染空白图表", async () => {
+    setup(backend({
+      "/market/klines?symbol=BTCUSDT&interval=1m&limit=500": { symbol: "BTCUSDT", interval: "1m", source: "BINANCE_USDM", status: "UNAVAILABLE", candles: [] },
+    }));
+    await waitFor(() => expect(screen.getByText("K线暂不可用")).toBeTruthy());
+    expect(chartMocks.createChart).not.toHaveBeenCalled();
+  });
+
   it("真实 Kline 返回后使用 Lightweight Charts v5 渲染", async () => {
     setup(backend({
       "/market/klines?symbol=BTCUSDT&interval=1m&limit=500": { symbol: "BTCUSDT", interval: "1m", source: "BINANCE_USDM_PUBLIC", status: "HEALTHY", supported_intervals: ["1m"], candles: [candle()] },

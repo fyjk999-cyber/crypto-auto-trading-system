@@ -10,7 +10,7 @@ delivery revision for this report.
 | Area | Result |
 | --- | --- |
 | Binance market source UI | PASS — `Binance USDⓈ-M` is explicit on the trading page and top bar. |
-| Binance Kline | BACKEND_UNAVAILABLE — existing `/market/klines` remains the only source; no synthetic candle or browser bypass was added. |
+| Binance Kline | UNAVAILABLE — `/market/klines` is implemented but the current local public-network request returned `UNAVAILABLE`; no synthetic candle or browser bypass was added. |
 | Binance real-time WebSocket | BACKEND_UNAVAILABLE — the existing backend WebSocket remains the sole UI path. |
 | OKX execution UI | PASS — System page identifies `OKX` and `模拟盘 DEMO`. |
 | OKX credential form | PASS — password fields are shown only after `配置 API`. |
@@ -33,7 +33,9 @@ delivery revision for this report.
 - `npm test`
 - `npm run typecheck`
 - `npm run build`
-- full backend `pytest`
+- backend `pytest`: first full run was 206/207 because an existing SQLite
+  supervisor lock test was intermittent; isolated `test_supervisor.py` retry
+  passed 5/5. This report does not treat the initial lock failure as a UI pass.
 
 ## Safety boundary
 

@@ -7,10 +7,11 @@ connection-validation endpoint. The frontend therefore renders the DEMO-only
 configuration form as a non-submitting shell and never persists credentials in
 the browser.
 
-The existing backend also has no historical Kline endpoint and its WebSocket
-does not currently publish the required Kline envelope. The frontend preserves
-the existing `/market/klines` request path and shows the explicit unavailable
-state rather than generating sample candles.
+The backend now exposes the historical Kline endpoint below. During local
+verification, its public-network request returned `UNAVAILABLE`; the frontend
+therefore shows an explicit unavailable state rather than generating sample
+candles. The WebSocket does not currently publish the required live Kline
+envelope to the UI.
 
 ## Existing Binance Kline contract
 
