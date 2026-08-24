@@ -76,6 +76,14 @@ def create_app(state: AppState) -> FastAPI:
             "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
         }
 
+    @app.get("/internal/runtime-health")
+    async def internal_runtime_health():
+        if state.supervisor is not None:
+            return state.supervisor.health()
+        if state.engine is not None:
+            return state.engine.runtime_snapshot()
+        return {"runtime_state": "NOT_RUNNING", "instance_id": "none"}
+
     @app.get("/cloud-status")
     async def cloud_status():
         return {

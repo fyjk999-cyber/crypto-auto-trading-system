@@ -5,8 +5,23 @@
   "compatibility_date": "2026-08-24",
   "workers_dev": true,
   "observability": { "enabled": true },
-  "vars": {
-    "BACKEND_URL": "https://container-backend.example.internal"
+  "vars": {},
+  "containers": [
+    {
+      "name": "crypto-trading-primary",
+      "class_name": "TradingContainer",
+      "image": "../container/Dockerfile",
+      "image_build_context": "..",
+      "max_instances": 1,
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "TRADING_CONTAINER", "class_name": "TradingContainer" }
+    ]
   },
-
+  "migrations": [
+    { "tag": "v1", "new_classes": ["TradingContainer"] }
+  ]
 }

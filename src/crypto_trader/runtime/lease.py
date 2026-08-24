@@ -32,6 +32,7 @@ class Lease:
     owner_id: str
     token: str
     expires_at: float
+    fence_generation: int = 1
 
 
 class LeaseManager:
@@ -88,11 +89,19 @@ class LeaseManager:
                     acquired_at=now,
                     renewed_at=None,
                     version=RuntimeLeaseORM.version + 1,
+                    fence_generation=RuntimeLeaseORM.fence_generation + 1,
                 )
             )
             await session.commit()
             if result.rowcount == 1:
-                return Lease(lease_key, owner_id, token, expires_at)
+                refreshed = await session.get(RuntimeLeaseORM, row.id)
+                return Lease(
+                    lease_key,
+                    owner_id,
+                    token,
+                    expires_at,
+                    refreshed.fence_generation if refreshed else row.fence_generation + 1,
+                )
         return None
 
     async def renew(self, lease_key: str, token: str, ttl_seconds: float) -> bool:
@@ -135,6 +144,23 @@ class LeaseManager:
             ).scalar_one_or_none()
             return row is not None and row.expires_at > now
 
+    async def is_current(self, lease_key: str, token: str, fence_generation: int) -> bool:
+        now = _epoch()
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(RuntimeLeaseORM).where(
+                        RuntimeLeaseORM.lease_key == lease_key,
+                        RuntimeLeaseORM.token == token,
+                    )
+                )
+            ).scalar_one_or_none()
+            return (
+                row is not None
+                and row.expires_at > now
+                and row.fence_generation == int(fence_generation)
+            )
+
     async def status(self, lease_key: str) -> dict | None:
         async with self.session_factory() as session:
             row = (
@@ -151,4 +177,5 @@ class LeaseManager:
                 "expires_at": row.expires_at,
                 "expired": row.expires_at <= time.time(),
                 "version": row.version,
+                "fence_generation": row.fence_generation,
             }

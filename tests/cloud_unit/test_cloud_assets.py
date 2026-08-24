@@ -78,3 +78,15 @@ def test_worker_gateway_control_endpoints_deny_codex():
     assert "allowedByRole" in source
     assert "/api/v1/kill-switch/off" in source
     assert 'requestClass === "CONTROL"' in source
+
+
+def test_wrangler_container_durable_object_config():
+    text = (ROOT / "deployment/cloudflare/worker/wrangler.jsonc").read_text()
+    # Wrangler uses JSONC; our config is valid JSON after removing trailing comma concerns.
+    # Check raw markers to avoid parser complications.
+    assert '"containers"' in text
+    assert '"crypto-trading-primary"' in text
+    assert '"class_name": "TradingContainer"' in text
+    worker_source = (ROOT / "deployment/cloudflare/worker/src/index.js").read_text()
+    assert "export class TradingContainer" in worker_source
+    assert "export async function scheduled" in worker_source

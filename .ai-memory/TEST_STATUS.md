@@ -1,4 +1,4 @@
 # TEST_STATUS
 
-Last full run: 178 pytest passed + 9 node worker tests.
-Ruff clean. agent-project-test pending final run.
+Current tests: pytest 183? (will confirm after adding supervisor tests). Node worker tests: 9.
+Ruff clean. agent-project-test to run.

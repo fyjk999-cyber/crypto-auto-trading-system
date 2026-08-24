@@ -69,6 +69,7 @@ class RuntimeLeaseORM(Base):
     acquired_at: Mapped[float] = mapped_column(Float, default=lambda: datetime.now(UTC).timestamp())
     renewed_at: Mapped[float | None] = mapped_column(Float)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    fence_generation: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class OrderORM(Base):

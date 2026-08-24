@@ -1,0 +1,27 @@
+{
+  "environment": "testnet",
+  "worker": "crypto-trading-gateway",
+  "container": "crypto-trading-primary",
+  "r2_bucket": "crypto-trading-backups",
+  "cron": "* * * * *",
+  "postgresql": {
+    "provider": "managed",
+    "recommended": "neon",
+    "database_url_env": "DATABASE_URL"
+  },
+  "secrets": [
+    "DATABASE_URL",
+    "BINANCE_TESTNET_API_KEY",
+    "BINANCE_TESTNET_API_SECRET",
+    "INTERNAL_API_SECRET",
+    "CODEX_CLIENT_ID",
+    "CODEX_CLIENT_SECRET",
+    "HARNESS_CLIENT_ID",
+    "HARNESS_CLIENT_SECRET"
+  ],
+  "deploy_command": "cd deployment/cloudflare/worker && npx wrangler deploy --containers-rollout=none",
+  "verification": [
+    "curl https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/health",
+    "curl https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1/version"
+  ]
+}

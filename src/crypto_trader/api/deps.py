@@ -15,6 +15,7 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
+from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 
 
 @dataclass
@@ -30,6 +31,7 @@ class AppState:
     leases: LeaseManager
     reconciliation: ReconciliationService
     engine: TradingEngine | None = None
+    supervisor: TradingRuntimeSupervisor | None = None
 
 
 async def require_api_key(

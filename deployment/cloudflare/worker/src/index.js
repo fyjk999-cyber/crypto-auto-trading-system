@@ -116,6 +116,10 @@ export async function handleRequest(request, env, ctx) {
     return new Response(JSON.stringify({ error: { code: "RATE_LIMITED", message: "slow down" } }),
       { status: 429, headers: baseHeaders() });
   }
+  const container = env.TRADING_CONTAINER;
+  if (container) {
+    return container.fetch(request);
+  }
   const backend = new URL(env.BACKEND_URL);
   if (pathname.startsWith("/api/v1/")) {
     backend.pathname = pathname.replace("/api/v1", "");
@@ -176,9 +180,40 @@ async function forward(from, to) {
   }
 }
 
+export class TradingContainer {
+  async fetch(_request) {
+    // Cloudflare Container connected to this Durable Object class.
+    // Trading logic lives in the Python container image.
+    return new Response(JSON.stringify({ ok: false, container: "crypto-trading-primary" }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    });
+  }
+}
+
+export async function scheduled(_event, env, _ctx) {
+  const container = env.TRADING_CONTAINER;
+  if (container) {
+    const response = await container.fetch(new Request("https://container/health"));
+    return new Response(JSON.stringify({ ok: response.ok, container: "crypto-trading-primary" }), {
+      status: response.ok ? 200 : 503,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  const backendUrl = env.BACKEND_URL || "https://container-backend.example.internal";
+  const response = await fetch(new URL("/health", backendUrl));
+  return new Response(JSON.stringify({ ok: response.ok, container: "crypto-trading-primary" }), {
+    status: response.ok ? 200 : 503,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (!ctx.rateLimiter) ctx.rateLimiter = new SlidingWindowRateLimiter();
     return handleRequest(request, env, ctx);
+  },
+  async scheduled(event, env, ctx) {
+    return scheduled(event, env, ctx);
   },
 };
