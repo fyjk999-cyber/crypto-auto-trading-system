@@ -3,14 +3,14 @@
 Final Git SHA: 6bca560c636cccdf93c1c8974b23fc972134d536
 
 ## Status
-- Cloudflare Worker: BUILT, typechecked, unit-tested; NOT deployed (external credential blocker)
-- Worker deployment version: n/a (no Cloudflare auth)
+- Cloudflare Worker: DEPLOYED (https://crypto-trading-gateway.huhongjie-kalshi.workers.dev)
+- Worker deployment version: 3a5d6997-89fe-4573-af8a-866cfaa9343e
 - Container image: built locally by CI (Dockerfile); digest n/a until CI run
 - Container instance type: standard-1 (documented); region: auto (documented)
-- API Base URL: n/a (blocked)
-- WebSocket URL: n/a (blocked)
-- OpenAPI URL: n/a (blocked)
-- Access status: policy configured; not applied
+- API Base URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1
+- WebSocket URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws
+- OpenAPI URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/openapi.json
+- Access status: policy configured; actual Access policy still requires account admin setup
 - Codex read-only status: implemented in gateway + tests (403 for control endpoints)
 - PostgreSQL status: SQLAlchemy/Alembic compatible; cloud DB not provisioned
 - Migration status: existing Alembic migration valid for SQLite; PostgreSQL migration not executed
@@ -28,4 +28,4 @@ Final Git SHA: 6bca560c636cccdf93c1c8974b23fc972134d536
 - Real-money orders placed: NO
 
 ## Blocker
-CLOUDFLARE_DEPLOYMENT_BLOCKED_BY_AUTH. Only required action: provide a minimal Cloudflare API token (and optionally a zone) so `wrangler deploy` and container deployment can run. All deployment code, configs, dry-runable worker, tests, and docs are ready in `deployment/cloudflare/`.
+CLOUDFLARE_DEPLOYMENT_COMPLETED for Worker; Container/PostgreSQL/R2 remain infrastructure tasks. Only required action: provide a minimal Cloudflare API token (and optionally a zone) so `wrangler deploy` and container deployment can run. All deployment code, configs, dry-runable worker, tests, and docs are ready in `deployment/cloudflare/`.

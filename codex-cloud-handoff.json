@@ -1,9 +1,9 @@
 {
   "environment": "testnet",
-  "api_base_url": "<url>",
-  "websocket_url": "<url>",
-  "openapi_url": "<url>",
-  "git_sha": "0dc4884ae3e416dc1df22f96620f55e8e4f41734",
+  "api_base_url": "https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1",
+  "websocket_url": "https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws",
+  "openapi_url": "https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/openapi.json",
+  "git_sha": "92320083378b229816114f639b29dea5f15b33dd",
   "access": {
     "type": "cloudflare_access_service_token",
     "client_id_env": "CF_ACCESS_CLIENT_ID",

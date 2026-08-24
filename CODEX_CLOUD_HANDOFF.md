@@ -1,11 +1,11 @@
 # CODEX CLOUD HANDOFF
 
 - Environment: TESTNET
-- API Base URL: <set after deploy>
-- WebSocket URL: <set after deploy>
-- OpenAPI URL: <set after deploy>
-- Swagger URL: <set after deploy>
-- Git SHA: 0dc4884ae3e416dc1df22f96620f55e8e4f41734 (pre-cloud code baseline)
+- API Base URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/api/v1
+- WebSocket URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/ws
+- OpenAPI URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/openapi.json
+- Swagger URL: https://crypto-trading-gateway.huhongjie-kalshi.workers.dev/docs
+- Git SHA: 92320083378b229816114f639b29dea5f15b33dd
 - Cloudflare Access required: yes (service token)
 - Codex token header names: CF-Access-Client-Id, CF-Access-Client-Secret
 - Read-only endpoints: GET /api/v1/*, HEAD /api/v1/*, /openapi.json, /docs
