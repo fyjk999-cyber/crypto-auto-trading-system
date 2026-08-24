@@ -10,3 +10,6 @@
 - 2026-08-24 PHASE 16: ML Meta is ensemble-level (not a 5% alpha). Base weights 40/20/15/10/15; dynamic per-decision weights only.
 - 2026-08-24 PHASE 16: Fast Learning updates stats only; Slow Learning requires backtest->OOS->walk-forward->shadow->promotion.
 - 2026-08-24 PHASE 16: alpha/sizing.py and alpha/leverage.py are advisory only; Risk+ExecutionAuthority remain final gates.
+- 2026-08-24 PHASE 17+: Perpetual first; ONE_WAY and ISOLATED first; hard max leverage 6x.
+- 2026-08-24 PHASE 17+: Ledger remains single financial truth for futures margin/funding/liquidation.
+- 2026-08-24 PHASE 17+: L1-L4 governance; L4 human approval timeout REJECTs; no auto-approve.

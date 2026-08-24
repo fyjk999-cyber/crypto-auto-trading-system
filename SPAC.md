@@ -133,3 +133,33 @@ Rules:
 - LONG/SHORT are fully symmetric; NO_TRADE is a first-class decision.
 - All financial values Decimal-only; no future leakage; every regime/feature/strategy
   output carries timestamp/version/reason_codes; every decision is replayable/auditable.
+
+## 17. Perpetual Futures Program (PHASE 17+)
+
+New phases extend the existing core; they never create a second trading core or
+second source of financial truth.
+
+- Ledger remains the single source of financial truth. Perpetual margin,
+  funding, liquidation, SHORT all enter the same append-only double-entry ledger
+  and are replayed into projections.
+- Instruments are separated into SPOT and PERPETUAL by `instrument_type`.
+  SPOT SELL is never used to fake a perpetual SHORT.
+- Position model: ONE_WAY first (LONG or SHORT net per symbol); HEDGE mode is
+  explicitly deferred as a known limitation. All side transitions are
+  deterministic, auditable, replayable.
+- Margin: ISOLATED first, CROSS later. Mark price is used for risk/liquidation,
+  not last trade price.
+- Funding is a first-class ledger event (payment and receipt).
+- Hard max leverage 6x; any alpha recommendation above 6x is capped or rejected.
+- Leverage decision chain: recommended_leverage -> risk_capped_leverage ->
+  review_approved_leverage -> effective_leverage, each recorded with
+  original/new value, reason, authority, timestamp, policy version.
+- Drawdown policy is configurable; DD >= 50% engages the global kill switch.
+  Risk-reducing actions (REDUCE/CLOSE) always remain allowed.
+- Trade governance levels L1-L4. L4 requires human approval; timeout rejects.
+- Reviews are deterministic and structured; LLM may only assist explanations.
+- Learning V2: Fast Learning updates statistics only; Slow Learning candidates
+  must pass backtest -> OOS -> walk-forward -> paper -> shadow -> promotion.
+  Self-modifying production code and self-modifying risk authority are forbidden.
+- Backtest reuses the real MarketState/Alpha/Risk/Margin/Ledger interfaces.
+- Defaults remain TRADING_MODE=PAPER and LIVE_TRADING_ENABLED=false.
