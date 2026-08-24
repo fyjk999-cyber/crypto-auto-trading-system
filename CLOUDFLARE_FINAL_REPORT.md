@@ -1,5 +1,7 @@
 # CLOUDFLARE FINAL REPORT
 
+Final Git SHA: 2ba200712ce1bf6a0ce5ab82415b04b1f146440e
+
 ## Status
 - Cloudflare Worker: BUILT, typechecked, unit-tested; NOT deployed (external credential blocker)
 - Worker deployment version: n/a (no Cloudflare auth)
@@ -21,7 +23,7 @@
 - Cloud chaos tests: gateway logic covered by Node tests; deployment chaos not executed
 - Total tests: 178 pytest + 9 node tests
 - Coverage: 87% (pytest)
-- CI: extended with worker typecheck/test and container build jobs
+- CI: green (lint/unit/integration/worker/container-build)
 - LIVE_TRADING_ENABLED=false
 - Real-money orders placed: NO
 
