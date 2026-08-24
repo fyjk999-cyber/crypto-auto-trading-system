@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+from enum import Enum
+
+
+class OrderSide(str, Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class OrderType(str, Enum):
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+
+
+class TimeInForce(str, Enum):
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
+
+
+class OrderStatus(str, Enum):
+    CREATED = "CREATED"
+    VALIDATED = "VALIDATED"
+    SUBMITTING = "SUBMITTING"
+    SUBMITTED = "SUBMITTED"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCEL_PENDING = "CANCEL_PENDING"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    UNKNOWN = "UNKNOWN"
+
+
+ACTIVE_ORDER_STATUSES = {
+    OrderStatus.CREATED,
+    OrderStatus.VALIDATED,
+    OrderStatus.SUBMITTING,
+    OrderStatus.SUBMITTED,
+    OrderStatus.ACKNOWLEDGED,
+    OrderStatus.OPEN,
+    OrderStatus.PARTIALLY_FILLED,
+    OrderStatus.CANCEL_PENDING,
+}
+
+TERMINAL_ORDER_STATUSES = {
+    OrderStatus.FILLED,
+    OrderStatus.CANCELLED,
+    OrderStatus.REJECTED,
+    OrderStatus.EXPIRED,
+}
+
+
+class OrderEventType(str, Enum):
+    ORDER_CREATED = "ORDER_CREATED"
+    ORDER_VALIDATED = "ORDER_VALIDATED"
+    ORDER_SUBMITTING = "ORDER_SUBMITTING"
+    ORDER_SUBMITTED = "ORDER_SUBMITTED"
+    ORDER_ACKNOWLEDGED = "ORDER_ACKNOWLEDGED"
+    ORDER_OPENED = "ORDER_OPENED"
+    ORDER_PARTIALLY_FILLED = "ORDER_PARTIALLY_FILLED"
+    ORDER_FILLED = "ORDER_FILLED"
+    ORDER_CANCEL_PENDING = "ORDER_CANCEL_PENDING"
+    ORDER_CANCELLED = "ORDER_CANCELLED"
+    ORDER_REJECTED = "ORDER_REJECTED"
+    ORDER_EXPIRED = "ORDER_EXPIRED"
+    ORDER_UNKNOWN = "ORDER_UNKNOWN"
+    ORDER_RECOVERED = "ORDER_RECOVERED"
+
+
+class LedgerEntryType(str, Enum):
+    TRADE = "TRADE"
+    FEE = "FEE"
+    DEPOSIT = "DEPOSIT"
+    WITHDRAWAL = "WITHDRAWAL"
+    TRANSFER = "TRANSFER"
+    FUNDING = "FUNDING"
+    INTEREST = "INTEREST"
+    REALIZED_PNL = "REALIZED_PNL"
+    MARGIN_CHANGE = "MARGIN_CHANGE"
+
+
+class LedgerDirection(str, Enum):
+    DEBIT = "DEBIT"
+    CREDIT = "CREDIT"
+
+
+class TradingMode(str, Enum):
+    PAPER = "PAPER"
+    LIVE = "LIVE"
+    SHADOW = "SHADOW"
+
+
+class RuntimeState(str, Enum):
+    STOPPED = "STOPPED"
+    STARTING = "STARTING"
+    RUNNING = "RUNNING"
+    RECOVERING = "RECOVERING"
+    STOPPING = "STOPPING"
+    HALTED = "HALTED"
+
+
+class MarketDataStatus(str, Enum):
+    HEALTHY = "HEALTHY"
+    RESYNCING = "RESYNCING"
+    UNHEALTHY = "UNHEALTHY"
+
+
+class ExchangeEventType(str, Enum):
+    ORDER_ACK = "ORDER_ACK"
+    ORDER_OPENED = "ORDER_OPENED"
+    ORDER_PARTIALLY_FILLED = "ORDER_PARTIALLY_FILLED"
+    ORDER_FILLED = "ORDER_FILLED"
+    ORDER_CANCELLED = "ORDER_CANCELLED"
+    ORDER_REJECTED = "ORDER_REJECTED"
+    ORDER_UNKNOWN = "ORDER_UNKNOWN"
+    BALANCE_UPDATE = "BALANCE_UPDATE"
+    POSITION_UPDATE = "POSITION_UPDATE"
+    MARKET_SNAPSHOT = "MARKET_SNAPSHOT"
+    MARKET_DELTA = "MARKET_DELTA"
+
+
+class ExecutionDecision(str, Enum):
+    APPROVE = "APPROVE"
+    HOLD = "HOLD"
+    REJECT = "REJECT"
+
+
+class HealthStatus(str, Enum):
+    OK = "OK"
+    DEGRADED = "DEGRADED"
+    UNHEALTHY = "UNHEALTHY"
