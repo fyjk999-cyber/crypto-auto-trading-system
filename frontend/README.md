@@ -1,12 +1,14 @@
-# Trading Control Center frontend
+# 中文量化交易控制台
 
-React and TypeScript local control center for the PAPER trading system.
+以 Kalshi 简洁工作区为设计参考的 React + TypeScript PAPER 交易终端。
 
 ## Current scope
 
-- Responsive local control-center pages backed by the FastAPI API.
-- REST refresh for `/health`, `/ready`, `/runtime`, `/account`, `/positions`, `/orders`, and `/killswitch`.
+- 五个中文一级入口：交易、持仓、订单、复盘、系统。
+- 默认交易页以 BTCUSDT 行情、K 线区域、系统判断、仓位、盈亏和风险为中心。
+- REST refresh for core state plus `/market`, `/market/sources`, `/signals`, `/strategies`, `/risk`, reviews and learning.
 - WebSocket reconnect followed by REST resynchronization.
+- Official `lightweight-charts` v5 candlestick and volume renderer.
 - No fabricated market, position, order, risk or performance data.
 - No frontend trading decisions or execution authority.
 - Sensitive actions fail closed.
@@ -25,11 +27,11 @@ The development server proxies the configured default local API and WebSocket to
 the backend CORS policy. Production hosting must provide an equivalent same-origin proxy or allow
 the configured origins explicitly.
 
-## Integration gate
+## Kline integration gate
 
-The following currently remain unavailable and intentionally render an honest backend-unavailable
-state: `/regime`, `/signals`, `/strategies`, `/risk`, `/margin`, `/daily-reviews`, `/learning`,
-and `/exchange-health`.
+The current backend does not expose `GET /market/klines` or structured `kline` WebSocket events.
+The chart therefore renders `K线接口尚未开放`; it never generates sample or random candles.
+The exact required contract is recorded in `../BACKEND_INTEGRATION_ISSUE.md`.
 
 Cloud integration remains deferred until Harness provides:
 

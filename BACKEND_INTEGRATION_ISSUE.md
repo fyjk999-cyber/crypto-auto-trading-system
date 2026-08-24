@@ -1,5 +1,64 @@
 # Backend integration status
 
+## UI V2 blocking market contract
+
+The latest backend exposes `/market` and `/market/sources`, but its OpenAPI has
+no historical Kline endpoint and `/ws` currently emits only `runtime` events.
+The V2 UI therefore shows real market summary values when available while the
+candlestick area remains explicitly unavailable.
+
+Required REST contract:
+
+```http
+GET /market/klines?symbol=BTCUSDT&interval=1m&limit=500
+```
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "interval": "1m",
+  "source": "BINANCE_USDM_PUBLIC",
+  "status": "HEALTHY",
+  "supported_intervals": ["1m", "5m", "15m", "1h", "4h", "1d"],
+  "candles": [
+    {
+      "open_time": "ISO-8601 timestamp",
+      "open": "decimal string",
+      "high": "decimal string",
+      "low": "decimal string",
+      "close": "decimal string",
+      "volume": "decimal string",
+      "close_time": "ISO-8601 timestamp"
+    }
+  ]
+}
+```
+
+Required incremental WebSocket envelope:
+
+```json
+{
+  "event_type": "kline",
+  "event_version": "v1",
+  "timestamp": "ISO-8601 timestamp",
+  "payload": {
+    "symbol": "BTCUSDT",
+    "interval": "1m",
+    "open_time": "ISO-8601 timestamp",
+    "open": "decimal string",
+    "high": "decimal string",
+    "low": "decimal string",
+    "close": "decimal string",
+    "volume": "decimal string",
+    "closed": false
+  }
+}
+```
+
+Frontend status: `BLOCKED_BACKEND_API` for REST candles and
+`BLOCKED_BACKEND_EVENT` for realtime candle updates. No sample or random
+candles are used.
+
 The local UI uses existing read-only endpoints: `/health`, `/ready`, `/runtime`, `/account`,
 `/positions`, `/orders`, `/killswitch`, and `/ws`.
 
