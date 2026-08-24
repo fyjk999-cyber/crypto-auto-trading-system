@@ -1,9 +1,13 @@
 # CURRENT_STATE
 
-Phase 0-16 complete.
-- 144 tests pass; ruff clean; agent-project-test PASS; coverage 87%.
-- Alpha layer (PHASE 16) implemented: MarketDataEngine, FeatureEngine, RegimeEngine,
-  MultiStrategyAlpha (Trend 40/Momentum 20/Breakout 15/MeanReversion 10/FundingBasis 15),
-  ML Meta (ensemble-level), MetaDecision, sizing/leverage advisors, Fast/Slow Learning.
-- GitHub repo: https://github.com/fyjk999-cyber/crypto-auto-trading-system
-- Source repos verified unchanged.
+Phase 17-27 core implemented:
+- perpetual domain, margin, funding, liquidation
+- true LONG/SHORT paper engine on ledger
+- futures ledger projection + journal-balanced tests
+- leverage control chain (hard max 6x)
+- L1-L4 governance, risk/adversarial reviewers, human approval timeout
+- stress engine, trade/failure memory, daily review, backtest V2, walk-forward
+- docs and CODEX_UI_HANDOFF generated
+Tests: 169 passing. Ruff clean. agent-project-test PASS.
+Known blockers for later phases: Binance Futures/Testnet require external API keys;
+PostgreSQL/cloud require external infrastructure credentials.

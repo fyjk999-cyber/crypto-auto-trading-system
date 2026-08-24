@@ -1,20 +1,9 @@
 # CHANGELOG
 
-- 2026-08-24: PHASE 0 source baselines captured.
-- 2026-08-24: PHASE 1 architecture locked.
-- 2026-08-24: PHASE 2 scaffold + SPAC + HARNESS_GOAL.
-- 2026-08-24: PHASE 3 domain model + decimal core.
-- 2026-08-24: PHASE 4 atomic ledger + projections + reconciliation.
-- 2026-08-24: PHASE 5 async order state machine + idempotency.
-- 2026-08-24: PHASE 6 risk engine + execution authority.
-- 2026-08-24: PHASE 7 orderbook + sequence-gap resync.
-- 2026-08-24: PHASE 8 Binance adapter + OKX/Bybit boundaries.
-- 2026-08-24: PHASE 9 SimulatedExchangeAdapter.
-- 2026-08-24: PHASE 10 runtime + run lease + recovery.
-- 2026-08-24: PHASE 11 API + migrations + CI.
-- 2026-08-24: PHASE 12 strategies + paper E2E.
-- 2026-08-24: PHASE 13 mandatory chaos suite (20/20).
-- 2026-08-24: PHASE 14 agent-project-test full audit PASS.
-- 2026-08-24: PHASE 15 GitHub repo + push.
-- 2026-08-24: PHASE 16 alpha layer: features, regime, 5 alpha sub-strategies,
-  ML Meta ensemble, meta decision, sizing/leverage, Fast/Slow Learning, tests.
+- 2026-08-24: PHASE 0-16 complete (see earlier entries).
+- 2026-08-24: PHASE 17 SPAC amendment (perpetual first).
+- 2026-08-24: PHASE 18-20 perpetual domain, true LONG/SHORT paper engine,
+  margin, funding, liquidation.
+- 2026-08-24: PHASE 21-24 governance L1-L4, leverage chain, stress engine,
+  trade/failure memory, daily review.
+- 2026-08-24: PHASE 25-31 backtest V2, walk-forward, docs/handoff.
