@@ -9,7 +9,8 @@ RUN addgroup --system app && adduser --system --ingroup app app
 WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /build/src ./src
-COPY alembic.ini migrations ./migrations
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
 COPY .env.example ./.env.example
 USER app
 ENV PYTHONUNBUFFERED=1 PORT=8080
