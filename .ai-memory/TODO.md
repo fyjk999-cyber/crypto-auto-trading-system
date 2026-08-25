@@ -1,7 +1,6 @@
 # TODO
 
-- Configure real LLM (external)
-- Start real forward shadow (external)
-- Run frontend tooling where Node is available
-- Full load/soak tests
-- pgvector production embeddings
+- Run scripts/frontend-verify.sh where Node exists.
+- Run full load/soak tests in staging.
+- Wire auth dependency on dangerous API endpoints at deployment.
+- Encrypted offsite backups.

@@ -1,7 +1,8 @@
 # TEST_STATUS
 
-- Updated: 2026-08-25T15:17:21.050938+00:00
-- pytest: 347 passed
+- Updated: 2026-08-25T15:47:16.949572+00:00
+- pytest: 350 passed
 - ruff: PASS
 - agent-project-test: PASS
-- frontend: NOT_EXECUTED (node unavailable)
+- performance smoke: PASS (scripts/performance_smoke.py)
+- frontend: NOT_EXECUTED (node missing)

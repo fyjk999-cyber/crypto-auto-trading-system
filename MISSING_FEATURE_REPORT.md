@@ -1,11 +1,9 @@
 # MISSING FEATURE REPORT
 
-Updated: 2026-08-25T15:17:21.050938+00:00
-
-- REAL_LLM_CONFIGURED remains NO (external).
-- Forward real-market shadow has not started (external).
-- Frontend Node/browser validation not executed (harness runtime unavailable).
-- Full load/soak performance tests not executed.
-- pgvector production embeddings not configured; local hash embedding is used.
-- Corrupt-backup detection not implemented.
-- Full auth layer not implemented.
+- Updated: 2026-08-25T15:47:16.949572+00:00
+- REAL_LLM_CONFIGURED = NO (external)
+- FORWARD_SHADOW_RUNNING = NO (external)
+- FRONTEND_FUNCTIONAL_READY = NO (node runtime unavailable in harness)
+- Full auth endpoint wiring + session lifecycle: deployment work
+- Encrypted offsite backup: not implemented
+- Full load/soak tests: not executed

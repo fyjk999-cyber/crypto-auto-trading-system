@@ -1,10 +1,9 @@
 # DISASTER RECOVERY REPORT
 
-- RPO target: <= 1 hour (database backups).
-- RTO target: <= 4 hours (restore + restart + reconcile).
-- Backup scope: database, config metadata, AI memory, strategy versions,
-  coin profiles, shadow campaign state, incident history, decision replay data,
-  human override logs.
-- Secrets are NOT included in plain-text backups.
-- Backup/restore orchestration implemented in operating_system/backup.py.
-- Corrupt-backup detection not yet implemented (future work).
+- Updated: 2026-08-25T15:47:16.949572+00:00
+- RPO target: <= 1 hour
+- RTO target: <= 4 hours
+- Backup integrity: SHA-256 checksums + manifest (schema version, migration
+  revision). Corrupt backup is detected and restore fails safe.
+- Tests: valid backup, tampered payload -> CORRUPT, restore verified.
+- Remaining: encrypted backup storage and offsite replication.
