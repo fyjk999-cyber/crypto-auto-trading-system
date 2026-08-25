@@ -338,3 +338,106 @@ class DailyReviewRunORM(Base):
     profit_factor: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     expectancy: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LLMStrategyCardORM(Base):
+    __tablename__ = "llm_strategy_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_name: Mapped[str] = mapped_column(String(64))
+    strategy_family: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(String(1000), default="")
+    ideal_market_regime: Mapped[str] = mapped_column(String(32), default="")
+    bad_market_regime: Mapped[str] = mapped_column(String(32), default="")
+    entry_logic: Mapped[str] = mapped_column(String(1000), default="")
+    exit_logic: Mapped[str] = mapped_column(String(1000), default="")
+    failure_modes: Mapped[str] = mapped_column(String(1000), default="")
+    required_tools: Mapped[str] = mapped_column(String(500), default="")
+    historical_examples: Mapped[str] = mapped_column(String(1000), default="")
+    confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0.5"))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AITradeEpisodeORM(Base):
+    __tablename__ = "ai_trade_episodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    episode_id: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    market_regime: Mapped[str] = mapped_column(String(16))
+    market_snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    quant_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    strategy_selected: Mapped[str] = mapped_column(String(200), default="")
+    llm_reasoning: Mapped[str] = mapped_column(String(2000), default="")
+    entry_price: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    exit_price: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    position_size: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    leverage: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    holding_time_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    mfe: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    mae: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    result: Mapped[str] = mapped_column(String(16), default="")
+    review_status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AITradeReviewORM(Base):
+    __tablename__ = "ai_trade_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    episode_id: Mapped[str] = mapped_column(String(64), unique=True)
+    success_factors_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    failure_factors_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    mistakes_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    future_rules_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0.5"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AIMarketPatternORM(Base):
+    __tablename__ = "ai_market_patterns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pattern_id: Mapped[str] = mapped_column(String(64), unique=True)
+    regime: Mapped[str] = mapped_column(String(16))
+    features_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    strategy: Mapped[str] = mapped_column(String(64))
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    profit_factor: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    success_drivers_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    failure_drivers_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    embedding_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AICoinProfileORM(Base):
+    __tablename__ = "ai_coin_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), unique=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    profile_summary: Mapped[str] = mapped_column(String(200), default="")
+    behavior_tags_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    best_setups_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    worst_setups_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AICompressedExperienceORM(Base):
+    __tablename__ = "ai_compressed_experience"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rule_id: Mapped[str] = mapped_column(String(64), unique=True)
+    title: Mapped[str] = mapped_column(String(200))
+    content: Mapped[str] = mapped_column(String(2000))
+    source_episode_count: Mapped[int] = mapped_column(Integer, default=0)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
