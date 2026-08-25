@@ -441,3 +441,48 @@ class AICompressedExperienceORM(Base):
     source_episode_count: Mapped[int] = mapped_column(Integer, default=0)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ShadowCampaignORM(Base):
+    __tablename__ = "shadow_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    campaign_id: Mapped[str] = mapped_column(String(64), unique=True)
+    start_time: Mapped[str | None] = mapped_column(String(64))
+    last_observation_time: Mapped[str | None] = mapped_column(String(64))
+    elapsed_real_calendar_days: Mapped[float] = mapped_column(Float, default=0.0)
+    valid_observation_days: Mapped[int] = mapped_column(Integer, default=0)
+    decision_count: Mapped[int] = mapped_column(Integer, default=0)
+    trade_count: Mapped[int] = mapped_column(Integer, default=0)
+    no_trade_count: Mapped[int] = mapped_column(Integer, default=0)
+    symbol_coverage_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    regime_coverage_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    downtime_hours: Mapped[float] = mapped_column(Float, default=0.0)
+    provider_failures: Mapped[int] = mapped_column(Integer, default=0)
+    market_data_failures: Mapped[int] = mapped_column(Integer, default=0)
+    critical_incidents: Mapped[int] = mapped_column(Integer, default=0)
+    data_quality_score: Mapped[float] = mapped_column(Float, default=100.0)
+    campaign_status: Mapped[str] = mapped_column(String(32), default="NOT_STARTED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CapitalAllocationORM(Base):
+    __tablename__ = "capital_allocations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    allocation_id: Mapped[str] = mapped_column(String(64), unique=True)
+    decision_id: Mapped[str] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    requested_capital_fraction: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
+    recommended_capital_fraction: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
+    recommended_notional: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    recommended_risk_budget: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    max_allowed_fraction: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    allocation_confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    reason_codes_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    policy_version: Mapped[str] = mapped_column(String(16), default="1.0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

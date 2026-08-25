@@ -1,18 +1,6 @@
 # DECISIONS
 
-- 2026-08-24: Ledger is the single money truth; Account/Position/PnL are projections.
-- 2026-08-24: Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy 2 async + Alembic + SQLite(aiosqlite) tests.
-- 2026-08-24: All financial arithmetic uses Decimal. Binary float forbidden in core financial fields.
-- 2026-08-24: Binance first adapter; OKX/Bybit boundaries only.
-- 2026-08-24: SimulatedExchangeAdapter shares the same adapter contract; no separate paper core.
-- 2026-08-24: DB-backed run lease with atomic CAS renew; single writer.
-
-- 2026-08-24 PHASE 16: ML Meta is ensemble-level (not a 5% alpha). Base weights 40/20/15/10/15; dynamic per-decision weights only.
-- 2026-08-24 PHASE 16: Fast Learning updates stats only; Slow Learning requires backtest->OOS->walk-forward->shadow->promotion.
-- 2026-08-24 PHASE 16: alpha/sizing.py and alpha/leverage.py are advisory only; Risk+ExecutionAuthority remain final gates.
-- 2026-08-24 PHASE 17+: Perpetual first; ONE_WAY and ISOLATED first; hard max leverage 6x.
-- 2026-08-24 PHASE 17+: Ledger remains single financial truth for futures margin/funding/liquidation.
-- 2026-08-24 PHASE 17+: L1-L4 governance; L4 human approval timeout REJECTs; no auto-approve.
-
-- 2026-08-25T15:01:44.952358+00:00: PHASE 111- RiskEngine/ExecutionAuthority remain final; capital allocation
-  and portfolio risk are advisory; no live trading; shadow campaign needs 90 real days.
+- Alembic is production migration mechanism; create_all is test-only.
+- Local hash embedding is the no-external-API default.
+- TemporalDataGuard is required before any decision context assembly.
+- RiskEngine/ExecutionAuthority/Ledger remain final authorities.
