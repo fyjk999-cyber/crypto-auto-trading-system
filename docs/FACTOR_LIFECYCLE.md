@@ -1,0 +1,4 @@
+# FACTOR LIFECYCLE
+
+CANDIDATE -> TESTING -> VALIDATED -> ACTIVE -> WARNING -> DEGRADING ->
+REVIEW -> ACTIVE or RETIRED. Persisted in factor_lifecycle table.

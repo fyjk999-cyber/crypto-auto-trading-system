@@ -37,6 +37,10 @@ class LLMContext:
     historical_similarity: dict = field(default_factory=dict)
     research_consensus: dict = field(default_factory=dict)
     market_intelligence_summary: dict = field(default_factory=dict)
+    factor_lifecycle: dict = field(default_factory=dict)
+    research_priority: dict = field(default_factory=dict)
+    factor_importance: dict = field(default_factory=dict)
+    knowledge_health: dict = field(default_factory=dict)
     factor_performance: dict = field(default_factory=dict)
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -64,6 +68,10 @@ class LLMContextBuilder:
         historical_similarity: dict | None = None,
         research_consensus: dict | None = None,
         market_intelligence_summary: dict | None = None,
+        factor_lifecycle: dict | None = None,
+        research_priority: dict | None = None,
+        factor_importance: dict | None = None,
+        knowledge_health: dict | None = None,
     ) -> LLMContext:
         return LLMContext(
             symbol=symbol,
@@ -85,6 +93,10 @@ class LLMContextBuilder:
             historical_similarity=historical_similarity or {},
             research_consensus=research_consensus or {},
             market_intelligence_summary=market_intelligence_summary or {},
+            factor_lifecycle=factor_lifecycle or {},
+            research_priority=research_priority or {},
+            factor_importance=factor_importance or {},
+            knowledge_health=knowledge_health or {},
         )
 
     def render_prompt(self, ctx: LLMContext) -> str:
@@ -103,6 +115,10 @@ class LLMContextBuilder:
             f"HistoricalSimilarity: {ctx.historical_similarity}\n"
             f"ResearchConsensus: {ctx.research_consensus}\n"
             f"MarketIntelligenceSummary: {ctx.market_intelligence_summary}\n"
+            f"FactorLifecycle: {ctx.factor_lifecycle}\n"
+            f"ResearchPriority: {ctx.research_priority}\n"
+            f"FactorImportance: {ctx.factor_importance}\n"
+            f"KnowledgeHealth: {ctx.knowledge_health}\n"
             f"Risk: {ctx.risk_state}\n"
             "Output keys: direction, confidence, risk_level, reason_codes, invalid_conditions."
         )

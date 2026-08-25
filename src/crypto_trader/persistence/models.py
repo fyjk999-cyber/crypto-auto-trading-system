@@ -711,3 +711,46 @@ class KnowledgeRelationORM(Base):
     entity_b: Mapped[str] = mapped_column(String(64))
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorLifecycleORM(Base):
+    __tablename__ = "factor_lifecycle"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_name: Mapped[str] = mapped_column(String(32), index=True)
+    old_state: Mapped[str] = mapped_column(String(16))
+    new_state: Mapped[str] = mapped_column(String(16))
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchPriorityORM(Base):
+    __tablename__ = "research_priority"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(64), index=True)
+    priority: Mapped[float] = mapped_column(Float, default=0.0)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorImportanceORM(Base):
+    __tablename__ = "factor_importance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_name: Mapped[str] = mapped_column(String(32), index=True)
+    importance: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeDecayORM(Base):
+    __tablename__ = "knowledge_decay"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    knowledge_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16))
+    decay_score: Mapped[float] = mapped_column(Float, default=0.0)
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
