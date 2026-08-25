@@ -1,3 +1,3 @@
-from crypto_trader.intelligence.derivatives import DerivativesEngine
+from crypto_trader.intelligence.engine import MarketIntelligenceEngine
 
-__all__ = ["DerivativesEngine"]
+__all__ = ["MarketIntelligenceEngine"]

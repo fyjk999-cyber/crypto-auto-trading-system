@@ -670,3 +670,44 @@ class ResearchReportORM(Base):
     conclusion: Mapped[str] = mapped_column(String(500), default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketIntelligenceContextORM(Base):
+    __tablename__ = "market_intelligence_context"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketSimilarityCaseORM(Base):
+    __tablename__ = "market_similarity_cases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    current_state_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    historical_state: Mapped[str] = mapped_column(String(64))
+    similarity: Mapped[float] = mapped_column(Float, default=0.0)
+    outcome: Mapped[str] = mapped_column(String(16), default="unknown")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchConsensusORM(Base):
+    __tablename__ = "research_consensus"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    research_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class KnowledgeRelationORM(Base):
+    __tablename__ = "knowledge_relations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_a: Mapped[str] = mapped_column(String(64))
+    relation: Mapped[str] = mapped_column(String(32))
+    entity_b: Mapped[str] = mapped_column(String(64))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

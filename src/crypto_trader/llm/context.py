@@ -34,6 +34,9 @@ class LLMContext:
     market_anomaly: dict = field(default_factory=dict)
     active_research: dict = field(default_factory=dict)
     previous_findings: dict = field(default_factory=dict)
+    historical_similarity: dict = field(default_factory=dict)
+    research_consensus: dict = field(default_factory=dict)
+    market_intelligence_summary: dict = field(default_factory=dict)
     factor_performance: dict = field(default_factory=dict)
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -58,6 +61,9 @@ class LLMContextBuilder:
         market_anomaly: dict | None = None,
         active_research: dict | None = None,
         previous_findings: dict | None = None,
+        historical_similarity: dict | None = None,
+        research_consensus: dict | None = None,
+        market_intelligence_summary: dict | None = None,
     ) -> LLMContext:
         return LLMContext(
             symbol=symbol,
@@ -76,6 +82,9 @@ class LLMContextBuilder:
             market_anomaly=market_anomaly or {},
             active_research=active_research or {},
             previous_findings=previous_findings or {},
+            historical_similarity=historical_similarity or {},
+            research_consensus=research_consensus or {},
+            market_intelligence_summary=market_intelligence_summary or {},
         )
 
     def render_prompt(self, ctx: LLMContext) -> str:
@@ -91,6 +100,9 @@ class LLMContextBuilder:
             f"MarketAnomaly: {ctx.market_anomaly}\n"
             f"ActiveResearch: {ctx.active_research}\n"
             f"PreviousFindings: {ctx.previous_findings}\n"
+            f"HistoricalSimilarity: {ctx.historical_similarity}\n"
+            f"ResearchConsensus: {ctx.research_consensus}\n"
+            f"MarketIntelligenceSummary: {ctx.market_intelligence_summary}\n"
             f"Risk: {ctx.risk_state}\n"
             "Output keys: direction, confidence, risk_level, reason_codes, invalid_conditions."
         )
