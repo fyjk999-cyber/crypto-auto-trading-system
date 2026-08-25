@@ -13,3 +13,6 @@
 - 2026-08-24 PHASE 17+: Perpetual first; ONE_WAY and ISOLATED first; hard max leverage 6x.
 - 2026-08-24 PHASE 17+: Ledger remains single financial truth for futures margin/funding/liquidation.
 - 2026-08-24 PHASE 17+: L1-L4 governance; L4 human approval timeout REJECTs; no auto-approve.
+
+- 2026-08-25T15:01:44.952358+00:00: PHASE 111- RiskEngine/ExecutionAuthority remain final; capital allocation
+  and portfolio risk are advisory; no live trading; shadow campaign needs 90 real days.

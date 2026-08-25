@@ -200,3 +200,16 @@ second source of financial truth.
 - Decision traces must be replayable: context hash, market/quant/knowledge/
   memory versions, prompt, response, parsed decision, conviction, risk,
   execution decision.
+
+## 20. PHASE 111-120 Capital Management & Real Market Validation Amendment
+
+- Distinguish IMPLEMENTED / FRAMEWORK_READY / HISTORICAL_SIMULATION_VALIDATED /
+  FORWARD_SHADOW_RUNNING / FORWARD_SHADOW_COMPLETE / EMPIRICALLY_VALIDATED / LIVE_READY.
+- Capital allocation, portfolio risk, liquidity and execution planning are advisory
+  layers. RiskEngine and ExecutionAuthority remain final authorities.
+- Forward shadow must use real chronological data only. No future data leakage.
+  Historical replay does not count as forward validation.
+- 90 real calendar days of valid observations are required for
+  FORWARD_SHADOW_COMPLETE.
+- Micro-capital deployment requires manual human approval; no automatic live.
+- Live trading remains disabled (LIVE_TRADING_ENABLED=false).
