@@ -103,8 +103,11 @@ async def test_daily_review_scheduler_idempotent(database):
     )
     await persistence.save_trade_memory(record)
     scheduler = DailyReviewScheduler(database.session_factory)
-    first = await scheduler.run_once("2026-08-24")
-    second = await scheduler.run_once("2026-08-24")
+    today = (
+        __import__("datetime").datetime.now(__import__("datetime").timezone.utc).date().isoformat()
+    )
+    first = await scheduler.run_once(today)
+    second = await scheduler.run_once(today)
     assert first["trade_count"] == 1
     assert first == second
     rows = await persistence.load_daily_reviews(limit=10)
