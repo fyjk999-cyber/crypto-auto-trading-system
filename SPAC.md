@@ -182,3 +182,21 @@ second source of financial truth.
 - Environment: TESTNET. `LIVE_TRADING_ENABLED=false`. Real-money orders are forbidden.
 - Worker/Container configs must match current Wrangler v4+ and Cloudflare
   Container lifecycle semantics (validated against official docs at implementation time).
+
+## 19. LLM Chief Trader Architecture (PHASE 31+ amendment)
+
+- LLM Chief Trader is the investment decision layer; quant models are Evidence
+  Providers only. Legacy quant/AI fusion is retained only for shadow A/B and
+  backtest comparison.
+- LLM may decide LONG/SHORT/NO_TRADE/WAIT/ADD/REDUCE/EXIT/HEDGE and propose
+  strategy, size, leverage, stop/take-profit, and invalidation conditions.
+- LLM MUST NOT submit orders, modify Ledger/Order State, bypass Risk, change
+  system risk limits, disable kill switch, or modify production strategy.
+- Hard pipeline: LLM ChiefTrader -> TradeProposal -> ConvictionEngine ->
+  RiskEngine -> ExecutionAuthority -> OrderManager -> ExchangeAdapter.
+- Knowledge Base (theory/tools) and Experience Memory (what happened) are
+  separate, versioned, auditable stores.
+- Multi-coin paper learning first. LIVE_TRADING_ENABLED=false always.
+- Decision traces must be replayable: context hash, market/quant/knowledge/
+  memory versions, prompt, response, parsed decision, conviction, risk,
+  execution decision.
