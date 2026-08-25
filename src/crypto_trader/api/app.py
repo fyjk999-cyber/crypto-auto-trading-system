@@ -23,6 +23,7 @@ from crypto_trader.exchange.binance_futures_public import (
     BinanceUSDMFuturesPublicClient,
 )
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
+from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
@@ -634,6 +635,27 @@ def create_app(state: AppState) -> FastAPI:
             }
             for r in rows
         ]
+
+    @app.get("/api/factors/{symbol}")
+    async def get_factor_snapshot(symbol: str):
+        service = FactorService(state.database.session_factory)
+        snapshot = await service.latest_snapshot(symbol)
+        if snapshot is None:
+            return {"symbol": symbol, "status": "NO_DATA", "market_state": {}}
+        return snapshot
+
+    @app.get("/api/factors/{symbol}/history")
+    async def get_factor_history(symbol: str, factor: str, limit: int = 100):
+        service = FactorService(state.database.session_factory)
+        return await service.history(symbol, factor, limit)
+
+    @app.get("/api/factors/{symbol}/snapshot")
+    async def get_factor_market_state(symbol: str):
+        service = FactorService(state.database.session_factory)
+        snapshot = await service.latest_snapshot(symbol)
+        if snapshot is None:
+            return {"symbol": symbol, "status": "NO_DATA", "market_state": {}}
+        return snapshot
 
     @app.get("/killswitch")
     async def killswitch():

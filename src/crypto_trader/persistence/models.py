@@ -486,3 +486,38 @@ class CapitalAllocationORM(Base):
     reason_codes_json: Mapped[list[Any] | None] = mapped_column(JSON)
     policy_version: Mapped[str] = mapped_column(String(16), default="1.0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorRegistryORM(Base):
+    __tablename__ = "factor_registry"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_id: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(64))
+    version: Mapped[str] = mapped_column(String(16), default="1.0")
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")
+    description: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorValueORM(Base):
+    __tablename__ = "factor_values"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    factor: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(16))
+    value: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorSnapshotORM(Base):
+    __tablename__ = "factor_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(16))
+    snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

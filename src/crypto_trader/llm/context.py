@@ -26,6 +26,7 @@ class LLMContext:
     risk_state: dict
     trade_memory: list[dict] = field(default_factory=list)
     daily_review: dict = field(default_factory=dict)
+    factor_snapshot: dict = field(default_factory=dict)
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
@@ -40,6 +41,7 @@ class LLMContextBuilder:
         risk_state: dict | None = None,
         trade_memory: list[dict] | None = None,
         daily_review: dict | None = None,
+        factor_snapshot: dict | None = None,
     ) -> LLMContext:
         return LLMContext(
             symbol=symbol,
@@ -49,13 +51,14 @@ class LLMContextBuilder:
             risk_state=risk_state or {},
             trade_memory=trade_memory or [],
             daily_review=daily_review or {},
+            factor_snapshot=factor_snapshot or {},
         )
 
     def render_prompt(self, ctx: LLMContext) -> str:
         return (
             f"You are a crypto market analyst. Return JSON only. Symbol: {ctx.symbol}\n"
             f"MarketState: {ctx.market_state}\nFeatures: {ctx.feature_vector}\n"
-            f"Risk: {ctx.risk_state}\n"
+            f"Factors: {ctx.factor_snapshot}\nRisk: {ctx.risk_state}\n"
             "Output keys: direction, confidence, risk_level, reason_codes, invalid_conditions."
         )
 
