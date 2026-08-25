@@ -1,7 +1,7 @@
 # LLM CHIEF TRADER FINAL REPORT
 
 ## Final SHA
-(to update after final commit)
+1ced8490bcb14cb5e966db0a29b1cfd340062c38
 
 ## Architecture Migration
 - LLM Chief Trader is the decision layer; quant models are evidence providers.
