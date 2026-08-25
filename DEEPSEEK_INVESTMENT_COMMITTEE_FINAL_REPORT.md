@@ -1,7 +1,7 @@
 # DEEPSEEK INVESTMENT COMMITTEE FINAL REPORT
 
 ## Final SHA
-(to update after final commit)
+c3a6701cf0a9bfc8cef76aa9f66afbd2656aaf23
 
 ## Status
 - DeepSeek integration: PASS (client, schemas, no API key logging)
