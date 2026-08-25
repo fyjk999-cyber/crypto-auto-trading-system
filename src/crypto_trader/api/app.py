@@ -28,6 +28,7 @@ from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.security.auth import Role, require_role_dependency
 
 
 class KillSwitchBody(BaseModel):
@@ -114,7 +115,9 @@ def create_app(state: AppState) -> FastAPI:
                 return strategy
         return None
 
-    @app.post("/exchange/okx/credentials")
+    @app.post(
+        "/exchange/okx/credentials", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
+    )
     async def save_okx_credentials(body: OKXCredentialRequest):
         if not body.demo:
             raise HTTPException(status_code=403, detail="LIVE is forbidden")
@@ -139,7 +142,9 @@ def create_app(state: AppState) -> FastAPI:
     async def okx_status():
         return state.okx_connection.snapshot()
 
-    @app.post("/exchange/okx/validate")
+    @app.post(
+        "/exchange/okx/validate", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
+    )
     async def validate_okx_credentials():
         values = EnvCredentialStore().read()
         if not (
@@ -226,7 +231,9 @@ def create_app(state: AppState) -> FastAPI:
         finally:
             await adapter.disconnect()
 
-    @app.delete("/exchange/okx/credentials")
+    @app.delete(
+        "/exchange/okx/credentials", dependencies=[Depends(require_role_dependency(Role.ADMIN))]
+    )
     async def delete_okx_credentials():
         EnvCredentialStore().clear()
         state.okx_connection.configure({}, None)
@@ -243,7 +250,9 @@ def create_app(state: AppState) -> FastAPI:
         )
         return PerpetualPaperEngine(state.database.session_factory, contract)
 
-    @app.post("/paper/perpetual/open")
+    @app.post(
+        "/paper/perpetual/open", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
+    )
     async def paper_perpetual_open(body: dict):
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
@@ -255,7 +264,9 @@ def create_app(state: AppState) -> FastAPI:
         )
         return pos.model_dump(mode="json")
 
-    @app.post("/paper/perpetual/close")
+    @app.post(
+        "/paper/perpetual/close", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
+    )
     async def paper_perpetual_close(body: dict):
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
@@ -484,7 +495,9 @@ def create_app(state: AppState) -> FastAPI:
     async def stress_tests(limit: int = 50):
         return {"stress_tests": [], "count": 0}
 
-    @app.post("/dev/daily-review/run")
+    @app.post(
+        "/dev/daily-review/run", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
+    )
     async def dev_daily_review_run():
         if state.settings.app_env != "development":
             raise HTTPException(status_code=403, detail="development only")
@@ -626,7 +639,7 @@ def create_app(state: AppState) -> FastAPI:
     async def killswitch():
         return state.risk.kill_switch.snapshot()
 
-    @app.post("/killswitch", dependencies=[Depends(lambda: None)])
+    @app.post("/killswitch", dependencies=[Depends(require_role_dependency(Role.ADMIN))])
     async def set_killswitch(body: KillSwitchBody):
         if body.enabled:
             state.risk.kill_switch.engage(body.reason)
@@ -637,7 +650,7 @@ def create_app(state: AppState) -> FastAPI:
         )
         return state.risk.kill_switch.snapshot()
 
-    @app.post("/manual-orders")
+    @app.post("/manual-orders", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
     async def manual_order(body: ManualOrderBody):
         """Manual order entry through the same core path (authority + engine required)."""
         if state.engine is None:

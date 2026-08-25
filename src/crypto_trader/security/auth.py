@@ -78,3 +78,32 @@ def record_audit(
         "timestamp": datetime.now(UTC).isoformat(),
     }
     return event
+
+
+def _fastapi_header(authorization: str | None = None):
+    if not AUTH_ENABLED:
+        return auth_context()
+    if authorization is None:
+        raise PermissionError("AUTH_REQUIRED")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        raise PermissionError("AUTH_REQUIRED")
+    for candidate in (Role.ADMIN, Role.OPERATOR, Role.VIEWER):
+        if verify_token(token, candidate):
+            return AuthContext(actor="token_user", role=candidate.value)
+    raise PermissionError("AUTH_DENIED")
+
+
+def require_role_dependency(role: Role):
+
+    def dependency(authorization: str | None = None):
+        if not AUTH_ENABLED:
+            return auth_context()
+        if authorization is None:
+            raise PermissionError("AUTH_REQUIRED")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not verify_token(token, role):
+            raise PermissionError("AUTH_DENIED")
+        return AuthContext(actor="token_user", role=role.value)
+
+    return dependency

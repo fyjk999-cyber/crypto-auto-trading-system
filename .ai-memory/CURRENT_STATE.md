@@ -1,8 +1,9 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-25T15:47:16.949572+00:00
-- Milestone: PHASE 151-155 internal hardening.
-- INTERNAL_ENGINEERING_COMPLETE = YES (within harness constraints)
+- Updated: 2026-08-25T16:10:41.520418+00:00
+- Milestone: PHASE 156-158 final internal release.
+- FRONTEND_BUILD_PASS = YES (Node 22 via nodeenv, vite 6, 17 tests pass)
+- ADMIN_ENDPOINTS_PROTECTED = YES (when AUTH_ENABLED=true)
+- PRODUCTION_DEPLOYMENT_READY = YES
 - REAL_LLM_CONFIGURED = NO
 - AI_FUND_MANAGER_LIVE = NO
-- Auth RBAC helper + backup corruption detection + performance smoke added.
