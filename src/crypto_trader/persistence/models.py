@@ -521,3 +521,43 @@ class FactorSnapshotORM(Base):
     timeframe: Mapped[str] = mapped_column(String(16))
     snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorPerformanceORM(Base):
+    __tablename__ = "factor_performance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_name: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(16))
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    average_return: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    sharpe: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    max_drawdown: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    profit_factor: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorAttributionORM(Base):
+    __tablename__ = "factor_attribution"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_id: Mapped[str] = mapped_column(String(64), index=True)
+    factor_name: Mapped[str] = mapped_column(String(32))
+    contribution: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    direction: Mapped[str] = mapped_column(String(8), default="positive")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorDecayORM(Base):
+    __tablename__ = "factor_decay"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_name: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16))
+    old_performance: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    new_performance: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
