@@ -7,6 +7,7 @@ from sqlalchemy import select
 from crypto_trader.factors.models import FactorResult, FactorSnapshot
 from crypto_trader.persistence.models import (
     FactorAttributionORM,
+    FactorCatalogORM,
     FactorDecayORM,
     FactorPerformanceORM,
     FactorRegistryORM,
@@ -228,3 +229,26 @@ class FactorService:
                 "reason": row.reason,
                 "timestamp": row.created_at.isoformat(),
             }
+
+    async def sync_catalog(self) -> None:
+        from crypto_trader.factors.catalog import FactorCatalog
+
+        catalog = FactorCatalog()
+        async with self.session_factory() as session:
+            for item in catalog.list():
+                row = await session.get(FactorCatalogORM, item["factor_id"])
+                if row is None:
+                    session.add(
+                        FactorCatalogORM(
+                            factor_id=item["factor_id"],
+                            name=item["name"],
+                            category=item["category"],
+                            formula=item["formula"],
+                            data_source=item["data_source"],
+                            timeframe=item["timeframe"],
+                            status=item["status"],
+                        )
+                    )
+                else:
+                    row.status = item["status"]
+            await session.commit()

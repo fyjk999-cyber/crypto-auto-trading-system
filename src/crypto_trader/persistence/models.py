@@ -561,3 +561,17 @@ class FactorDecayORM(Base):
     new_performance: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     reason: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorCatalogORM(Base):
+    __tablename__ = "factor_catalog"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_id: Mapped[str] = mapped_column(String(32), unique=True)
+    name: Mapped[str] = mapped_column(String(64))
+    category: Mapped[str] = mapped_column(String(32))
+    formula: Mapped[str] = mapped_column(String(200), default="")
+    data_source: Mapped[str] = mapped_column(String(32))
+    timeframe: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="CANDIDATE")
+    created_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
