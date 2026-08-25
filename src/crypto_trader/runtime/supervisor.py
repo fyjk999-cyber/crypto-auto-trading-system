@@ -45,6 +45,7 @@ class TradingRuntimeSupervisor:
         owner_id: str = "crypto-trading-primary",
         interval_seconds: float = 0.1,
         renew_interval: float = 0.5,
+        execution_interval: float = 0.5,
         scanner_callback: Callable[[], Awaitable[None]] | None = None,
         execution_callback: Callable[[], Awaitable[None]] | None = None,
         order_event_callback: Callable[[], Awaitable[None]] | None = None,
@@ -57,6 +58,7 @@ class TradingRuntimeSupervisor:
         self.owner_id = owner_id
         self.interval = interval_seconds
         self.renew_interval = renew_interval
+        self.execution_interval = execution_interval
         self.scanner_callback = scanner_callback
         self.execution_callback = execution_callback
         self.order_event_callback = order_event_callback
@@ -135,7 +137,7 @@ class TradingRuntimeSupervisor:
 
     async def _execution_loop(self) -> None:
         while not self._stopping:
-            await asyncio.sleep(self.interval)
+            await asyncio.sleep(max(self.interval, self.execution_interval))
             if self._lease is not None and await self.lease_manager.is_current(
                 self.lease_key, self._lease.token, self._lease.fence_generation
             ):
