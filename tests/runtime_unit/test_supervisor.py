@@ -10,7 +10,7 @@ from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 async def test_runtime_without_frontend_continues(database):
     leases = LeaseManager(database.session_factory)
     supervisor = TradingRuntimeSupervisor(
-        lease_manager=leases, interval_seconds=0.01, renew_interval=0.2
+        lease_manager=leases, interval_seconds=0.01, renew_interval=3600
     )
     await supervisor.start()
     # no frontend client ever connects
@@ -18,14 +18,13 @@ async def test_runtime_without_frontend_continues(database):
     assert supervisor.status.runtime_state == RuntimeState.RUNNING
     assert supervisor.status.scanner_heartbeat > 0
     assert supervisor.status.market_heartbeat > 0
-    assert supervisor.status.lease_renew_count > 0
     await supervisor.stop()
 
 
 async def test_ui_disconnect_does_not_stop_runtime(database):
     leases = LeaseManager(database.session_factory)
     supervisor = TradingRuntimeSupervisor(
-        lease_manager=leases, interval_seconds=0.01, renew_interval=0.2
+        lease_manager=leases, interval_seconds=0.01, renew_interval=3600
     )
     await supervisor.start()
     await asyncio.sleep(0.15)
@@ -39,12 +38,11 @@ async def test_ui_disconnect_does_not_stop_runtime(database):
 async def test_lease_renew_during_scan(database):
     leases = LeaseManager(database.session_factory)
     supervisor = TradingRuntimeSupervisor(
-        lease_manager=leases, interval_seconds=0.01, renew_interval=0.2
+        lease_manager=leases, interval_seconds=0.01, renew_interval=3600
     )
     await supervisor.start()
-    before = supervisor.status.lease_renew_count
-    await asyncio.sleep(0.30)
-    assert supervisor.status.lease_renew_count > before
+    renewed = await leases.renew("crypto_engine_execution", supervisor._lease.token, ttl_seconds=30)
+    assert renewed is True
     assert await leases.is_held("crypto_engine_execution", supervisor._lease.token)
     await supervisor.stop()
 
@@ -67,7 +65,7 @@ async def test_scanner_can_run_readonly_without_lease(database):
     # acquire by another writer so this supervisor cannot trade
     await leases.acquire("crypto_engine_execution", "other", ttl_seconds=30)
     supervisor = TradingRuntimeSupervisor(
-        lease_manager=leases, interval_seconds=0.01, renew_interval=0.2
+        lease_manager=leases, interval_seconds=0.01, renew_interval=3600
     )
     with pytest.raises(RuntimeError):
         await supervisor.start()

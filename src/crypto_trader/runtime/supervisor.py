@@ -122,7 +122,7 @@ class TradingRuntimeSupervisor:
 
     async def _scanner_loop(self) -> None:
         while not self._stopping:
-            await asyncio.sleep(self.renew_interval)
+            await asyncio.sleep(self.interval)
             self.status.scanner_heartbeat += 1
             # Lease renewal is owned by the single _lease_renew_loop below to
             # avoid concurrent SQLite writers in local/CI runs.
