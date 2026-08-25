@@ -1,6 +1,6 @@
 # FRONTEND FUNCTIONAL TEST REPORT
 
-- tested commit SHA: (to update after final commit)
+- tested commit SHA: c8fe23d13ad25708c976869f75e4015c27678a86
 - frontend start status: NOT_STARTED (node runtime unavailable)
 - backend start status: NOT_EXECUTED
 - pages tested: none in browser
