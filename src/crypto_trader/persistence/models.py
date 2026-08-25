@@ -625,3 +625,48 @@ class FactorCombinationORM(Base):
     status: Mapped[str] = mapped_column(String(16), default="TESTING")
     performance_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketAnomalyORM(Base):
+    __tablename__ = "market_anomalies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    type: Mapped[str] = mapped_column(String(32))
+    severity: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchHypothesisORM(Base):
+    __tablename__ = "research_hypothesis"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    question: Mapped[str] = mapped_column(String(200))
+    factor: Mapped[str] = mapped_column(String(32))
+    logic: Mapped[str] = mapped_column(String(200), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), default="OPEN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchExperimentORM(Base):
+    __tablename__ = "research_experiments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hypothesis: Mapped[str] = mapped_column(String(200))
+    dataset: Mapped[str] = mapped_column(String(64))
+    method: Mapped[str] = mapped_column(String(32), default="walk_forward")
+    result: Mapped[str] = mapped_column(String(16), default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResearchReportORM(Base):
+    __tablename__ = "research_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(64), unique=True)
+    summary: Mapped[str] = mapped_column(String(500), default="")
+    conclusion: Mapped[str] = mapped_column(String(500), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
