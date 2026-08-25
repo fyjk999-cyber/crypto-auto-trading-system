@@ -28,6 +28,9 @@ class LLMContext:
     daily_review: dict = field(default_factory=dict)
     factor_snapshot: dict = field(default_factory=dict)
     factor_health: dict = field(default_factory=dict)
+    market_regime: dict = field(default_factory=dict)
+    factor_confidence: dict = field(default_factory=dict)
+    factor_combinations: dict = field(default_factory=dict)
     factor_performance: dict = field(default_factory=dict)
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -46,6 +49,9 @@ class LLMContextBuilder:
         factor_snapshot: dict | None = None,
         factor_health: dict | None = None,
         factor_performance: dict | None = None,
+        market_regime: dict | None = None,
+        factor_confidence: dict | None = None,
+        factor_combinations: dict | None = None,
     ) -> LLMContext:
         return LLMContext(
             symbol=symbol,
@@ -58,6 +64,9 @@ class LLMContextBuilder:
             factor_snapshot=factor_snapshot or {},
             factor_health=factor_health or {},
             factor_performance=factor_performance or {},
+            market_regime=market_regime or {},
+            factor_confidence=factor_confidence or {},
+            factor_combinations=factor_combinations or {},
         )
 
     def render_prompt(self, ctx: LLMContext) -> str:
@@ -67,6 +76,9 @@ class LLMContextBuilder:
             f"Factors: {ctx.factor_snapshot}\n"
             f"FactorHealth: {ctx.factor_health}\n"
             f"FactorPerformance: {ctx.factor_performance}\n"
+            f"MarketRegime: {ctx.market_regime}\n"
+            f"FactorConfidence: {ctx.factor_confidence}\n"
+            f"FactorCombinations: {ctx.factor_combinations}\n"
             f"Risk: {ctx.risk_state}\n"
             "Output keys: direction, confidence, risk_level, reason_codes, invalid_conditions."
         )

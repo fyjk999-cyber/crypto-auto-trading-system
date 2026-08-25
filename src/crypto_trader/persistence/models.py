@@ -575,3 +575,53 @@ class FactorCatalogORM(Base):
     timeframe: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), default="CANDIDATE")
     created_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketRegimeHistoryORM(Base):
+    __tablename__ = "market_regime_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    regime: Mapped[str] = mapped_column(String(32))
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorRegimePerformanceORM(Base):
+    __tablename__ = "factor_regime_performance"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_name: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    regime: Mapped[str] = mapped_column(String(32))
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    win_rate: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    sharpe: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    return_value: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    drawdown: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorConfidenceORM(Base):
+    __tablename__ = "factor_confidence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    factor_name: Mapped[str] = mapped_column(String(32), index=True)
+    confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    historical_reliability: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    regime_match: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    decay_penalty: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FactorCombinationORM(Base):
+    __tablename__ = "factor_combinations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    factors_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    result: Mapped[str] = mapped_column(String(16), default="TESTING")
+    status: Mapped[str] = mapped_column(String(16), default="TESTING")
+    performance_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
