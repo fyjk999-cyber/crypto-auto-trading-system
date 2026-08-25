@@ -26,6 +26,7 @@ from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
@@ -81,6 +82,7 @@ def create_app(state: AppState) -> FastAPI:
             allow_headers=["*"],
         )
     app.state.ctx = state
+    app.state.feedback_interface = ResearchFeedbackInterface()
 
     def ctx() -> AppState:
         return state
@@ -635,6 +637,13 @@ def create_app(state: AppState) -> FastAPI:
             }
             for r in rows
         ]
+
+    @app.get("/api/intelligence/feedback/{symbol}")
+    async def research_feedback(symbol: str):
+        feedback = app.state.feedback_interface.get(symbol)
+        if feedback is None:
+            return {"symbol": symbol, "status": "NO_DATA"}
+        return feedback
 
     @app.get("/api/factors/{symbol}")
     async def get_factor_snapshot(symbol: str):
