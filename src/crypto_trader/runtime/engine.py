@@ -379,7 +379,7 @@ class TradingEngine:
             strategy_id=signal.strategy_id,
             run_id=run_id,
             expires_at=signal.expires_at,
-            metadata={"signal_id": signal.signal_id},
+            metadata={**signal.metadata, "signal_id": signal.signal_id},
         )
         auth_ctx = AuthorizationContext(
             now=self.clock.now(),
