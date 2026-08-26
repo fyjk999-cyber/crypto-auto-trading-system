@@ -52,6 +52,8 @@ class TradingRuntimeSupervisor:
         user_data_stream_callback: Callable[[], Awaitable[None]] | None = None,
         reconciliation_callback: Callable[[], Awaitable[None]] | None = None,
         market_data_callback: Callable[[], Awaitable[None]] | None = None,
+        ai_position_callback: Callable[[], Awaitable[None]] | None = None,
+        ai_position_interval_seconds: float = 5.0,
     ) -> None:
         self.lease_manager = lease_manager
         self.lease_key = lease_key
@@ -65,6 +67,8 @@ class TradingRuntimeSupervisor:
         self.user_data_stream_callback = user_data_stream_callback
         self.reconciliation_callback = reconciliation_callback
         self.market_data_callback = market_data_callback
+        self.ai_position_callback = ai_position_callback
+        self.ai_position_interval_seconds = ai_position_interval_seconds
         self.status = RuntimeStatus()
         self._tasks: dict[str, asyncio.Task] = {}
         self._stopping = False
@@ -97,6 +101,8 @@ class TradingRuntimeSupervisor:
             "lease_renew": self._lease_renew_loop,
             "heartbeat": self._heartbeat_loop,
         }
+        if self.ai_position_callback is not None:
+            loops["ai_position"] = self._ai_position_loop
         for name, coro in loops.items():
             self._tasks[name] = asyncio.create_task(
                 self._supervised(name, coro()), name=f"runtime-{name}"
@@ -113,6 +119,12 @@ class TradingRuntimeSupervisor:
                 self._tasks[name] = asyncio.create_task(
                     self._supervised(name, coro), name=f"runtime-{name}-restart"
                 )
+
+    async def _ai_position_loop(self) -> None:
+        while not self._stopping:
+            await asyncio.sleep(self.ai_position_interval_seconds)
+            if self.ai_position_callback is not None:
+                await self.ai_position_callback()
 
     async def _market_data_loop(self) -> None:
         while not self._stopping:
