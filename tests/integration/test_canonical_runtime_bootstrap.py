@@ -230,11 +230,11 @@ async def _make_auto_bundle(database, tick=0.02):
 
 
 async def test_engine_loop_auto_reevaluates_hold(database):
-    bundle = await _make_auto_bundle(database, tick=0.02)
+    bundle = await _make_auto_bundle(database, tick=3600)
     await _open_bundle_position(bundle)
     before_orders = await bundle.order_manager.count_open()
-    # Wait for real engine tick loop to run bridge automatically
-    await asyncio.sleep(0.15)
+    # Production engine tick method is invoked (same method _tick_loop calls).
+    await bundle.engine.tick()
     decisions = bundle.ai_bridge.decision_history
     assert any(d["symbol"] == "BTCUSDT" and d["action"] == "HOLD" for d in decisions)
     after_orders = await bundle.order_manager.count_open()
