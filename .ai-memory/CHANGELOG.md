@@ -1,3 +1,3 @@
 # CHANGELOG
 
-- 2026-08-26T05:39:47.873867+00:00: SHORT position runtime support + reduce_only preservation patch.
+- 2026-08-26T14:59:06.691937+00:00: Canonical LLM entry + real position context integration.

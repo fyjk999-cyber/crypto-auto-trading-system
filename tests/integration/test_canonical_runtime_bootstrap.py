@@ -37,6 +37,20 @@ async def _seed_book(bundle, symbol, price="100"):
     )
 
 
+async def _wait_for_position(bundle, symbol, predicate, timeout_seconds=3.0, interval=0.01):
+    """Deterministically wait for a spot position to satisfy ``predicate``."""
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while True:
+        positions = await bundle.portfolio.get_positions()
+        if predicate(positions.get(symbol)):
+            return positions
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(
+                f"position {symbol} did not reach expected state within {timeout_seconds}s"
+            )
+        await asyncio.sleep(interval)
+
+
 async def _open_bundle_position(bundle, symbol="BTCUSDT", qty="0.1"):
     await _seed_book(bundle, symbol)
     signal = SignalIntent(
@@ -49,7 +63,9 @@ async def _open_bundle_position(bundle, symbol="BTCUSDT", qty="0.1"):
         reason="open for test",
     )
     await bundle.engine.process_signal(signal)
-    await asyncio.sleep(0.2)
+    await _wait_for_position(
+        bundle, symbol, lambda p: p is not None and float(p.quantity or 0) >= float(qty)
+    )
 
 
 async def _insert_position(database, symbol, qty="0.1"):
@@ -130,8 +146,9 @@ async def test_reduce_real_runtime_path(database):
     bridge.thesis_overrides["BTCUSDT"] = "THESIS_WEAKENING"
     bridge.requested_change_overrides["BTCUSDT"] = 0.05
     await bridge.evaluate_active_positions(bundle.engine, bundle.portfolio)
-    await asyncio.sleep(0.2)
-    positions = await bundle.portfolio.get_positions()
+    positions = await _wait_for_position(
+        bundle, "BTCUSDT", lambda p: p is not None and float(p.quantity or 0) < 0.1
+    )
     assert "BTCUSDT" in positions
     assert float(positions["BTCUSDT"].quantity) < 0.1
     assert float(positions["BTCUSDT"].quantity) >= 0
@@ -145,8 +162,9 @@ async def test_exit_real_runtime_path(database):
     bridge = bundle.ai_bridge
     bridge.thesis_overrides["BTCUSDT"] = "THESIS_INVALIDATED"
     await bridge.evaluate_active_positions(bundle.engine, bundle.portfolio)
-    await asyncio.sleep(0.2)
-    positions = await bundle.portfolio.get_positions()
+    positions = await _wait_for_position(
+        bundle, "BTCUSDT", lambda p: p is None or float(p.quantity or 0) == 0
+    )
     assert "BTCUSDT" not in positions or float(positions["BTCUSDT"].quantity) == 0
     await bundle.engine.stop()
     await bundle.database.close()
@@ -251,8 +269,9 @@ async def test_engine_loop_reduce_real_path(database):
     bundle.ai_bridge.thesis_overrides["BTCUSDT"] = "THESIS_WEAKENING"
     bundle.ai_bridge.requested_change_overrides["BTCUSDT"] = 0.05
     await bundle.engine.tick()
-    await asyncio.sleep(0.1)
-    positions = await bundle.portfolio.get_positions()
+    positions = await _wait_for_position(
+        bundle, "BTCUSDT", lambda p: p is not None and float(p.quantity or 0) < 0.1
+    )
     assert "BTCUSDT" in positions
     assert float(positions["BTCUSDT"].quantity) < 0.1
     assert float(positions["BTCUSDT"].quantity) >= 0
@@ -267,8 +286,9 @@ async def test_engine_loop_exit_real_path(database):
     bundle.ai_bridge.last_evaluation.clear()
     bundle.ai_bridge.thesis_overrides["BTCUSDT"] = "THESIS_INVALIDATED"
     await bundle.engine.tick()
-    await asyncio.sleep(0.1)
-    positions = await bundle.portfolio.get_positions()
+    positions = await _wait_for_position(
+        bundle, "BTCUSDT", lambda p: p is None or float(p.quantity or 0) == 0
+    )
     assert "BTCUSDT" not in positions or float(positions["BTCUSDT"].quantity) == 0
     await bundle.engine.stop()
     await bundle.database.close()
@@ -435,5 +455,3 @@ async def test_reduce_only_repeated_exit_is_idempotent(database):
     executable = [d for d in bridge.decision_history if d.get("executable")]
     assert len(executable) == 1
     await bundle.database.close()
-
-

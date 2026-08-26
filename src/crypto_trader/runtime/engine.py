@@ -18,8 +18,11 @@ from crypto_trader.domain.enums import (
     ExecutionDecision,
     LedgerDirection,
     LedgerEntryType,
+    MarketType,
+    OrderEventType,
     OrderSide,
     OrderStatus,
+    PositionSide,
     RuntimeState,
     TradingMode,
 )
@@ -36,6 +39,7 @@ from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import (
     ExchangeEvent,
     Fill,
+    Instrument,
     OrderIntent,
     RiskDecision,
     SignalIntent,
@@ -50,6 +54,7 @@ from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_tra
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
+from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.persistence.database import Database
 from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
 from crypto_trader.portfolio.service import PortfolioService
@@ -83,6 +88,7 @@ class TradingEngine:
         ai_position_bridge: AIPositionRuntimeBridge | None = None,
         clock: Clock | None = None,
         authority: ExecutionAuthority | None = None,
+        perpetual_engine: PerpetualPaperEngine | None = None,
         lease_key: str = "crypto_engine_execution",
         require_lease: bool = True,
     ) -> None:
@@ -101,6 +107,7 @@ class TradingEngine:
         self.ai_position_bridge = ai_position_bridge
         self.clock = clock or SystemClock()
         self.authority = authority or ExecutionAuthority()
+        self.perpetual_engine = perpetual_engine
         self.lease_key = lease_key
         self.require_lease = require_lease
         self.event_bus = EventBus()
@@ -316,6 +323,69 @@ class TradingEngine:
         )
 
     # --------------------------------------------------------------- signals
+    async def _current_signed_quantity(
+        self, symbol: str, market_type: MarketType, positions: dict
+    ) -> Decimal:
+        """Signed position for the order's symbol (positive LONG, negative SHORT)."""
+        if market_type == MarketType.PERPETUAL:
+            if self.perpetual_engine is None:
+                return Decimal("0")
+            state = await self.perpetual_engine.load_state()
+            pos = state.positions.get(symbol)
+            return pos.quantity if pos is not None and not pos.is_flat else Decimal("0")
+        spot = positions.get(symbol)
+        return D(spot.quantity) if spot is not None else Decimal("0")
+
+    async def _execute_perpetual_order(
+        self,
+        intent: OrderIntent,
+        market_price: Decimal,
+        position_side: PositionSide,
+        run_id: str | None,
+        client_order_id: str,
+    ) -> None:
+        engine = self.perpetual_engine
+        if engine is None:
+            await self.audit.log(
+                "PERPETUAL_ENGINE_MISSING",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+            )
+            return
+        if position_side == PositionSide.FLAT:
+            position_side = (
+                PositionSide.LONG if intent.side == OrderSide.BUY else PositionSide.SHORT
+            )
+        price = market_price if market_price > 0 else D("100")
+        qty = D(intent.quantity)
+        order = await self.order_manager.create_from_intent(
+            intent, trading_mode=self.settings.effective_mode()
+        )
+        await self.order_manager.validate(order.internal_order_id)
+        await self.order_manager.submitting(order.internal_order_id)
+        await self.order_manager.submitted(order.internal_order_id)
+        if intent.reduce_only:
+            await engine.close_position(position_side, qty, price, order_id=order.internal_order_id)
+        else:
+            await engine.open_position(
+                position_side, qty, price, Decimal("1"), order_id=order.internal_order_id
+            )
+        await self.order_manager.transition(order.internal_order_id, OrderEventType.ORDER_FILLED)
+        await self.audit.log(
+            "PERPETUAL_ORDER_FILLED",
+            target=client_order_id,
+            run_id=run_id,
+            client_order_id=client_order_id,
+            order_id=order.internal_order_id,
+            after={
+                "side": position_side.value,
+                "quantity": str(qty),
+                "reduce_only": intent.reduce_only,
+            },
+        )
+        self.health.set("submission", True)
+
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
         run_id = self.run_id
         symbol = signal.symbol
@@ -340,6 +410,14 @@ class TradingEngine:
             if mid is not None:
                 market_price = mid
         open_orders = await self.order_manager.count_open()
+
+        # Normalize the order contract into typed fields: read legacy metadata
+        # once here, then downstream layers rely on the typed fields only.
+        market_type = signal.market_type
+        position_side = signal.position_side
+        reduce_only = bool(signal.reduce_only or signal.metadata.get("reduce_only", False))
+        current_signed_qty = await self._current_signed_quantity(symbol, market_type, positions)
+
         risk_decision = self.risk_engine.check(
             signal,
             account=account,
@@ -348,9 +426,7 @@ class TradingEngine:
             open_order_count=open_orders,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
-            current_signed_qty=positions.get(symbol).quantity
-            if positions.get(symbol)
-            else Decimal("0"),
+            current_signed_qty=current_signed_qty,
         )
         await self._persist_risk(risk_decision)
         if risk_decision.decision != ExecutionDecision.APPROVE:
@@ -366,6 +442,21 @@ class TradingEngine:
             return risk_decision
 
         instrument = self._instruments.get(symbol)
+        if (
+            instrument is None
+            and market_type == MarketType.PERPETUAL
+            and self.perpetual_engine is not None
+        ):
+            contract = self.perpetual_engine.contract
+            instrument = Instrument(
+                symbol=symbol,
+                base_asset=contract.base,
+                quote_asset=contract.quote,
+                status="TRADING",
+                tick_size=contract.tick_size,
+                step_size=contract.quantity_step,
+                exchange="PAPER_PERPETUAL",
+            )
         lease_held = (
             self.require_lease
             and self.lease is not None
@@ -382,6 +473,9 @@ class TradingEngine:
             strategy_id=signal.strategy_id,
             run_id=run_id,
             expires_at=signal.expires_at,
+            market_type=market_type,
+            position_side=position_side,
+            reduce_only=reduce_only,
             metadata={**signal.metadata, "signal_id": signal.signal_id},
         )
         auth_ctx = AuthorizationContext(
@@ -401,9 +495,7 @@ class TradingEngine:
             orderbook_healthy=self.market_data.is_healthy(symbol),
             symbol_tradeable=instrument is not None and instrument.status == "TRADING",
             exchange_connected=self.adapter.connected,
-            current_signed_qty=positions.get(symbol).quantity
-            if positions.get(symbol)
-            else Decimal("0"),
+            current_signed_qty=current_signed_qty,
             balance_fresh=self.portfolio is not None,
             risk_decision=risk_decision,
             instrument=instrument,
@@ -418,6 +510,14 @@ class TradingEngine:
                 run_id=run_id,
                 client_order_id=client_order_id,
                 after={"notes": notes},
+            )
+            return risk_decision
+
+        # Route PERPETUAL orders to the paper perpetual engine; SPOT orders
+        # continue through the spot order lifecycle below.
+        if market_type == MarketType.PERPETUAL:
+            await self._execute_perpetual_order(
+                intent, market_price, position_side, run_id, client_order_id
             )
             return risk_decision
 

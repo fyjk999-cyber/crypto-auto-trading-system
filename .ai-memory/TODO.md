@@ -1,5 +1,5 @@
 # TODO
 
-- Deploy runtime with canonical supervisor activation in production.
-- Run 90-day forward shadow with real OKX data.
-- Configure real LLM.
+- Persist position opened_at for exact position age.
+- Wire factor_intelligence_provider into canonical bootstrap.
+- Configure real LLM; run forward shadow.

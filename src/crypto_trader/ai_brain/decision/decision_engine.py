@@ -34,7 +34,7 @@ class AITradingBrain:
         situation = self.observer.observe(
             market_state=market_state, factor_intelligence=factor_intelligence, portfolio=portfolio
         )
-        if active_position and float(active_position.get("quantity", 0)) > 0:
+        if active_position and float(active_position.get("quantity", 0)) != 0:
             return self._position_analysis(
                 symbol=symbol,
                 market_state=market_state,

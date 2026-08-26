@@ -25,6 +25,8 @@ class AIPositionEvaluation:
     side: str
     quantity: float
     reduce_only: bool
+    market_type: str = "SPOT"
+    position_side: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
@@ -38,14 +40,22 @@ class AIPositionEvaluation:
             "side": self.side,
             "quantity": self.quantity,
             "reduce_only": self.reduce_only,
+            "market_type": self.market_type,
+            "position_side": self.position_side,
             "timestamp": self.timestamp,
         }
 
 
 class AIPositionRuntimeBridge:
-    def __init__(self, brain: AITradingBrain | None = None, cooldown_seconds: float = 5.0) -> None:
+    def __init__(
+        self,
+        brain: AITradingBrain | None = None,
+        cooldown_seconds: float = 5.0,
+        perpetual_engine=None,
+    ) -> None:
         self.brain = brain or AITradingBrain()
         self.cooldown_seconds = cooldown_seconds
+        self.perpetual_engine = perpetual_engine
         self.last_evaluation: dict[str, str] = {}
         self.last_decision: dict[str, str] = {}
         self.decision_history: list[dict] = []
@@ -74,6 +84,7 @@ class AIPositionRuntimeBridge:
             active_position=active_position,
         )
         side = str(active_position.get("side", "LONG")).upper()
+        market_type = str(active_position.get("market_type", "SPOT")).upper()
         quantity = float(active_position.get("quantity", 0.0))
         requested_change = float(active_position.get("requested_change", 0.0))
         mapping = map_trading_intent(
@@ -92,6 +103,8 @@ class AIPositionRuntimeBridge:
             side=mapping.side,
             quantity=mapping.quantity,
             reduce_only=mapping.reduce_only,
+            market_type=market_type,
+            position_side=side,
         )
         self.last_decision[symbol] = evaluation.action
         self.last_evaluation[symbol] = now.isoformat()
@@ -109,42 +122,120 @@ class AIPositionRuntimeBridge:
             return False
 
     async def evaluate_active_positions(self, engine, portfolio) -> list[AIPositionEvaluation]:
-        positions = await portfolio.get_positions()
-        evaluations = []
-        for symbol, position in positions.items():
+        # Snapshot both position sources up front, before any order submission,
+        # so DB reads do not race the async fill-settlement loop.
+        candidates: list[tuple] = []
+        spot_positions = await portfolio.get_positions()
+        for symbol, position in spot_positions.items():
             raw_quantity = float(position.quantity or 0)
             if raw_quantity == 0:
                 continue
-            abs_quantity = abs(raw_quantity)
-            side = "LONG" if raw_quantity > 0 else "SHORT"
-            active_position = {
-                "quantity": abs_quantity,
-                "side": side,
-                "entry_price": float(position.avg_entry_price or 0),
-                "current_price": float(position.avg_entry_price or 0),
-                "unrealized_pnl": 0.0,
-                "realized_pnl": float(position.realized_pnl or 0),
-                "age_seconds": 0.0,
-                "thesis_status": self.thesis_overrides.get(symbol, "THESIS_INTACT"),
-                "thesis": "position management",
-                "hard_risk_exit": self.hard_risk_overrides.get(symbol, False),
-                "requested_change": self.requested_change_overrides.get(symbol, 0.0),
-            }
-            evaluation = self.evaluate(symbol=symbol, active_position=active_position)
-            evaluations.append(evaluation)
-            if evaluation.executable and evaluation.action in ("ADD", "REDUCE", "EXIT"):
-                await self._apply_to_engine(engine, symbol, evaluation)
+            candidates.append(
+                (
+                    symbol,
+                    "SPOT",
+                    "LONG" if raw_quantity > 0 else "SHORT",
+                    abs(raw_quantity),
+                    float(position.avg_entry_price or 0),
+                    float(position.realized_pnl or 0),
+                )
+            )
+
+        if self.perpetual_engine is not None:
+            try:
+                state = await self.perpetual_engine.load_state()
+                for symbol, mpos in state.positions.items():
+                    if mpos.is_flat:
+                        continue
+                    candidates.append(
+                        (
+                            symbol,
+                            "PERPETUAL",
+                            mpos.side.value,
+                            abs(float(mpos.quantity or 0)),
+                            float(mpos.avg_entry_price or 0),
+                            float(mpos.realized_pnl or 0),
+                        )
+                    )
+            except Exception:
+                pass
+
+        evaluations: list[AIPositionEvaluation] = []
+        for symbol, market_type, side, abs_quantity, entry_price, realized_pnl in candidates:
+            await self._evaluate_one(
+                engine,
+                evaluations,
+                symbol=symbol,
+                market_type=market_type,
+                side=side,
+                abs_quantity=abs_quantity,
+                entry_price=entry_price,
+                realized_pnl=realized_pnl,
+            )
         return evaluations
+
+    async def _evaluate_one(
+        self,
+        engine,
+        evaluations: list[AIPositionEvaluation],
+        *,
+        symbol: str,
+        market_type: str,
+        side: str,
+        abs_quantity: float,
+        entry_price: float,
+        realized_pnl: float,
+    ) -> None:
+        current_price = entry_price
+        book = getattr(engine, "market_data", None)
+        if book is not None:
+            orderbook = book.books.get(symbol)
+            if orderbook is not None:
+                mid = orderbook.mid_price()
+                if mid is not None:
+                    current_price = float(mid)
+        if current_price > 0 and entry_price > 0:
+            if side == "LONG":
+                unrealized_pnl = (current_price - entry_price) * abs_quantity
+            else:
+                unrealized_pnl = (entry_price - current_price) * abs_quantity
+        else:
+            unrealized_pnl = 0.0
+        active_position = {
+            "quantity": abs_quantity,
+            "side": side,
+            "market_type": market_type,
+            "entry_price": entry_price,
+            "current_price": current_price,
+            "unrealized_pnl": unrealized_pnl,
+            "realized_pnl": realized_pnl,
+            "age_seconds": 0.0,
+            "thesis_status": self.thesis_overrides.get(symbol, "THESIS_INTACT"),
+            "thesis": "position management",
+            "hard_risk_exit": self.hard_risk_overrides.get(symbol, False),
+            "requested_change": self.requested_change_overrides.get(symbol, 0.0),
+        }
+        evaluation = self.evaluate(symbol=symbol, active_position=active_position)
+        evaluations.append(evaluation)
+        if evaluation.executable and evaluation.action in ("ADD", "REDUCE", "EXIT"):
+            await self._apply_to_engine(engine, symbol, evaluation)
 
     async def _apply_to_engine(self, engine, symbol: str, evaluation: AIPositionEvaluation) -> None:
         from datetime import UTC, datetime
 
-        from crypto_trader.domain.enums import OrderSide, OrderType
+        from crypto_trader.domain.enums import MarketType, OrderSide, OrderType, PositionSide
         from crypto_trader.domain.models import SignalIntent
 
         side = OrderSide.BUY if evaluation.side == "BUY" else OrderSide.SELL
+        market_type = (
+            MarketType(evaluation.market_type) if evaluation.market_type else MarketType.SPOT
+        )
+        position_side = (
+            PositionSide(evaluation.position_side)
+            if evaluation.position_side
+            else PositionSide.FLAT
+        )
         signal_id = f"ai_{symbol}_{int(datetime.now(UTC).timestamp() * 1000)}"
-        metadata = {"reduce_only": True} if evaluation.reduce_only else {}
         signal = SignalIntent(
             signal_id=signal_id,
             strategy_id="ai_brain",
@@ -153,6 +244,8 @@ class AIPositionRuntimeBridge:
             quantity=str(evaluation.quantity),
             order_type=OrderType.MARKET,
             reason=evaluation.reason,
-            metadata=metadata,
+            market_type=market_type,
+            position_side=position_side,
+            reduce_only=evaluation.reduce_only,
         )
         await engine.process_signal(signal)

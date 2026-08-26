@@ -1,4 +1,4 @@
 # DECISIONS
 
-- 2026-08-26T05:08:06.826548+00:00: Architecture development frozen unless a validated defect requires
-  change. Canonical bootstrap wiring is the only official runtime construction.
+- 2026-08-26T14:59:06.691937+00:00: ChiefTraderStrategyAdapter is canonical entry. MultiStrategyAlpha is
+  evidence/shadow only. LLM failure closes entry path (NO_TRADE).

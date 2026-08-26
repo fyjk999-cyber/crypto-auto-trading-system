@@ -19,11 +19,14 @@ from crypto_trader.ledger.service import LedgerService
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
+from crypto_trader.perpetual.domain import PerpetualContract
+from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
+from crypto_trader.runtime.chief_trader_strategy import ChiefTraderStrategyAdapter
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
@@ -81,15 +84,28 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             }
         )
 
+    # MultiStrategyAlpha remains a shadow/benchmark evidence provider. It is no
+    # longer the canonical entry strategy in LLM trading mode.
     alpha = MultiStrategyAlpha(
         symbol="BTCUSDT",
         risk_per_trade="0.0005",
         max_position_notional="5000",
         max_leverage="3",
     )
-    strategies = [alpha] if settings.auto_start_runtime else [DummyStrategy()]
+    chief_trader = ChiefTraderStrategyAdapter(provider=None)
+    strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
-    bridge = AIPositionRuntimeBridge()
+    perpetual_contract = PerpetualContract(
+        symbol="BTCUSDT_PERP",
+        base="BTC",
+        quote="USDT",
+        settlement_asset="USDT",
+        max_leverage=Decimal("6"),
+        taker_fee_rate=Decimal("0.0005"),
+    )
+    perpetual_engine = PerpetualPaperEngine(database.session_factory, perpetual_contract)
+
+    bridge = AIPositionRuntimeBridge(perpetual_engine=perpetual_engine)
     supervisor = TradingRuntimeSupervisor(
         lease_manager=leases,
         ai_position_callback=lambda: bridge.evaluate_active_positions(engine, portfolio),
@@ -111,6 +127,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         strategies=strategies,
         ai_position_bridge=bridge,
         authority=ExecutionAuthority(),
+        perpetual_engine=perpetual_engine,
         require_lease=True,
     )
 

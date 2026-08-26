@@ -12,6 +12,10 @@ from crypto_trader.persistence.models import Base
 
 
 def create_db_engine(database_url: str, **kwargs) -> AsyncEngine:
+    if database_url.startswith("sqlite"):
+        # Let concurrent readers/writers wait for the single-writer lock instead
+        # of immediately raising "database is locked" under contention.
+        kwargs.setdefault("connect_args", {"timeout": 30.0})
     return create_async_engine(database_url, pool_pre_ping=True, **kwargs)
 
 

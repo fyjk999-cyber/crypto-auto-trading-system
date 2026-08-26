@@ -18,7 +18,7 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     )
     bundle = await build_system(settings)
     assert bundle.engine is not None
-    assert bundle.engine.strategies[0].name == "multi_strategy_alpha"
+    assert bundle.engine.strategies[0].name == "llm_chief_trader"
     run_id = await bundle.engine.start()
     assert run_id
     assert bundle.engine.state_machine.state.value == "RUNNING"
