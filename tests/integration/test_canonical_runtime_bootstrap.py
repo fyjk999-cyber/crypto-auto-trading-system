@@ -129,10 +129,8 @@ async def test_reduce_real_runtime_path(database):
     bridge = bundle.ai_bridge
     bridge.thesis_overrides["BTCUSDT"] = "THESIS_WEAKENING"
     bridge.requested_change_overrides["BTCUSDT"] = 0.05
-    supervisor = await _start_supervisor(bundle)
-    await asyncio.sleep(0.15)
-    await supervisor.stop()
-    await asyncio.sleep(0.1)
+    await bridge.evaluate_active_positions(bundle.engine, bundle.portfolio)
+    await asyncio.sleep(0.2)
     positions = await bundle.portfolio.get_positions()
     assert "BTCUSDT" in positions
     assert float(positions["BTCUSDT"].quantity) < 0.1
@@ -146,10 +144,8 @@ async def test_exit_real_runtime_path(database):
     await _open_bundle_position(bundle)
     bridge = bundle.ai_bridge
     bridge.thesis_overrides["BTCUSDT"] = "THESIS_INVALIDATED"
-    supervisor = await _start_supervisor(bundle)
-    await asyncio.sleep(0.15)
-    await supervisor.stop()
-    await asyncio.sleep(0.1)
+    await bridge.evaluate_active_positions(bundle.engine, bundle.portfolio)
+    await asyncio.sleep(0.2)
     positions = await bundle.portfolio.get_positions()
     assert "BTCUSDT" not in positions or float(positions["BTCUSDT"].quantity) == 0
     await bundle.engine.stop()
