@@ -55,6 +55,7 @@ from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.event_bus import EventBus
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
@@ -79,6 +80,7 @@ class TradingEngine:
         reconciliation: ReconciliationService | None = None,
         audit: AuditService | None = None,
         strategies: list[StrategyPlugin] | None = None,
+        ai_position_bridge: AIPositionRuntimeBridge | None = None,
         clock: Clock | None = None,
         authority: ExecutionAuthority | None = None,
         lease_key: str = "crypto_engine_execution",
@@ -96,6 +98,7 @@ class TradingEngine:
         self.reconciliation = reconciliation or ReconciliationService(database.session_factory)
         self.audit = audit or AuditService(database.session_factory)
         self.strategies = strategies or []
+        self.ai_position_bridge = ai_position_bridge
         self.clock = clock or SystemClock()
         self.authority = authority or ExecutionAuthority()
         self.lease_key = lease_key
@@ -239,6 +242,10 @@ class TradingEngine:
     # ------------------------------------------------------------------ tick
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
+        positions = await self.portfolio.get_positions()
+        active_symbols = {
+            symbol for symbol, position in positions.items() if float(position.quantity or 0) != 0
+        }
         for strategy in self.strategies:
             ctx = await self._strategy_context()
             if ctx is None:
@@ -252,9 +259,18 @@ class TradingEngine:
             self.consecutive_failures = 0
             self.health.set(f"strategy:{strategy.name}", True)
             for signal in signals:
+                # Active-position priority: suppress accidental duplicate entry
+                # for symbols already held unless this is the AI position path.
+                if (
+                    signal.symbol in active_symbols
+                    and getattr(signal, "strategy_id", "") != "ai_brain"
+                ):
+                    continue
                 decision = await self.process_signal(signal)
                 if decision is not None:
                     decisions.append(decision)
+        if self.ai_position_bridge is not None:
+            await self.ai_position_bridge.evaluate_active_positions(self, self.portfolio)
         self.health.set("engine_loop", True)
         return decisions
 

@@ -89,6 +89,13 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     strategies = [alpha] if settings.auto_start_runtime else [DummyStrategy()]
 
+    bridge = AIPositionRuntimeBridge()
+    supervisor = TradingRuntimeSupervisor(
+        lease_manager=leases,
+        ai_position_callback=lambda: bridge.evaluate_active_positions(engine, portfolio),
+        ai_position_interval_seconds=5.0,
+    )
+
     engine = TradingEngine(
         settings=settings,
         database=database,
@@ -102,16 +109,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         reconciliation=reconciliation,
         audit=audit,
         strategies=strategies,
+        ai_position_bridge=bridge,
         authority=ExecutionAuthority(),
         require_lease=True,
     )
 
-    bridge = AIPositionRuntimeBridge()
-    supervisor = TradingRuntimeSupervisor(
-        lease_manager=leases,
-        ai_position_callback=lambda: bridge.evaluate_active_positions(engine, portfolio),
-        ai_position_interval_seconds=5.0,
-    )
     app_state = AppState(
         settings=settings,
         database=database,

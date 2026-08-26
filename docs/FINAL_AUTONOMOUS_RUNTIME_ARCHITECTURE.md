@@ -1,9 +1,9 @@
 # FINAL AUTONOMOUS RUNTIME ARCHITECTURE
 
-Market Data -> TradingEngine Tick/Event -> Portfolio Snapshot ->
-No position: Entry Analysis (AI) | Active position: Position Re-evaluation (AI)
--> runtime_adapter -> existing SignalIntent -> Risk -> Execution -> Order ->
-Exchange/Paper -> Ledger -> Portfolio -> next tick.
+Production path:
+FastAPI lifespan -> TradingEngine.start() -> TradingEngine._tick_loop() ->
+TradingEngine.tick() -> AIPositionRuntimeBridge -> HOLD/ADD/REDUCE/EXIT ->
+TradingEngine.process_signal() -> RiskEngine -> ExecutionAuthority -> OrderManager -> Portfolio.
 
-build_system() now creates AIPositionRuntimeBridge and registers
-ai_position_callback on TradingRuntimeSupervisor.
+No second scheduler is required. AIPositionRuntimeBridge is attached to
+TradingEngine via dependency injection in build_system().

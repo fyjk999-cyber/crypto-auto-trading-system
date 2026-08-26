@@ -208,3 +208,78 @@ def test_learning_feedback_after_review():
     )
     assert "late_exit" in mistakes.frequent()
     assert patterns.find("trend_failure")[0]["lesson"].startswith("exit faster")
+
+
+async def _make_auto_bundle(database, tick=0.02):
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_SYNTHETIC",
+        paper_initial_equity="100000",
+        engine_tick_seconds=tick,
+        reconciliation_interval_seconds=3600,
+        run_lease_renew_interval_seconds=3600,
+    )
+    bundle = await build_system(settings)
+    await bundle.engine.start()
+    return bundle
+
+
+async def test_engine_loop_auto_reevaluates_hold(database):
+    bundle = await _make_auto_bundle(database, tick=0.02)
+    await _open_bundle_position(bundle)
+    before_orders = await bundle.order_manager.count_open()
+    # Wait for real engine tick loop to run bridge automatically
+    await asyncio.sleep(0.15)
+    decisions = bundle.ai_bridge.decision_history
+    assert any(d["symbol"] == "BTCUSDT" and d["action"] == "HOLD" for d in decisions)
+    after_orders = await bundle.order_manager.count_open()
+    assert after_orders == before_orders
+    await bundle.engine.stop()
+    await bundle.database.close()
+
+
+async def test_engine_loop_reduce_real_path(database):
+    bundle = await _make_auto_bundle(database, tick=3600)
+    await _open_bundle_position(bundle)
+    bundle.ai_bridge.cooldown_seconds = 0.0
+    bundle.ai_bridge.last_evaluation.clear()
+    bundle.ai_bridge.thesis_overrides["BTCUSDT"] = "THESIS_WEAKENING"
+    bundle.ai_bridge.requested_change_overrides["BTCUSDT"] = 0.05
+    await bundle.engine.tick()
+    await asyncio.sleep(0.1)
+    positions = await bundle.portfolio.get_positions()
+    assert "BTCUSDT" in positions
+    assert float(positions["BTCUSDT"].quantity) < 0.1
+    assert float(positions["BTCUSDT"].quantity) >= 0
+    await bundle.engine.stop()
+    await bundle.database.close()
+
+
+async def test_engine_loop_exit_real_path(database):
+    bundle = await _make_auto_bundle(database, tick=3600)
+    await _open_bundle_position(bundle)
+    bundle.ai_bridge.cooldown_seconds = 0.0
+    bundle.ai_bridge.last_evaluation.clear()
+    bundle.ai_bridge.thesis_overrides["BTCUSDT"] = "THESIS_INVALIDATED"
+    await bundle.engine.tick()
+    await asyncio.sleep(0.1)
+    positions = await bundle.portfolio.get_positions()
+    assert "BTCUSDT" not in positions or float(positions["BTCUSDT"].quantity) == 0
+    await bundle.engine.stop()
+    await bundle.database.close()
+
+
+async def test_engine_loop_multi_position_reevaluation(database):
+    bundle = await _make_auto_bundle(database, tick=3600)
+    await _insert_position(database, "BTCUSDT", "0.1")
+    await _insert_position(database, "ETHUSDT", "0.2")
+    await bundle.engine.tick()
+    symbols = {d["symbol"] for d in bundle.ai_bridge.decision_history}
+    assert {"BTCUSDT", "ETHUSDT"} <= symbols
+    await bundle.engine.stop()
+    await bundle.database.close()

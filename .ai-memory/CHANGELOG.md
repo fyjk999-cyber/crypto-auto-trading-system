@@ -1,3 +1,4 @@
 # CHANGELOG
 
-- 2026-08-26T05:08:06.826548+00:00: Completed canonical AI runtime bootstrap integration tests.
+- 2026-08-26T05:23:51.726054+00:00: Production AI loop correction: bridge attached to TradingEngine;
+  removed need for separately started supervisor for AI positions.
