@@ -1,6 +1,7 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-26T04:24:25.048757+00:00
-- AI autonomous runtime bridge wired into supervisor loop.
-- Forward market data path verified (OKX reachable).
-- Forward shadow smoke passed; long-duration evidence pending.
+- Updated: 2026-08-26T05:08:06.826548+00:00
+- Canonical AI runtime bootstrap wiring completed in build_system().
+- AIPositionRuntimeBridge instantiated; ai_position_callback registered.
+- Supervisor AI position loop auto-starts.
+- pytest 455 passed; frontend typecheck pass.

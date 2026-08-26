@@ -14,6 +14,7 @@ from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
@@ -85,6 +86,7 @@ class AppState:
     reconciliation: ReconciliationService
     engine: TradingEngine | None = None
     supervisor: TradingRuntimeSupervisor | None = None
+    ai_bridge: AIPositionRuntimeBridge | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
 
 

@@ -49,6 +49,9 @@ class AIPositionRuntimeBridge:
         self.last_evaluation: dict[str, str] = {}
         self.last_decision: dict[str, str] = {}
         self.decision_history: list[dict] = []
+        self.thesis_overrides: dict[str, str] = {}
+        self.requested_change_overrides: dict[str, float] = {}
+        self.hard_risk_overrides: dict[str, bool] = {}
 
     def evaluate(
         self,
@@ -104,3 +107,48 @@ class AIPositionRuntimeBridge:
             return (now - last_ts).total_seconds() < self.cooldown_seconds
         except Exception:
             return False
+
+    async def evaluate_active_positions(self, engine, portfolio) -> list[AIPositionEvaluation]:
+        positions = await portfolio.get_positions()
+        evaluations = []
+        for symbol, position in positions.items():
+            quantity = float(position.quantity or 0)
+            if quantity <= 0:
+                continue
+            active_position = {
+                "quantity": quantity,
+                "side": "LONG" if quantity > 0 else "SHORT",
+                "entry_price": float(position.avg_entry_price or 0),
+                "current_price": float(position.avg_entry_price or 0),
+                "unrealized_pnl": 0.0,
+                "realized_pnl": float(position.realized_pnl or 0),
+                "age_seconds": 0.0,
+                "thesis_status": self.thesis_overrides.get(symbol, "THESIS_INTACT"),
+                "thesis": "position management",
+                "hard_risk_exit": self.hard_risk_overrides.get(symbol, False),
+                "requested_change": self.requested_change_overrides.get(symbol, 0.0),
+            }
+            evaluation = self.evaluate(symbol=symbol, active_position=active_position)
+            evaluations.append(evaluation)
+            if evaluation.executable and evaluation.action in ("ADD", "REDUCE", "EXIT"):
+                await self._apply_to_engine(engine, symbol, evaluation)
+        return evaluations
+
+    async def _apply_to_engine(self, engine, symbol: str, evaluation: AIPositionEvaluation) -> None:
+        from datetime import UTC, datetime
+
+        from crypto_trader.domain.enums import OrderSide, OrderType
+        from crypto_trader.domain.models import SignalIntent
+
+        side = OrderSide.BUY if evaluation.side == "BUY" else OrderSide.SELL
+        signal_id = f"ai_{symbol}_{int(datetime.now(UTC).timestamp() * 1000)}"
+        signal = SignalIntent(
+            signal_id=signal_id,
+            strategy_id="ai_brain",
+            symbol=symbol,
+            side=side,
+            quantity=str(evaluation.quantity),
+            order_type=OrderType.MARKET,
+            reason=evaluation.reason,
+        )
+        await engine.process_signal(signal)

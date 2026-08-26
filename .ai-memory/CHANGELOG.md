@@ -1,3 +1,3 @@
 # CHANGELOG
 
-- 2026-08-26T04:24:25.048757+00:00: Final AI autonomous runtime wiring + forward shadow smoke.
+- 2026-08-26T05:08:06.826548+00:00: Completed canonical AI runtime bootstrap integration tests.

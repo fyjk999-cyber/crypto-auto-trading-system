@@ -23,8 +23,10 @@ from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
+from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.strategy.dummy import DummyStrategy
@@ -45,6 +47,8 @@ class RuntimeBundle:
     adapter: SimulatedExchangeAdapter
     alpha: MultiStrategyAlpha
     engine: TradingEngine
+    supervisor: TradingRuntimeSupervisor
+    ai_bridge: AIPositionRuntimeBridge
     app_state: AppState
 
 
@@ -102,6 +106,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         require_lease=True,
     )
 
+    bridge = AIPositionRuntimeBridge()
+    supervisor = TradingRuntimeSupervisor(
+        lease_manager=leases,
+        ai_position_callback=lambda: bridge.evaluate_active_positions(engine, portfolio),
+        ai_position_interval_seconds=5.0,
+    )
     app_state = AppState(
         settings=settings,
         database=database,
@@ -114,6 +124,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         leases=leases,
         reconciliation=reconciliation,
         engine=engine,
+        supervisor=supervisor,
+        ai_bridge=bridge,
     )
     return RuntimeBundle(
         settings=settings,
@@ -129,6 +141,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         adapter=adapter,
         alpha=alpha,
         engine=engine,
+        supervisor=supervisor,
+        ai_bridge=bridge,
         app_state=app_state,
     )
 
