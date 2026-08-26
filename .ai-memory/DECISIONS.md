@@ -1,4 +1,5 @@
 # DECISIONS
 
-- 2026-08-26T14:59:06.691937+00:00: ChiefTraderStrategyAdapter is canonical entry. MultiStrategyAlpha is
-  evidence/shadow only. LLM failure closes entry path (NO_TRADE).
+- 2026-08-26T23:07:25.140636+00:00: Evolution Runtime is optional and cannot touch trading core.
+- UtcClock is canonical for evolution scheduling.
+- Memory/Research access goes through gateways.
