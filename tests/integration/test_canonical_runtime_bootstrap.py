@@ -283,3 +283,71 @@ async def test_engine_loop_multi_position_reevaluation(database):
     assert {"BTCUSDT", "ETHUSDT"} <= symbols
     await bundle.engine.stop()
     await bundle.database.close()
+
+
+async def test_short_bridge_mapping_never_reverses(database):
+    from crypto_trader.ai_brain.runtime_adapter import map_trading_intent
+
+    hold = map_trading_intent(intent_action="HOLD", position_side="SHORT", position_quantity=1.0)
+    assert hold.executable is False
+    add = map_trading_intent(
+        intent_action="ADD", position_side="SHORT", position_quantity=1.0, requested_change=0.2
+    )
+    assert add.side == "SELL" and add.quantity == 0.2
+    reduce = map_trading_intent(
+        intent_action="REDUCE", position_side="SHORT", position_quantity=1.0, requested_change=0.3
+    )
+    assert reduce.side == "BUY" and reduce.quantity == 0.3 and reduce.reduce_only is True
+    exit_ = map_trading_intent(intent_action="EXIT", position_side="SHORT", position_quantity=1.0)
+    assert exit_.side == "BUY" and exit_.quantity == 1.0 and exit_.reduce_only is True
+    await asyncio.sleep(0)
+
+
+async def test_reduce_only_metadata_preserved_into_signal(database):
+    from crypto_trader.ai_brain.runtime_adapter import map_trading_intent
+    from crypto_trader.domain.enums import OrderSide, OrderType
+    from crypto_trader.domain.identifiers import new_id
+    from crypto_trader.domain.models import SignalIntent
+
+    mapping = map_trading_intent(
+        intent_action="REDUCE", position_side="LONG", position_quantity=1.0, requested_change=0.3
+    )
+    signal = SignalIntent(
+        signal_id=new_id("sig"),
+        strategy_id="ai_brain",
+        symbol="BTCUSDT",
+        side=OrderSide(mapping.side),
+        quantity=str(mapping.quantity),
+        order_type=OrderType.MARKET,
+        reason="reduce",
+        metadata={"reduce_only": mapping.reduce_only},
+    )
+    assert signal.metadata["reduce_only"] is True
+    await asyncio.sleep(0)
+
+
+async def test_mixed_long_short_multi_position_reevaluation(database):
+    bundle = await _make_auto_bundle(database, tick=3600)
+    await _insert_position(database, "BTCUSDT", "0.1")
+    async with bundle.database.session_factory() as session:
+        from crypto_trader.persistence.models import PositionProjectionORM
+
+        session.add(
+            PositionProjectionORM(
+                account_id="default",
+                symbol="ETHUSDT",
+                base_asset="ETH",
+                quote_asset="USDT",
+                quantity=Decimal("-0.2"),
+                avg_entry_price=Decimal("50"),
+                cost_basis=Decimal("0"),
+                realized_pnl=Decimal("0"),
+            )
+        )
+        await session.commit()
+    await bundle.engine.tick()
+    decisions = {d["symbol"]: d for d in bundle.ai_bridge.decision_history}
+    assert decisions["BTCUSDT"]["action"] in ("HOLD", "REDUCE", "EXIT")
+    assert decisions["ETHUSDT"]["action"] in ("HOLD", "REDUCE", "EXIT")
+    await bundle.engine.stop()
+    await bundle.database.close()

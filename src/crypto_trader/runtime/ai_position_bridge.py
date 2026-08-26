@@ -112,12 +112,14 @@ class AIPositionRuntimeBridge:
         positions = await portfolio.get_positions()
         evaluations = []
         for symbol, position in positions.items():
-            quantity = float(position.quantity or 0)
-            if quantity <= 0:
+            raw_quantity = float(position.quantity or 0)
+            if raw_quantity == 0:
                 continue
+            abs_quantity = abs(raw_quantity)
+            side = "LONG" if raw_quantity > 0 else "SHORT"
             active_position = {
-                "quantity": quantity,
-                "side": "LONG" if quantity > 0 else "SHORT",
+                "quantity": abs_quantity,
+                "side": side,
                 "entry_price": float(position.avg_entry_price or 0),
                 "current_price": float(position.avg_entry_price or 0),
                 "unrealized_pnl": 0.0,
@@ -142,6 +144,7 @@ class AIPositionRuntimeBridge:
 
         side = OrderSide.BUY if evaluation.side == "BUY" else OrderSide.SELL
         signal_id = f"ai_{symbol}_{int(datetime.now(UTC).timestamp() * 1000)}"
+        metadata = {"reduce_only": True} if evaluation.reduce_only else {}
         signal = SignalIntent(
             signal_id=signal_id,
             strategy_id="ai_brain",
@@ -150,5 +153,6 @@ class AIPositionRuntimeBridge:
             quantity=str(evaluation.quantity),
             order_type=OrderType.MARKET,
             reason=evaluation.reason,
+            metadata=metadata,
         )
         await engine.process_signal(signal)
