@@ -1,7 +1,6 @@
 # FACTOR ARCHITECTURE
 
-Market Data -> Factor Engine (calculators) -> FactorResult list -> SnapshotBuilder
--> FactorSnapshot -> FactorService persistence -> LLM tools (read-only).
-
-Calculators: trend, momentum, volatility, volume, orderflow, funding, open_interest.
-Factor Engine never places orders or makes trading decisions.
+Three brains share one factor system:
+- LIVE TRADING BRAIN: FactorToolGateway read/calculate/consume.
+- DAILY LEARNING BRAIN: factor attribution + candidate lessons.
+- EVOLUTION BRAIN: discovery -> hypothesis -> candidate -> validation -> safe promotion.

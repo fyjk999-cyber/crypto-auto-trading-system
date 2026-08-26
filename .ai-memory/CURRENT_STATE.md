@@ -1,8 +1,7 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-26T23:07:25.140636+00:00
-- Evolution Runtime foundation implemented: UTC clock, ReviewPeriod,
-  EvolutionReviewScheduler, EvolutionStateMachine, MemoryGateway,
-  ResearchGateway.
-- Live Trading Runtime remains untouched by evolution runtime.
-- Full pytest 499 passed; agent-project-test pass.
+- Updated: 2026-08-26T23:15:25.592501+00:00
+- Factor three-brain integration foundation: FactorToolGateway + immutable
+  FactorSnapshotContract + read-only live LLM factor tools.
+- Live factor access is canonical; mutation denied in live runtime.
+- pytest 506 passed.
