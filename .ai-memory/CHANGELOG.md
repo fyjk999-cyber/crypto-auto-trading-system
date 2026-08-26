@@ -1,4 +1,4 @@
 # CHANGELOG
 
-- 2026-08-25T16:10:41.520418+00:00: PHASE 156-158: frontend runtime recovered via nodeenv, vite downgrade
-  fix, RBAC endpoint protection, Docker/deployment files, start script.
+- 2026-08-26T04:08:32.926985+00:00: Position lifecycle integration complete; position-aware AI Brain;
+  canonical position manager; runtime adapter; 14 lifecycle tests.

@@ -1,6 +1,4 @@
 # TODO
 
-- Configure real LLM (external)
-- Start real forward shadow (external)
-- Run browser E2E in an environment with Playwright/Chrome
-- Encrypted offsite backups
+- Wire runtime_adapter into TradingEngine scheduler loop in deployment.
+- Real LLM config; real forward shadow.

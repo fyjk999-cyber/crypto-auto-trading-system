@@ -1,9 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-25T16:10:41.520418+00:00
-- Milestone: PHASE 156-158 final internal release.
-- FRONTEND_BUILD_PASS = YES (Node 22 via nodeenv, vite 6, 17 tests pass)
-- ADMIN_ENDPOINTS_PROTECTED = YES (when AUTH_ENABLED=true)
-- PRODUCTION_DEPLOYMENT_READY = YES
-- REAL_LLM_CONFIGURED = NO
-- AI_FUND_MANAGER_LIVE = NO
+- Updated: 2026-08-26T04:08:32.926985+00:00
+- AI Trading Brain is position-aware.
+- Factor Intelligence remains evidence/tool provider.
+- Risk remains authoritative; Execution remains only order layer.

@@ -1,46 +1,23 @@
-"""Position management: state machine + intelligence. No execution."""
+"""Compatibility wrapper. Canonical implementation lives in ai_brain."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-
-VALID_STATES = (
-    "WATCHING",
-    "ENTERED",
-    "MONITORING",
-    "ADJUSTING",
-    "EXIT_PENDING",
-    "EXITED",
-    "REVIEW",
+from crypto_trader.ai_brain.position_manager.manager import (
+    PositionContext,
+    PositionDecision,
+    PositionManager,
 )
+from crypto_trader.ai_brain.position_manager.state import PositionLifecycle
+
+PositionStateMachine = PositionLifecycle
 
 
-@dataclass
-class PositionStateMachine:
-    state: str = "WATCHING"
-    history: list[dict] = field(default_factory=list)
-
-    def transition(self, new_state: str, reason: str = "") -> dict:
-        if new_state not in VALID_STATES:
-            raise ValueError(f"invalid state {new_state}")
-        record = {
-            "from": self.state,
-            "to": new_state,
-            "reason": reason,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        self.state = new_state
-        self.history.append(record)
-        return record
-
-    def allowed(self, new_state: str) -> bool:
-        order = {s: i for i, s in enumerate(VALID_STATES)}
-        return order.get(new_state, -1) >= order.get(self.state, -1)
-
-
-@dataclass
 class PositionIntelligence:
+    """Thin wrapper around canonical PositionManager for legacy callers."""
+
+    def __init__(self) -> None:
+        self._manager = PositionManager()
+
     def decide(
         self,
         *,
@@ -49,10 +26,19 @@ class PositionIntelligence:
         opportunity_score: float,
         profit_factor: float = 0.0,
     ) -> str:
-        if not thesis_valid:
-            return "EXIT"
+        thesis_status = "THESIS_INTACT" if thesis_valid else "THESIS_INVALIDATED"
         if risk_increased:
-            return "REDUCE"
-        if opportunity_score > 0.7 and profit_factor < 1.5:
-            return "ADD"
-        return "HOLD"
+            thesis_status = "THESIS_WEAKENING"
+        ctx = PositionContext(symbol="legacy", position_quantity=1.0, thesis_status=thesis_status)
+        decision = self._manager.decide(ctx)
+        return decision.action
+
+
+__all__ = [
+    "PositionContext",
+    "PositionDecision",
+    "PositionManager",
+    "PositionLifecycle",
+    "PositionStateMachine",
+    "PositionIntelligence",
+]

@@ -1,7 +1,7 @@
 from crypto_trader.ai_brain.decision.decision_engine import AITradingBrain
 from crypto_trader.ai_brain.exit_manager.manager import ExitManager
 from crypto_trader.ai_brain.learning.loop import LearningLoop
-from crypto_trader.ai_brain.position_manager.manager import PositionManager
+from crypto_trader.ai_brain.position_manager.manager import PositionContext, PositionManager
 from crypto_trader.ai_brain.review.engine import TradeReviewEngine
 
 
@@ -49,25 +49,31 @@ def test_position_manager_dynamic_decisions():
     manager = PositionManager()
     assert (
         manager.decide(
-            symbol="BTC-USDT", thesis_valid=False, risk_increased=False, opportunity_score=0.5
+            PositionContext(
+                symbol="BTC-USDT", position_quantity=1.0, thesis_status="THESIS_INVALIDATED"
+            )
         ).action
         == "EXIT"
     )
     assert (
         manager.decide(
-            symbol="BTC-USDT", thesis_valid=True, risk_increased=True, opportunity_score=0.5
+            PositionContext(
+                symbol="BTC-USDT", position_quantity=1.0, thesis_status="THESIS_WEAKENING"
+            )
         ).action
         == "REDUCE"
     )
     assert (
         manager.decide(
-            symbol="BTC-USDT", thesis_valid=True, risk_increased=False, opportunity_score=0.8
+            PositionContext(
+                symbol="BTC-USDT", position_quantity=1.0, thesis_status="THESIS_STRENGTHENING"
+            )
         ).action
         == "ADD"
     )
     assert (
         manager.decide(
-            symbol="BTC-USDT", thesis_valid=True, risk_increased=False, opportunity_score=0.4
+            PositionContext(symbol="BTC-USDT", position_quantity=1.0, thesis_status="THESIS_INTACT")
         ).action
         == "HOLD"
     )
