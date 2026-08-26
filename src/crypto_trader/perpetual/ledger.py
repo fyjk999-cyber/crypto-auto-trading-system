@@ -259,23 +259,78 @@ def _apply_txn(snap: FuturesProjectionSnapshot, txn: LedgerTransactionORM) -> No
                 snap.fees_paid += entry.amount
     action = meta.get("action")
     if action == "OPEN":
-        side = PositionSide(meta["side"])
-        pos = snap.positions.setdefault(symbol, MarginPosition(symbol=symbol))
-        pos.side = side
-        pos.quantity = D(meta["quantity"]) if side == PositionSide.LONG else -D(meta["quantity"])
-        pos.avg_entry_price = D(meta["entry_price"])
-        pos.initial_margin = D(meta["initial_margin"])
-        pos.leverage = D(meta["leverage"])
-        snap.margin_balance += D(meta["initial_margin"])
+        _apply_open(snap, symbol, meta)
     elif action == "CLOSE":
-        pos = snap.positions.get(symbol)
-        if pos is not None:
-            snap.realized_pnl += D(meta["realized_pnl"])
-            snap.margin_balance = max(snap.margin_balance - D(meta["margin_release"]), D("0"))
-            del snap.positions[symbol]
+        _apply_close(snap, symbol, meta)
     elif txn.entry_type in ("FUNDING_PAYMENT", "FUNDING_RECEIPT"):
         for entry in txn.entries:
             if entry.account == "FUNDING_PAYMENT" and entry.direction == "DEBIT":
                 snap.funding_paid += entry.amount
             elif entry.account == "FUNDING_RECEIPT" and entry.direction == "CREDIT":
                 snap.funding_received += entry.amount
+
+
+def _signed_qty(side: PositionSide, qty: Decimal) -> Decimal:
+    return qty if side == PositionSide.LONG else -qty
+
+
+def _apply_open(snap: FuturesProjectionSnapshot, symbol: str, meta: dict) -> None:
+    side = PositionSide(meta["side"])
+    qty = D(meta["quantity"])
+    entry = D(meta["entry_price"])
+    margin = D(meta["initial_margin"])
+    lev = D(meta["leverage"])
+    pos = snap.positions.get(symbol)
+    if pos is None or pos.is_flat:
+        snap.positions[symbol] = MarginPosition(
+            symbol=symbol,
+            side=side,
+            quantity=_signed_qty(side, qty),
+            avg_entry_price=entry,
+            leverage=lev,
+            initial_margin=margin,
+        )
+    else:
+        old_abs = abs(pos.quantity)
+        if pos.side == side:
+            # ADD: accumulate same-side exposure with a weighted average entry.
+            new_abs = old_abs + qty
+            pos.avg_entry_price = (pos.avg_entry_price * old_abs + entry * qty) / new_abs
+            pos.quantity = _signed_qty(side, new_abs)
+            pos.initial_margin = pos.initial_margin + margin
+        else:
+            # Opposite-side open: net the existing position before flipping.
+            if qty >= old_abs:
+                remaining = qty - old_abs
+                if remaining == 0:
+                    pos.side = PositionSide.FLAT
+                    pos.quantity = Decimal("0")
+                    pos.avg_entry_price = Decimal("0")
+                    pos.initial_margin = Decimal("0")
+                else:
+                    pos.side = side
+                    pos.quantity = _signed_qty(side, remaining)
+                    pos.avg_entry_price = entry
+                    pos.initial_margin = margin
+            else:
+                pos.quantity = _signed_qty(pos.side, old_abs - qty)
+                pos.initial_margin = max(
+                    pos.initial_margin * (old_abs - qty) / old_abs, Decimal("0")
+                )
+    snap.margin_balance += margin
+
+
+def _apply_close(snap: FuturesProjectionSnapshot, symbol: str, meta: dict) -> None:
+    pos = snap.positions.get(symbol)
+    if pos is None:
+        return
+    qty = D(meta["quantity"])
+    snap.realized_pnl += D(meta["realized_pnl"])
+    snap.margin_balance = max(snap.margin_balance - D(meta["margin_release"]), D("0"))
+    remaining = abs(pos.quantity) - qty
+    if remaining <= 0:
+        del snap.positions[symbol]
+    else:
+        # REDUCE: keep the remaining exposure on the same side.
+        pos.quantity = _signed_qty(pos.side, remaining)
+        pos.initial_margin = max(pos.initial_margin - D(meta["margin_release"]), D("0"))

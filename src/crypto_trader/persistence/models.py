@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -96,6 +97,9 @@ class OrderORM(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[str | None] = mapped_column(String(255))
     last_event_id: Mapped[str | None] = mapped_column(String(64))
+    market_type: Mapped[str] = mapped_column(String(16), default="SPOT")
+    position_side: Mapped[str] = mapped_column(String(8), default="FLAT")
+    reduce_only: Mapped[bool] = mapped_column(Boolean, default=False)
 
     events: Mapped[list[OrderEventORM]] = relationship(
         back_populates="order", cascade="all, delete-orphan"

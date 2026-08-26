@@ -3,6 +3,17 @@ from __future__ import annotations
 from enum import Enum
 
 
+class MarketType(str, Enum):
+    SPOT = "SPOT"
+    PERPETUAL = "PERPETUAL"
+
+
+class PositionSide(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    FLAT = "FLAT"
+
+
 class OrderSide(str, Enum):
     BUY = "BUY"
     SELL = "SELL"

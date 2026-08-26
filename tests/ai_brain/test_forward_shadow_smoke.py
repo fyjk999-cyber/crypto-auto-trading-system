@@ -7,6 +7,7 @@ from crypto_trader.shadow_campaign.forward_metrics import ForwardMetrics
 
 async def test_real_okx_forward_data_smoke_and_metrics():
     import pytest
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(

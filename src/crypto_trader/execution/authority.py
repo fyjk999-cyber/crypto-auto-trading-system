@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from crypto_trader.domain.enums import ExecutionDecision, OrderStatus, TradingMode
 from crypto_trader.domain.models import Instrument, OrderIntent, RiskDecision
 from crypto_trader.domain.money import D, floor_to_step, round_tick
 from crypto_trader.execution.rate_limiter import RateLimiter
+from crypto_trader.risk.engine import check_no_reversal
 from crypto_trader.risk.kill_switch import KillSwitch
 
 
@@ -39,6 +41,7 @@ class AuthorizationContext:
     reconciliation_halted: bool = False
     rate_limiter: RateLimiter | None = None
     min_notional_ok: bool = True
+    current_signed_qty: Decimal = Decimal("0")
     notes: list[str] = field(default_factory=list)
 
 
@@ -106,6 +109,17 @@ class ExecutionAuthority:
         # 11. risk must still be valid
         if ctx.risk_decision is None or ctx.risk_decision.decision != ExecutionDecision.APPROVE:
             return reject("RISK_NOT_VALID")
+        # 11b. no-reversal recheck (defense in depth: risk already passed, but
+        # the position may have changed before execution reaches the adapter)
+        allowed, reason = check_no_reversal(
+            market_type=intent.market_type,
+            side=intent.side,
+            quantity=D(intent.quantity),
+            reduce_only=bool(intent.reduce_only or intent.metadata.get("reduce_only", False)),
+            current_signed_qty=ctx.current_signed_qty,
+        )
+        if not allowed:
+            return reject(reason)
         # 12. precision, min quantity, min notional
         instrument = ctx.instrument
         if instrument is None:

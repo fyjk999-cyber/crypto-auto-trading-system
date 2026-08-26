@@ -14,10 +14,12 @@ from crypto_trader.domain.enums import (
     LedgerDirection,
     LedgerEntryType,
     MarketDataStatus,
+    MarketType,
     OrderEventType,
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
     TimeInForce,
     TradingMode,
 )
@@ -78,6 +80,9 @@ class OrderIntent(BaseModel):
     strategy_id: str = "manual"
     run_id: str | None = None
     expires_at: datetime | None = None
+    market_type: MarketType = MarketType.SPOT
+    position_side: PositionSide = PositionSide.FLAT
+    reduce_only: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -117,6 +122,9 @@ class Order(BaseModel):
     expires_at: datetime | None = None
     rejection_reason: str | None = None
     last_event_id: str | None = None
+    market_type: MarketType = MarketType.SPOT
+    position_side: PositionSide = PositionSide.FLAT
+    reduce_only: bool = False
 
     @property
     def remaining_quantity(self) -> Decimal:
@@ -263,6 +271,9 @@ class SignalIntent(BaseModel):
     expires_at: datetime | None = None
     reason: str = ""
     run_id: str | None = None
+    market_type: MarketType = MarketType.SPOT
+    position_side: PositionSide = PositionSide.FLAT
+    reduce_only: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

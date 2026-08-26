@@ -2,7 +2,7 @@ import asyncio
 from decimal import Decimal
 
 from crypto_trader.config import Settings
-from crypto_trader.domain.enums import OrderSide, OrderType
+from crypto_trader.domain.enums import ExecutionDecision, OrderSide, OrderType
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.persistence.models import PositionProjectionORM
 from crypto_trader.runtime.bootstrap import build_system
@@ -62,7 +62,7 @@ async def _insert_position(database, symbol, qty="0.1"):
                 quote_asset="USDT",
                 quantity=Decimal(qty),
                 avg_entry_price=Decimal("100"),
-                cost_basis=Decimal("0"),
+                cost_basis=Decimal(qty) * Decimal("100"),
                 realized_pnl=Decimal("0"),
             )
         )
@@ -362,18 +362,24 @@ async def test_reduce_only_signal_to_order_intent(database):
     bundle.engine.require_lease = False
     await bundle.adapter.connect()
     await _seed_book(bundle, "BTCUSDT")
+    await _insert_position(database, "BTCUSDT", "0.1")
     captured = {}
 
     async def fake_authorize(intent, ctx):
         captured["intent"] = intent
-        from crypto_trader.domain.enums import ExecutionDecision
         return ExecutionDecision.APPROVE, []
 
     bundle.engine.authority.authorize = fake_authorize
     signal = SignalIntent(
-        signal_id=new_id("sig"), strategy_id="ai_brain", symbol="BTCUSDT",
-        side=OrderSide.SELL, quantity="0.05", order_type=OrderType.MARKET,
-        reason="reduce", metadata={"reduce_only": True})
+        signal_id=new_id("sig"),
+        strategy_id="ai_brain",
+        symbol="BTCUSDT",
+        side=OrderSide.SELL,
+        quantity="0.05",
+        order_type=OrderType.MARKET,
+        reason="reduce",
+        metadata={"reduce_only": True},
+    )
     await bundle.engine.process_signal(signal)
     assert captured["intent"].metadata.get("reduce_only") is True
     assert captured["intent"].metadata.get("signal_id") == signal.signal_id
@@ -389,18 +395,24 @@ async def test_reduce_only_survives_execution_authority(database):
     bundle.engine.require_lease = False
     await bundle.adapter.connect()
     await _seed_book(bundle, "BTCUSDT")
+    await _insert_position(database, "BTCUSDT", "0.1")
     seen = {}
 
     async def fake_authorize(intent, ctx):
         seen["reduce_only"] = intent.metadata.get("reduce_only", False)
-        from crypto_trader.domain.enums import ExecutionDecision
         return ExecutionDecision.APPROVE, []
 
     bundle.engine.authority.authorize = fake_authorize
     signal = SignalIntent(
-        signal_id=new_id("sig"), strategy_id="ai_brain", symbol="BTCUSDT",
-        side=OrderSide.SELL, quantity="0.05", order_type=OrderType.MARKET,
-        reason="exit", metadata={"reduce_only": True})
+        signal_id=new_id("sig"),
+        strategy_id="ai_brain",
+        symbol="BTCUSDT",
+        side=OrderSide.SELL,
+        quantity="0.05",
+        order_type=OrderType.MARKET,
+        reason="exit",
+        metadata={"reduce_only": True},
+    )
     await bundle.engine.process_signal(signal)
     assert seen["reduce_only"] is True
     await bundle.database.close()
@@ -409,8 +421,13 @@ async def test_reduce_only_survives_execution_authority(database):
 async def test_reduce_only_repeated_exit_is_idempotent(database):
     bundle = await _make_auto_bundle(database, tick=3600)
     bridge = bundle.ai_bridge
-    active = {"quantity": 1.0, "side": "LONG", "thesis_status": "THESIS_INVALIDATED",
-              "thesis": "bad", "requested_change": 0.0}
+    active = {
+        "quantity": 1.0,
+        "side": "LONG",
+        "thesis_status": "THESIS_INVALIDATED",
+        "thesis": "bad",
+        "requested_change": 0.0,
+    }
     first = bridge.evaluate(symbol="BTCUSDT", active_position=active)
     second = bridge.evaluate(symbol="BTCUSDT", active_position=active)
     assert first.action == "EXIT"
@@ -418,3 +435,5 @@ async def test_reduce_only_repeated_exit_is_idempotent(database):
     executable = [d for d in bridge.decision_history if d.get("executable")]
     assert len(executable) == 1
     await bundle.database.close()
+
+

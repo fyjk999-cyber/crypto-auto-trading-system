@@ -8,23 +8,17 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from crypto_trader.domain.enums import MarketType, PositionSide
 from crypto_trader.domain.money import StrictDecimal
 
-
-class ContractType(str, Enum):
-    SPOT = "SPOT"
-    PERPETUAL = "PERPETUAL"
+# Backward-compatible alias: the perpetual package historically exposed its own
+# ContractType name; the canonical source of truth is domain.enums.MarketType.
+ContractType = MarketType
 
 
 class MarginMode(str, Enum):
     ISOLATED = "ISOLATED"
     CROSS = "CROSS"
-
-
-class PositionSide(str, Enum):
-    LONG = "LONG"
-    SHORT = "SHORT"
-    FLAT = "FLAT"
 
 
 class PerpetualContract(BaseModel):

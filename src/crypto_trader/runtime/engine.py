@@ -348,6 +348,9 @@ class TradingEngine:
             open_order_count=open_orders,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
+            current_signed_qty=positions.get(symbol).quantity
+            if positions.get(symbol)
+            else Decimal("0"),
         )
         await self._persist_risk(risk_decision)
         if risk_decision.decision != ExecutionDecision.APPROVE:
@@ -398,6 +401,9 @@ class TradingEngine:
             orderbook_healthy=self.market_data.is_healthy(symbol),
             symbol_tradeable=instrument is not None and instrument.status == "TRADING",
             exchange_connected=self.adapter.connected,
+            current_signed_qty=positions.get(symbol).quantity
+            if positions.get(symbol)
+            else Decimal("0"),
             balance_fresh=self.portfolio is not None,
             risk_decision=risk_decision,
             instrument=instrument,

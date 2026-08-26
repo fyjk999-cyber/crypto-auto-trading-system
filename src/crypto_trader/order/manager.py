@@ -16,10 +16,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.enums import (
+    MarketType,
     OrderEventType,
     OrderSide,
     OrderStatus,
     OrderType,
+    PositionSide,
     TimeInForce,
     TradingMode,
 )
@@ -54,6 +56,9 @@ def _orm_to_order(row: OrderORM) -> Order:
         expires_at=row.expires_at,
         rejection_reason=row.rejection_reason,
         last_event_id=row.last_event_id,
+        market_type=MarketType(row.market_type),
+        position_side=PositionSide(row.position_side),
+        reduce_only=bool(row.reduce_only),
     )
 
 
@@ -119,6 +124,9 @@ class OrderManager:
                 created_at=now,
                 updated_at=now,
                 expires_at=intent.expires_at,
+                market_type=intent.market_type.value,
+                position_side=intent.position_side.value,
+                reduce_only=intent.reduce_only,
             )
             session.add(row)
             await session.flush()

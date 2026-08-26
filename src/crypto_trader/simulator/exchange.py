@@ -204,6 +204,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             created_at=raw.created_at,
             updated_at=raw.created_at,
             expires_at=raw.expires_at,
+            market_type=raw.market_type,
+            position_side=raw.position_side,
+            reduce_only=raw.reduce_only,
         )
 
     async def submit_order(self, order: Order) -> Order:
