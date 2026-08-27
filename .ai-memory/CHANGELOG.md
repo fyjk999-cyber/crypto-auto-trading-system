@@ -1,3 +1,3 @@
 # CHANGELOG
 
-- 2026-08-27T01:05:31.351192+00:00: PHASE 4 hierarchical weekly/monthly/yearly learning.
+- 2026-08-27T04:47:11.619354+00:00: PHASE 4B hierarchical review durable persistence.

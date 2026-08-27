@@ -256,3 +256,134 @@ class ReviewJobStore:
                 row.error = error
                 row.attempt += 1
             await session.commit()
+
+
+class HierarchicalReviewStore:
+    """Durable persistence for weekly/monthly/yearly review results."""
+
+    TABLE_MAP = None
+
+    def __init__(self, session_factory) -> None:
+        self.session_factory = session_factory
+        from crypto_trader.persistence.models import (
+            MonthlyReviewResultORM,
+            WeeklyReviewResultORM,
+            YearlyReviewResultORM,
+        )
+
+        self.TABLE_MAP = {
+            "WEEKLY": WeeklyReviewResultORM,
+            "MONTHLY": MonthlyReviewResultORM,
+            "YEARLY": YearlyReviewResultORM,
+        }
+
+    async def store_review(self, review_type: str, review: dict) -> None:
+        model = self.TABLE_MAP[review_type.upper()]
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(select(model).where(model.review_id == review["review_id"]))
+            ).scalar_one_or_none()
+            if row is None:
+                session.add(
+                    model(
+                        review_id=review["review_id"],
+                        review_type=review_type.upper(),
+                        period_id=review.get("period_id", ""),
+                        starts_at=review.get("starts_at", ""),
+                        ends_at=review.get("ends_at", ""),
+                        created_at_utc=review.get("created_at_utc", ""),
+                        status=review.get("status", "COMPLETED"),
+                        summary_json=review,
+                        source_review_ids_json=review.get(
+                            "daily_review_ids",
+                            review.get("weekly_review_ids", review.get("monthly_review_ids", [])),
+                        ),
+                        confirmed_lessons_json=review.get("confirmed_lessons", []),
+                        invalidated_lessons_json=review.get("invalidated_lessons", []),
+                        candidate_lessons_json=review.get("candidate_lessons", []),
+                        patterns_json=review.get("persistent_patterns", review.get("patterns", [])),
+                        research_questions_json=review.get("research_questions", []),
+                        proposals_json=review.get(
+                            "strategy_proposals",
+                            review.get(
+                                "factor_proposals", review.get("architecture_proposals", [])
+                            ),
+                        ),
+                        data_quality=review.get("data_quality", "OK"),
+                        warnings_json=review.get("warnings", []),
+                    )
+                )
+                await session.commit()
+
+    async def get_review(self, review_type: str, review_id: str) -> dict | None:
+        model = self.TABLE_MAP[review_type.upper()]
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(select(model).where(model.review_id == review_id))
+            ).scalar_one_or_none()
+            return row.summary_json if row else None
+
+    async def list_period(self, review_type: str, period_id: str) -> list[dict]:
+        model = self.TABLE_MAP[review_type.upper()]
+        async with self.session_factory() as session:
+            rows = (
+                (await session.execute(select(model).where(model.period_id == period_id)))
+                .scalars()
+                .all()
+            )
+            return [r.summary_json for r in rows if r.summary_json]
+
+
+class HierarchicalReviewJobStore:
+    def __init__(self, session_factory) -> None:
+        self.session_factory = session_factory
+        from crypto_trader.persistence.models import HierarchicalReviewJobORM
+
+        self.model = HierarchicalReviewJobORM
+
+    async def get(self, review_key: str) -> dict | None:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(select(self.model).where(self.model.review_key == review_key))
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                "review_key": row.review_key,
+                "review_id": row.review_id,
+                "period_type": row.period_type,
+                "period_id": row.period_id,
+                "status": row.status,
+                "attempt": row.attempt,
+                "error": row.error,
+            }
+
+    async def put(
+        self,
+        review_key: str,
+        review_id: str,
+        period_type: str,
+        period_id: str,
+        status: str,
+        error: str = "",
+    ) -> None:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(select(self.model).where(self.model.review_key == review_key))
+            ).scalar_one_or_none()
+            if row is None:
+                session.add(
+                    self.model(
+                        review_key=review_key,
+                        review_id=review_id,
+                        period_type=period_type,
+                        period_id=period_id,
+                        status=status,
+                        error=error,
+                    )
+                )
+            else:
+                row.status = status
+                row.error = error
+                row.attempt += 1
+            await session.commit()

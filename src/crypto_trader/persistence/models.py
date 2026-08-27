@@ -947,3 +947,91 @@ class ReviewJobORM(Base):
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WeeklyReviewResultORM(Base):
+    __tablename__ = "weekly_review_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), unique=True)
+    review_type: Mapped[str] = mapped_column(String(16), default="WEEKLY")
+    period_id: Mapped[str] = mapped_column(String(16), index=True)
+    starts_at: Mapped[str] = mapped_column(String(40))
+    ends_at: Mapped[str] = mapped_column(String(40))
+    created_at_utc: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(16), default="COMPLETED")
+    summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    source_review_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    confirmed_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    invalidated_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    candidate_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    patterns_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    research_questions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    proposals_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    data_quality: Mapped[str] = mapped_column(String(16), default="OK")
+    warnings_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MonthlyReviewResultORM(Base):
+    __tablename__ = "monthly_review_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), unique=True)
+    review_type: Mapped[str] = mapped_column(String(16), default="MONTHLY")
+    period_id: Mapped[str] = mapped_column(String(16), index=True)
+    starts_at: Mapped[str] = mapped_column(String(40))
+    ends_at: Mapped[str] = mapped_column(String(40))
+    created_at_utc: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(16), default="COMPLETED")
+    summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    source_review_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    confirmed_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    invalidated_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    candidate_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    patterns_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    research_questions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    proposals_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    data_quality: Mapped[str] = mapped_column(String(16), default="OK")
+    warnings_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class YearlyReviewResultORM(Base):
+    __tablename__ = "yearly_review_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), unique=True)
+    review_type: Mapped[str] = mapped_column(String(16), default="YEARLY")
+    period_id: Mapped[str] = mapped_column(String(16), index=True)
+    starts_at: Mapped[str] = mapped_column(String(40))
+    ends_at: Mapped[str] = mapped_column(String(40))
+    created_at_utc: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(16), default="COMPLETED")
+    summary_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    source_review_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    confirmed_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    invalidated_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    candidate_lessons_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    patterns_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    research_questions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    proposals_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    data_quality: Mapped[str] = mapped_column(String(16), default="OK")
+    warnings_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class HierarchicalReviewJobORM(Base):
+    __tablename__ = "hierarchical_review_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_key: Mapped[str] = mapped_column(String(64), unique=True)
+    review_id: Mapped[str] = mapped_column(String(64))
+    period_type: Mapped[str] = mapped_column(String(16))
+    period_id: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[str] = mapped_column(String(40), default="")
+    completed_at: Mapped[str] = mapped_column(String(40), default="")
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
