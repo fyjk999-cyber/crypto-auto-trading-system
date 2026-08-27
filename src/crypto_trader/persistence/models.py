@@ -851,3 +851,99 @@ class ResearchOptimizationORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     strategy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DecisionEvidenceORM(Base):
+    __tablename__ = "decision_evidence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[str] = mapped_column(String(64), unique=True)
+    timestamp_utc: Mapped[str] = mapped_column(String(40))
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    timeframe: Mapped[str] = mapped_column(String(16))
+    strategy_id: Mapped[str] = mapped_column(String(32))
+    strategy_version: Mapped[str] = mapped_column(String(16))
+    model_version: Mapped[str] = mapped_column(String(16))
+    prompt_version: Mapped[str] = mapped_column(String(16))
+    factor_snapshot_id: Mapped[str] = mapped_column(String(64))
+    factor_set_version: Mapped[str] = mapped_column(String(32))
+    factor_profile: Mapped[str] = mapped_column(String(32))
+    market_data_reference: Mapped[str] = mapped_column(String(64))
+    analysis_evidence_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    decision_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    risk_decision_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    execution_intent_reference: Mapped[str] = mapped_column(String(64), default="")
+    created_at_utc: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DailyReviewResultORM(Base):
+    __tablename__ = "daily_review_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), unique=True)
+    review_type: Mapped[str] = mapped_column(String(16), default="DAILY")
+    period_id: Mapped[str] = mapped_column(String(16), index=True)
+    starts_at: Mapped[str] = mapped_column(String(40))
+    ends_at: Mapped[str] = mapped_column(String(40))
+    triggered_at: Mapped[str] = mapped_column(String(40))
+    decision_count: Mapped[int] = mapped_column(Integer, default=0)
+    trade_count: Mapped[int] = mapped_column(Integer, default=0)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    data_quality: Mapped[str] = mapped_column(String(16), default="OK")
+    warnings_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16), default="COMPLETED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PatternCandidateORM(Base):
+    __tablename__ = "learning_pattern_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pattern_id: Mapped[str] = mapped_column(String(64), unique=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    pattern_type: Mapped[str] = mapped_column(String(64))
+    conditions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    decision_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), default="CANDIDATE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LessonORM(Base):
+    __tablename__ = "learning_lessons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lesson_id: Mapped[str] = mapped_column(String(64), unique=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    type: Mapped[str] = mapped_column(String(64))
+    canonical_statement: Mapped[str] = mapped_column(String(500))
+    conditions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    recommended_action: Mapped[str] = mapped_column(String(200), default="")
+    evidence_count: Mapped[int] = mapped_column(Integer, default=0)
+    supporting_decisions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    contradictions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    first_seen: Mapped[str] = mapped_column(String(40))
+    last_seen: Mapped[str] = mapped_column(String(40))
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), default="CANDIDATE")
+    source_review_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    source_pattern_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReviewJobORM(Base):
+    __tablename__ = "learning_review_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_key: Mapped[str] = mapped_column(String(64), unique=True)
+    review_id: Mapped[str] = mapped_column(String(64))
+    period_type: Mapped[str] = mapped_column(String(16))
+    period_id: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    started_at: Mapped[str] = mapped_column(String(40), default="")
+    completed_at: Mapped[str] = mapped_column(String(40), default="")
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

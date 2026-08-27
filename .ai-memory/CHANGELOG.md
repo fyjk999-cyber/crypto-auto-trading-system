@@ -1,3 +1,3 @@
 # CHANGELOG
 
-- 2026-08-27T00:29:52.841080+00:00: PHASE 3 full daily learning brain (replay/review/error/pattern/lesson).
+- 2026-08-27T00:46:08.701071+00:00: PHASE 3B durable learning persistence hardening.

@@ -1,7 +1,7 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-27T00:29:52.841080+00:00
-- PHASE 3 FULL DAILY LEARNING BRAIN foundation implemented.
-- DailyReviewPipeline + replay + error mining + pattern + lesson complete.
-- Lessons remain CANDIDATE; weekly confirmation remains Phase 4.
-- pytest 517 passed, 4 skipped.
+- Updated: 2026-08-27T00:46:08.701071+00:00
+- PHASE 3B durable learning persistence complete.
+- SQL backends: SqlEvidenceBackend, SqlMemoryBackend, ReviewJobStore.
+- Migration 0014_learning created for durable tables.
+- pytest 521 passed, 4 skipped.

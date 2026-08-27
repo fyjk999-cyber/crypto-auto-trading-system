@@ -1,5 +1,4 @@
 # FACTOR ATTRIBUTION
 
-Phase 3 adds DailyReviewPipeline: Replay -> Review -> Factor Attribution ->
-Error Mining -> Pattern -> Lesson. decision_quality is separated from
-outcome_quality. Daily lessons remain CANDIDATE.
+Phase 3B adds durable SQL persistence for factor-linked DecisionEvidence and
+learning outputs. Replay still uses stored historical snapshots only.
