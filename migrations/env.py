@@ -4,7 +4,7 @@ from logging.config import fileConfig
 import os
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from crypto_trader.persistence.models import Base
 
@@ -24,13 +24,9 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    section = dict(config.get_section(config.config_ini_section, {}))
-    section["sqlalchemy.url"] = os.environ.get("DATABASE_URL") or section.get("sqlalchemy.url")
-    connectable = engine_from_config(
-        section,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    sync_url = url.replace("+asyncpg", "+psycopg2").replace("+aiosqlite", "")
+    connectable = create_engine(sync_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
