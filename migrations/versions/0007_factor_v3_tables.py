@@ -39,7 +39,11 @@ def upgrade() -> None:
         sa.Column("drawdown", sa.Numeric(38, 18), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index("ix_factor_regime_performance_factor_name", "factor_regime_performance", ["factor_name"])
+    op.create_index(
+        "ix_factor_regime_performance_factor_name",
+        "factor_regime_performance",
+        ["factor_name"],
+    )
     op.create_table(
         "factor_confidence",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -67,7 +71,9 @@ def downgrade() -> None:
     op.drop_table("factor_combinations")
     op.drop_index("ix_factor_confidence_factor_name", table_name="factor_confidence")
     op.drop_table("factor_confidence")
-    op.drop_index("ix_factor_regime_performance_factor_name", table_name="factor_regime_performance")
+    op.drop_index(
+        "ix_factor_regime_performance_factor_name", table_name="factor_regime_performance"
+    )
     op.drop_table("factor_regime_performance")
     op.drop_index("ix_market_regime_history_symbol", table_name="market_regime_history")
     op.drop_table("market_regime_history")

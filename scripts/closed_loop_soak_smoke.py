@@ -2,16 +2,14 @@
 import asyncio
 import os
 import tempfile
-from decimal import Decimal
+from datetime import UTC, datetime
 
 from crypto_trader.config import Settings
-from crypto_trader.decision_replay.evidence import DecisionEvidence
 from crypto_trader.evolution.daily.pipeline import DailyReviewPipeline
 from crypto_trader.evolution.hierarchical.engine import HierarchicalLearningEngine
-from crypto_trader.evolution.promotion.coordinator import SafePromotionCoordinator
 from crypto_trader.evolution.promotion.contracts import TradingRelease, UpgradeReadinessSnapshot
+from crypto_trader.evolution.promotion.coordinator import SafePromotionCoordinator
 from crypto_trader.runtime.bootstrap import build_system
-from datetime import UTC, datetime
 
 
 async def main():
