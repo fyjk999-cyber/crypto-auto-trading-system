@@ -1,4 +1,4 @@
 # TODO
 
-- Phase 7: safe promotion + version activation + rollback.
-- PostgreSQL durable persistence for workspaces/validation runs (SQL models pending).
+- PostgreSQL durable persistence for promotion records/releases.
+- Production deployment decision (external, explicit).
