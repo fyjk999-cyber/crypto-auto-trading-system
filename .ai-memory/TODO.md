@@ -1,4 +1,4 @@
 # TODO
 
-- Phase 6: candidate sandbox materialization + static validation.
-- Phase 7+: validation pipeline + safe promotion.
+- Phase 7: safe promotion + version activation + rollback.
+- PostgreSQL durable persistence for workspaces/validation runs (SQL models pending).
