@@ -25,17 +25,58 @@ def _volume(candle: dict) -> Decimal:
     return D(str(candle.get("volume", "0")))
 
 
+# Fixed group -> factor mapping used to attribute calculator failures explicitly.
+FACTOR_GROUPS: dict[str, tuple[str, ...]] = {
+    "price": ("return", "momentum", "trend", "breakout", "mean_reversion"),
+    "volume": ("volume_change", "volume_anomaly", "volume_divergence"),
+    "volatility": ("atr", "realized_volatility", "volatility_regime"),
+    "orderflow": (
+        "orderbook_imbalance",
+        "buy_sell_imbalance",
+        "cvd",
+        "aggressive_trading_ratio",
+    ),
+    "derivatives": (
+        "funding_rate",
+        "funding_change",
+        "open_interest",
+        "oi_divergence",
+        "liquidation_pressure",
+    ),
+}
+
+EXPECTED_FACTOR_IDS: tuple[str, ...] = tuple(
+    factor for factors in FACTOR_GROUPS.values() for factor in factors
+)
+
+
 class FactorCaptureEngine:
+    def __init__(self) -> None:
+        # Populated on every capture(): factor_id -> exception detail for groups
+        # whose calculation raised. Never silently swallowed; recorded and reported
+        # through FactorSnapshotContract.calculation_warnings by the gateway.
+        self.last_calculation_errors: dict[str, str] = {}
+
     def capture(
         self, symbol: str, timeframe: str, candles: list[dict], market_data: dict | None = None
     ) -> list[FactorResult]:
         md = market_data or {}
         results: list[FactorResult] = []
-        self._capture_price(symbol, timeframe, candles, results)
-        self._capture_volume(symbol, timeframe, candles, results)
-        self._capture_volatility(symbol, timeframe, candles, results)
-        self._capture_orderflow(symbol, timeframe, candles, md, results)
-        self._capture_derivatives(symbol, timeframe, md, results)
+        errors: dict[str, str] = {}
+        steps = (
+            ("price", lambda: self._capture_price(symbol, timeframe, candles, results)),
+            ("volume", lambda: self._capture_volume(symbol, timeframe, candles, results)),
+            ("volatility", lambda: self._capture_volatility(symbol, timeframe, candles, results)),
+            ("orderflow", lambda: self._capture_orderflow(symbol, timeframe, candles, md, results)),
+            ("derivatives", lambda: self._capture_derivatives(symbol, timeframe, md, results)),
+        )
+        for group_name, step in steps:
+            try:
+                step()
+            except Exception as exc:
+                for factor_id in FACTOR_GROUPS[group_name]:
+                    errors[factor_id] = f"{type(exc).__name__}: {exc}"
+        self.last_calculation_errors = errors
         return results
 
     def _add(self, results, factor_id, symbol, timeframe, value, confidence, metadata=None):
