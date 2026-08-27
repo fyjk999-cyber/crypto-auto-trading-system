@@ -15,6 +15,7 @@ from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -52,6 +53,7 @@ class RuntimeBundle:
     engine: TradingEngine
     supervisor: TradingRuntimeSupervisor
     ai_bridge: AIPositionRuntimeBridge
+    factor_gateway: FactorToolGateway
     app_state: AppState
 
 
@@ -106,6 +108,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     perpetual_engine = PerpetualPaperEngine(database.session_factory, perpetual_contract)
 
     bridge = AIPositionRuntimeBridge(perpetual_engine=perpetual_engine)
+    factor_gateway = FactorToolGateway()
     supervisor = TradingRuntimeSupervisor(
         lease_manager=leases,
         ai_position_callback=lambda: bridge.evaluate_active_positions(engine, portfolio),
@@ -145,6 +148,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         supervisor=supervisor,
         ai_bridge=bridge,
+        factor_gateway=factor_gateway,
     )
     return RuntimeBundle(
         settings=settings,
@@ -162,6 +166,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         supervisor=supervisor,
         ai_bridge=bridge,
+        factor_gateway=factor_gateway,
         app_state=app_state,
     )
 

@@ -10,7 +10,11 @@ from crypto_trader.domain.identifiers import new_id
 from crypto_trader.factors.capture import FactorCaptureEngine
 from crypto_trader.factors.catalog import FactorCatalog
 from crypto_trader.factors.models import FactorResult
-from crypto_trader.factors.version import FactorSetVersion, FactorSnapshotContract
+from crypto_trader.factors.version import (
+    FactorSetVersion,
+    FactorSnapshotContract,
+    FactorSnapshotEntry,
+)
 
 
 @dataclass
@@ -48,21 +52,41 @@ class FactorToolGateway:
     ) -> FactorSnapshotContract:
         now = datetime.now(UTC)
         results = self.capture_engine.capture(symbol, timeframe, candles, market_data)
-        factors: dict[str, dict] = {}
+        entries = []
         failed = []
+        if not candles:
+            return FactorSnapshotContract(
+                snapshot_id=new_id("fsnap"),
+                timestamp_utc=now.isoformat(),
+                symbol=symbol,
+                timeframe=timeframe,
+                factor_set_version=self.factor_set.factor_set_version,
+                factor_registry_version="registry-v1",
+                factor_config_hash=self.factor_set.config_hash,
+                factors=(),
+                market_regime="UNKNOWN",
+                market_data_version="v1",
+                source_timestamp=now.isoformat(),
+                failed_factors=tuple(self.factor_set.included_factors),
+                calculation_warnings=("INSUFFICIENT_HISTORY",),
+            )
         for result in results:
             if result.confidence <= Decimal("0"):
                 failed.append(result.factor_name)
                 continue
-            factors[result.factor_name] = {
-                "raw_value": str(result.value),
-                "normalized_value": str(result.value),
-                "confidence": str(result.confidence),
-                "effective_weight": "1.0",
-                "contribution": str(result.value * Decimal("0.1")),
-                "metadata": result.metadata,
-                "data_quality": "VALID_ZERO" if result.value == 0 else "OK",
-            }
+            status = "VALID_ZERO" if result.value == 0 else "OK"
+            entries.append(
+                FactorSnapshotEntry(
+                    factor_name=result.factor_name,
+                    raw_value=str(result.value),
+                    normalized_value=str(result.value),
+                    confidence=str(result.confidence),
+                    effective_weight="1.0",
+                    contribution=str(result.value * Decimal("0.1")),
+                    status=status,
+                    metadata={k: str(v) for k, v in result.metadata.items()},
+                )
+            )
         self._last_results = {r.factor_name: r for r in results}
         return FactorSnapshotContract(
             snapshot_id=new_id("fsnap"),
@@ -72,7 +96,7 @@ class FactorToolGateway:
             factor_set_version=self.factor_set.factor_set_version,
             factor_registry_version="registry-v1",
             factor_config_hash=self.factor_set.config_hash,
-            factors=factors,
+            factors=tuple(entries),
             market_regime="UNKNOWN",
             market_data_version="v1",
             source_timestamp=now.isoformat(),

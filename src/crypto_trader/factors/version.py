@@ -1,9 +1,11 @@
-"""Versioned factor set and immutable snapshot contract."""
+"""Versioned factor set and deeply immutable snapshot contract."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
@@ -13,13 +15,19 @@ class FactorSetVersion:
     parent_version: str
     status: str
     included_factors: tuple[str, ...]
-    factor_weights: dict[str, str]
-    factor_parameters: dict[str, str]
-    factor_formulas_hash: str
-    config_hash: str
+    factor_weights: Mapping[str, str] = field(default_factory=dict)
+    factor_parameters: Mapping[str, str] = field(default_factory=dict)
+    factor_formulas_hash: str = "v1"
+    config_hash: str = "v1"
     created_by: str = "system"
     candidate_id: str = ""
     promotion_id: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "factor_weights", MappingProxyType(dict(self.factor_weights)))
+        object.__setattr__(
+            self, "factor_parameters", MappingProxyType(dict(self.factor_parameters))
+        )
 
     @classmethod
     def active_default(cls) -> FactorSetVersion:
@@ -37,11 +45,36 @@ class FactorSetVersion:
                 "funding",
                 "open_interest",
             ),
-            factor_weights={},
-            factor_parameters={},
             factor_formulas_hash="v1",
             config_hash="v1",
         )
+
+
+@dataclass(frozen=True)
+class FactorSnapshotEntry:
+    factor_name: str
+    raw_value: str
+    normalized_value: str
+    confidence: str
+    effective_weight: str
+    contribution: str
+    status: str
+    metadata: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+
+    def to_dict(self) -> dict:
+        return {
+            "factor_name": self.factor_name,
+            "raw_value": self.raw_value,
+            "normalized_value": self.normalized_value,
+            "confidence": self.confidence,
+            "effective_weight": self.effective_weight,
+            "contribution": self.contribution,
+            "status": self.status,
+            "metadata": dict(self.metadata),
+        }
 
 
 @dataclass(frozen=True)
@@ -53,13 +86,19 @@ class FactorSnapshotContract:
     factor_set_version: str
     factor_registry_version: str
     factor_config_hash: str
-    factors: dict[str, dict]
+    factors: tuple[FactorSnapshotEntry, ...]
     market_regime: str
     market_data_version: str
     source_timestamp: str
     disabled_factors: tuple[str, ...] = ()
     failed_factors: tuple[str, ...] = ()
     calculation_warnings: tuple[str, ...] = ()
+
+    def factor(self, name: str) -> FactorSnapshotEntry | None:
+        for entry in self.factors:
+            if entry.factor_name == name:
+                return entry
+        return None
 
     def to_dict(self) -> dict:
         return {
@@ -70,7 +109,7 @@ class FactorSnapshotContract:
             "factor_set_version": self.factor_set_version,
             "factor_registry_version": self.factor_registry_version,
             "factor_config_hash": self.factor_config_hash,
-            "factors": {k: dict(v) for k, v in self.factors.items()},
+            "factors": [entry.to_dict() for entry in self.factors],
             "market_regime": self.market_regime,
             "market_data_version": self.market_data_version,
             "source_timestamp": self.source_timestamp,

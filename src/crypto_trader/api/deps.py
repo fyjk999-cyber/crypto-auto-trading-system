@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from fastapi import Header, HTTPException
 
 from crypto_trader.config import Settings
+from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -87,6 +88,7 @@ class AppState:
     engine: TradingEngine | None = None
     supervisor: TradingRuntimeSupervisor | None = None
     ai_bridge: AIPositionRuntimeBridge | None = None
+    factor_gateway: FactorToolGateway | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
 
 

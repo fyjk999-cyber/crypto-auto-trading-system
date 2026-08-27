@@ -30,7 +30,7 @@ def test_gateway_calculates_versioned_snapshot():
         market_data={"bid_volume": "60", "ask_volume": "40"},
     )
     assert snapshot.factor_set_version == "factorset-v1"
-    assert "trend" in snapshot.factors
+    assert snapshot.factor("trend") is not None
     assert snapshot.snapshot_id
 
 
@@ -39,11 +39,10 @@ def test_snapshot_immutability():
     snapshot = gateway.calculate_snapshot(
         symbol="BTC-USDT-SWAP", timeframe="15m", candles=candles()
     )
-    try:
-        snapshot.factors["trend"] = {}
-        raise AssertionError()
-    except Exception:
-        pass
+    import pytest
+
+    with pytest.raises((AttributeError, TypeError)):
+        snapshot.factors[0].metadata["x"] = "y"
 
 
 def test_valid_zero_vs_failure_distinction():
@@ -56,7 +55,7 @@ def test_valid_zero_vs_failure_distinction():
 def test_critical_factor_missing_candles_no_fake_zero():
     gateway = FactorToolGateway()
     snapshot = gateway.calculate_snapshot(symbol="BTC-USDT-SWAP", timeframe="15m", candles=[])
-    trend = snapshot.factors.get("trend")
+    trend = snapshot.factor("trend")
     assert trend is None or snapshot.failed_factors
 
 

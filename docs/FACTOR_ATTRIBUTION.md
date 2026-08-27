@@ -1,5 +1,4 @@
 # FACTOR ATTRIBUTION
 
-FactorAttribution decomposes a trade PnL into contributor and negative factor
-contributions using the entry factor snapshot. Persisted in factor_attribution
-per factor with direction positive/negative.
+FactorAttributionResult links decision/evidence/snapshot and separates
+decision_quality from outcome_quality. V1 implemented in evolution/daily.py.
