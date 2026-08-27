@@ -1,5 +1,5 @@
 # TODO
 
-- Chapter 10: 24h real paper qualification (BLOCKED_BY_ENVIRONMENT).
-- Full PostgreSQL fill/engine-loop scenarios.
+- Push local commit when network restores.
+- Run Chapter 10/11 in external staging.
 - Owner approval gate (Chapter 13) explicit stop.
