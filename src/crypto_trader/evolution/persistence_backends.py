@@ -118,6 +118,22 @@ class SqlEvidenceBackend:
             ).scalar_one_or_none()
             return row.result_json if row else None
 
+    async def list_reviews_by_period(self, period_id: str) -> list[dict]:
+        """All completed daily review payloads for one UTC day (period_id)."""
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(DailyReviewResultORM)
+                        .where(DailyReviewResultORM.period_id == period_id)
+                        .order_by(DailyReviewResultORM.review_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [row.result_json for row in rows if row.result_json]
+
     async def store_pattern(self, pattern: dict) -> None:
         async with self.session_factory() as session:
             row = (
