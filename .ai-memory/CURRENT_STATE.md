@@ -1,6 +1,7 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-27T14:03:02.673963+00:00
-- CHAPTER 9.5D complete: second candidate authority removed.
-- foundation/ is sole Candidate lifecycle authority; lab is compatibility only.
-- pytest 620 passed, 8 skipped.
+- Updated: 2026-08-27T14:18:22.363472+00:00
+- CHAPTER 10 PRE-FLIGHT complete: canonical candidate contract hardening.
+- TEST_HARDENING_COMPLETE = YES
+- Chapter 10 remains BLOCKED_BY_ENVIRONMENT until staging exists.
+- pytest 628 passed, 8 skipped.
