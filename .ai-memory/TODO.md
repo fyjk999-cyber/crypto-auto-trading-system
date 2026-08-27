@@ -1,6 +1,5 @@
 # TODO
 
-- Run scripts/postgres_runtime_qualification.sh with real PostgreSQL.
-- Run 24h + multi-day paper soak in staging.
-- Observe real 00:05 UTC review boundary.
-- Runtime failure injection + promotion/rollback dry-run.
+- Provision staging PostgreSQL + Docker.
+- Run 24h+ paper soak and real boundary validation.
+- Runtime failure injection and promotion/rollback dry-runs.
