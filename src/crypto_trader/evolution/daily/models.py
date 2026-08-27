@@ -1,9 +1,67 @@
-"""Daily Learning Brain bridge: evidence package + factor attribution V1."""
+"""Daily review contracts."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
+
+@dataclass
+class DailyReviewResult:
+    review_id: str
+    review_type: str = "DAILY"
+    period_id: str = ""
+    starts_at: str = ""
+    ends_at: str = ""
+    triggered_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    decision_count: int = 0
+    trade_count: int = 0
+    gross_pnl: str = "0"
+    net_pnl: str = "0"
+    fees: str = "0"
+    funding: str = "0"
+    win_rate: str = "0"
+    profit_factor: str = "0"
+    expectancy: str = "0"
+    average_r: str = "0"
+    reviewed_decisions: list = field(default_factory=list)
+    factor_attributions: list = field(default_factory=list)
+    error_clusters: list = field(default_factory=list)
+    patterns: list = field(default_factory=list)
+    candidate_lessons: list = field(default_factory=list)
+    data_quality: str = "OK"
+    warnings: list = field(default_factory=list)
+    created_at_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    status: str = "COMPLETED"
+
+    def to_dict(self) -> dict:
+        return {
+            "review_id": self.review_id,
+            "review_type": self.review_type,
+            "period_id": self.period_id,
+            "starts_at": self.starts_at,
+            "ends_at": self.ends_at,
+            "triggered_at": self.triggered_at,
+            "decision_count": self.decision_count,
+            "trade_count": self.trade_count,
+            "gross_pnl": self.gross_pnl,
+            "net_pnl": self.net_pnl,
+            "fees": self.fees,
+            "funding": self.funding,
+            "win_rate": self.win_rate,
+            "profit_factor": self.profit_factor,
+            "expectancy": self.expectancy,
+            "average_r": self.average_r,
+            "reviewed_decisions": list(self.reviewed_decisions),
+            "factor_attributions": list(self.factor_attributions),
+            "error_clusters": list(self.error_clusters),
+            "patterns": list(self.patterns),
+            "candidate_lessons": list(self.candidate_lessons),
+            "data_quality": self.data_quality,
+            "warnings": list(self.warnings),
+            "created_at_utc": self.created_at_utc,
+            "status": self.status,
+        }
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,3 @@
 # CHANGELOG
 
-- 2026-08-27T00:14:33.078993+00:00: PHASE 2 live factor + evidence SSOT integration.
+- 2026-08-27T00:29:52.841080+00:00: PHASE 3 full daily learning brain (replay/review/error/pattern/lesson).

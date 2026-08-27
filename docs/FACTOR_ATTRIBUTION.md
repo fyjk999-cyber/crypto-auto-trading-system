@@ -1,4 +1,5 @@
 # FACTOR ATTRIBUTION
 
-FactorAttributionResult links decision/evidence/snapshot and separates
-decision_quality from outcome_quality. V1 implemented in evolution/daily.py.
+Phase 3 adds DailyReviewPipeline: Replay -> Review -> Factor Attribution ->
+Error Mining -> Pattern -> Lesson. decision_quality is separated from
+outcome_quality. Daily lessons remain CANDIDATE.
