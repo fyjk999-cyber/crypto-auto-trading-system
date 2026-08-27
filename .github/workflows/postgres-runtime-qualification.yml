@@ -1,0 +1,39 @@
+name: postgres-runtime-qualification
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  postgres-qualification:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: crypto_trader
+          POSTGRES_USER: crypto
+          POSTGRES_PASSWORD: crypto_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crypto -d crypto_trader"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://crypto:crypto_ci_password@127.0.0.1:5432/crypto_trader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Run migrations on clean PostgreSQL
+        run: uv run python -m alembic -c alembic.ini upgrade head
+      - name: Verify migration head
+        run: uv run python -m alembic -c alembic.ini current
+      - name: Run PostgreSQL qualification tests
+        run: uv run pytest tests/postgres_qualification -q
