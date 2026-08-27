@@ -6,6 +6,25 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import MappingProxyType
+from typing import Any
+
+
+def _deep_freeze(value: Any) -> Any:
+    """Recursively copy mutable containers into immutable equivalents."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _deep_freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item) for item in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    """Return ordinary JSON-friendly containers without exposing snapshot internals."""
+    if isinstance(value, Mapping):
+        return {key: _deep_thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -24,10 +43,9 @@ class FactorSetVersion:
     promotion_id: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "factor_weights", MappingProxyType(dict(self.factor_weights)))
-        object.__setattr__(
-            self, "factor_parameters", MappingProxyType(dict(self.factor_parameters))
-        )
+        object.__setattr__(self, "included_factors", tuple(self.included_factors))
+        object.__setattr__(self, "factor_weights", _deep_freeze(dict(self.factor_weights)))
+        object.__setattr__(self, "factor_parameters", _deep_freeze(dict(self.factor_parameters)))
 
     @classmethod
     def active_default(cls) -> FactorSetVersion:
@@ -59,10 +77,10 @@ class FactorSnapshotEntry:
     effective_weight: str
     contribution: str
     status: str
-    metadata: Mapping[str, str] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "metadata", _deep_freeze(dict(self.metadata)))
 
     def to_dict(self) -> dict:
         return {
@@ -73,8 +91,26 @@ class FactorSnapshotEntry:
             "effective_weight": self.effective_weight,
             "contribution": self.contribution,
             "status": self.status,
-            "metadata": dict(self.metadata),
+            "metadata": _deep_thaw(self.metadata),
         }
+
+
+def _coerce_snapshot_entry(value: FactorSnapshotEntry | Mapping[str, Any]) -> FactorSnapshotEntry:
+    """Copy supported inputs into a fully frozen FactorSnapshotEntry."""
+    if isinstance(value, FactorSnapshotEntry):
+        return FactorSnapshotEntry(
+            factor_name=value.factor_name,
+            raw_value=value.raw_value,
+            normalized_value=value.normalized_value,
+            confidence=value.confidence,
+            effective_weight=value.effective_weight,
+            contribution=value.contribution,
+            status=value.status,
+            metadata=_deep_thaw(value.metadata),
+        )
+    if isinstance(value, Mapping):
+        return FactorSnapshotEntry(**dict(value))
+    raise TypeError("factors must contain FactorSnapshotEntry or mapping values")
 
 
 @dataclass(frozen=True)
@@ -93,6 +129,16 @@ class FactorSnapshotContract:
     disabled_factors: tuple[str, ...] = ()
     failed_factors: tuple[str, ...] = ()
     calculation_warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "factors",
+            tuple(_coerce_snapshot_entry(entry) for entry in self.factors),
+        )
+        object.__setattr__(self, "disabled_factors", tuple(self.disabled_factors))
+        object.__setattr__(self, "failed_factors", tuple(self.failed_factors))
+        object.__setattr__(self, "calculation_warnings", tuple(self.calculation_warnings))
 
     def factor(self, name: str) -> FactorSnapshotEntry | None:
         for entry in self.factors:
