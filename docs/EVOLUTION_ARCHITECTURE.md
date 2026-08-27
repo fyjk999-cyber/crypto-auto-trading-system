@@ -1,7 +1,9 @@
 # EVOLUTION ARCHITECTURE
 
-Phase 3B: DAILY LEARNING persistence is durable.
-- SqlEvidenceBackend: DecisionEvidence, DailyReviewResult, PatternCandidate, Lesson.
-- SqlMemoryBackend: lesson listing + status updates.
-- ReviewJobStore: idempotency state per review:daily:{UTC_DATE}.
-- PostgreSQL-compatible SQLAlchemy; SQLite only for tests/local.
+Phase 4 hierarchical learning:
+- DAILY review is COMPLETE.
+- WEEKLY review: consumes DailyReviewResult, confirms/invalidates lessons
+  (multi-day evidence required), produces WeeklyReviewResult.
+- MONTHLY review: consumes WeeklyReviewResult, strategy/factor evaluation.
+- YEARLY review: consumes MonthlyReviewResult, meta-learning + complexity.
+- All higher-level reviews are proposals only; no production mutation.
