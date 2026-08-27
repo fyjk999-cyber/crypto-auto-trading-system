@@ -1,5 +1,5 @@
 # TODO
 
-- Push local commit when network restores.
-- Run Chapter 10/11 in external staging.
-- Owner approval gate (Chapter 13) explicit stop.
+- External staging for 24h/multi-day soak.
+- Full PostgreSQL engine-loop scenarios.
+- Owner approval gate.
