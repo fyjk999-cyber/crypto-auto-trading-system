@@ -109,9 +109,7 @@ _CANONICAL = {
 # required together; the union of canonically-optional factors plus every other
 # computed factor remain optional.
 _required_union = tuple(
-    dict.fromkeys(
-        factor for profile in _CANONICAL.values() for factor in profile.required_factors
-    )
+    dict.fromkeys(factor for profile in _CANONICAL.values() for factor in profile.required_factors)
 )
 required_set = set(_required_union)
 # A factor optional in one profile but required in another (e.g. mean_reversion)
@@ -222,6 +220,25 @@ def _state_from_warnings(factor_id: str, warnings: tuple[str, ...]) -> str:
     prefix = f"{factor_id}:"
     for record in warnings:
         if record.startswith(prefix):
-            state = record[len(prefix):].split(":", 1)[0]
+            state = record[len(prefix) :].split(":", 1)[0]
             return state if state in UNUSABLE_STATES else FactorHealthState.CALCULATION_FAILED
     return FactorHealthState.INSUFFICIENT_HISTORY
+
+
+class FactorProfileGate:
+    """Deterministic entry-eligibility policy for factor-dependent entries."""
+
+    def evaluate(self, profile: FactorProfile, snapshot) -> str:
+        factors = {entry.factor_name: entry.status for entry in snapshot.factors}
+        for required in profile.required_factors:
+            status = factors.get(required, FactorHealthState.MISSING_DATA)
+            if status not in USABLE_STATES:
+                return BLOCKED
+        for optional in profile.optional_factors:
+            status = factors.get(optional, FactorHealthState.MISSING_DATA)
+            if status not in USABLE_STATES:
+                return DEGRADED
+        return READY
+
+    def allows_entry(self, profile: FactorProfile, snapshot) -> bool:
+        return self.evaluate(profile, snapshot) != BLOCKED

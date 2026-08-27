@@ -8,15 +8,25 @@ from crypto_trader.evolution.promotion.entry_gate import NewEntryGate
 def make_snapshot(**overrides):
     base = dict(
         timestamp_utc=datetime.now(UTC).isoformat(),
-        candidate_id="c1", champion_version="v1",
-        open_positions=0, open_orders=0, in_flight_orders=0,
-        pending_execution=0, recent_entry_count=0,
-        market_volatility_state="NORMAL", spread_state="NORMAL",
-        liquidity_state="NORMAL", market_data_health="HEALTHY",
-        exchange_health="HEALTHY", reconciliation_health="HEALTHY",
-        ledger_health="HEALTHY", portfolio_health="HEALTHY",
-        risk_health="HEALTHY", kill_switch_state="OFF",
-        runtime_lease_health="HEALTHY", critical_incidents=0,
+        candidate_id="c1",
+        champion_version="v1",
+        open_positions=0,
+        open_orders=0,
+        in_flight_orders=0,
+        pending_execution=0,
+        recent_entry_count=0,
+        market_volatility_state="NORMAL",
+        spread_state="NORMAL",
+        liquidity_state="NORMAL",
+        market_data_health="HEALTHY",
+        exchange_health="HEALTHY",
+        reconciliation_health="HEALTHY",
+        ledger_health="HEALTHY",
+        portfolio_health="HEALTHY",
+        risk_health="HEALTHY",
+        kill_switch_state="OFF",
+        runtime_lease_health="HEALTHY",
+        critical_incidents=0,
     )
     base.update(overrides)
     return UpgradeReadinessSnapshot(**base)
@@ -24,10 +34,17 @@ def make_snapshot(**overrides):
 
 def make_release(release_id="r1"):
     return TradingRelease(
-        release_id=release_id, strategy_version="s2", factor_set_version="f2",
-        prompt_version="p2", model_routing_version="m2",
-        code_commit="abc", config_hash="cfg", parent_release_id="r0",
-        candidate_id="c1", promotion_id="promo1")
+        release_id=release_id,
+        strategy_version="s2",
+        factor_set_version="f2",
+        prompt_version="p2",
+        model_routing_version="m2",
+        code_commit="abc",
+        config_hash="cfg",
+        parent_release_id="r0",
+        candidate_id="c1",
+        promotion_id="promo1",
+    )
 
 
 def test_safe_window_false_when_position_exists():
@@ -61,9 +78,14 @@ def test_safe_window_true_when_empty_healthy():
 def test_promotion_happy_path_and_lock():
     coordinator = SafePromotionCoordinator()
     result = coordinator.promote(
-        promotion_id="promo1", candidate_id="c1", certified=True,
-        snapshot=make_snapshot(), target_release=make_release(),
-        health_pass=True, smoke_pass=True)
+        promotion_id="promo1",
+        candidate_id="c1",
+        certified=True,
+        snapshot=make_snapshot(),
+        target_release=make_release(),
+        health_pass=True,
+        smoke_pass=True,
+    )
     assert result.status == "ACTIVE"
     assert coordinator.active_release.release_id == "r1"
     assert coordinator.records["promo1"].status == "ACTIVE"
@@ -73,18 +95,28 @@ def test_promotion_happy_path_and_lock():
 def test_promotion_uncertified_blocked():
     coordinator = SafePromotionCoordinator()
     result = coordinator.promote(
-        promotion_id="promo1", candidate_id="c1", certified=False,
-        snapshot=make_snapshot(), target_release=make_release(),
-        health_pass=True, smoke_pass=True)
+        promotion_id="promo1",
+        candidate_id="c1",
+        certified=False,
+        snapshot=make_snapshot(),
+        target_release=make_release(),
+        health_pass=True,
+        smoke_pass=True,
+    )
     assert result.status == "REJECTED"
 
 
 def test_promotion_health_fail_rolls_back():
     coordinator = SafePromotionCoordinator()
     result = coordinator.promote(
-        promotion_id="promo1", candidate_id="c1", certified=True,
-        snapshot=make_snapshot(), target_release=make_release(),
-        health_pass=False, smoke_pass=True)
+        promotion_id="promo1",
+        candidate_id="c1",
+        certified=True,
+        snapshot=make_snapshot(),
+        target_release=make_release(),
+        health_pass=False,
+        smoke_pass=True,
+    )
     assert result.status == "ROLLED_BACK"
     assert coordinator.gate.state == "OPEN"
 
@@ -92,9 +124,14 @@ def test_promotion_health_fail_rolls_back():
 def test_rollback_safe_degraded_when_health_fails():
     coordinator = SafePromotionCoordinator()
     coordinator.promote(
-        promotion_id="promo1", candidate_id="c1", certified=True,
-        snapshot=make_snapshot(), target_release=make_release(),
-        health_pass=True, smoke_pass=True)
+        promotion_id="promo1",
+        candidate_id="c1",
+        certified=True,
+        snapshot=make_snapshot(),
+        target_release=make_release(),
+        health_pass=True,
+        smoke_pass=True,
+    )
     result = coordinator.rollback(promotion_id="promo1", health_pass=False)
     assert result.status == "SAFE_DEGRADED"
     assert coordinator.gate.state == "BLOCKED_FOR_UPGRADE"

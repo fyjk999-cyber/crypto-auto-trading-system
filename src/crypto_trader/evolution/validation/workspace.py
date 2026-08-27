@@ -1,4 +1,5 @@
 """Isolated candidate workspace with strict path policy."""
+
 from __future__ import annotations
 
 import os
@@ -26,39 +27,59 @@ class CandidateWorkspace:
     budget: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        return {"candidate_id": self.candidate_id, "parent_commit": self.parent_commit,
-                "parent_version": self.parent_version,
-                "workspace_path": self.workspace_path,
-                "allowed_paths": list(self.allowed_paths),
-                "protected_paths": list(self.protected_paths),
-                "created_at_utc": self.created_at_utc,
-                "workspace_status": self.workspace_status,
-                "candidate_commit": self.candidate_commit,
-                "diff_hash": self.diff_hash,
-                "changed_files": list(self.changed_files),
-                "loc_added": self.loc_added, "loc_removed": self.loc_removed,
-                "budget": dict(self.budget)}
+        return {
+            "candidate_id": self.candidate_id,
+            "parent_commit": self.parent_commit,
+            "parent_version": self.parent_version,
+            "workspace_path": self.workspace_path,
+            "allowed_paths": list(self.allowed_paths),
+            "protected_paths": list(self.protected_paths),
+            "created_at_utc": self.created_at_utc,
+            "workspace_status": self.workspace_status,
+            "candidate_commit": self.candidate_commit,
+            "diff_hash": self.diff_hash,
+            "changed_files": list(self.changed_files),
+            "loc_added": self.loc_added,
+            "loc_removed": self.loc_removed,
+            "budget": dict(self.budget),
+        }
 
 
 class CandidateWorkspaceManager:
-    def __init__(self, base_dir: str = "/tmp/evolution_candidates",
-                 policy: EvolutionMutationPolicy | None = None) -> None:
+    def __init__(
+        self,
+        base_dir: str = "/tmp/evolution_candidates",
+        policy: EvolutionMutationPolicy | None = None,
+    ) -> None:
         self.base_dir = base_dir
         self.policy = policy or EvolutionMutationPolicy()
         self.workspaces: dict[str, CandidateWorkspace] = {}
 
-    def create(self, *, candidate_id: str, parent_commit: str,
-               parent_version: str, allowed_paths: list[str],
-               budget: dict | None = None) -> CandidateWorkspace:
+    def create(
+        self,
+        *,
+        candidate_id: str,
+        parent_commit: str,
+        parent_version: str,
+        allowed_paths: list[str],
+        budget: dict | None = None,
+    ) -> CandidateWorkspace:
         workspace_path = os.path.join(self.base_dir, f"candidate-{candidate_id}")
         workspace = CandidateWorkspace(
-            candidate_id=candidate_id, parent_commit=parent_commit,
-            parent_version=parent_version, workspace_path=workspace_path,
+            candidate_id=candidate_id,
+            parent_commit=parent_commit,
+            parent_version=parent_version,
+            workspace_path=workspace_path,
             allowed_paths=tuple(allowed_paths),
             protected_paths=self.policy.protected_path_prefixes,
-            budget=budget or {"max_files_changed": 5, "max_loc_added": 200,
-                              "max_loc_removed": 100, "max_new_parameters": 10,
-                              "max_new_factors": 3},
+            budget=budget
+            or {
+                "max_files_changed": 5,
+                "max_loc_added": 200,
+                "max_loc_removed": 100,
+                "max_new_parameters": 10,
+                "max_new_factors": 3,
+            },
         )
         self.workspaces[candidate_id] = workspace
         return workspace
@@ -77,8 +98,9 @@ class CandidateWorkspaceManager:
             return False, "PATH_NOT_ALLOWED", ""
         return True, "OK", target
 
-    def record_write(self, workspace: CandidateWorkspace, path: str,
-                     loc_added: int = 1, loc_removed: int = 0) -> tuple[bool, str]:
+    def record_write(
+        self, workspace: CandidateWorkspace, path: str, loc_added: int = 1, loc_removed: int = 0
+    ) -> tuple[bool, str]:
         ok, reason, target = self.resolve_path(workspace, path)
         if not ok:
             workspace.workspace_status = "QUARANTINED"
@@ -98,8 +120,9 @@ class CandidateWorkspaceManager:
             return False, "CHANGE_BUDGET_EXCEEDED_LOC_REMOVED"
         return True, "OK"
 
-    def finalize(self, workspace: CandidateWorkspace, candidate_commit: str,
-                 diff_hash: str) -> None:
+    def finalize(
+        self, workspace: CandidateWorkspace, candidate_commit: str, diff_hash: str
+    ) -> None:
         workspace.candidate_commit = candidate_commit
         workspace.diff_hash = diff_hash
         workspace.workspace_status = "MATERIALIZED"

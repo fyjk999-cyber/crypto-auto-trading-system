@@ -245,9 +245,7 @@ class HierarchicalLearningEngine:
         }
 
         # Drawdown over the ordered daily net pnl series.
-        day_pnls = [
-            (str(d.get("period_id", "")), _dec(d.get("net_pnl"))) for d in daily_reviews
-        ]
+        day_pnls = [(str(d.get("period_id", "")), _dec(d.get("net_pnl"))) for d in daily_reviews]
         running = peak = drawdown = Decimal("0")
         for _day, pnl in day_pnls:
             running += pnl
@@ -367,9 +365,8 @@ class HierarchicalLearningEngine:
         sharpe = Decimal("0")
         if len(weekly_pnls) >= 2:
             mean = total_pnl / Decimal(len(weekly_pnls))
-            variance = (
-                sum(((p - mean) ** 2 for p in weekly_pnls), Decimal("0"))
-                / Decimal(len(weekly_pnls))
+            variance = sum(((p - mean) ** 2 for p in weekly_pnls), Decimal("0")) / Decimal(
+                len(weekly_pnls)
             )
             std = variance.sqrt() if variance > 0 else Decimal("0")
             if std > 0:
@@ -564,9 +561,8 @@ class HierarchicalLearningEngine:
         sortino: str = NOT_AVAILABLE
         if len(monthly_pnls) >= 2:
             mean = total / Decimal(len(monthly_pnls))
-            variance = (
-                sum(((p - mean) ** 2 for p in monthly_pnls), Decimal("0"))
-                / Decimal(len(monthly_pnls))
+            variance = sum(((p - mean) ** 2 for p in monthly_pnls), Decimal("0")) / Decimal(
+                len(monthly_pnls)
             )
             std = variance.sqrt() if variance > 0 else Decimal("0")
             downside = [p for p in monthly_pnls if p < 0]
@@ -654,8 +650,14 @@ class HierarchicalLearningEngine:
 
         # Evolution pipeline stats and cost metrics are only reported when the
         # monthly inputs actually carry them; otherwise explicitly unavailable.
-        pipeline_fields = ("candidate_count", "validation_count", "promotion_count",
-                           "rejection_count", "rollback_count", "research_success_rate")
+        pipeline_fields = (
+            "candidate_count",
+            "validation_count",
+            "promotion_count",
+            "rejection_count",
+            "rollback_count",
+            "research_success_rate",
+        )
         pipeline: dict[str, object] = {}
         for field_name in pipeline_fields:
             values = [m.get(field_name) for m in monthly_reviews if m.get(field_name) is not None]
@@ -677,9 +679,9 @@ class HierarchicalLearningEngine:
             "tail_risk": AVAILABLE if worst_month is not None else NOT_AVAILABLE,
             "lesson_confirmation_rate": AVAILABLE if lesson_total else INSUFFICIENT_EVIDENCE,
             "version_lineage": AVAILABLE if version_lineage else NOT_AVAILABLE,
-            "evolution_pipeline_stats": AVAILABLE if any(
-                v != NOT_AVAILABLE for v in pipeline.values()
-            ) else NOT_AVAILABLE,
+            "evolution_pipeline_stats": AVAILABLE
+            if any(v != NOT_AVAILABLE for v in pipeline.values())
+            else NOT_AVAILABLE,
         }
 
         return YearlyReviewResult(

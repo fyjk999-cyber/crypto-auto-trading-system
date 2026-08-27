@@ -5,6 +5,7 @@ in ``crypto_trader.factors.models.FactorHealth`` (EXPERIMENTAL/HEALTHY/...),
 which tracks long-run factor usefulness rather than a single calculation.
 """
 
+
 class FactorHealthState:
     OK = "OK"
     VALID_ZERO = "VALID_ZERO"

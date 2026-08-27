@@ -94,10 +94,21 @@ def test_candidate_serialization_round_trip():
     assert restored == cand
     payload = cand.to_dict()
     assert set(payload) == {
-        "candidate_id", "candidate_type", "parent_version", "candidate_version",
-        "hypothesis_id", "changed_components", "code_hash", "config_hash",
-        "strategy_version", "factor_version", "model_version", "prompt_version",
-        "dataset_version", "created_at_utc", "status",
+        "candidate_id",
+        "candidate_type",
+        "parent_version",
+        "candidate_version",
+        "hypothesis_id",
+        "changed_components",
+        "code_hash",
+        "config_hash",
+        "strategy_version",
+        "factor_version",
+        "model_version",
+        "prompt_version",
+        "dataset_version",
+        "created_at_utc",
+        "status",
     }
 
 
@@ -106,7 +117,7 @@ def test_candidate_is_immutable_but_transitions_return_new_instance():
     with pytest.raises(AttributeError):
         cand.status = CANDIDATE_MATERIALIZED
     advanced = cand.transition(CANDIDATE_MATERIALIZED)
-    assert cand.status == CANDIDATE_DRAFT          # original untouched
+    assert cand.status == CANDIDATE_DRAFT  # original untouched
     assert advanced.status == CANDIDATE_MATERIALIZED
     assert advanced.candidate_id == cand.candidate_id
 
@@ -126,8 +137,13 @@ def test_candidate_requires_fields_and_known_status():
 
 def test_candidate_full_legal_lifecycle():
     cand = make_candidate()
-    walk = [CANDIDATE_DRAFT, CANDIDATE_MATERIALIZED, CANDIDATE_VALIDATING,
-            CANDIDATE_CERTIFIED, CANDIDATE_READY_FOR_UPGRADE]
+    walk = [
+        CANDIDATE_DRAFT,
+        CANDIDATE_MATERIALIZED,
+        CANDIDATE_VALIDATING,
+        CANDIDATE_CERTIFIED,
+        CANDIDATE_READY_FOR_UPGRADE,
+    ]
     current = cand
     for target in walk[1:]:
         current = current.transition(target)
@@ -137,17 +153,19 @@ def test_candidate_full_legal_lifecycle():
 
 def test_candidate_illegal_transitions_are_rejected():
     cand = make_candidate()
-    for illegal in (CANDIDATE_VALIDATING, CANDIDATE_REJECTED, CANDIDATE_CERTIFIED,
-                    CANDIDATE_READY_FOR_UPGRADE):
+    for illegal in (
+        CANDIDATE_VALIDATING,
+        CANDIDATE_REJECTED,
+        CANDIDATE_CERTIFIED,
+        CANDIDATE_READY_FOR_UPGRADE,
+    ):
         with pytest.raises(IllegalCandidateTransition):
             cand.transition(illegal)
     materialized = cand.transition(CANDIDATE_MATERIALIZED)
-    with pytest.raises(IllegalCandidateTransition):      # cannot skip VALIDATING
+    with pytest.raises(IllegalCandidateTransition):  # cannot skip VALIDATING
         materialized.transition(CANDIDATE_CERTIFIED)
-    rejected = materialized.transition(CANDIDATE_VALIDATING).transition(
-        CANDIDATE_REJECTED
-    )
-    with pytest.raises(IllegalCandidateTransition):      # REJECTED is terminal
+    rejected = materialized.transition(CANDIDATE_VALIDATING).transition(CANDIDATE_REJECTED)
+    with pytest.raises(IllegalCandidateTransition):  # REJECTED is terminal
         rejected.transition(CANDIDATE_CERTIFIED)
     certified_ready = (
         cand.transition(CANDIDATE_MATERIALIZED)
@@ -155,7 +173,7 @@ def test_candidate_illegal_transitions_are_rejected():
         .transition(CANDIDATE_CERTIFIED)
         .transition(CANDIDATE_READY_FOR_UPGRADE)
     )
-    with pytest.raises(IllegalCandidateTransition):      # upgrade-ready is terminal
+    with pytest.raises(IllegalCandidateTransition):  # upgrade-ready is terminal
         certified_ready.transition(CANDIDATE_DRAFT)
 
 
@@ -171,9 +189,12 @@ def test_candidate_cannot_activate_production():
 
 def test_candidate_validation_branch_tracks_hypothesis():
     hyp = make_hypothesis()
-    cand = make_candidate(hypothesis_id=hyp.hypothesis_id).transition(
-        CANDIDATE_MATERIALIZED
-    ).transition(CANDIDATE_VALIDATING).transition(CANDIDATE_REJECTED)
+    cand = (
+        make_candidate(hypothesis_id=hyp.hypothesis_id)
+        .transition(CANDIDATE_MATERIALIZED)
+        .transition(CANDIDATE_VALIDATING)
+        .transition(CANDIDATE_REJECTED)
+    )
     assert cand.hypothesis_id == hyp.hypothesis_id == "hyp-001"
     assert cand.status == CANDIDATE_REJECTED
 
@@ -193,13 +214,21 @@ def test_lineage_record_round_trip_and_root_allowed_without_parent():
     assert root.to_dict()["parent_candidate_id"] == ""
     with pytest.raises(ValueError, match="mutation_type"):
         CandidateLineageRecord(
-            candidate_id="x", parent_candidate_id="", parent_version="v",
-            hypothesis_id="h", mutation_type="", changed_components=("a",),
+            candidate_id="x",
+            parent_candidate_id="",
+            parent_version="v",
+            hypothesis_id="h",
+            mutation_type="",
+            changed_components=("a",),
         )
     with pytest.raises(ValueError, match="changed components"):
         CandidateLineageRecord(
-            candidate_id="x", parent_candidate_id="", parent_version="v",
-            hypothesis_id="h", mutation_type="MUTATE", changed_components=(),
+            candidate_id="x",
+            parent_candidate_id="",
+            parent_version="v",
+            hypothesis_id="h",
+            mutation_type="MUTATE",
+            changed_components=(),
         )
 
 
@@ -232,7 +261,9 @@ def test_lineage_chain_walks_parents_to_root_in_order():
     ]
     chain = lineage_chain(records, leaf_candidate_id="cand-003")
     assert [entry["candidate_id"] for entry in chain] == [
-        "cand-003", "cand-002", "cand-root",
+        "cand-003",
+        "cand-002",
+        "cand-root",
     ]
     assert chain[-1]["mutation_type"] == "INITIAL"
 
@@ -240,12 +271,20 @@ def test_lineage_chain_walks_parents_to_root_in_order():
 def test_lineage_chain_detects_cycles():
     cyclic = [
         CandidateLineageRecord(
-            candidate_id="a", parent_candidate_id="b", parent_version="v0",
-            hypothesis_id="h", mutation_type="MUTATE", changed_components=("a",),
+            candidate_id="a",
+            parent_candidate_id="b",
+            parent_version="v0",
+            hypothesis_id="h",
+            mutation_type="MUTATE",
+            changed_components=("a",),
         ),
         CandidateLineageRecord(
-            candidate_id="b", parent_candidate_id="a", parent_version="v1",
-            hypothesis_id="h", mutation_type="MUTATE", changed_components=("b",),
+            candidate_id="b",
+            parent_candidate_id="a",
+            parent_version="v1",
+            hypothesis_id="h",
+            mutation_type="MUTATE",
+            changed_components=("b",),
         ),
     ]
     with pytest.raises(ValueError, match="cyclic lineage"):

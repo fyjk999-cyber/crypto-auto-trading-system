@@ -56,6 +56,8 @@ class FactorToolGateway:
         self, *, symbol: str, timeframe: str, candles: list[dict], market_data: dict | None = None
     ) -> FactorSnapshotContract:
         now = datetime.now(UTC)
+        regime = str((market_data or {}).get("regime", "UNKNOWN"))
+        source_timestamp = str((market_data or {}).get("source_timestamp", now.isoformat()))
         entries = []
         failed = []
         warnings: list[str] = []
@@ -70,9 +72,9 @@ class FactorToolGateway:
                 factor_registry_version="registry-v1",
                 factor_config_hash=self.factor_set.config_hash,
                 factors=(),
-                market_regime="UNKNOWN",
+                market_regime=regime,
                 market_data_version="v1",
-                source_timestamp=now.isoformat(),
+                source_timestamp=source_timestamp,
                 failed_factors=tuple(EXPECTED_FACTOR_IDS),
                 calculation_warnings=tuple(
                     f"{factor_id}:{FactorHealthState.CALCULATION_FAILED}:{detail}"
@@ -92,9 +94,9 @@ class FactorToolGateway:
                 factor_registry_version="registry-v1",
                 factor_config_hash=self.factor_set.config_hash,
                 factors=(),
-                market_regime="UNKNOWN",
+                market_regime=regime,
                 market_data_version="v1",
-                source_timestamp=now.isoformat(),
+                source_timestamp=source_timestamp,
                 failed_factors=tuple(self.factor_set.included_factors),
                 calculation_warnings=("INSUFFICIENT_HISTORY",),
             )
@@ -111,14 +113,18 @@ class FactorToolGateway:
                     if assessment.state == FactorHealthState.VALID_ZERO
                     else FactorHealthState.OK
                 )
+                weights = getattr(self.factor_set, "factor_weights", {}) or {}
+                actual_weight = weights.get(result.factor_name)
                 entries.append(
                     FactorSnapshotEntry(
                         factor_name=result.factor_name,
                         raw_value=str(result.value),
                         normalized_value=str(result.value),
                         confidence=str(result.confidence),
-                        effective_weight="1.0",
-                        contribution=str(result.value * Decimal("0.1")),
+                        effective_weight=(
+                            str(actual_weight) if actual_weight is not None else "NOT_AVAILABLE"
+                        ),
+                        contribution="NOT_AVAILABLE",
                         status=status,
                         metadata={k: str(v) for k, v in result.metadata.items()},
                     )
@@ -151,9 +157,9 @@ class FactorToolGateway:
             factor_registry_version="registry-v1",
             factor_config_hash=self.factor_set.config_hash,
             factors=tuple(entries),
-            market_regime="UNKNOWN",
+            market_regime=regime,
             market_data_version="v1",
-            source_timestamp=now.isoformat(),
+            source_timestamp=source_timestamp,
             failed_factors=tuple(failed),
             calculation_warnings=tuple(warnings),
         )

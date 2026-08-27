@@ -87,11 +87,13 @@ class FactorHypothesis:
         _require(self.proposed_change, "proposed_change")
         if not self.success_metrics:
             raise ValueError("FactorHypothesis requires at least one success metric")
-        for name in ("source_lesson_ids", "source_review_ids", "success_metrics",
-                     "guardrail_metrics"):
-            object.__setattr__(
-                self, name, tuple(getattr(self, name))
-            )
+        for name in (
+            "source_lesson_ids",
+            "source_review_ids",
+            "success_metrics",
+            "guardrail_metrics",
+        ):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
 
     def to_dict(self) -> dict:
         return {
@@ -156,8 +158,7 @@ class EvolutionCandidate:
             raise ValueError("EvolutionCandidate requires at least one changed component")
         if self.status not in CANDIDATE_STATUSES:
             raise ValueError(
-                f"invalid candidate status {self.status!r}; "
-                f"expected one of {CANDIDATE_STATUSES}"
+                f"invalid candidate status {self.status!r}; expected one of {CANDIDATE_STATUSES}"
             )
         object.__setattr__(self, "changed_components", tuple(self.changed_components))
 

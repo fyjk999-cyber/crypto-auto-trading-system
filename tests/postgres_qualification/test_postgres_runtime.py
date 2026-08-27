@@ -19,13 +19,23 @@ pytestmark = pytest.mark.skipif(
 def make_evidence(decision_id="d_pg"):
     now = datetime.now(UTC).isoformat()
     return {
-        "decision_id": decision_id, "timestamp_utc": now, "symbol": "BTCUSDT",
-        "timeframe": "15m", "strategy_id": "llm", "strategy_version": "1",
-        "model_version": "1", "prompt_version": "1", "factor_snapshot_id": "fs_pg",
-        "factor_set_version": "factorset-v1", "factor_profile": "FULL",
-        "market_data_reference": "md_pg", "analysis_evidence": {},
-        "decision": {"action": "LONG"}, "risk_decision": {"decision": "APPROVE"},
-        "execution_intent_reference": "", "created_at_utc": now,
+        "decision_id": decision_id,
+        "timestamp_utc": now,
+        "symbol": "BTCUSDT",
+        "timeframe": "15m",
+        "strategy_id": "llm",
+        "strategy_version": "1",
+        "model_version": "1",
+        "prompt_version": "1",
+        "factor_snapshot_id": "fs_pg",
+        "factor_set_version": "factorset-v1",
+        "factor_profile": "FULL",
+        "market_data_reference": "md_pg",
+        "analysis_evidence": {},
+        "decision": {"action": "LONG"},
+        "risk_decision": {"decision": "APPROVE"},
+        "execution_intent_reference": "",
+        "created_at_utc": now,
     }
 
 
@@ -61,14 +71,20 @@ async def test_postgres_review_job_and_hierarchy_persistence():
 
     store = HierarchicalReviewStore(db.session_factory)
     weekly = {
-        "review_id": "w_pg", "period_id": "2026-W35",
+        "review_id": "w_pg",
+        "period_id": "2026-W35",
         "starts_at": "2026-08-24T00:00:00+00:00",
         "ends_at": "2026-08-30T23:59:59.999999+00:00",
-        "created_at_utc": datetime.now(UTC).isoformat(), "status": "COMPLETED",
-        "daily_review_ids": ["d_pg"], "confirmed_lessons": [],
-        "invalidated_lessons": [], "candidate_lessons": [],
-        "persistent_patterns": [], "research_questions": [],
-        "data_quality": "OK", "warnings": [],
+        "created_at_utc": datetime.now(UTC).isoformat(),
+        "status": "COMPLETED",
+        "daily_review_ids": ["d_pg"],
+        "confirmed_lessons": [],
+        "invalidated_lessons": [],
+        "candidate_lessons": [],
+        "persistent_patterns": [],
+        "research_questions": [],
+        "data_quality": "OK",
+        "warnings": [],
     }
     await store.store_review("WEEKLY", weekly)
     loaded = await store.get_review("WEEKLY", "w_pg")
@@ -82,11 +98,18 @@ async def test_postgres_canonical_bootstrap_uses_postgres_url():
 
     url = os.environ["DATABASE_URL"]
     settings = Settings(
-        _env_file=None, app_env="test", trading_mode="PAPER",
-        live_trading_enabled=False, database_url=url,
-        auto_start_runtime=False, paper_mode="PAPER_SYNTHETIC",
-        paper_initial_equity="100000", engine_tick_seconds=3600,
-        reconciliation_interval_seconds=3600, run_lease_renew_interval_seconds=3600)
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_SYNTHETIC",
+        paper_initial_equity="100000",
+        engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600,
+        run_lease_renew_interval_seconds=3600,
+    )
     bundle = await build_system(settings)
     assert bundle.database.url == url
     assert bundle.factor_gateway is not None

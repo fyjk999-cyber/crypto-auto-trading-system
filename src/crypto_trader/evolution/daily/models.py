@@ -132,3 +132,61 @@ def build_attribution_v1(
         confidence="0.5",
         candidate_lessons=(),
     )
+
+
+def build_attribution_evidence_based(
+    *,
+    attribution_id: str,
+    review_id: str,
+    evidence: dict,
+    decision_quality: str,
+    outcome_quality: str,
+) -> FactorAttributionResult:
+    factors = evidence.get("factors", {})
+    decision_direction = evidence.get("decision", {}).get("action", "NO_TRADE")
+    supporting = []
+    opposing = []
+    conflicts = []
+    health_issues = []
+    contributions = {}
+    for name, entry in factors.items():
+        status = entry.get("status", "UNKNOWN")
+        if status not in ("OK", "VALID_ZERO"):
+            health_issues.append(f"{name}:{status}")
+            continue
+        value = float(entry.get("normalized_value", 0))
+        if value > 0.1:
+            if decision_direction in ("LONG", "OPEN_LONG"):
+                supporting.append(name)
+            elif decision_direction in ("SHORT", "OPEN_SHORT"):
+                opposing.append(name)
+        elif value < -0.1:
+            if decision_direction in ("SHORT", "OPEN_SHORT"):
+                supporting.append(name)
+            elif decision_direction in ("LONG", "OPEN_LONG"):
+                opposing.append(name)
+        contribution = entry.get("contribution", "NOT_AVAILABLE")
+        if contribution != "NOT_AVAILABLE":
+            contributions[name] = contribution
+    dominant = supporting[:1]
+    if supporting and opposing:
+        conflicts = ["DIRECTION_CONFLICT"]
+    return FactorAttributionResult(
+        attribution_id=attribution_id,
+        review_id=review_id,
+        decision_id=evidence.get("decision_id", ""),
+        factor_snapshot_id=evidence.get("factor_snapshot_id", ""),
+        factor_set_version=evidence.get("factor_set_version", ""),
+        supporting_factors=tuple(supporting),
+        opposing_factors=tuple(opposing),
+        dominant_factors=tuple(dominant),
+        conflicts=tuple(conflicts),
+        health_issues=tuple(health_issues),
+        factor_contributions=contributions,
+        decision_quality=decision_quality,
+        outcome_quality=outcome_quality,
+        failure_candidates=(),
+        evidence_refs=(evidence.get("factor_snapshot_id", ""),),
+        confidence="0.5",
+        candidate_lessons=(),
+    )

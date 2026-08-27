@@ -1,4 +1,5 @@
 """Candidate certification."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,9 +17,12 @@ class CandidateCertification:
         self.certified_at_utc = self.certified_at_utc or datetime.now(UTC).isoformat()
 
     def to_dict(self) -> dict:
-        return {"candidate_id": self.candidate_id,
-                "validation_run_id": self.validation_run_id,
-                "status": self.status, "certified_at_utc": self.certified_at_utc}
+        return {
+            "candidate_id": self.candidate_id,
+            "validation_run_id": self.validation_run_id,
+            "status": self.status,
+            "certified_at_utc": self.certified_at_utc,
+        }
 
 
 def certify(run) -> CandidateCertification:

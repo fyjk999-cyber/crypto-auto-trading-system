@@ -1,4 +1,5 @@
 """Safe promotion coordinator."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -44,13 +45,15 @@ class SafePromotionCoordinator:
             reasons.append("ABNORMAL_SPREAD")
         if snapshot.liquidity_state == "CRITICAL":
             reasons.append("CRITICAL_LIQUIDITY")
-        for name, state in (("market_data", snapshot.market_data_health),
-                            ("exchange", snapshot.exchange_health),
-                            ("reconciliation", snapshot.reconciliation_health),
-                            ("ledger", snapshot.ledger_health),
-                            ("portfolio", snapshot.portfolio_health),
-                            ("risk", snapshot.risk_health),
-                            ("lease", snapshot.runtime_lease_health)):
+        for name, state in (
+            ("market_data", snapshot.market_data_health),
+            ("exchange", snapshot.exchange_health),
+            ("reconciliation", snapshot.reconciliation_health),
+            ("ledger", snapshot.ledger_health),
+            ("portfolio", snapshot.portfolio_health),
+            ("risk", snapshot.risk_health),
+            ("lease", snapshot.runtime_lease_health),
+        ):
             if state != "HEALTHY":
                 reasons.append(f"{name.upper()}_UNHEALTHY")
         if snapshot.kill_switch_state != "OFF":
@@ -59,10 +62,17 @@ class SafePromotionCoordinator:
             reasons.append("CRITICAL_INCIDENTS")
         return (not reasons), reasons
 
-    def promote(self, *, promotion_id: str, candidate_id: str,
-                certified: bool, snapshot: UpgradeReadinessSnapshot,
-                target_release: TradingRelease,
-                health_pass: bool, smoke_pass: bool) -> PromotionResult:
+    def promote(
+        self,
+        *,
+        promotion_id: str,
+        candidate_id: str,
+        certified: bool,
+        snapshot: UpgradeReadinessSnapshot,
+        target_release: TradingRelease,
+        health_pass: bool,
+        smoke_pass: bool,
+    ) -> PromotionResult:
         if self._lock:
             return PromotionResult(promotion_id, "REJECTED", "PROMOTION_LOCK_HELD")
         if not certified:
@@ -83,10 +93,13 @@ class SafePromotionCoordinator:
         )
         self.snapshots[promotion_id] = champion_snapshot
         self.gate.block()
-        record = PromotionRecord(promotion_id, candidate_id,
-                                 snapshot.champion_version,
-                                 target_release.release_id,
-                                 status="ACTIVATING")
+        record = PromotionRecord(
+            promotion_id,
+            candidate_id,
+            snapshot.champion_version,
+            target_release.release_id,
+            status="ACTIVATING",
+        )
         self.records[promotion_id] = record
         if not health_pass or not smoke_pass:
             record.status = "ROLLING_BACK"

@@ -114,8 +114,10 @@ def test_optional_unhealthy_degrades_but_does_not_block():
 
 
 def test_blocked_outweighs_degraded_regardless_of_order():
-    broken = {"trend": FactorHealthState.CALCULATION_FAILED,
-              "breakout": FactorHealthState.MISSING_DATA}
+    broken = {
+        "trend": FactorHealthState.CALCULATION_FAILED,
+        "breakout": FactorHealthState.MISSING_DATA,
+    }
     import itertools
 
     readings = set()

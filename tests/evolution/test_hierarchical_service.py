@@ -58,9 +58,19 @@ def make_service(database) -> tuple[HierarchicalReviewService, dict]:
     return service, stores
 
 
-def make_daily(day, *, review_id=None, net_pnl="10", lessons=(), attributions=(),
-               error_clusters=(), patterns=(), strategy_quality=None,
-               factor_quality=None, regime_summary=None):
+def make_daily(
+    day,
+    *,
+    review_id=None,
+    net_pnl="10",
+    lessons=(),
+    attributions=(),
+    error_clusters=(),
+    patterns=(),
+    strategy_quality=None,
+    factor_quality=None,
+    regime_summary=None,
+):
     rid = review_id if review_id is not None else f"daily-{day}"
     return {
         "review_id": rid,
@@ -85,9 +95,18 @@ def make_daily(day, *, review_id=None, net_pnl="10", lessons=(), attributions=()
     }
 
 
-def make_weekly_payload(period_id, *, pnl="-100", drawdown="-50", lessons_confirmed=(),
-                        lessons_invalidated=(), strategy_quality=None, factor_quality=None,
-                        failures=None, conflicts=None):
+def make_weekly_payload(
+    period_id,
+    *,
+    pnl="-100",
+    drawdown="-50",
+    lessons_confirmed=(),
+    lessons_invalidated=(),
+    strategy_quality=None,
+    factor_quality=None,
+    failures=None,
+    conflicts=None,
+):
     return {
         "review_id": f"review-weekly-{period_id}",
         "period_id": period_id,
@@ -168,24 +187,38 @@ async def test_weekly_lesson_recurrence_and_lifecycle(database):
     service, _ = make_service(database)
     day_a, day_b, day_c, day_d = WEEK36_DAYS[0], WEEK36_DAYS[1], WEEK36_DAYS[2], WEEK36_DAYS[3]
     confirmed_lesson = {
-        "lesson_id": "L-confirm", "canonical_statement": "avoid chase entries",
-        "evidence_count": 2, "contradictions": 0, "supporting_decisions": 4,
+        "lesson_id": "L-confirm",
+        "canonical_statement": "avoid chase entries",
+        "evidence_count": 2,
+        "contradictions": 0,
+        "supporting_decisions": 4,
     }
     candidate_once = {
-        "lesson_id": "L-cand", "canonical_statement": "size down in chop",
-        "evidence_count": 1, "contradictions": 0, "supporting_decisions": 2,
+        "lesson_id": "L-cand",
+        "canonical_statement": "size down in chop",
+        "evidence_count": 1,
+        "contradictions": 0,
+        "supporting_decisions": 2,
     }
     reject_inst = {
-        "lesson_id": "L-reject", "canonical_statement": "short into funding print",
-        "evidence_count": 1, "contradictions": 2, "supporting_decisions": 0,
+        "lesson_id": "L-reject",
+        "canonical_statement": "short into funding print",
+        "evidence_count": 1,
+        "contradictions": 2,
+        "supporting_decisions": 0,
     }
     dailies = [
         make_daily(day_a, lessons=[dict(confirmed_lesson)]),
         # two contradicting instances on one day + one next day: instances(3) > days(2)
-        make_daily(day_b, lessons=[
-            dict(candidate_once), dict(candidate_once),
-            dict(reject_inst), dict(reject_inst),
-        ]),
+        make_daily(
+            day_b,
+            lessons=[
+                dict(candidate_once),
+                dict(candidate_once),
+                dict(reject_inst),
+                dict(reject_inst),
+            ],
+        ),
         make_daily(day_c, lessons=[dict(confirmed_lesson), dict(reject_inst)]),
     ]
     # also store the remaining three empty days so no MISSING warnings interfere
@@ -198,16 +231,15 @@ async def test_weekly_lesson_recurrence_and_lifecycle(database):
 
     payload = await service.run_weekly(WEEK_NOW)
     rec = payload["lesson_recurrence"]
-    assert rec["avoid chase entries"]["days"] == 2       # distinct-day counting
-    assert rec["size down in chop"]["days"] == 1          # same-day repeat ignored
+    assert rec["avoid chase entries"]["days"] == 2  # distinct-day counting
+    assert rec["size down in chop"]["days"] == 1  # same-day repeat ignored
 
     confirmed_stmts = [item["canonical_statement"] for item in payload["confirmed_lessons"]]
     rejected_stmts = [item["canonical_statement"] for item in payload["invalidated_lessons"]]
     assert confirmed_stmts == ["avoid chase entries"]
     assert rejected_stmts == ["short into funding print"]  # 3 contradicting > 2 presence days
     assert any(
-        item["canonical_statement"] == "size down in chop"
-        and item["status"] == "CANDIDATE"
+        item["canonical_statement"] == "size down in chop" and item["status"] == "CANDIDATE"
         for item in payload["candidate_lessons"]
     )
     confirmed = payload["confirmed_lessons"][0]
@@ -226,7 +258,7 @@ async def test_weekly_service_idempotent_restart_safe_and_job_attempt(database):
     assert len(rows) == 1
     job = await stores["jobs"].get("review:weekly:2026-W36")
     assert job["status"] == "COMPLETED"
-    assert job["attempt"] == 0            # cache-hit rerun does not rewrite the job
+    assert job["attempt"] == 0  # cache-hit rerun does not rewrite the job
 
     # restart safety: brand-new service over the same database finds the report
     restarted, stores2 = make_service(database)
@@ -257,7 +289,7 @@ async def test_weekly_failure_marks_job_failed_then_retry_succeeds(database):
     assert failed["status"] == "FAILED"
     assert "boom" in failed["error"]
 
-    recovered = await service.run_weekly(WEEK_NOW)   # FAILED jobs are retryable
+    recovered = await service.run_weekly(WEEK_NOW)  # FAILED jobs are retryable
     assert recovered["period_id"] == "2026-W36"
     final = await stores["jobs"].get("review:weekly:2026-W36")
     assert final["status"] == "COMPLETED"
@@ -273,7 +305,9 @@ async def test_weekly_run_does_not_mutate_production_factor_state(database):
 
     assert FactorSetVersion.active_default().status == "ACTIVE"
     assert active_factor_set_state() == (
-        before_version, "ACTIVE", before_weights,
+        before_version,
+        "ACTIVE",
+        before_weights,
     )
     mutation_keys = {"factor_weights", "activate", "promotion", "active_version"}
     assert not mutation_keys & set(weekly)
@@ -289,14 +323,14 @@ async def test_monthly_period_boundary_february_and_leap_year():
     feb = previous_monthly(_utc(2026, 3, 1))
     assert feb.period_id == "2026-02"
     weeks = _expected_period_ids(feb.starts_at.isoformat(), feb.ends_at.isoformat(), "week")
-    assert len(weeks) == 5                       # W05..W09 touch February 2026
+    assert len(weeks) == 5  # W05..W09 touch February 2026
     days = _expected_period_ids(feb.starts_at.isoformat(), feb.ends_at.isoformat(), "day")
     assert len(days) == 28
 
     leap = previous_monthly(_utc(2028, 3, 1))
     assert leap.period_id == "2028-02"
     leap_days = _expected_period_ids(leap.starts_at.isoformat(), leap.ends_at.isoformat(), "day")
-    assert len(leap_days) == 29                  # leap-year February
+    assert len(leap_days) == 29  # leap-year February
 
 
 async def test_monthly_engine_exact_duplicate_weekly_reports():
@@ -313,20 +347,24 @@ async def test_monthly_engine_exact_duplicate_weekly_reports():
     )
     assert result.weekly_review_ids.count("review-weekly-2026-W31") == 1
     missing = [w for w in result.warnings if w.startswith("MISSING_WEEKLY_REPORTS:")]
-    assert missing == ["MISSING_WEEKLY_REPORTS:" + ",".join(
-        ("2026-W33", "2026-W34", "2026-W35", "2026-W36")
-    )]
-    assert result.monthly_pnl == "60"            # 100 - 40, counted once
+    assert missing == [
+        "MISSING_WEEKLY_REPORTS:" + ",".join(("2026-W33", "2026-W34", "2026-W35", "2026-W36"))
+    ]
+    assert result.monthly_pnl == "60"  # 100 - 40, counted once
 
 
 async def test_monthly_engine_deterministic_aggregation():
     engine = HierarchicalLearningEngine()
     weeklies = [
-        make_weekly_payload(label, pnl=str(i * 10 - 20), drawdown=f"-{i + 1}",
-                            strategy_quality={"llm-strategy": i - 1},
-                            factor_quality={"momentum": 1},
-                            failures={"momentum": {"total": i}},
-                            conflicts={"trend": {"total": 1}})
+        make_weekly_payload(
+            label,
+            pnl=str(i * 10 - 20),
+            drawdown=f"-{i + 1}",
+            strategy_quality={"llm-strategy": i - 1},
+            factor_quality={"momentum": 1},
+            failures={"momentum": {"total": i}},
+            conflicts={"trend": {"total": 1}},
+        )
         for i, label in enumerate(("2026-W31", "2026-W32", "2026-W33"), start=1)
     ]
     kwargs = dict(
@@ -338,7 +376,7 @@ async def test_monthly_engine_deterministic_aggregation():
     second = engine.monthly_review(review_id="r1", weekly_reviews=list(weeklies), **kwargs)
     a, b = first.to_dict(), second.to_dict()
     a.pop("created_at_utc"), b.pop("created_at_utc")
-    assert a == b                                # order-insensitive dict equality
+    assert a == b  # order-insensitive dict equality
     missing_labels = b["warnings"][0].split(":", 1)[1].split(",")
     assert missing_labels == ["2026-W34", "2026-W35", "2026-W36"]
 
@@ -346,12 +384,16 @@ async def test_monthly_engine_deterministic_aggregation():
 async def test_monthly_proposals_are_proposal_only_with_known_actions():
     engine = HierarchicalLearningEngine()
     stable = make_weekly_payload(
-        "2026-W31", pnl="120", drawdown="-10",
+        "2026-W31",
+        pnl="120",
+        drawdown="-10",
         strategy_quality={"llm-strategy": 1},
         factor_quality={"momentum": 1, "vwap": 0.5},
     )
     flaky = make_weekly_payload(
-        "2026-W32", pnl="-15", drawdown="-90",
+        "2026-W32",
+        pnl="-15",
+        drawdown="-90",
         factor_quality={"momentum": 1, "chop": 0},
         failures={"chop": {"total": 4}},
         conflicts={"chop": {"total": 4}},
@@ -364,14 +406,14 @@ async def test_monthly_proposals_are_proposal_only_with_known_actions():
         weekly_reviews=[stable, flaky],
     )
     proposals = result.factor_proposals + result.strategy_proposals
-    assert proposals                              # both dimensions emit proposals
+    assert proposals  # both dimensions emit proposals
     for proposal in proposals:
         assert proposal["proposal_only"] is True
         assert proposal["recommendation"] in RECOMMENDATION_ACTIONS
     by_factor = {p["factor"]: p["recommendation"] for p in result.factor_proposals}
-    assert by_factor["momentum"] == "INCREASE_WEIGHT_CANDIDATE"   # full-window, clean
-    assert by_factor["vwap"] == "KEEP"            # used < window, no failures recorded
-    assert by_factor["chop"] == "RETIRE_CANDIDATE"                # failures >= usage weeks
+    assert by_factor["momentum"] == "INCREASE_WEIGHT_CANDIDATE"  # full-window, clean
+    assert by_factor["vwap"] == "KEEP"  # used < window, no failures recorded
+    assert by_factor["chop"] == "RETIRE_CANDIDATE"  # failures >= usage weeks
     strategy_actions = [p["recommendation"] for p in result.strategy_proposals]
     assert set(strategy_actions) <= set(RECOMMENDATION_ACTIONS)
     assert "llm-strategy" in {p["strategy"] for p in result.strategy_proposals}
@@ -379,7 +421,7 @@ async def test_monthly_proposals_are_proposal_only_with_known_actions():
 
 async def test_monthly_optional_fields_absent_marked_not_available():
     engine = HierarchicalLearningEngine()
-    bare = make_weekly_payload("2026-W33", pnl="25")   # no fees/funding/latency fields
+    bare = make_weekly_payload("2026-W33", pnl="25")  # no fees/funding/latency fields
     result = engine.monthly_review(
         review_id="review-monthly-2026-08",
         period_id="2026-08",
@@ -396,13 +438,21 @@ async def test_monthly_optional_fields_absent_marked_not_available():
 async def test_service_monthly_from_stored_weeklies_is_idempotent(database):
     service, stores = make_service(database)
     month_weeks = ("2026-W31", "2026-W32", "2026-W33", "2026-W34", "2026-W35", "2026-W36")
-    pnls = {"2026-W31": "100", "2026-W32": "-30", "2026-W33": "20",
-            "2026-W34": "40", "2026-W35": "-10", "2026-W36": "60"}
+    pnls = {
+        "2026-W31": "100",
+        "2026-W32": "-30",
+        "2026-W33": "20",
+        "2026-W34": "40",
+        "2026-W35": "-10",
+        "2026-W36": "60",
+    }
     for label in month_weeks:
         await stores["reviews"].store_review(
             "WEEKLY",
             make_weekly_payload(
-                label, pnl=pnls[label], drawdown="-25",
+                label,
+                pnl=pnls[label],
+                drawdown="-25",
                 lessons_confirmed=[{"lesson_id": f"L-{label}"}],
                 strategy_quality={"llm-strategy": 1},
                 factor_quality={"momentum": 1},
@@ -411,15 +461,15 @@ async def test_service_monthly_from_stored_weeklies_is_idempotent(database):
             ),
         )
 
-    monthly_now = _utc(2026, 9, 1)              # Sep 1 -> reviews 2026-08
+    monthly_now = _utc(2026, 9, 1)  # Sep 1 -> reviews 2026-08
     payload = await service.run_monthly(monthly_now)
     assert payload["period_id"] == "2026-08"
     assert payload["weekly_review_ids"] == [f"review-weekly-{label}" for label in month_weeks]
     assert payload["monthly_pnl"] == str(sum(int(v) for v in pnls.values()))
-    assert float(payload["risk_adjusted"]["sharpe_weekly"]) > 0   # mixed series, positive mean
+    assert float(payload["risk_adjusted"]["sharpe_weekly"]) > 0  # mixed series, positive mean
     assert payload["max_drawdown"] == "-25"
     assert payload["factor_usage"]["momentum"] == 6
-    assert payload["factor_failure_frequency"]["orderflow"] == 12   # per-week total summed
+    assert payload["factor_failure_frequency"]["orderflow"] == 12  # per-week total summed
     assert payload["confirmed_lessons"][0]["lesson_id"].startswith("L-2026-W31")
 
     rerun = await service.run_monthly(monthly_now)
@@ -467,8 +517,9 @@ async def test_service_monthly_timezone_independent_period_selection(database):
 # --------------------------------------------------------------------- yearly
 
 
-def make_monthly_payload(period_id, *, pnl="10", drawdown="-5", lessons_confirmed=(),
-                         lessons_invalidated=(), extra=None):
+def make_monthly_payload(
+    period_id, *, pnl="10", drawdown="-5", lessons_confirmed=(), lessons_invalidated=(), extra=None
+):
     payload = {
         "review_id": f"review-monthly-{period_id}",
         "period_id": period_id,
@@ -506,9 +557,9 @@ async def test_yearly_engine_metrics_exact_values():
         ends_at="2025-12-31T23:59:59.999999+00:00",
         monthly_reviews=months,
     )
-    assert result.annual_return == "0"           # 10 - 10
-    assert result.max_drawdown == "-10"          # min of monthly drawdowns
-    assert result.tail_risk == "-10.000"         # worst month quantized
+    assert result.annual_return == "0"  # 10 - 10
+    assert result.max_drawdown == "-10"  # min of monthly drawdowns
+    assert result.tail_risk == "-10.000"  # worst month quantized
     assert result.metric_availability["annual_return"] == "AVAILABLE"
     assert result.metric_availability["tail_risk"] == "AVAILABLE"
     assert result.metric_availability["calmar"] == "AVAILABLE"
@@ -541,7 +592,9 @@ async def test_yearly_engine_lesson_rates_and_lineage():
     engine = HierarchicalLearningEngine()
     months = [
         make_monthly_payload(
-            "2025-03", pnl="12", drawdown="-3",
+            "2025-03",
+            pnl="12",
+            drawdown="-3",
             lessons_confirmed=[{"lesson_id": "L1"}],
             lessons_invalidated=[{"lesson_id": "L2"}, {"lesson_id": "L3"}],
             extra={
@@ -559,15 +612,17 @@ async def test_yearly_engine_lesson_rates_and_lineage():
         ends_at="2025-12-31T23:59:59.999999+00:00",
         monthly_reviews=months,
     )
-    assert result.lesson_confirmation_rate == "0.333"   # 1 / 3
-    assert result.lesson_rejection_rate == "0.667"      # 2 / 3
-    assert result.version_lineage == [{
-        "month": "2025-03",
-        "strategy_version": "strategy-v3",
-        "factor_set_version": "factorset-v2",
-        "model_version": "model-7",
-        "prompt_version": "prompt-4",
-    }]
+    assert result.lesson_confirmation_rate == "0.333"  # 1 / 3
+    assert result.lesson_rejection_rate == "0.667"  # 2 / 3
+    assert result.version_lineage == [
+        {
+            "month": "2025-03",
+            "strategy_version": "strategy-v3",
+            "factor_set_version": "factorset-v2",
+            "model_version": "model-7",
+            "prompt_version": "prompt-4",
+        }
+    ]
     lifespan = result.strategy_lifespan[0]
     assert lifespan["strategy"] == "llm-strategy"
     assert lifespan["months"] == 1
@@ -578,13 +633,19 @@ async def test_service_yearly_from_stored_monthlies(database):
     for i, month in enumerate(("2025-01", "2025-02", "2025-03")):
         await stores["reviews"].store_review(
             "MONTHLY",
-            make_monthly_payload(month, pnl=str((i + 1) * 5), drawdown=f"-{i + 2}",
-                                 lessons_confirmed=[{"lesson_id": f"L{i}"}]),
+            make_monthly_payload(
+                month,
+                pnl=str((i + 1) * 5),
+                drawdown=f"-{i + 2}",
+                lessons_confirmed=[{"lesson_id": f"L{i}"}],
+            ),
         )
     payload = await service.run_yearly(_utc(2026, 1, 1))
     assert payload["period_id"] == "2025"
     assert payload["monthly_review_ids"] == [
-        "review-monthly-2025-01", "review-monthly-2025-02", "review-monthly-2025-03",
+        "review-monthly-2025-01",
+        "review-monthly-2025-02",
+        "review-monthly-2025-03",
     ]
     assert payload["annual_return"] == "30"
     assert payload["metric_availability"]["max_drawdown"] == "AVAILABLE"
@@ -605,7 +666,10 @@ async def test_service_rejects_unsupported_period_type(database):
 def test_monthly_contract_execution_summary_is_list():
     """Regression lock: execution_summary serialized as list (not legacy dict)."""
     result = MonthlyReviewResult(
-        review_id="m", period_id="2026-08",
-        starts_at="", ends_at="", weekly_review_ids=[],
+        review_id="m",
+        period_id="2026-08",
+        starts_at="",
+        ends_at="",
+        weekly_review_ids=[],
     )
     assert isinstance(result.to_dict()["execution_summary"], list)
