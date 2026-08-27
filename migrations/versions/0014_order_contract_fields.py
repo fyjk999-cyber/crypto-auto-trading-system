@@ -25,7 +25,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "orders",
-        sa.Column("reduce_only", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("reduce_only", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
 
 
