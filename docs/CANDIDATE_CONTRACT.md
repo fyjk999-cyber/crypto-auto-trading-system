@@ -1,7 +1,7 @@
 # CANDIDATE CONTRACT
 
-- Canonical Candidate contract: src/crypto_trader/evolution/foundation/contracts.py
-- CandidateStatus lifecycle excludes production ACTIVE states; Safe Promotion
-  owns ACTIVE/ROLLED_BACK/SAFE_DEGRADED.
-- evolution/lab is a GLM compatibility surface; canonical authority remains
-  foundation + validation + promotion.
+- Single authority: src/crypto_trader/evolution/foundation/
+- CandidateStatus canonical values include VALIDATED and READY_FOR_PROMOTION;
+  production ACTIVE state lives in Safe Promotion only.
+- evolution/lab is deprecated compatibility: aliases/adapters only, no
+  independent transition graph.

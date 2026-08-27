@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-27T13:52:12.744505+00:00
-- CHAPTER 9.5C complete: canonical contracts/attribution/scheduler hardening.
-- One Candidate authority (foundation); lab compatibility re-exports.
-- pytest 627 passed, 8 skipped.
+- Updated: 2026-08-27T14:03:02.673963+00:00
+- CHAPTER 9.5D complete: second candidate authority removed.
+- foundation/ is sole Candidate lifecycle authority; lab is compatibility only.
+- pytest 620 passed, 8 skipped.
