@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0014_order_contract"
-down_revision = "0013_factor_v10"
+down_revision = "0014_learning"
 branch_labels = None
 depends_on = None
 

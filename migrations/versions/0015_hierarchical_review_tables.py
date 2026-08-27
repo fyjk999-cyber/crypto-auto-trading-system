@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0015_hierarchical"
-down_revision = "0014_learning"
+down_revision = "0014_order_contract"
 branch_labels = None
 depends_on = None
 
