@@ -1,5 +1,3 @@
 # TODO
 
-- External staging for 24h/multi-day soak.
-- Full PostgreSQL engine-loop scenarios.
-- Owner approval gate.
+- Await external staging; then Chapter 10.1 -> Chapter 10 -> 11 -> 12 -> 13.
