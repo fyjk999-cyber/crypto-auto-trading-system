@@ -149,44 +149,80 @@ def build_attribution_evidence_based(
     conflicts = []
     health_issues = []
     contributions = {}
+    dominant = []
+    dominant_magnitude = None
+    semantic_known = 0
+    usable_required = 0
+    total_required = len(factors)
     for name, entry in factors.items():
         status = entry.get("status", "UNKNOWN")
         if status not in ("OK", "VALID_ZERO"):
             health_issues.append(f"{name}:{status}")
             continue
+        usable_required += 1
+        semantics = entry.get("metadata", {}).get("direction_semantics", "")
         value = float(entry.get("normalized_value", 0))
-        if value > 0.1:
-            if decision_direction in ("LONG", "OPEN_LONG"):
-                supporting.append(name)
-            elif decision_direction in ("SHORT", "OPEN_SHORT"):
-                opposing.append(name)
-        elif value < -0.1:
-            if decision_direction in ("SHORT", "OPEN_SHORT"):
-                supporting.append(name)
-            elif decision_direction in ("LONG", "OPEN_LONG"):
-                opposing.append(name)
         contribution = entry.get("contribution", "NOT_AVAILABLE")
         if contribution != "NOT_AVAILABLE":
-            contributions[name] = contribution
-    dominant = supporting[:1]
+            try:
+                contributions[name] = contribution
+                magnitude = abs(float(contribution))
+                if magnitude and (dominant_magnitude is None or magnitude > dominant_magnitude):
+                    dominant = [name]
+                    dominant_magnitude = magnitude
+            except (TypeError, ValueError):
+                contributions[name] = "INVALID_CONTRIBUTION"
+        if not semantics:
+            continue
+        semantic_known += 1
+        if semantics in ("NON_DIRECTIONAL", "REGIME", "RISK_ONLY"):
+            continue
+        bullish_positive = semantics in ("BULLISH_POSITIVE", "SIGNED_DIRECTIONAL")
+        if decision_direction in ("LONG", "OPEN_LONG"):
+            if bullish_positive and value > 0:
+                supporting.append(name)
+            elif not bullish_positive and value < 0:
+                supporting.append(name)
+            elif value != 0:
+                opposing.append(name)
+        elif decision_direction in ("SHORT", "OPEN_SHORT"):
+            if bullish_positive and value < 0:
+                supporting.append(name)
+            elif not bullish_positive and value > 0:
+                supporting.append(name)
+            elif value != 0:
+                opposing.append(name)
     if supporting and opposing:
         conflicts = ["DIRECTION_CONFLICT"]
+    if total_required == 0:
+        confidence = "INSUFFICIENT_EVIDENCE"
+        failure_candidates = ("INSUFFICIENT_SEMANTIC_EVIDENCE",)
+    else:
+        health_coverage = usable_required / total_required
+        semantic_coverage = semantic_known / total_required
+        contribution_coverage = len(contributions) / total_required
+        raw = 0.5 * health_coverage + 0.25 * semantic_coverage + 0.25 * contribution_coverage
+        raw -= 0.2 * len(conflicts)
+        confidence = (
+            "INSUFFICIENT_EVIDENCE" if raw < 0.3 else str(round(min(0.9, max(0.05, raw)), 3))
+        )
+        failure_candidates = tuple(health_issues) if health_issues else ()
     return FactorAttributionResult(
         attribution_id=attribution_id,
         review_id=review_id,
         decision_id=evidence.get("decision_id", ""),
         factor_snapshot_id=evidence.get("factor_snapshot_id", ""),
         factor_set_version=evidence.get("factor_set_version", ""),
-        supporting_factors=tuple(supporting),
-        opposing_factors=tuple(opposing),
-        dominant_factors=tuple(dominant),
+        supporting_factors=tuple(dict.fromkeys(supporting)),
+        opposing_factors=tuple(dict.fromkeys(opposing)),
+        dominant_factors=tuple(dict.fromkeys(dominant)),
         conflicts=tuple(conflicts),
         health_issues=tuple(health_issues),
         factor_contributions=contributions,
         decision_quality=decision_quality,
         outcome_quality=outcome_quality,
-        failure_candidates=(),
+        failure_candidates=failure_candidates,
         evidence_refs=(evidence.get("factor_snapshot_id", ""),),
-        confidence="0.5",
+        confidence=confidence,
         candidate_lessons=(),
     )

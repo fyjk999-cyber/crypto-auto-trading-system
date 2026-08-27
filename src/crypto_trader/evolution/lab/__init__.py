@@ -19,6 +19,13 @@ from crypto_trader.evolution.lab.contracts import (
 )
 
 __all__ = [
+    "Candidate",
+    "CandidateStatus",
+    "ChangeProposal",
+    "EvolutionHypothesis",
+    "EvolutionIntake",
+    "EvolutionMutationPolicy",
+    "ResearchReport",
     "CANDIDATE_CERTIFIED",
     "CANDIDATE_DRAFT",
     "CANDIDATE_MATERIALIZED",
@@ -35,3 +42,17 @@ __all__ = [
     "can_transition",
     "lineage_chain",
 ]
+
+
+# Canonical authority re-exports (Chapter 9.5C)
+from crypto_trader.evolution.foundation import (  # noqa: E402
+    Candidate,
+    CandidateStatus,
+    ChangeProposal,
+    EvolutionHypothesis,
+    EvolutionIntake,
+    EvolutionMutationPolicy,
+    ResearchReport,
+)
+
+CANONICAL_CANDIDATE_AUTHORITY = "src/crypto_trader/evolution/foundation"

@@ -1,4 +1,4 @@
 # DECISIONS
 
-- 2026-08-27T10:10:39.726980+00:00: foundation/ is canonical Candidate authority. lab/ is compatibility
-  only. Factor profile BLOCKED gates new factor-dependent entry.
+- 2026-08-27T13:52:12.744505+00:00: foundation/ is single Candidate lifecycle truth. Review completion
+  status is COMPLETED. No fabricated attribution confidence.

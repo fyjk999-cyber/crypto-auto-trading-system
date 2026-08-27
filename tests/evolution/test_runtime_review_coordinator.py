@@ -29,7 +29,7 @@ async def test_coordinator_runs_daily_and_idempotent():
         now, {"DAILY": lambda period: calls.append(period.period_id)}
     )
     assert first[0]["status"] == "COMPLETED"
-    assert second[0]["status"] == "SKIPPED_DONE"
+    assert second[0]["status"] == "SKIPPED_COMPLETED"
     assert calls == ["2026-08-25"]
 
 

@@ -1,6 +1,5 @@
 # TODO
 
-- PostgreSQL engine-loop coverage full restoration.
-- 24h/multi-day paper soak.
-- Real 00:05 UTC boundary observation.
-- Owner approval gate (Chapter 13) must remain explicit stop.
+- Chapter 10: 24h real paper qualification (BLOCKED_BY_ENVIRONMENT until staging exists).
+- Full PostgreSQL fill/engine-loop scenarios.
+- Owner approval gate (Chapter 13) explicit stop.

@@ -19,8 +19,8 @@ class RuntimeReviewCoordinator:
             key = f"review:{period_type.lower()}:{period.period_id}"
             if self.job_store is not None:
                 existing = await self.job_store.get(key)
-                if existing and existing.get("status") == "DONE":
-                    results.append({"period": period_type, "status": "SKIPPED_DONE"})
+                if existing and existing.get("status") == "COMPLETED":
+                    results.append({"period": period_type, "status": "SKIPPED_COMPLETED"})
                     continue
             callback = callbacks.get(period_type)
             if callback is not None:
@@ -35,7 +35,7 @@ class RuntimeReviewCoordinator:
                     f"review-{period_type.lower()}-{period.period_id}",
                     period_type,
                     period.period_id,
-                    "DONE",
+                    "COMPLETED",
                 )
             results.append({"period": period_type, "status": "COMPLETED"})
         return results
