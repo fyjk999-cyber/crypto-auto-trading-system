@@ -1,7 +1,15 @@
 import asyncio
+import json
+from dataclasses import FrozenInstanceError
+
+import pytest
 
 from crypto_trader.factors.tool_gateway import FactorToolGateway
-from crypto_trader.factors.version import FactorSetVersion
+from crypto_trader.factors.version import (
+    FactorSetVersion,
+    FactorSnapshotContract,
+    FactorSnapshotEntry,
+)
 from crypto_trader.llm.tools.live_factor_tools import LiveFactorTools
 
 
@@ -21,6 +29,36 @@ def candles(n=30):
     return rows
 
 
+def _nested_snapshot() -> FactorSnapshotContract:
+    return FactorSnapshotContract(
+        snapshot_id="fsnap-test",
+        timestamp_utc="2026-08-27T00:00:00+00:00",
+        symbol="BTC-USDT-SWAP",
+        timeframe="15m",
+        factor_set_version="factorset-v1",
+        factor_registry_version="registry-v1",
+        factor_config_hash="cfg-v1",
+        factors=(
+            FactorSnapshotEntry(
+                factor_name="trend",
+                raw_value="1",
+                normalized_value="1",
+                confidence="0.9",
+                effective_weight="1.0",
+                contribution="0.1",
+                status="OK",
+                metadata={"nested": {"items": ["a", "b"]}},
+            ),
+        ),
+        market_regime="TREND",
+        market_data_version="v1",
+        source_timestamp="2026-08-27T00:00:00+00:00",
+        disabled_factors=(),
+        failed_factors=(),
+        calculation_warnings=(),
+    )
+
+
 def test_gateway_calculates_versioned_snapshot():
     gateway = FactorToolGateway()
     snapshot = gateway.calculate_snapshot(
@@ -34,15 +72,96 @@ def test_gateway_calculates_versioned_snapshot():
     assert snapshot.snapshot_id
 
 
-def test_snapshot_immutability():
-    gateway = FactorToolGateway()
-    snapshot = gateway.calculate_snapshot(
-        symbol="BTC-USDT-SWAP", timeframe="15m", candles=candles()
-    )
-    import pytest
+def test_top_level_mutation_fails():
+    snapshot = _nested_snapshot()
+    with pytest.raises(FrozenInstanceError):
+        snapshot.symbol = "ETH-USDT-SWAP"
 
-    with pytest.raises((AttributeError, TypeError)):
-        snapshot.factors[0].metadata["x"] = "y"
+
+def test_factor_entry_mutation_fails():
+    snapshot = _nested_snapshot()
+    with pytest.raises(FrozenInstanceError):
+        snapshot.factors[0].raw_value = "2"
+
+
+def test_metadata_mutation_fails():
+    snapshot = _nested_snapshot()
+    with pytest.raises(TypeError):
+        snapshot.factors[0].metadata["new"] = "value"
+    with pytest.raises(TypeError):
+        snapshot.factors[0].metadata["nested"]["new"] = "value"
+    with pytest.raises(AttributeError):
+        snapshot.factors[0].metadata["nested"]["items"].append("c")
+
+
+def test_to_dict_returns_ordinary_serializable_structures():
+    snapshot = _nested_snapshot()
+    payload = snapshot.to_dict()
+
+    assert isinstance(payload["factors"], list)
+    assert isinstance(payload["factors"][0]["metadata"], dict)
+    assert isinstance(payload["factors"][0]["metadata"]["nested"], dict)
+    assert isinstance(payload["factors"][0]["metadata"]["nested"]["items"], list)
+    json.dumps(payload)
+
+
+def test_to_dict_mutation_does_not_mutate_original_snapshot():
+    snapshot = _nested_snapshot()
+    payload = snapshot.to_dict()
+
+    payload["factors"][0]["metadata"]["nested"]["items"].append("changed")
+    payload["disabled_factors"].append("trend")
+
+    assert snapshot.factors[0].metadata["nested"]["items"] == ("a", "b")
+    assert snapshot.disabled_factors == ()
+
+
+def test_snapshot_construction_copies_and_freezes_inputs():
+    factor_metadata = {"nested": {"items": ["a"]}}
+    factors = [
+        {
+            "factor_name": "trend",
+            "raw_value": "1",
+            "normalized_value": "1",
+            "confidence": "0.9",
+            "effective_weight": "1.0",
+            "contribution": "0.1",
+            "status": "OK",
+            "metadata": factor_metadata,
+        }
+    ]
+    disabled = ["funding"]
+    failed = ["open_interest"]
+    warnings = ["STALE_INPUT"]
+
+    snapshot = FactorSnapshotContract(
+        snapshot_id="fsnap-copy",
+        timestamp_utc="2026-08-27T00:00:00+00:00",
+        symbol="BTC-USDT-SWAP",
+        timeframe="15m",
+        factor_set_version="factorset-v1",
+        factor_registry_version="registry-v1",
+        factor_config_hash="cfg-v1",
+        factors=factors,
+        market_regime="TREND",
+        market_data_version="v1",
+        source_timestamp="2026-08-27T00:00:00+00:00",
+        disabled_factors=disabled,
+        failed_factors=failed,
+        calculation_warnings=warnings,
+    )
+
+    factors.append({"factor_name": "late"})
+    factor_metadata["nested"]["items"].append("changed")
+    disabled.append("trend")
+    failed.append("momentum")
+    warnings.append("CALCULATION_FAILED")
+
+    assert len(snapshot.factors) == 1
+    assert snapshot.factors[0].metadata["nested"]["items"] == ("a",)
+    assert snapshot.disabled_factors == ("funding",)
+    assert snapshot.failed_factors == ("open_interest",)
+    assert snapshot.calculation_warnings == ("STALE_INPUT",)
 
 
 def test_valid_zero_vs_failure_distinction():
