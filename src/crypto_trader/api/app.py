@@ -650,11 +650,30 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/risk")
     async def risk():
+        account = await state.portfolio.get_account(state.settings.effective_mode())
+        positions = await state.portfolio.get_positions()
+        equity = account.equity or Decimal("0")
+        gross_notional = sum(
+            abs(position.quantity * (position.avg_entry_price or Decimal("0")))
+            for position in positions.values()
+        )
+        leverage = (
+            gross_notional / equity if equity > 0 and gross_notional > 0 else Decimal("0")
+        )
         return {
             "trading_mode": state.settings.effective_mode().value,
             "live_trading_enabled": state.settings.live_trading_enabled,
             "kill_switch": state.risk.kill_switch.snapshot(),
             "risk_config": state.risk.config.model_dump(mode="json"),
+            # Display metrics derived from canonical portfolio state. Metrics the
+            # system does not track are reported as NOT_AVAILABLE, never faked.
+            "metrics": {
+                "current_drawdown": "NOT_AVAILABLE",
+                "risk_multiplier": "NOT_AVAILABLE",
+                "effective_leverage": str(leverage),
+                "margin_ratio": "NOT_AVAILABLE" if positions else "0",
+                "flat": not positions,
+            },
         }
 
     @app.get("/margin")

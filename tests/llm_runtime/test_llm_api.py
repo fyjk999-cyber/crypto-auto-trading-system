@@ -129,3 +129,16 @@ async def test_provider_api_hot_reload_test_and_secret_redaction(database, monke
     await restarted.reload()
     assert "deepseek" in restarted.providers
     assert set(restarted.routes) == {route["route_name"] for route in routes}
+
+
+async def test_risk_endpoint_reports_honest_metrics(database):
+    client = TestClient(create_app(make_state(database)))
+    payload = client.get("/risk").json()
+    metrics = payload["metrics"]
+    assert metrics["flat"] is True                       # empty ledger -> no positions
+    assert metrics["effective_leverage"] == "0"          # real zero, not fabricated
+    assert metrics["margin_ratio"] == "0"                # no positions -> no margin used
+    assert metrics["current_drawdown"] == "NOT_AVAILABLE"  # equity peak not tracked
+    assert metrics["risk_multiplier"] == "NOT_AVAILABLE"
+    assert payload["kill_switch"]["enabled"] is False
+    assert payload["trading_mode"] == "PAPER"

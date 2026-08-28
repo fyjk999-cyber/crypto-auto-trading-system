@@ -89,6 +89,13 @@ function percent(value: unknown) {
   return `${normalized.toFixed(2)}%`;
 }
 
+function metricOrNA(value: unknown, naLabel = "NOT_AVAILABLE") {
+  if (value === "NOT_AVAILABLE" || value === undefined || value === null || value === "") {
+    return naLabel;
+  }
+  return String(value);
+}
+
 function direction(value: unknown) {
   const side = String(value ?? "").toUpperCase();
   if (["BUY", "LONG"].includes(side)) return { label: "做多", code: "LONG", tone: "long" };
@@ -247,6 +254,29 @@ function CurrentPosition({ snapshot, compact = false }: { snapshot: TradingSnaps
   return <div className={`current-position ${compact ? "compact" : ""}`}><div className="position-title"><strong>{position.symbol}</strong><span className={side.tone}>{side.code}</span><b>{numberText(Math.abs(Number(position.quantity)), 8)} BTC</b></div><dl><div><dt>入场价</dt><dd>{money(position.avg_entry_price)}</dd></div><div><dt>标记价格</dt><dd>{money(pick(market, "mark_price", "price"))}</dd></div><div><dt>未实现盈亏</dt><dd>--</dd></div><div><dt>已实现盈亏</dt><dd>{money(position.realized_pnl)}</dd></div><div><dt>杠杆</dt><dd>--</dd></div><div><dt>爆仓距离</dt><dd>--</dd></div></dl></div>;
 }
 
+function RiskPanel({ risk, killSwitchFallback }: { risk: JsonRecord; killSwitchFallback?: boolean }) {
+  const metrics = record(risk.metrics);
+  const flat = metrics.flat === true;
+  const leverage = (() => {
+    if (flat) return "空仓";
+    if (metrics.effective_leverage === "NOT_AVAILABLE") return "NOT_AVAILABLE";
+    return `${numberText(metrics.effective_leverage)}x`;
+  })();
+  const marginRatio = flat ? "无保证金占用" : metricOrNA(metrics.margin_ratio);
+  const liquidation = flat ? "空仓" : "NOT_AVAILABLE";
+  const killSwitchEnabled = Boolean(record(risk.kill_switch).enabled ?? killSwitchFallback);
+  return (
+    <dl className="risk-grid">
+      <div><dt>当前回撤</dt><dd>{metricOrNA(metrics.current_drawdown)}</dd></div>
+      <div><dt>风险乘数</dt><dd>{metricOrNA(metrics.risk_multiplier)}</dd></div>
+      <div><dt>有效杠杆</dt><dd>{leverage}</dd></div>
+      <div><dt>保证金率</dt><dd>{marginRatio}</dd></div>
+      <div><dt>爆仓距离</dt><dd>{liquidation}</dd></div>
+      <div><dt>Kill Switch</dt><dd className={killSwitchEnabled ? "danger" : "safe"}>{killSwitchEnabled ? "交易已停止" : "安全"}</dd></div>
+    </dl>
+  );
+}
+
 function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const marketState = snapshot.optional["/market"] ?? { status: "loading" as const };
   const market = record(marketState.data);
@@ -297,7 +327,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
     </section>
     <section className="lower-workspace">
       <Panel title="当前持仓" source={snapshot.positions}><CurrentPosition snapshot={snapshot} compact /></Panel>
-      <Panel title="风险状态" source={snapshot.optional["/risk"]}><dl className="risk-grid"><div><dt>当前回撤</dt><dd>{percent(pick(risk, "current_drawdown", "drawdown"))}</dd></div><div><dt>风险乘数</dt><dd>{numberText(pick(risk, "risk_multiplier"))}</dd></div><div><dt>有效杠杆</dt><dd>{numberText(pick(risk, "effective_leverage"))}</dd></div><div><dt>保证金率</dt><dd>{percent(pick(risk, "margin_ratio"))}</dd></div><div><dt>爆仓距离</dt><dd>--</dd></div><div><dt>Kill Switch</dt><dd className={Boolean(record(risk.kill_switch).enabled ?? snapshot.killswitch.data?.enabled) ? "danger" : "safe"}>{Boolean(record(risk.kill_switch).enabled ?? snapshot.killswitch.data?.enabled) ? "交易已停止" : "安全"}</dd></div></dl><p className="risk-note">最大杠杆配置：{text(pick(riskConfig, "max_leverage"))}</p></Panel>
+      <Panel title="风险状态" source={snapshot.optional["/risk"]}><RiskPanel risk={risk} killSwitchFallback={(snapshot.killswitch.data as boolean | undefined)} /><p className="risk-note">最大杠杆配置：{text(pick(riskConfig, "max_leverage"))}</p></Panel>
     </section>
   </>;
 }
