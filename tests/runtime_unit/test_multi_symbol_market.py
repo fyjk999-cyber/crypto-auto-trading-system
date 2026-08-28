@@ -172,11 +172,11 @@ class _StaticScanner:
         return OpportunityScore(
             symbol=ctx.symbol,
             score=score,
-            eligible=True,
+            eligible=score >= 0.20,
             direction="LONG_BIAS",
             spread_bps=1.0,
             components={"test": score},
-            reason="OK",
+            reason="OK" if score >= 0.20 else "SCORE_BELOW_THRESHOLD",
         )
 
 
@@ -191,7 +191,7 @@ class _RecordingMultiSymbolChief(MultiSymbolChiefTraderStrategyAdapter):
 
 
 @pytest.mark.asyncio
-async def test_multi_symbol_chief_only_invokes_llm_path_for_top_k_after_full_scan():
+async def test_multi_symbol_opportunity_ranking_is_advisory_not_an_ai_gate():
     adapter = _RecordingMultiSymbolChief(
         symbols=("BTCUSDT", "ETHUSDT", "SOLUSDT"),
         provider=_HealthyProvider(),
@@ -209,13 +209,9 @@ async def test_multi_symbol_chief_only_invokes_llm_path_for_top_k_after_full_sca
         "ETHUSDT",
         "SOLUSDT",
     ]
-    assert adapter.decided == ["SOLUSDT"]
-
-    for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
-        await adapter.on_market_data(SimpleNamespace(symbol=symbol))
-
-    assert adapter.decided == ["SOLUSDT", "ETHUSDT", "SOLUSDT"]
-    assert "BTCUSDT" not in adapter.decided
+    # BTC has the lowest score and is below the scanner's eligibility threshold,
+    # but it still reaches the AI decision path. Quant ranking is evidence only.
+    assert adapter.decided == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
 
 @pytest.mark.asyncio
