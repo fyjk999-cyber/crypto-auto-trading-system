@@ -14,6 +14,7 @@ from sqlalchemy import text
 from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
+from crypto_trader.api.market_analysis import create_market_analysis_router
 from crypto_trader.config import get_settings
 from crypto_trader.credentials import EnvCredentialStore
 from crypto_trader.domain.enums import OrderSide
@@ -223,6 +224,7 @@ def create_app(state: AppState) -> FastAPI:
         )
     app.state.ctx = state
     app.state.feedback_interface = ResearchFeedbackInterface()
+    app.include_router(create_market_analysis_router(state))
 
     def ctx() -> AppState:
         return state
