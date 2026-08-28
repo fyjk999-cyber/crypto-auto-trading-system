@@ -17,14 +17,14 @@ import time
 
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
-from crypto_trader.runtime.chief_trader_strategy import ChiefTraderStrategyAdapter
+from crypto_trader.runtime.ai_first_chief_trader import AIFirstChiefTraderStrategyAdapter
 from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner, OpportunityScore
 from crypto_trader.strategy.base import StrategyContext
 
 logger = logging.getLogger("crypto_trader.multi_symbol_chief")
 
 
-class MultiSymbolChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
+class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
     version = "2.3.0"
 
     def __init__(
