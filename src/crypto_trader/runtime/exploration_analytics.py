@@ -267,6 +267,7 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
                 "qty": abs(signed),
                 "ts": str(fill.timestamp),
                 "side": str(fill.side),
+                "direction": "LONG" if str(fill.side) == "BUY" else "SHORT",
                 "fit": meta.get("strategy_fit_score") if meta else None,
                 "confidence": (
                     meta.get("evidence_adjusted_confidence")
@@ -322,6 +323,7 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
                 "market_regime": lot["regime"],
                 "decision_class": lot["decision_class"],
                 "decision_id": lot["decision_id"],
+                "direction": lot.get("direction", ""),
                 "valid_sample": lot.get("valid_sample", False),
             }
         )
@@ -350,9 +352,35 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
             )
     holdings = [t["holding_seconds"] for t in trades if t.get("holding_seconds")]
     overall = _summary([t["return_rate"] for t in trades], holdings)
+    completed_long = sum(1 for t in trades if t.get("direction") == "LONG")
+    completed_short = sum(1 for t in trades if t.get("direction") == "SHORT")
+    normal_long = sum(
+        1 for t in trades
+        if t.get("direction") == "LONG" and t.get("decision_class") == "NORMAL_ENTRY"
+    )
+    normal_short = sum(
+        1 for t in trades
+        if t.get("direction") == "SHORT" and t.get("decision_class") == "NORMAL_ENTRY"
+    )
+    exploration_long = sum(
+        1 for t in trades
+        if t.get("direction") == "LONG"
+        and t.get("decision_class") == "EXPLORATION_ENTRY"
+    )
+    exploration_short = sum(
+        1 for t in trades
+        if t.get("direction") == "SHORT"
+        and t.get("decision_class") == "EXPLORATION_ENTRY"
+    )
     progress = {
         "valid_completed_samples": valid_completed,
         "completed_samples": valid_completed,  # frontend/status backward-compat
+        "completed_long": completed_long,
+        "completed_short": completed_short,
+        "normal_long": normal_long,
+        "normal_short": normal_short,
+        "exploration_long": exploration_long,
+        "exploration_short": exploration_short,
         "sample_target": settings.exploration_sample_target,
         "target_reached": valid_completed >= settings.exploration_sample_target,
         "executed_entries": executed_entries,
@@ -399,17 +427,7 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
         "outcomes_overall": overall,
         "outcomes_by_strategy": _group_summary(trades, "selected_strategy"),
         "outcomes_by_regime": _group_summary(trades, "market_regime"),
-        "outcomes_by_decision_class": _group_summary(trades, "decision_class"),
-        "calibration": calibration,
-    }
-
-    return {
-        "policy": policy,
-        "progress": progress,
-        "coverage": coverage,
-        "outcomes_overall": overall,
-        "outcomes_by_strategy": _group_summary(trades, "selected_strategy"),
-        "outcomes_by_regime": _group_summary(trades, "market_regime"),
+        "outcomes_by_direction": _group_summary(trades, "direction"),
         "outcomes_by_decision_class": _group_summary(trades, "decision_class"),
         "calibration": calibration,
     }

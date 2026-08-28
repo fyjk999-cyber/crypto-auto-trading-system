@@ -31,6 +31,7 @@ from crypto_trader.llm_runtime.contracts import ModelRoute, ProviderUpsert
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.runtime.execution_symbols import reference_symbol_for
 from crypto_trader.security.auth import Role, require_role_dependency
 
 
@@ -722,23 +723,74 @@ def create_app(state: AppState) -> FastAPI:
             abs(position.quantity * (position.avg_entry_price or Decimal("0")))
             for position in positions.values()
         )
-        leverage = (
+        spot_leverage = (
             gross_notional / equity if equity > 0 and gross_notional > 0 else Decimal("0")
         )
+        metrics: dict = {
+            "current_drawdown": "NOT_AVAILABLE",
+            "risk_multiplier": "NOT_AVAILABLE",
+            "effective_leverage": str(spot_leverage),
+            "margin_ratio": "NOT_AVAILABLE" if positions else "0",
+            "flat": not positions,
+        }
+        # §21: risk panel must understand PAPER PERPETUAL state. When a
+        # BTCUSDT_PERP LONG/SHORT exists, leverage/margin/liquidation come
+        # from the futures projection + real reference mark price.
+        try:
+            if state.engine is not None and state.engine.perpetual_engine is not None:
+                perp_engine = state.engine.perpetual_engine
+                perp_state = await perp_engine.load_state()
+                perp_position = perp_state.positions.get(
+                    perp_engine.contract.symbol
+                )
+                if perp_position is not None and not perp_position.is_flat:
+                    contract = perp_engine.contract
+                    reference_symbol = reference_symbol_for(perp_position.symbol)
+                    book = state.market_data.books.get(reference_symbol)
+                    mark_price = book.mid_price() if book is not None else None
+                    notional = (
+                        abs(perp_position.quantity)
+                        * perp_position.avg_entry_price
+                        * contract.contract_size
+                    )
+                    metrics["flat"] = False
+                    metrics["effective_leverage"] = str(
+                        notional / perp_position.initial_margin
+                        if perp_position.initial_margin
+                        else "NOT_AVAILABLE"
+                    )
+                    metrics["margin_ratio"] = str(
+                        perp_position.maintenance_margin
+                        / perp_position.initial_margin
+                        if perp_position.initial_margin
+                        else "NOT_AVAILABLE"
+                    )
+                    metrics["liquidation_price"] = str(
+                        perp_position.liquidation_price
+                        if perp_position.liquidation_price is not None
+                        else "NOT_AVAILABLE"
+                    )
+                    metrics["mark_price"] = (
+                        str(mark_price) if mark_price is not None else "NOT_AVAILABLE"
+                    )
+                    if mark_price is not None and perp_position.liquidation_price:
+                        distance = abs(mark_price - perp_position.liquidation_price)
+                        metrics["liquidation_distance"] = str(
+                            distance / mark_price if mark_price > 0 else "NOT_AVAILABLE"
+                        )
+                    else:
+                        metrics["liquidation_distance"] = "NOT_AVAILABLE"
+        except Exception:
+            pass
         return {
             "trading_mode": state.settings.effective_mode().value,
             "live_trading_enabled": state.settings.live_trading_enabled,
             "kill_switch": state.risk.kill_switch.snapshot(),
             "risk_config": state.risk.config.model_dump(mode="json"),
-            # Display metrics derived from canonical portfolio state. Metrics the
-            # system does not track are reported as NOT_AVAILABLE, never faked.
-            "metrics": {
-                "current_drawdown": "NOT_AVAILABLE",
-                "risk_multiplier": "NOT_AVAILABLE",
-                "effective_leverage": str(leverage),
-                "margin_ratio": "NOT_AVAILABLE" if positions else "0",
-                "flat": not positions,
-            },
+            # Display metrics derived from canonical portfolio state. Metrics
+            # the system does not track are reported as NOT_AVAILABLE, never
+            # faked.
+            "metrics": metrics,
         }
 
     @app.get("/margin")
@@ -870,8 +922,62 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/positions")
     async def positions():
+        # §20: one read-only position truth. Spot positions + PAPER PERPETUAL
+        # state are merged so the frontend can never show "空仓" while
+        # BTCUSDT_PERP LONG/SHORT is actually open.
         positions = await state.portfolio.get_positions()
-        return {symbol: pos.model_dump(mode="json") for symbol, pos in positions.items()}
+        payload = {symbol: pos.model_dump(mode="json") for symbol, pos in positions.items()}
+        try:
+            if state.engine is not None and state.engine.perpetual_engine is not None:
+                engine = state.engine.perpetual_engine
+                perp_state = await engine.load_state()
+                for symbol, position in perp_state.positions.items():
+                    if position.is_flat:
+                        continue
+                    book = state.market_data.books.get(
+                        reference_symbol_for(symbol)
+                    )
+                    mark_price = (
+                        book.mid_price() if book is not None else None
+                    )
+                    payload[symbol] = {
+                        "symbol": symbol,
+                        "base_asset": engine.contract.base,
+                        "quote_asset": engine.contract.quote,
+                        "quantity": str(position.quantity),
+                        "avg_entry_price": str(position.avg_entry_price),
+                        "cost_basis": str(position.initial_margin),
+                        "realized_pnl": str(position.realized_pnl),
+                        "updated_at": position.ts.isoformat(),
+                        "market_type": "PERPETUAL",
+                        "side": position.side.value,
+                        "unrealized_pnl": str(position.unrealized_pnl),
+                        "leverage": (
+                            str(
+                                abs(position.quantity)
+                                * position.avg_entry_price
+                                / position.initial_margin
+                            )
+                            if position.initial_margin
+                            else "NOT_AVAILABLE"
+                        ),
+                        "initial_margin": str(position.initial_margin),
+                        "liquidation_price": str(
+                            position.liquidation_price
+                            if position.liquidation_price is not None
+                            else "NOT_AVAILABLE"
+                        ),
+                        "mark_price": (
+                            str(mark_price)
+                            if mark_price is not None
+                            else "NOT_AVAILABLE"
+                        ),
+                    }
+        except Exception:
+            # Perpetual projection is read-only state; failure must never break
+            # the spot positions endpoint.
+            pass
+        return payload
 
     @app.get("/account")
     async def account():

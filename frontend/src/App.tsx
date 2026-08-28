@@ -327,7 +327,9 @@ function CurrentPosition({ snapshot, compact = false }: { snapshot: TradingSnaps
   const position = positions[0];
   const side = positionDirection(position);
   const market = record(snapshot.optional["/market"]?.data);
-  return <div className={`current-position ${compact ? "compact" : ""}`}><div className="position-title"><strong>{position.symbol}</strong><span className={side.tone}>{side.code}</span><b>{numberText(Math.abs(Number(position.quantity)), 8)} BTC</b></div><dl><div><dt>入场价</dt><dd>{money(position.avg_entry_price)}</dd></div><div><dt>标记价格</dt><dd>{money(pick(market, "mark_price", "price"))}</dd></div><div><dt>未实现盈亏</dt><dd>NOT_AVAILABLE</dd></div><div><dt>已实现盈亏</dt><dd>{money(position.realized_pnl)}</dd></div><div><dt>杠杆</dt><dd>NOT_AVAILABLE</dd></div><div><dt>爆仓距离</dt><dd>NOT_AVAILABLE</dd></div></dl></div>;
+  const mark = pick(position, "mark_price") ?? pick(market, "mark_price", "price");
+  const isPerpetual = position.market_type === "PERPETUAL";
+  return <div className={`current-position ${compact ? "compact" : ""}`}><div className="position-title"><strong>{position.symbol}</strong><span className={side.tone}>{side.code}</span><b>{numberText(Math.abs(Number(position.quantity)), 8)} BTC</b></div><dl><div><dt>入场价</dt><dd>{money(position.avg_entry_price)}</dd></div><div><dt>标记价格</dt><dd>{money(mark)}</dd></div><div><dt>未实现盈亏</dt><dd>{isPerpetual ? money(position.unrealized_pnl) : "NOT_AVAILABLE"}</dd></div><div><dt>已实现盈亏</dt><dd>{money(position.realized_pnl)}</dd></div><div><dt>杠杆</dt><dd>{isPerpetual && position.leverage ? `${numberText(position.leverage)}x` : "NOT_AVAILABLE"}</dd></div><div><dt>爆仓距离</dt><dd>{isPerpetual ? text(position.liquidation_price) : "NOT_AVAILABLE"}</dd></div></dl></div>;
 }
 
 function RiskPanel({ risk, killSwitchFallback }: { risk: JsonRecord; killSwitchFallback?: boolean }) {
@@ -339,7 +341,11 @@ function RiskPanel({ risk, killSwitchFallback }: { risk: JsonRecord; killSwitchF
     return `${numberText(metrics.effective_leverage)}x`;
   })();
   const marginRatio = flat ? "无保证金占用" : metricOrNA(metrics.margin_ratio);
-  const liquidation = flat ? "空仓" : "NOT_AVAILABLE";
+  const liquidation = flat
+    ? "空仓"
+    : metricOrNA(
+        pick(metrics, "liquidation_distance", "liquidation_price"),
+      );
   const killSwitchEnabled = Boolean(record(risk.kill_switch).enabled ?? killSwitchFallback);
   return (
     <dl className="risk-grid">
@@ -452,7 +458,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
 function PositionsPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const rows = Object.values(snapshot.positions.data ?? {});
   const market = record(snapshot.optional["/market"]?.data);
-  return <Panel title="持仓明细" source={snapshot.positions}>{snapshot.positions.status !== "ready" || !rows.length ? <EmptyBlock source={snapshot.positions} /> : <div className="table-wrap"><table><thead><tr><th>交易对</th><th>方向</th><th>数量</th><th>入场价</th><th>标记价格</th><th>未实现盈亏</th><th>已实现盈亏</th><th>杠杆</th><th>爆仓价</th></tr></thead><tbody>{rows.map((position) => { const side = positionDirection(position); return <tr key={position.symbol}><td><strong>{position.symbol}</strong></td><td><span className={side.tone}>{side.code}</span></td><td>{numberText(Math.abs(Number(position.quantity)), 8)}</td><td>{money(position.avg_entry_price)}</td><td>{money(pick(market, "mark_price", "price"))}</td><td>NOT_AVAILABLE</td><td>{money(position.realized_pnl)}</td><td>NOT_AVAILABLE</td><td>NOT_AVAILABLE</td></tr>; })}</tbody></table></div>}</Panel>;
+  return <Panel title="持仓明细" source={snapshot.positions}>{snapshot.positions.status !== "ready" || !rows.length ? <EmptyBlock source={snapshot.positions} /> : <div className="table-wrap"><table><thead><tr><th>交易对</th><th>方向</th><th>数量</th><th>入场价</th><th>标记价格</th><th>未实现盈亏</th><th>已实现盈亏</th><th>杠杆</th><th>爆仓价</th></tr></thead><tbody>{rows.map((position) => { const side = positionDirection(position); return <tr key={position.symbol}><td><strong>{position.symbol}</strong></td><td><span className={side.tone}>{side.code}</span></td><td>{numberText(Math.abs(Number(position.quantity)), 8)}</td><td>{money(position.avg_entry_price)}</td><td>{money(position.mark_price ?? pick(market, "mark_price", "price"))}</td><td>{position.market_type === "PERPETUAL" ? money(position.unrealized_pnl) : "NOT_AVAILABLE"}</td><td>{money(position.realized_pnl)}</td><td>{position.market_type === "PERPETUAL" && position.leverage ? `${numberText(position.leverage)}x` : "NOT_AVAILABLE"}</td><td>{position.market_type === "PERPETUAL" ? text(position.liquidation_price) : "NOT_AVAILABLE"}</td></tr>; })}</tbody></table></div>}</Panel>;
 }
 
 const orderStatus: Record<string, string> = { NEW: "待成交", OPEN: "挂单中", PARTIALLY_FILLED: "部分成交", FILLED: "已成交", CANCELLED: "已取消", REJECTED: "已拒绝", EXPIRED: "已过期", UNKNOWN: "状态未知" };

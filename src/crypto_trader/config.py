@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -105,6 +106,7 @@ class Settings(BaseSettings):
     entry_cooldown_seconds: float = 240.0      # min interval between NEW entries
     exploration_sample_target: int = 200       # completed-trade guideline
     exploration_max_holding_seconds: float = 4 * 3600  # PAPER time stop
+    paper_exploration_leverage: Decimal = Decimal("1")  # desired 1x leverage
 
     @field_validator("trading_mode", mode="before")
     @classmethod

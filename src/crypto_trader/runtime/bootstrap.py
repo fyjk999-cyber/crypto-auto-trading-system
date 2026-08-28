@@ -232,6 +232,15 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     perpetual_engine = PerpetualPaperEngine(database.session_factory, perpetual_contract)
 
+    # §10: the duplicate-entry gate must see perpetual state. Wired after the
+    # engine exists so the adapter can ask "is BTCUSDT_PERP already open?"
+    async def _has_open_perpetual_position() -> bool:
+        state = await perpetual_engine.load_state()
+        position = state.positions.get(perpetual_contract.symbol)
+        return position is not None and not position.is_flat
+
+    chief_trader.perpetual_position_provider = _has_open_perpetual_position
+
     bridge = AIPositionRuntimeBridge(
         perpetual_engine=perpetual_engine,
         time_stop_seconds=(

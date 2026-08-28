@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 
 from crypto_trader.ai_brain.decision.decision_engine import AITradingBrain
 from crypto_trader.ai_brain.runtime_adapter import map_trading_intent
+from crypto_trader.runtime.execution_symbols import reference_symbol_for
 
 
 @dataclass
@@ -202,7 +203,10 @@ class AIPositionRuntimeBridge:
         current_price = entry_price
         book = getattr(engine, "market_data", None)
         if book is not None:
-            orderbook = book.books.get(symbol)
+            # §13: perpetual positions are marked against the real reference
+            # market book (BTCUSDT), never against a BTCUSDT_PERP book.
+            reference_symbol = reference_symbol_for(symbol)
+            orderbook = book.books.get(reference_symbol)
             if orderbook is not None:
                 mid = orderbook.mid_price()
                 if mid is not None:

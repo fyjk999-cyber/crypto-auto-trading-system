@@ -1038,3 +1038,85 @@ def test_doctrine_F_risk_engine_approval_allows_paper_execution():
         open_order_count=0,
     )
     assert decision.decision == ExecutionDecision.APPROVE
+
+
+# ---------------------------------------------------------------------------
+# Bidirectional PAPER perpetual entry mapping
+# ---------------------------------------------------------------------------
+
+async def test_long_entry_maps_to_paper_perpetual():
+    provider = ScriptedProvider(_long_response(action="LONG"))
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    signal = signals[0]
+    assert signal.symbol == "BTCUSDT_PERP"
+    assert signal.market_type.value == "PERPETUAL"
+    assert signal.position_side.value == "LONG"
+    assert signal.side.value == "BUY"
+    assert signal.reduce_only is False
+    assert signal.metadata["reference_market_symbol"] == "BTCUSDT"
+    assert signal.metadata["execution_symbol"] == "BTCUSDT_PERP"
+
+
+async def test_short_entry_maps_to_paper_perpetual():
+    provider = ScriptedProvider(_long_response(action="SHORT"))
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    signal = signals[0]
+    assert signal.symbol == "BTCUSDT_PERP"
+    assert signal.market_type.value == "PERPETUAL"
+    assert signal.position_side.value == "SHORT"
+    assert signal.side.value == "SELL"
+    assert signal.reduce_only is False
+    assert signal.metadata["reference_market_symbol"] == "BTCUSDT"
+
+
+async def test_unknown_action_never_maps_to_perpetual():
+    provider = ScriptedProvider(_long_response(action="MOON"))
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+    )
+    assert await adapter.on_market_data(make_ctx()) == []
+
+
+async def test_bridge_time_stop_exit_short_reduce_only():
+    """Section 14: SHORT time-stop exits BUY reduce-only."""
+    from crypto_trader.runtime.ai_position_bridge import (
+        AIPositionEvaluation,
+        AIPositionRuntimeBridge,
+    )
+
+    class FakeEngine:
+        def __init__(self):
+            self.market_data = None
+            self.submitted = []
+
+        async def process_signal(self, signal):
+            self.submitted.append(signal)
+
+    engine = FakeEngine()
+    bridge = AIPositionRuntimeBridge(time_stop_seconds=0.0)
+    evaluations: list[AIPositionEvaluation] = []
+    await bridge._evaluate_one(
+        engine,
+        evaluations,
+        symbol="BTCUSDT_PERP",
+        market_type="PERPETUAL",
+        side="SHORT",
+        abs_quantity=0.001,
+        entry_price=100.0,
+        realized_pnl=0.0,
+    )
+    assert evaluations[0].action == "EXIT"
+    assert evaluations[0].reduce_only is True
+    assert evaluations[0].side == "BUY"
+    assert engine.submitted[0].side.value == "BUY"

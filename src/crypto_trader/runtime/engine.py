@@ -19,7 +19,6 @@ from crypto_trader.domain.enums import (
     LedgerDirection,
     LedgerEntryType,
     MarketType,
-    OrderEventType,
     OrderSide,
     OrderStatus,
     PositionSide,
@@ -62,6 +61,7 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.event_bus import EventBus
+from crypto_trader.runtime.execution_symbols import reference_symbol_for
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.recovery import RecoveryService
@@ -382,7 +382,18 @@ class TradingEngine:
             position_side = (
                 PositionSide.LONG if intent.side == OrderSide.BUY else PositionSide.SHORT
             )
-        price = market_price if market_price > 0 else D("100")
+        # §6: this path is only reached after the PERPETUAL_REFERENCE_PRICE
+        # gate above has verified a real, positive reference mark price.
+        if market_price <= 0:
+            await self.audit.log(
+                "PERPETUAL_REFERENCE_PRICE_UNAVAILABLE",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                after={"price": str(market_price)},
+            )
+            return
+        price = market_price
         qty = D(intent.quantity)
         order = await self.order_manager.create_from_intent(
             intent, trading_mode=self.settings.effective_mode()
@@ -390,13 +401,47 @@ class TradingEngine:
         await self.order_manager.validate(order.internal_order_id)
         await self.order_manager.submitting(order.internal_order_id)
         await self.order_manager.submitted(order.internal_order_id)
+        # §9: desired PAPER exploration leverage is centralized; the margin
+        # engine still caps it at the contract maximum. Never hardcoded 5x.
+        leverage = D(str(self.settings.paper_exploration_leverage))
         if intent.reduce_only:
-            await engine.close_position(position_side, qty, price, order_id=order.internal_order_id)
+            await engine.close_position(
+                position_side, qty, price, order_id=order.internal_order_id
+            )
         else:
             await engine.open_position(
-                position_side, qty, price, Decimal("1"), order_id=order.internal_order_id
+                position_side, qty, price, leverage, order_id=order.internal_order_id
             )
-        await self.order_manager.transition(order.internal_order_id, OrderEventType.ORDER_FILLED)
+        # §15/§17: persist a canonical FillORM for every PAPER perpetual open
+        # and close so orders UI / fills / exploration attribution / Daily
+        # Learning all see the same auditable fill record.
+        contract = engine.contract
+        fee = qty * price * contract.contract_size * contract.taker_fee_rate
+        fill = Fill(
+            fill_id=new_id("fill"),
+            trade_id=new_id("trd"),
+            order_id=order.internal_order_id,
+            client_order_id=client_order_id,
+            exchange_order_id=f"paper_perp_{order.internal_order_id}",
+            symbol=intent.symbol,
+            side=intent.side,
+            price=price,
+            quantity=qty,
+            fee=fee,
+            fee_currency="USDT",
+            timestamp=datetime.now(UTC),
+            payload={
+                "market_type": MarketType.PERPETUAL.value,
+                "position_side": position_side.value,
+                "decision_id": (intent.metadata or {}).get("decision_id", ""),
+                "signal_id": (intent.metadata or {}).get("signal_id", ""),
+                "reference_market_symbol": (
+                    intent.metadata or {}
+                ).get("reference_market_symbol", reference_symbol_for(intent.symbol)),
+                "paper_execution": True,
+            },
+        )
+        await self.order_manager.apply_fill(fill)
         await self.audit.log(
             "PERPETUAL_ORDER_FILLED",
             target=client_order_id,
@@ -407,6 +452,9 @@ class TradingEngine:
                 "side": position_side.value,
                 "quantity": str(qty),
                 "reduce_only": intent.reduce_only,
+                "fill_id": fill.fill_id,
+                "price": str(price),
+                "fee": str(fee),
             },
         )
         self.health.set("submission", True)
@@ -428,7 +476,20 @@ class TradingEngine:
 
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
-        book = self.market_data.books.get(symbol)
+        # Normalize the order contract into typed fields: read legacy metadata
+        # once here, then downstream layers rely on the typed fields only.
+        market_type = signal.market_type
+        position_side = signal.position_side
+        reduce_only = bool(signal.reduce_only or signal.metadata.get("reduce_only", False))
+        # §5/§13: perpetual orders are marked against the REAL reference
+        # market book (BTCUSDT), never against a non-existent BTCUSDT_PERP
+        # book, and never against a fallback price.
+        reference_symbol = (
+            reference_symbol_for(symbol)
+            if market_type == MarketType.PERPETUAL
+            else symbol
+        )
+        book = self.market_data.books.get(reference_symbol)
         market_price = D("0")
         if book is not None:
             mid = book.mid_price()
@@ -436,11 +497,32 @@ class TradingEngine:
                 market_price = mid
         open_orders = await self.order_manager.count_open()
 
-        # Normalize the order contract into typed fields: read legacy metadata
-        # once here, then downstream layers rely on the typed fields only.
-        market_type = signal.market_type
-        position_side = signal.position_side
-        reduce_only = bool(signal.reduce_only or signal.metadata.get("reduce_only", False))
+        # §6 HARD GATE: no real reference mark price -> no new PERPETUAL
+        # order. Do not substitute 100 or any other placeholder.
+        if market_type == MarketType.PERPETUAL and market_price <= 0:
+            risk_decision = RiskDecision(
+                risk_decision_id=new_id("risk"),
+                client_order_id=client_order_id,
+                symbol=symbol,
+                side=signal.side,
+                decision=ExecutionDecision.REJECT,
+                reason="PERPETUAL_REFERENCE_PRICE_UNAVAILABLE",
+                checks={"reference_market_symbol": reference_symbol},
+                timestamp=datetime.now(UTC),
+                run_id=run_id,
+            )
+            await self._persist_risk(risk_decision)
+            await self.audit.log(
+                "RISK_REJECT",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                before={"signal": signal.model_dump(mode="json")},
+                after={"reason": risk_decision.reason},
+            )
+            self.health.set("risk", True)
+            return risk_decision
+
         current_signed_qty = await self._current_signed_quantity(symbol, market_type, positions)
 
         risk_decision = self.risk_engine.check(
@@ -512,12 +594,12 @@ class TradingEngine:
             order_status=OrderStatus.CREATED,
             expires_at=intent.expires_at,
             market_data_fresh=self.market_data.is_fresh(
-                symbol, self.settings.market_data_max_age_seconds
+                reference_symbol, self.settings.market_data_max_age_seconds
             ),
             orderbook_fresh=self.market_data.is_fresh(
-                symbol, self.settings.orderbook_max_age_seconds
+                reference_symbol, self.settings.orderbook_max_age_seconds
             ),
-            orderbook_healthy=self.market_data.is_healthy(symbol),
+            orderbook_healthy=self.market_data.is_healthy(reference_symbol),
             symbol_tradeable=instrument is not None and instrument.status == "TRADING",
             exchange_connected=self.adapter.connected,
             current_signed_qty=current_signed_qty,
@@ -735,6 +817,11 @@ class TradingEngine:
 
     # ----------------------------------------------------------------- ledger
     async def _settle_fill(self, fill: Fill) -> None:
+        # §16: PERPETUAL fills are recorded for audibility but monetary
+        # settlement is owned by FuturesLedger. Never double-post SPOT trade
+        # ledger entries or spot positions for a perpetual fill.
+        if str((fill.payload or {}).get("market_type")) == MarketType.PERPETUAL.value:
+            return
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return

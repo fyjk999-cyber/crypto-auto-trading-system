@@ -20,6 +20,13 @@ export type Position = {
   cost_basis: string;
   realized_pnl: string;
   updated_at?: string | null;
+  market_type?: string;
+  side?: string;
+  unrealized_pnl?: string;
+  leverage?: string;
+  initial_margin?: string;
+  liquidation_price?: string;
+  mark_price?: string;
 };
 
 export type Order = {

@@ -28,12 +28,16 @@ import time
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from crypto_trader.domain.enums import OrderSide, OrderType
+from crypto_trader.domain.enums import MarketType, OrderSide, OrderType, PositionSide
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.provider import LLMProvider
+from crypto_trader.runtime.execution_symbols import (
+    PAPER_PERPETUAL_EXECUTION_SYMBOL,
+    execution_symbol_for,
+)
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 
 logger = logging.getLogger("crypto_trader.chief_trader")
@@ -73,6 +77,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         normal_quantity: str = "0.001",
         exploration_sampler=None,
         memory_provider=None,
+        perpetual_position_provider=None,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -106,6 +111,9 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # selection), NEVER a veto and never a second decision authority.
         self.memory_provider = memory_provider
         self._last_memory: dict = {}
+        # §10 duplicate-entry gate must also see PAPER PERPETUAL state; the
+        # provider is wired in bootstrap after PerpetualPaperEngine exists.
+        self.perpetual_position_provider = perpetual_position_provider
         self.evidence_persist_failures = 0
         self._last_entry_initiated_at: float | None = None
         # Entry-path invocation bound: market data ticks arrive far more often
@@ -277,6 +285,32 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             )
             await self._persist_evidence(decision, ctx, chief_ctx)
             return []
+
+        # §10 duplicate-entry gate includes PAPER PERPETUAL state, so a new
+        # ChiefTrader entry can never stack on an existing BTCUSDT_PERP
+        # LONG/SHORT. PositionManager (bridge) owns HOLD/ADD/REDUCE/EXIT.
+        if self.perpetual_position_provider is not None:
+            try:
+                has_perp = self.perpetual_position_provider()
+                if hasattr(has_perp, "__await__"):
+                    has_perp = await has_perp
+                if has_perp:
+                    decision = self._gate_decision(
+                        chief_ctx,
+                        reason_code="POSITION_ALREADY_OPEN",
+                        thesis=(
+                            "Entry skipped: a PAPER PERPETUAL position is "
+                            "already open; management is handled by the bridge"
+                        ),
+                    )
+                    await self._persist_evidence(decision, ctx, chief_ctx)
+                    return []
+            except Exception as exc:
+                logger.warning(
+                    "PERPETUAL_POSITION_CHECK_FAILED symbol=%s error=%s",
+                    ctx.symbol,
+                    type(exc).__name__,
+                )
 
         # §13 HARD GATE: separate entry cooldown (distinct from the ~60s LLM
         # evaluation cadence) bounds how often NEW entries may be initiated.
@@ -548,12 +582,20 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
     def _map_to_signals(
         self, decision, ctx: StrategyContext, chief_ctx: ChiefTraderContext
     ) -> list[SignalIntent]:
-        """Exhaustive entry mapping. Unknown/management actions -> no signal."""
+        """Exhaustive entry mapping. Unknown/management actions -> no signal.
+
+        §0/§4: automatic entries for the canonical BTCUSDT reference execute
+        as PAPER PERPETUAL (BTCUSDT_PERP) for BOTH LONG and SHORT. Other
+        symbols keep their existing spot entry path (spot shorts remain
+        protected by the RiskEngine SPOT_OVERSHORT gate).
+        """
         action = decision.action.upper()
         if action in _LONG_ACTIONS:
             side = OrderSide.BUY
+            direction = "LONG"
         elif action in _SHORT_ACTIONS:
             side = OrderSide.SELL
+            direction = "SHORT"
         elif action in _NO_SIGNAL_ACTIONS:
             return []
         else:
@@ -566,32 +608,50 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             return []
         # §7 exploration sizing: smaller experiments, same risk authority.
         quantity = self._entry_quantity(decision)
+        reference_symbol = ctx.symbol
+        execution_symbol = execution_symbol_for(reference_symbol)
+        is_perpetual = execution_symbol == PAPER_PERPETUAL_EXECUTION_SYMBOL
+        market_type = MarketType.PERPETUAL if is_perpetual else MarketType.SPOT
+        position_side = (
+            PositionSide.LONG if direction == "LONG" else PositionSide.SHORT
+        ) if is_perpetual else PositionSide.FLAT
+        metadata = {
+            "decision_id": decision.decision_id,
+            "thesis": decision.thesis[:500],
+            "model_version": decision.model_version,
+            "domain_model_version": getattr(self.provider, "domain_model_version", ""),
+            "llm_invocation_id": decision.llm_invocation_id,
+            "selected_strategy": decision.selected_strategy,
+            "strategy_fit_score": str(decision.strategy_fit_score),
+            "market_regime": decision.market_regime,
+            "factor_snapshot_id": decision.factor_snapshot_id,
+            "raw_llm_confidence": str(decision.raw_llm_confidence),
+            "evidence_adjusted_confidence": str(
+                decision.evidence_adjusted_confidence
+            ),
+            "decision_class": decision.decision_class or "NORMAL",
+            "exploration_mode": str(decision.exploration_mode),
+            # §22 execution lineage: never confuse execution contract and
+            # real-market reference symbol.
+            "market_type": market_type.value,
+            "execution_symbol": execution_symbol,
+            "reference_market_symbol": reference_symbol,
+            "position_side": position_side.value,
+            "requested_quantity": quantity,
+        }
         return [
             SignalIntent(
                 signal_id=new_id("llm"),
                 strategy_id=self.name,
-                symbol=ctx.symbol,
+                symbol=execution_symbol,
                 side=side,
                 quantity=quantity,
                 order_type=OrderType.MARKET,
                 reason=decision.thesis[:200] or "llm_chief_trader",
-                metadata={
-                    "decision_id": decision.decision_id,
-                    "thesis": decision.thesis[:500],
-                    "model_version": decision.model_version,
-                    "domain_model_version": getattr(self.provider, "domain_model_version", ""),
-                    "llm_invocation_id": decision.llm_invocation_id,
-                    "selected_strategy": decision.selected_strategy,
-                    "strategy_fit_score": str(decision.strategy_fit_score),
-                    "market_regime": decision.market_regime,
-                    "factor_snapshot_id": decision.factor_snapshot_id,
-                    "raw_llm_confidence": str(decision.raw_llm_confidence),
-                    "evidence_adjusted_confidence": str(
-                        decision.evidence_adjusted_confidence
-                    ),
-                    "decision_class": decision.decision_class or "NORMAL",
-                    "exploration_mode": str(decision.exploration_mode),
-                },
+                market_type=market_type,
+                position_side=position_side,
+                reduce_only=False,
+                metadata=metadata,
             )
         ]
 
@@ -641,6 +701,25 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "evidence_adjusted_confidence": decision.evidence_adjusted_confidence,
                 "position_size_request": decision.position_size_request,
                 "leverage_request": decision.leverage_request,
+                # §22 execution lineage recorded with the decision evidence.
+                "market_type": (
+                    "PERPETUAL"
+                    if execution_symbol_for(ctx.symbol) == PAPER_PERPETUAL_EXECUTION_SYMBOL
+                    else "SPOT"
+                ),
+                "execution_symbol": execution_symbol_for(ctx.symbol),
+                "reference_market_symbol": ctx.symbol,
+                "position_side": (
+                    ("LONG" if decision.action.upper() == "LONG" else "SHORT")
+                    if decision.action.upper() in ("LONG", "SHORT")
+                    and execution_symbol_for(ctx.symbol) == PAPER_PERPETUAL_EXECUTION_SYMBOL
+                    else "FLAT"
+                ),
+                "requested_quantity": (
+                    self._entry_quantity(decision)
+                    if decision.action.upper() in ("LONG", "SHORT")
+                    else ""
+                ),
                 # §1 RelevantMemory provenance: what the Live brain actually
                 # saw from the canonical memory stores (soft evidence only).
                 "memory_refs": list((self._last_memory or {}).get("memory_refs", [])),
