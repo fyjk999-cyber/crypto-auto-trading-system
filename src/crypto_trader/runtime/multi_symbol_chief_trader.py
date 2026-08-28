@@ -50,7 +50,9 @@ class MultiSymbolChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
         self.opportunity_top_k = max(1, min(int(opportunity_top_k), len(normalized)))
         self._opportunity_scores: dict[str, OpportunityScore] = {}
         self._seen_in_round: set[str] = set()
-        self._eligible_symbols: set[str] = set(normalized) if not self.opportunity_scanner_enabled else set()
+        self._eligible_symbols: set[str] = (
+            set(normalized) if not self.opportunity_scanner_enabled else set()
+        )
         self._opportunity_ranking: list[OpportunityScore] = []
         self._ranking_ready = not self.opportunity_scanner_enabled
         self._ranking_generation = 0
