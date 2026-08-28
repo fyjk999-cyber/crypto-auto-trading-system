@@ -6,7 +6,9 @@ import json
 import time
 from typing import Protocol
 
+import httpcore
 import httpx
+from httpcore._backends.auto import AutoBackend
 
 from crypto_trader.llm_runtime.contracts import (
     LLMErrorCode,
@@ -22,9 +24,67 @@ class ProviderTransport(Protocol):
     ) -> ProviderResult: ...
 
 
+class DoHNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Resolves hosts via a JSON DoH endpoint before opening the TCP socket.
+
+    Some local VPN/TUN clients answer DNS with fake IPs that hang TLS
+    handshakes for specific providers. Resolving through DoH and dialing the
+    real address (TLS SNI and certificate validation stay bound to the
+    original hostname) restores correct routing. Opt-in only.
+    """
+
+    def __init__(self, doh_endpoint: str, doh_client: httpx.AsyncClient | None = None) -> None:
+        super().__init__()
+        self.doh_endpoint = doh_endpoint.rstrip("/")
+        self._doh_client = doh_client or httpx.AsyncClient(timeout=5.0)
+        self._owns_client = doh_client is None
+        self._inner = AutoBackend()  # concrete TCP backend to delegate to
+
+    async def _resolve(self, host: str) -> str | None:
+        try:
+            response = await self._doh_client.get(
+                self.doh_endpoint, params={"name": host, "type": "A"}
+            )
+            answers = response.json().get("Answer") or []
+            for answer in answers:
+                if answer.get("type") == 1 and answer.get("data"):
+                    return str(answer["data"])
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            return None
+        return None
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None,  # noqa: ASYNC109
+                          socket_options=None):
+        resolved = await self._resolve(str(host))
+        return await self._inner.connect_tcp(
+            resolved or str(host), port, timeout, local_address, socket_options
+        )
+
+    async def aclose(self) -> None:
+        if self._owns_client:
+            await self._doh_client.aclose()
+
+
+class DoHTransport(httpx.AsyncHTTPTransport):
+    """httpx transport that dials DoH-resolved addresses; SNI/TLS unchanged."""
+
+    def __init__(self, doh_endpoint: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._pool = httpcore.AsyncConnectionPool(
+            network_backend=DoHNetworkBackend(doh_endpoint)
+        )
+
+
 class OpenAICompatibleProvider:
-    def __init__(self, client_factory=None) -> None:
+    def __init__(self, client_factory=None, doh_endpoint: str | None = None) -> None:
         self.client_factory = client_factory
+        self.doh_endpoint = doh_endpoint
+
+    def _build_client(self, config: ProviderConfig, route: ModelRoute) -> httpx.AsyncClient:
+        kwargs: dict = {"base_url": config.base_url, "timeout": route.timeout_seconds}
+        if self.doh_endpoint:
+            kwargs["transport"] = DoHTransport(self.doh_endpoint)
+        return httpx.AsyncClient(**kwargs)
 
     async def complete(
         self, *, config: ProviderConfig, route: ModelRoute, api_key: str, prompt: str
@@ -32,7 +92,7 @@ class OpenAICompatibleProvider:
         started = time.monotonic()
         owns_client = self.client_factory is None
         client = (
-            httpx.AsyncClient(base_url=config.base_url, timeout=route.timeout_seconds)
+            self._build_client(config, route)
             if owns_client
             else self.client_factory(config, route)
         )

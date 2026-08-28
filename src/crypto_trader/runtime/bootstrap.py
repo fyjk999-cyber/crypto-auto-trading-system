@@ -21,6 +21,7 @@ from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm_runtime.domain_models import DomainModelRuntime
 from crypto_trader.llm_runtime.gateway import GatewayProviderAdapter, LLMGateway
+from crypto_trader.llm_runtime.provider import OpenAICompatibleProvider
 from crypto_trader.llm_runtime.repository import LLMRepository
 from crypto_trader.llm_runtime.secrets import EncryptedFileSecretStore
 from crypto_trader.market_data.service import MarketDataService
@@ -85,6 +86,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     llm_gateway = LLMGateway(
         llm_repository,
         EncryptedFileSecretStore(settings.llm_secret_store_path, settings.llm_master_key_path),
+        provider_factory=lambda _config: OpenAICompatibleProvider(
+            doh_endpoint=settings.llm_doh_resolver or None
+        ),
     )
     await llm_gateway.reload()
     domain_model_runtime = DomainModelRuntime(llm_gateway)

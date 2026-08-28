@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # initialized lazily only after the user saves a provider key.
     llm_secret_store_path: str = "data/.llm-secrets.json"
     llm_master_key_path: str = "data/.llm-master-key"
+    # Optional JSON-DoH endpoint (e.g. https://dns.alidns.com/resolve) used by the
+    # LLM transport when local VPN/TUN fake-IP DNS hangs TLS to a provider. Empty
+    # disables the behaviour entirely.
+    llm_doh_resolver: str = ""
 
     @field_validator("trading_mode", mode="before")
     @classmethod
