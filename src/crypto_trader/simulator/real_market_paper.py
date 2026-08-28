@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -13,6 +14,8 @@ from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.state import MarketState
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class PaperRealMarketAdapter(SimulatedExchangeAdapter):
@@ -91,6 +94,10 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             closed_clients.add(client_id)
             try:
                 await feed.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "OKX public feed close failed symbol=%s error=%s",
+                    feed.symbol,
+                    type(exc).__name__,
+                )
         await super().disconnect()
