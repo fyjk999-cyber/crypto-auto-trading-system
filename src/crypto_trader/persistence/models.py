@@ -873,6 +873,7 @@ class DecisionEvidenceORM(Base):
     decision_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     risk_decision_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     execution_intent_reference: Mapped[str] = mapped_column(String(64), default="")
+    domain_model_version: Mapped[str] = mapped_column(String(80), default="")
     created_at_utc: Mapped[str] = mapped_column(String(40))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1035,3 +1036,51 @@ class HierarchicalReviewJobORM(Base):
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LLMProviderORM(Base):
+    __tablename__ = "llm_providers"
+
+    provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_type: Mapped[str] = mapped_column(String(16))
+    display_name: Mapped[str] = mapped_column(String(100))
+    base_url: Mapped[str] = mapped_column(String(500))
+    api_key_secret_ref: Mapped[str] = mapped_column(String(160), unique=True)
+    default_model: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    timeout_seconds: Mapped[float] = mapped_column(Float, default=30.0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=2)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LLMRouteORM(Base):
+    __tablename__ = "llm_routes"
+
+    route_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(64), index=True)
+    model_name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    temperature: Mapped[float] = mapped_column(Float, default=0.2)
+    max_tokens: Mapped[int] = mapped_column(Integer, default=800)
+    timeout_seconds: Mapped[float] = mapped_column(Float, default=30.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LLMUsageORM(Base):
+    __tablename__ = "llm_usage"
+
+    invocation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    brain: Mapped[str] = mapped_column(String(16), index=True)
+    route: Mapped[str] = mapped_column(String(64), index=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(120))
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_classification: Mapped[str | None] = mapped_column(String(40))
+    correlation_id: Mapped[str | None] = mapped_column(String(100))
+    request_hash: Mapped[str] = mapped_column(String(64))

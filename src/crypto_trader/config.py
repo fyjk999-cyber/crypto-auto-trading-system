@@ -12,7 +12,7 @@ from crypto_trader.domain.enums import TradingMode
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    app_env: Literal["development", "test", "production"] = "development"
+    app_env: Literal["development", "test", "production", "LOCAL"] = "development"
     trading_mode: TradingMode = TradingMode.PAPER
     live_trading_enabled: bool = False
     database_url: str = "sqlite+aiosqlite:///./data/crypto_trader.db"
@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = "INFO"
     structured_logs: bool = True
+
+    # Shared LLM runtime. Secrets are encrypted outside the database and are
+    # initialized lazily only after the user saves a provider key.
+    llm_secret_store_path: str = "data/.llm-secrets.json"
+    llm_master_key_path: str = "data/.llm-master-key"
 
     @field_validator("trading_mode", mode="before")
     @classmethod

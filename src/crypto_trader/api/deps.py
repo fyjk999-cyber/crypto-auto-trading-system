@@ -6,8 +6,13 @@ from datetime import UTC, datetime
 from fastapi import Header, HTTPException
 
 from crypto_trader.config import Settings
+from crypto_trader.evolution.gateways.research_gateway import ResearchGateway
 from crypto_trader.factors.tool_gateway import FactorToolGateway
+from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.llm_runtime.domain_models import DomainModelRuntime
+from crypto_trader.llm_runtime.gateway import LLMGateway
+from crypto_trader.llm_runtime.repository import LLMRepository
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -89,6 +94,11 @@ class AppState:
     supervisor: TradingRuntimeSupervisor | None = None
     ai_bridge: AIPositionRuntimeBridge | None = None
     factor_gateway: FactorToolGateway | None = None
+    llm_gateway: LLMGateway | None = None
+    domain_model_runtime: DomainModelRuntime | None = None
+    llm_repository: LLMRepository | None = None
+    daily_review_scheduler: DailyReviewScheduler | None = None
+    research_gateway: ResearchGateway | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
 
 

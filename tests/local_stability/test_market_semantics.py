@@ -62,17 +62,17 @@ async def test_synthetic_requires_explicit_mode_and_never_reports_binance(databa
     assert "BINANCE" not in data["source"]
 
 
-async def test_real_market_unavailable_reports_binance_not_synthetic(database):
+async def test_real_market_unavailable_reports_okx_not_synthetic(database):
     client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
     data = client.get("/market").json()
-    assert data["provider"] == "BINANCE_USDM"
+    assert data["provider"] == "OKX"
     assert data["status"] == "UNAVAILABLE"
 
 
 async def test_real_market_adapter_does_not_silent_fallback():
     class FailingPublicClient:
         async def get_orderbook(self, symbol, limit=100):
-            raise BinancePublicDataUnavailable("HTTP_451_GEO_RESTRICTED")
+            raise RuntimeError("OKX unavailable")
 
     adapter = PaperRealMarketAdapter(
         initial_balances={"USDT": Decimal("100000")},
@@ -81,6 +81,42 @@ async def test_real_market_adapter_does_not_silent_fallback():
     await adapter.connect()
     with pytest.raises(MarketDataUnhealthy):
         await adapter.get_orderbook("BTCUSDT")
+
+
+def test_paper_real_market_uses_okx_public_feed():
+    adapter = PaperRealMarketAdapter(initial_balances={"USDT": Decimal("100000")})
+    assert adapter.feed.__class__.__name__ == "OKXPublicMarketFeed"
+
+
+async def test_okx_orderbook_is_normalized_to_canonical_symbol():
+    class PublicClient:
+        async def get_orderbook(self, symbol, limit=100):
+            assert symbol == "BTC-USDT-SWAP"
+            return {
+                "data": [
+                    {
+                        "ts": "1722470400000",
+                        "bids": [["100", "2", "0", "1"]],
+                        "asks": [["101", "3", "0", "1"]],
+                    }
+                ]
+            }
+
+    adapter = PaperRealMarketAdapter(initial_balances={"USDT": Decimal("100000")})
+    adapter.public_client = PublicClient()
+    book = await adapter.get_orderbook("BTCUSDT")
+    assert book.symbol == "BTCUSDT"
+    assert book.exchange == "OKX"
+    assert book.best_bid().price == Decimal("100")
+    assert book.best_ask().price == Decimal("101")
+
+
+async def test_exchange_health_separates_okx_market_from_local_paper_execution(database):
+    client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
+    data = client.get("/exchange-health").json()
+    assert data["market_data"]["provider"] == "OKX"
+    assert data["execution"]["provider"] == "LOCAL_PAPER"
+    assert data["mode"] == "PAPER"
 
 
 async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):

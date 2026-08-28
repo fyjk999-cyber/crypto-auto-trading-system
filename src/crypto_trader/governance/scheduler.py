@@ -3,18 +3,36 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 
 from crypto_trader.governance.daily_review import DailyReview
 from crypto_trader.governance.memory import FailureMemory, TradeMemory
 from crypto_trader.governance.memory_persistence import MemoryPersistence
+from crypto_trader.llm_runtime.contracts import (
+    DailyReviewReasoning,
+    LessonExtractionResult,
+    LLMRequest,
+)
+
+
+class DailyLLMRetryableError(RuntimeError):
+    """Semantic daily work failed; deterministic trading runtime stays available."""
 
 
 class DailyReviewScheduler:
-    def __init__(self, session_factory, review_time_utc: str = "00:05") -> None:
+    def __init__(
+        self,
+        session_factory,
+        review_time_utc: str = "00:05",
+        llm_gateway=None,
+        domain_model_runtime=None,
+    ) -> None:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
         self.review_time_utc = review_time_utc
+        self.llm_gateway = llm_gateway
+        self.domain_model_runtime = domain_model_runtime
 
     async def run_once(self, date: str | None = None) -> dict:
         date = date or datetime.now(UTC).date().isoformat()
@@ -27,6 +45,66 @@ class DailyReviewScheduler:
             if record.failure_class is not None:
                 failure_memory.record(record.decision_id, record.failure_class)
         stats = DailyReview(trade_memory, failure_memory).run(date)
+        semantic_review = None
+        semantic_lessons = None
+        if self.llm_gateway is not None:
+            evidence = {
+                "date": date,
+                "trade_count": stats.trade_count,
+                "daily_pnl": str(stats.daily_pnl),
+                "win_rate": str(stats.win_rate),
+                "failure_distribution": stats.failure_distribution,
+            }
+            if self.domain_model_runtime is not None:
+                review_response = await self.domain_model_runtime.invoke(
+                    route="daily_review",
+                    context={"DecisionEvidence": evidence, "ReviewContext": {"date": date}},
+                    response_model=DailyReviewReasoning,
+                )
+            else:
+                review_response = await self.llm_gateway.invoke(
+                    LLMRequest(
+                        route="daily_review",
+                        brain="DAILY",
+                        prompt=f"Reason over immutable daily evidence: {json.dumps(evidence)}",
+                        correlation_id=f"daily:{date}",
+                    ),
+                    DailyReviewReasoning,
+                )
+            if not review_response.ok:
+                reason = (
+                    review_response.error_code.value if review_response.error_code else "failed"
+                )
+                raise DailyLLMRetryableError(f"daily_review:{reason}")
+            if self.domain_model_runtime is not None:
+                lesson_response = await self.domain_model_runtime.invoke(
+                    route="daily_lesson_extraction",
+                    context={
+                        "ReviewReasoning": review_response.content or {},
+                        "HistoricalLessons": [],
+                    },
+                    response_model=LessonExtractionResult,
+                )
+            else:
+                lesson_response = await self.llm_gateway.invoke(
+                    LLMRequest(
+                        route="daily_lesson_extraction",
+                        brain="DAILY",
+                        prompt=(
+                            "Extract evidence-backed lessons from: "
+                            f"{json.dumps(review_response.content)}"
+                        ),
+                        correlation_id=f"daily:{date}",
+                    ),
+                    LessonExtractionResult,
+                )
+            if not lesson_response.ok:
+                reason = (
+                    lesson_response.error_code.value if lesson_response.error_code else "failed"
+                )
+                raise DailyLLMRetryableError(f"daily_lesson_extraction:{reason}")
+            semantic_review = review_response.content
+            semantic_lessons = lesson_response.content
         await self.persistence.save_daily_review(date, stats)
         return {
             "date": date,
@@ -34,6 +112,8 @@ class DailyReviewScheduler:
             "trade_count": stats.trade_count,
             "win_rate": str(stats.win_rate),
             "profit_factor": str(stats.profit_factor),
+            "llm_review": semantic_review,
+            "llm_lessons": semantic_lessons,
         }
 
     async def loop(self) -> None:

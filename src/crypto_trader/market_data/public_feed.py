@@ -1,4 +1,4 @@
-"""Binance USD-M public market-data feed (REST polling, keyless)."""
+"""Credential-free public market-data feeds."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from crypto_trader.exchange.binance_futures_public import (
     BinancePublicDataUnavailable,
     BinanceUSDMFuturesPublicClient,
 )
+from crypto_trader.exchange.okx import OKXAdapter
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import DataHealth, MarketState, SourceStatus
 
@@ -156,3 +158,69 @@ class BinancePublicMarketFeed:
 
     async def close(self) -> None:
         await self.client.close()
+
+
+class OKXPublicMarketFeed:
+    """Credential-free OKX SWAP market state for canonical PAPER runtime."""
+
+    def __init__(self, symbol: str = "BTCUSDT", client: OKXAdapter | None = None) -> None:
+        self.symbol = symbol
+        self.mapper = SymbolMapper()
+        self.client = client or OKXAdapter()
+        self.state = MarketState(symbol=symbol, source="OKX_PUBLIC", exchange="OKX")
+
+    def _healthy(self, name: str, now: datetime) -> None:
+        self.state.sources[name] = SourceStatus(
+            source="OKX_PUBLIC",
+            status=DataHealth.HEALTHY,
+            age_seconds=0,
+            updated_at=now,
+            data_source="REAL",
+        )
+
+    async def refresh(self) -> MarketState:
+        now = datetime.now(UTC)
+        inst_id = self.mapper.to_okx(self.symbol)
+        index_id = inst_id.removesuffix("-SWAP")
+        try:
+            ticker = await self.client.get_ticker(inst_id)
+            book_payload = await self.client.get_orderbook(inst_id)
+            book_raw = book_payload["data"][0]
+            bids = [(D(row[0]), D(row[1])) for row in book_raw.get("bids", [])]
+            asks = [(D(row[0]), D(row[1])) for row in book_raw.get("asks", [])]
+            book = OrderBook(symbol=self.symbol, exchange="OKX")
+            book.apply_snapshot(int(book_raw.get("ts", "0")), bids, asks, now=now)
+            bid, ask = book.best_bid(), book.best_ask()
+            self.state.best_bid = bid.price if bid else D("0")
+            self.state.best_ask = ask.price if ask else D("0")
+            self.state.price = D(ticker.get("last", "0"))
+            self.state.volume = D(ticker.get("volume_24h", "0"))
+            self.state.spread = self.state.best_ask - self.state.best_bid
+            self.state.depth = sum(
+                (level.quantity for level in book.bids.values()), D("0")
+            ) + sum((level.quantity for level in book.asks.values()), D("0"))
+            self._healthy("ticker", now)
+            self._healthy("orderbook", now)
+
+            mark = await self.client.get_public_mark_price(inst_id)
+            index = await self.client.get_public_index_ticker(index_id)
+            funding = await self.client.get_public_funding_rate(inst_id)
+            oi = await self.client.get_public_open_interest(inst_id)
+            self.state.mark_price = D(mark.get("markPx", "0"))
+            self.state.index_price = D(index.get("idxPx", "0"))
+            self.state.funding_rate = D(funding.get("fundingRate", "0"))
+            self.state.open_interest = D(oi.get("oi", "0"))
+            for name in ("mark_price", "index_price", "funding", "open_interest"):
+                self._healthy(name, now)
+        except Exception as exc:
+            self.state.invalidate(f"OKX_PUBLIC_UNAVAILABLE: {type(exc).__name__}")
+            raise
+        self.state.compute_basis()
+        self.state.timestamp = now
+        self.state.exchange_timestamp = now
+        self.state.received_timestamp = now
+        self.state.mark_healthy_from_sources()
+        return self.state
+
+    async def close(self) -> None:
+        await self.client.disconnect()

@@ -10,9 +10,6 @@ function requestUrl(path: string) {
 }
 
 export function websocketUrl() {
-  if (import.meta.env.DEV && WS_URL === "ws://127.0.0.1:8000/ws") {
-    return `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/local-ws`;
-  }
   return WS_URL;
 }
 
@@ -29,7 +26,7 @@ export async function getJson<T>(path: string): Promise<ApiState<T>> {
   }
 }
 
-export async function sendJson<T>(path: string, method: "POST" | "DELETE", body?: unknown): Promise<ApiState<T>> {
+export async function sendJson<T>(path: string, method: "POST" | "PUT" | "DELETE", body?: unknown): Promise<ApiState<T>> {
   try {
     const response = await fetch(requestUrl(path), {
       method,

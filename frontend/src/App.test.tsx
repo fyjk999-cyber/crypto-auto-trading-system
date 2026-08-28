@@ -49,8 +49,8 @@ function backend(overrides: Record<string, unknown | Response> = {}) {
       return value instanceof Response ? value : json(value);
     }
     if (path.startsWith("/market/klines")) return json({ detail: "not found" }, 404);
-    if (path === "/market/sources") return json({ binance: { source: "BINANCE_USDM_PUBLIC", status: "HEALTHY" } });
-    if (path === "/market") return json({ symbol: "BTCUSDT", price: "63420.5", mark_price: "63418.3", funding_rate: "0.0001", open_interest: "18200000000", health: "HEALTHY" });
+    if (path === "/market/sources") return json({ provider: "OKX", source: "OKX", status: "HEALTHY", sources: { ticker: { source: "OKX_PUBLIC", status: "HEALTHY" } } });
+    if (path === "/market") return json({ symbol: "BTCUSDT", source: "OKX", data_source: "REAL", price: "63420.5", mark_price: "63418.3", funding_rate: "0.0001", open_interest: "18200000000", health: "HEALTHY" });
     if (path === "/account") return json({ account_id: "default", mode: "PAPER", balances: {}, equity: "125.50", margin_used: "0" });
     if (path === "/positions") return json({});
     if (path === "/orders") return json([]);
@@ -66,6 +66,14 @@ function backend(overrides: Record<string, unknown | Response> = {}) {
     if (path === "/learning") return json({ status: "NO_ALPHA", fast_learning: {}, slow_learning_candidates: [] });
     if (path === "/reviews") return json({ reviews: [], count: 0 });
     if (path === "/exchange-health") return json({ adapter: "connected", mode: "PAPER" });
+    if (path === "/llm/status") return json({ configured: false, health: "NOT_CONFIGURED", providers: 0, routes: 0, usage: { today_calls: 0, today_tokens: 0, failed_calls: 0, average_latency_ms: 0 } });
+    if (path === "/llm/providers") return json({ providers: [] });
+    if (path === "/llm/routes") return json({ routes: [] });
+    if (path === "/llm/domain-models") return json({ domain_models: [
+      { domain_model_id: "crypto-trader-live", display_name: "CryptoTrader-Live-v1", version: "v1", prompt_version: "live-prompt-v1", context_profile_version: "live-context-v1", output_schema_version: "trading-analysis-v1", routes: [{ provider_id: "deepseek", base_model: "deepseek-chat" }] },
+      { domain_model_id: "crypto-trader-learning", display_name: "CryptoTrader-Learning-v1", version: "v1", prompt_version: "learning-prompt-v1", context_profile_version: "learning-context-v1", output_schema_version: "review-lesson-v1", routes: [] },
+      { domain_model_id: "crypto-trader-evolution", display_name: "CryptoTrader-Evolution-v1", version: "v1", prompt_version: "evolution-prompt-v1", context_profile_version: "evolution-context-v1", output_schema_version: "research-hypothesis-candidate-v1", routes: [] },
+    ] });
     if (path === "/version") return json({ git_sha: "abc123", environment: "local" });
     return json({ detail: "not found" }, 404);
   });
@@ -92,14 +100,46 @@ function setup(fetchMock = backend()) {
 }
 
 describe("中文加密交易终端 V2", () => {
-  it("默认进入交易页，并且只有五个中文一级导航", async () => {
+  it("默认进入交易页，并且显示六个一级导航", async () => {
     setup();
     const nav = screen.getByRole("navigation", { name: "主导航" });
-    expect(within(nav).getAllByRole("link")).toHaveLength(5);
+    expect(within(nav).getAllByRole("link")).toHaveLength(6);
     expect(within(nav).getByRole("link", { name: "交易" }).getAttribute("aria-current")).toBe("page");
     await waitFor(() => expect(screen.getByText("$125.5")).toBeTruthy());
     expect(screen.getByRole("heading", { name: "BTCUSDT 行情" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "当前判断" })).toBeTruthy();
+  });
+
+  it("LLM 页面不持久化密钥，并可测试连接、保存 Provider 与六条语义路由", async () => {
+    window.location.hash = "#/llm";
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const fetchMock = backend({
+      "/llm/test": { ok: true, provider: "deepseek", model: "deepseek-chat", latency_ms: 88, error_code: null },
+      "/llm/providers": { providers: [] },
+      "/llm/routes": { routes: [] },
+      "/llm/domain-models": { domain_models: [] },
+      "/llm/status": { configured: false, health: "NOT_CONFIGURED", usage: { today_calls: 0 } },
+    });
+    setup(fetchMock);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "LLM Provider" })).toBeTruthy());
+    const key = screen.getByLabelText("LLM API Key") as HTMLInputElement;
+    expect(key.type).toBe("password");
+    expect(screen.getByText("基础模型 / Base Model")).toBeTruthy();
+    expect(screen.getByText("领域模型 / Domain Models")).toBeTruthy();
+    fireEvent.change(key, { target: { value: "sk-browser-temporary" } });
+    expect(setItem).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(screen.getByText("连接成功 · 88 ms")).toBeTruthy());
+    const testCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/local-api/llm/test"));
+    expect(String(testCall?.[1]?.body)).toContain("sk-browser-temporary");
+    expect(setItem).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/Live Analysis|Daily Review|Daily Lesson Extraction|Evolution Research|Evolution Hypothesis|Evolution Candidate Reasoning/)).toHaveLength(6);
+  });
+
+  it("本地开发直接连接后端 WebSocket，避免开发代理丢失升级请求", async () => {
+    setup();
+    await waitFor(() => expect(TestWebSocket.instances.length).toBeGreaterThan(0));
+    expect(TestWebSocket.instances[0].url).toBe("ws://127.0.0.1:8000/ws");
   });
 
   it("Kline API 不存在时明确显示接口尚未开放", async () => {
@@ -176,15 +216,26 @@ describe("中文加密交易终端 V2", () => {
     expect(marketPanel?.textContent).not.toContain("99999");
   });
 
-  it("明确显示 OKX K线行情与 OKX 模拟执行，不混淆策略 Binance 状态", async () => {
+  it("明确区分 OKX 实时行情与本地 PAPER 模拟执行", async () => {
     setup(backend({
-      "/market": { symbol: "BTCUSDT", status: "HEALTHY", price: "100", mark_price: "99", index_price: "98", best_bid: "99.5", best_ask: "100.5", spread: "1", basis: "0.01", health: "HEALTHY" },
+      "/market": { symbol: "BTCUSDT", source: "OKX", status: "HEALTHY", price: "100", mark_price: "99", index_price: "98", best_bid: "99.5", best_ask: "100.5", spread: "1", basis: "0.01", health: "HEALTHY" },
       "/market/klines?symbol=BTCUSDT&interval=1m&limit=500": { symbol: "BTCUSDT", interval: "1m", source: "OKX", status: "HEALTHY", supported_intervals: ["1m"], candles: [candle()] },
+      "/exchange-health": { market_data: { provider: "OKX", status: "HEALTHY" }, execution: { provider: "LOCAL_PAPER", status: "CONNECTED" }, adapter: "connected", mode: "PAPER" },
     }));
-    await waitFor(() => expect(screen.getByText("行情源：OKX · 实时")).toBeTruthy());
-    expect(screen.getByText("执行交易所：OKX 模拟盘 DEMO")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("行情：OKX · 实时")).toBeTruthy());
+    expect(screen.getByText("执行：本地 PAPER 模拟成交")).toBeTruthy();
     expect(screen.getByText("指数价格")).toBeTruthy();
     expect(screen.getByText("买一")).toBeTruthy();
+  });
+
+  it("没有信号时显示暂无判断而不是观望", async () => {
+    setup(backend({
+      "/market": { symbol: "BTCUSDT", source: "OKX", status: "HEALTHY", price: "100", health: "HEALTHY" },
+      "/market/sources": { provider: "OKX", status: "HEALTHY", sources: {} },
+      "/signals": { signals: [] },
+    }));
+    await waitFor(() => expect(screen.getByText("暂无判断数据")).toBeTruthy());
+    expect(screen.queryByText("观望")).toBeNull();
   });
 
   it("市场不可用时保留真实不可用状态，不展示假价格", async () => {
@@ -202,7 +253,7 @@ describe("中文加密交易终端 V2", () => {
       "/exchange/okx/credentials": { saved: true, demo: true, key_suffix: "demo" },
     });
     setup(fetchMock);
-    await waitFor(() => expect(screen.getByRole("heading", { name: "OKX 交易所连接" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "OKX API 连接" })).toBeTruthy());
     expect(screen.getByText("模拟盘 DEMO")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "配置 API" }));
     const apiKey = screen.getByLabelText("OKX API Key") as HTMLInputElement;
@@ -235,6 +286,26 @@ describe("中文加密交易终端 V2", () => {
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("验证失败：ACCOUNT_CONFIG"));
     expect(screen.getByText("API 凭据验证失败")).toBeTruthy();
     expect(screen.queryByText("Invalid signature")).toBeNull();
+  });
+
+  it("OKX 验证请求期间立即显示进度", async () => {
+    window.location.hash = "#/system";
+    let finishValidation!: (response: Response) => void;
+    const validation = new Promise<Response>((resolve) => { finishValidation = resolve; });
+    const baseFetch = backend({
+      "/exchange/okx/status": { configured: true, key_suffix: "1234", health: "UNVERIFIED" },
+    });
+    const fetchMock = vi.fn((input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/local-api/exchange/okx/validate")) return validation;
+      return baseFetch(input, init);
+    });
+    setup(fetchMock);
+    await waitFor(() => expect(screen.getByRole("button", { name: "验证连接" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "验证连接" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("正在验证 OKX 连接"));
+    expect((screen.getByRole("button", { name: "验证中…" }) as HTMLButtonElement).disabled).toBe(true);
+    finishValidation(json({ authenticated: true, health: "HEALTHY", stage: "COMPLETE" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("OKX DEMO 验证成功"));
   });
 
   it("移动端宽度仍保留价格、判断、持仓、PnL 和 K线区域", async () => {

@@ -10,6 +10,7 @@ UI_URL="http://127.0.0.1:${UI_PORT}/"
 RUNTIME_DIR="${TMPDIR:-/tmp}/crypto-auto-trading-system-local"
 BACKEND_LAUNCHER_PID=""
 FRONTEND_LAUNCHER_PID=""
+OKX_CONNECT_PID=""
 
 listener_pids() {
   local port=$1
@@ -42,6 +43,10 @@ cleanup() {
   if [[ -n "$BACKEND_LAUNCHER_PID" ]] && kill -0 "$BACKEND_LAUNCHER_PID" 2>/dev/null; then
     kill "$BACKEND_LAUNCHER_PID" 2>/dev/null || true
     wait "$BACKEND_LAUNCHER_PID" 2>/dev/null || true
+  fi
+  if [[ -n "$OKX_CONNECT_PID" ]] && kill -0 "$OKX_CONNECT_PID" 2>/dev/null; then
+    kill "$OKX_CONNECT_PID" 2>/dev/null || true
+    wait "$OKX_CONNECT_PID" 2>/dev/null || true
   fi
 
   exit "$exit_code"
@@ -92,13 +97,17 @@ FRONTEND_LOG="$RUNTIME_DIR/frontend.log"
 trap cleanup EXIT INT TERM
 
 cd "$TASK_ROOT"
+if [[ -z "${GIT_SHA:-}" ]] && command -v git >/dev/null 2>&1; then
+  GIT_SHA=$(git -C "$TASK_ROOT" rev-parse HEAD 2>/dev/null || true)
+  export GIT_SHA
+fi
 if [[ -x "$TASK_ROOT/.venv/bin/alembic" && -x "$TASK_ROOT/.venv/bin/uvicorn" ]]; then
   "$TASK_ROOT/.venv/bin/alembic" upgrade head >> "$BACKEND_LOG" 2>&1
-  "$TASK_ROOT/.venv/bin/uvicorn" crypto_trader.api.app:app \
+  "$TASK_ROOT/.venv/bin/python" -m crypto_trader.runtime.local_runner \
     --host "$BACKEND_HOST" --port "$BACKEND_PORT" >> "$BACKEND_LOG" 2>&1 &
 elif command -v uv >/dev/null 2>&1; then
   uv run alembic upgrade head >> "$BACKEND_LOG" 2>&1
-  uv run uvicorn crypto_trader.api.app:app \
+  uv run python -m crypto_trader.runtime.local_runner \
     --host "$BACKEND_HOST" --port "$BACKEND_PORT" >> "$BACKEND_LOG" 2>&1 &
 else
   echo "BACKEND ERROR: install project dependencies in .venv or install uv first." >&2
@@ -107,6 +116,9 @@ fi
 BACKEND_LAUNCHER_PID=$!
 
 wait_for_http_200 "BACKEND" "$BACKEND_URL" "$BACKEND_LAUNCHER_PID" "$BACKEND_LOG"
+
+"$TASK_ROOT/scripts/connect-okx.sh" >> "$BACKEND_LOG" 2>&1 &
+OKX_CONNECT_PID=$!
 
 "$TASK_ROOT/scripts/start-ui.sh" >> "$FRONTEND_LOG" 2>&1 &
 FRONTEND_LAUNCHER_PID=$!

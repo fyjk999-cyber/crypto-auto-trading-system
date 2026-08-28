@@ -16,7 +16,12 @@ class ChiefTraderEngine:
 
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
-        response = await self.provider.complete_json(prompt=prompt) if self.provider else None
+        if self.provider and hasattr(self.provider, "complete_domain_analysis"):
+            response = await self.provider.complete_domain_analysis(
+                context=ctx.domain_model_context()
+            )
+        else:
+            response = await self.provider.complete_json(prompt=prompt) if self.provider else None
         if response is not None and response.ok and response.parsed_json:
             return self.parse_decision(response.parsed_json, ctx)
         # Fail safe: LLM unavailable or invalid JSON -> NO_TRADE

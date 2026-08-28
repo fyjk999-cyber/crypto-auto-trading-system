@@ -7,6 +7,8 @@ ChiefTraderEngine, and maps LONG/SHORT to SignalIntent. NO_TRADE submits nothing
 
 from __future__ import annotations
 
+import time
+
 from crypto_trader.domain.enums import OrderSide, OrderType
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import SignalIntent
@@ -25,12 +27,38 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         *,
         provider: LLMProvider | None = None,
         factor_intelligence_provider=None,
+        min_decision_interval_seconds: float = 60.0,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
         self.factor_intelligence_provider = factor_intelligence_provider
+        # Entry-path invocation bound: market data ticks arrive far more often
+        # than a Chief Trader decision is needed. Existing-position safety
+        # (reduce/exit/stop) does NOT depend on this interval: it lives in the
+        # independent runtime bridge.
+        self.min_decision_interval_seconds = max(min_decision_interval_seconds, 0.0)
+        self._last_decision_completed_at: float | None = None
 
     async def on_market_data(self, ctx: StrategyContext) -> list[SignalIntent]:
+        # An unconfigured/degraded shared gateway must not create repeated
+        # provider invocations. Existing-position safety remains owned by the
+        # independent runtime bridge, risk engine, and execution authority.
+        if self.provider is None or not self.provider.healthy():
+            return []
+        if not getattr(self.provider, "route_ready", lambda: True)():
+            return []
+        now = time.monotonic()
+        if (
+            self._last_decision_completed_at is not None
+            and now - self._last_decision_completed_at < self.min_decision_interval_seconds
+        ):
+            return []
+        try:
+            return await self._decide(ctx)
+        finally:
+            self._last_decision_completed_at = time.monotonic()
+
+    async def _decide(self, ctx: StrategyContext) -> list[SignalIntent]:
         factor_intelligence = {}
         if self.factor_intelligence_provider is not None:
             try:
@@ -82,6 +110,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                     "decision_id": decision.decision_id,
                     "thesis": decision.thesis[:500],
                     "model_version": decision.model_version,
+                    "domain_model_version": getattr(self.provider, "domain_model_version", ""),
                 },
             )
         ]

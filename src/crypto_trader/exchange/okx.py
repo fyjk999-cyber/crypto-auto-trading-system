@@ -309,10 +309,37 @@ class OKXAdapter(ExchangeAdapter):
         raw = data["data"][0]
         return {
             "symbol": raw["instId"],
+            "last": raw.get("last", "0"),
             "bid": raw.get("bidPx", "0"),
             "ask": raw.get("askPx", "0"),
-            "mark": raw.get("markPx", "0"),
+            "open_24h": raw.get("open24h", "0"),
+            "volume_24h": raw.get("vol24h", "0"),
+            "timestamp": raw.get("ts", "0"),
         }
+
+    async def get_public_mark_price(self, inst_id: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/public/mark-price", params={"instType": "SWAP", "instId": inst_id}
+        )
+        return data["data"][0]
+
+    async def get_public_index_ticker(self, inst_id: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/market/index-tickers", params={"instId": inst_id}
+        )
+        return data["data"][0]
+
+    async def get_public_funding_rate(self, inst_id: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/public/funding-rate", params={"instId": inst_id}
+        )
+        return data["data"][0]
+
+    async def get_public_open_interest(self, inst_id: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/public/open-interest", params={"instType": "SWAP", "instId": inst_id}
+        )
+        return data["data"][0]
 
     async def get_candles(self, inst_id: str, bar: str, limit: int = 500) -> list[list[str]]:
         """Fetch public OKX candles; no credentials or demo headers are used."""

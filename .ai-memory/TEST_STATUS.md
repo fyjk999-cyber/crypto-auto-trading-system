@@ -5,3 +5,4 @@
 - ruff: PASS
 - frontend typecheck: PASS
 - agent-project-test: PASS
+- 2026-08-28: Phase 8D-1.5 plus domain model layer full pytest: 647 passed, 7 skipped; ruff check: PASS; phase formatting scope: PASS; frontend tests/typecheck/build: PASS; agent-project-test previously passed. Full-repository ruff format check still has pre-existing unrelated drift.

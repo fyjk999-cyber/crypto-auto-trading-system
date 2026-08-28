@@ -6,3 +6,4 @@
 - CHAPTER 10 = BLOCKED_BY_ENVIRONMENT.
 - Frozen runtime qualification baseline: af9e393bc8c07bd0bbab8cfdc35421e9c707660b
 - REAL_MONEY_READY = NO. REAL_MONEY_ENABLED = NO.
+- Phase 8D-1.5 LLM provider runtime is configured for PAPER-only three-brain use; real-provider validation remains NOT_RUN.

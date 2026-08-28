@@ -27,6 +27,7 @@ from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
+from crypto_trader.llm_runtime.contracts import ModelRoute, ProviderUpsert
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
@@ -58,19 +59,157 @@ class OKXCredentialRequest(BaseModel):
     demo: bool = True
 
 
+class LLMTestRequest(BaseModel):
+    provider_id: str | None = None
+    provider: ProviderUpsert | None = None
+
+
+class LLMRoutesRequest(BaseModel):
+    routes: list[ModelRoute]
+
+
 def create_app(state: AppState) -> FastAPI:
     initial_credentials = EnvCredentialStore().read()
     state.okx_connection.configure(
         initial_credentials, EnvCredentialStore.key_suffix(initial_credentials.get("OKX_API_KEY"))
     )
+    okx_validation_lock = asyncio.Lock()
+
+    async def _validate_okx_credentials(*, reuse_healthy: bool = False) -> dict:
+        async with okx_validation_lock:
+            if reuse_healthy and state.okx_connection.authenticated:
+                return state.okx_connection.snapshot()
+            values = EnvCredentialStore().read()
+            if not (
+                values.get("OKX_API_KEY")
+                and values.get("OKX_API_SECRET")
+                and values.get("OKX_API_PASSPHRASE")
+            ):
+                result = {
+                    "authenticated": False,
+                    "health": "NOT_CONFIGURED",
+                    "stage": "CREDENTIALS",
+                    "reason_code": "NOT_CONFIGURED",
+                }
+                state.okx_connection.validation(result)
+                return result
+            if values.get("OKX_DEMO", "true") != "true":
+                result = {
+                    "authenticated": False,
+                    "health": "DEGRADED",
+                    "stage": "CREDENTIALS",
+                    "reason_code": "LIVE_FORBIDDEN",
+                }
+                state.okx_connection.validation(result)
+                return result
+            adapter = OKXAdapter(
+                base_url=values.get("OKX_BASE_URL", "https://openapi.okx.com"),
+                api_key=values["OKX_API_KEY"],
+                api_secret=values["OKX_API_SECRET"],
+                api_passphrase=values["OKX_API_PASSPHRASE"],
+                demo=True,
+            )
+            await adapter.connect()
+            stage = "PUBLIC_TIME"
+            try:
+                time_result = await adapter.sync_server_time()
+                if abs(time_result["offset_ms"]) > 1500:
+                    result = {
+                        "authenticated": False,
+                        "health": "DEGRADED",
+                        "stage": "PUBLIC_TIME",
+                        "reason_code": "TIME_OFFSET",
+                    }
+                    state.okx_connection.validation(result)
+                    return result
+                stage = "ACCOUNT_CONFIG"
+                account_config = await adapter.get_account_config()
+                config_rows = (
+                    account_config.get("data") if isinstance(account_config, dict) else None
+                )
+                if (
+                    not isinstance(config_rows, list)
+                    or not config_rows
+                    or not isinstance(config_rows[0], dict)
+                ):
+                    result = {
+                        "authenticated": False,
+                        "health": "DEGRADED",
+                        "stage": "ACCOUNT_CONFIG",
+                        "reason_code": "MALFORMED_RESPONSE",
+                        "message": "OKX account configuration response is incomplete",
+                    }
+                    state.okx_connection.validation(result)
+                    return result
+                stage = "BALANCE"
+                balances = await adapter.get_balances()
+                stage = "POSITIONS"
+                positions = await adapter.get_positions()
+                stage = "PENDING_ORDERS"
+                pending = await adapter.get_pending_orders()
+                result = {
+                    "authenticated": True,
+                    "health": "HEALTHY",
+                    "stage": "COMPLETE",
+                    "reason_code": None,
+                    "account_mode": config_rows[0].get("acctLv", "unknown"),
+                    "position_mode": config_rows[0].get("posMode", "unknown"),
+                    "instrument": "BTC-USDT-SWAP",
+                    "balances": len(balances),
+                    "positions": len(positions),
+                    "pending_orders": len(pending.get("data", [])),
+                }
+                state.okx_connection.validation(result)
+                return result
+            except OKXDiagnosticError as exc:
+                result = {
+                    "authenticated": False,
+                    "health": "DEGRADED",
+                    "stage": stage,
+                    "reason_code": exc.reason_code,
+                    "exchange_code": exc.exchange_code,
+                    "message": exc.safe_message,
+                }
+                state.okx_connection.validation(result)
+                return result
+            except Exception:
+                result = {
+                    "authenticated": False,
+                    "health": "DEGRADED",
+                    "stage": stage,
+                    "reason_code": "VALIDATION_ERROR",
+                }
+                state.okx_connection.validation(result)
+                return result
+            finally:
+                await adapter.disconnect()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        auto_validation_task = None
+        daily_review_task = None
         if state.engine is not None:
             await state.engine.start()
-        yield
-        if state.engine is not None:
-            await state.engine.stop()
+        if state.okx_connection.configured:
+            auto_validation_task = asyncio.create_task(
+                _validate_okx_credentials(reuse_healthy=True), name="okx-demo-auto-validation"
+            )
+        if state.daily_review_scheduler is not None:
+            daily_review_task = asyncio.create_task(
+                state.daily_review_scheduler.loop(), name="daily-review-scheduler"
+            )
+        try:
+            yield
+        finally:
+            if auto_validation_task is not None:
+                if not auto_validation_task.done():
+                    auto_validation_task.cancel()
+                await asyncio.gather(auto_validation_task, return_exceptions=True)
+            if daily_review_task is not None:
+                daily_review_task.cancel()
+                await asyncio.gather(daily_review_task, return_exceptions=True)
+            if state.engine is not None:
+                await state.engine.stop()
 
     app = FastAPI(title="Crypto Automated Trading System", version="0.1.0", lifespan=lifespan)
     if state.settings.app_env == "development":
@@ -149,90 +288,7 @@ def create_app(state: AppState) -> FastAPI:
         "/exchange/okx/validate", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def validate_okx_credentials():
-        values = EnvCredentialStore().read()
-        if not (
-            values.get("OKX_API_KEY")
-            and values.get("OKX_API_SECRET")
-            and values.get("OKX_API_PASSPHRASE")
-        ):
-            result = {
-                "authenticated": False,
-                "health": "NOT_CONFIGURED",
-                "stage": "CREDENTIALS",
-                "reason_code": "NOT_CONFIGURED",
-            }
-            state.okx_connection.validation(result)
-            return result
-        adapter = OKXAdapter(
-            base_url=values.get("OKX_BASE_URL", "https://openapi.okx.com"),
-            api_key=values["OKX_API_KEY"],
-            api_secret=values["OKX_API_SECRET"],
-            api_passphrase=values["OKX_API_PASSPHRASE"],
-            demo=values.get("OKX_DEMO", "true") == "true",
-        )
-        await adapter.connect()
-        stage = "PUBLIC_TIME"
-        try:
-            time_result = await adapter.sync_server_time()
-            if abs(time_result["offset_ms"]) > 1500:
-                result = {
-                    "authenticated": False,
-                    "health": "DEGRADED",
-                    "stage": "PUBLIC_TIME",
-                    "reason_code": "TIME_OFFSET",
-                }
-                state.okx_connection.validation(result)
-                return result
-            stage = "ACCOUNT_CONFIG"
-            account_config = await adapter.get_account_config()
-            config_rows = account_config.get("data") if isinstance(account_config, dict) else None
-            if (
-                not isinstance(config_rows, list)
-                or not config_rows
-                or not isinstance(config_rows[0], dict)
-            ):
-                result = {
-                    "authenticated": False,
-                    "health": "DEGRADED",
-                    "stage": "ACCOUNT_CONFIG",
-                    "reason_code": "MALFORMED_RESPONSE",
-                    "message": "OKX account configuration response is incomplete",
-                }
-                state.okx_connection.validation(result)
-                return result
-            stage = "BALANCE"
-            balances = await adapter.get_balances()
-            stage = "POSITIONS"
-            positions = await adapter.get_positions()
-            stage = "PENDING_ORDERS"
-            pending = await adapter.get_pending_orders()
-            result = {
-                "authenticated": True,
-                "health": "HEALTHY",
-                "stage": "COMPLETE",
-                "reason_code": None,
-                "account_mode": config_rows[0].get("acctLv", "unknown"),
-                "position_mode": config_rows[0].get("posMode", "unknown"),
-                "instrument": "BTC-USDT-SWAP",
-                "balances": len(balances),
-                "positions": len(positions),
-                "pending_orders": len(pending.get("data", [])),
-            }
-            state.okx_connection.validation(result)
-            return result
-        except OKXDiagnosticError as exc:
-            result = {
-                "authenticated": False,
-                "health": "DEGRADED",
-                "stage": stage,
-                "reason_code": exc.reason_code,
-                "exchange_code": exc.exchange_code,
-                "message": exc.safe_message,
-            }
-            state.okx_connection.validation(result)
-            return result
-        finally:
-            await adapter.disconnect()
+        return await _validate_okx_credentials(reuse_healthy=True)
 
     @app.delete(
         "/exchange/okx/credentials", dependencies=[Depends(require_role_dependency(Role.ADMIN))]
@@ -241,6 +297,119 @@ def create_app(state: AppState) -> FastAPI:
         EnvCredentialStore().clear()
         state.okx_connection.configure({}, None)
         return state.okx_connection.snapshot()
+
+    def _llm_gateway():
+        if state.llm_gateway is None or state.llm_repository is None:
+            raise HTTPException(status_code=503, detail="LLM runtime is not attached")
+        return state.llm_gateway
+
+    @app.get("/llm/status")
+    async def llm_status():
+        gateway = _llm_gateway()
+        return {**gateway.status(), "usage": await state.llm_repository.usage_today()}
+
+    @app.get("/llm/providers")
+    async def llm_providers():
+        gateway = _llm_gateway()
+        return {
+            "providers": [gateway.safe_provider(config) for config in gateway.providers.values()]
+        }
+
+    @app.post("/llm/providers", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
+    async def create_llm_provider(body: ProviderUpsert):
+        gateway = _llm_gateway()
+        if body.provider_id in gateway.providers:
+            raise HTTPException(status_code=409, detail="provider already exists")
+        try:
+            return await gateway.save_provider(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.put(
+        "/llm/providers/{provider_id}",
+        dependencies=[Depends(require_role_dependency(Role.OPERATOR))],
+    )
+    async def update_llm_provider(provider_id: str, body: ProviderUpsert):
+        gateway = _llm_gateway()
+        if provider_id != body.provider_id:
+            raise HTTPException(status_code=422, detail="provider_id cannot be changed")
+        try:
+            return await gateway.save_provider(body)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        "/llm/providers/{provider_id}",
+        dependencies=[Depends(require_role_dependency(Role.ADMIN))],
+    )
+    async def delete_llm_provider(provider_id: str):
+        gateway = _llm_gateway()
+        await gateway.delete_provider(provider_id)
+        return {"deleted": True, "provider_id": provider_id}
+
+    @app.get("/llm/routes")
+    async def llm_routes():
+        gateway = _llm_gateway()
+        return {"routes": [route.model_dump() for route in gateway.routes.values()]}
+
+    @app.get("/llm/domain-models")
+    async def llm_domain_models():
+        if state.domain_model_runtime is None:
+            raise HTTPException(status_code=503, detail="Domain model runtime is not attached")
+        return {"domain_models": state.domain_model_runtime.describe()}
+
+    @app.put("/llm/routes", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
+    async def update_llm_routes(body: LLMRoutesRequest):
+        gateway = _llm_gateway()
+        try:
+            routes = await gateway.save_routes(body.routes)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"routes": routes}
+
+    @app.post("/llm/test", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
+    async def test_llm_provider(body: LLMTestRequest):
+        if body.provider is not None:
+            response = await _llm_gateway().test_unsaved_provider(body.provider)
+            provider_id = body.provider.provider_id
+        elif body.provider_id:
+            response = await _llm_gateway().test_provider(body.provider_id)
+            provider_id = body.provider_id
+        else:
+            raise HTTPException(status_code=422, detail="provider or provider_id is required")
+        return {
+            "ok": response.ok,
+            "provider": response.provider or provider_id,
+            "model": response.model,
+            "latency_ms": round(response.latency_ms, 2),
+            "checked_at": response.checked_at,
+            "error_code": response.error_code.value if response.error_code else None,
+        }
+
+    @app.post("/llm/qualification", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
+    async def qualify_llm_routes():
+        """Run inert, schema-validated checks for the six configured routes."""
+        responses = await _llm_gateway().qualify_configured_routes()
+        checks = [
+            {
+                "route": response.route,
+                "ok": response.ok,
+                "provider": response.provider,
+                "model": response.model,
+                "latency_ms": round(response.latency_ms, 2),
+                "input_tokens": response.input_tokens,
+                "output_tokens": response.output_tokens,
+                "total_tokens": response.total_tokens,
+                "error_code": response.error_code.value if response.error_code else None,
+            }
+            for response in responses
+        ]
+        return {"ok": bool(checks) and all(check["ok"] for check in checks), "checks": checks}
+
+    @app.get("/llm/usage")
+    async def llm_usage():
+        _llm_gateway()
+        return await state.llm_repository.usage_today()
 
     def _perpetual_engine():
         contract = PerpetualContract(
@@ -291,12 +460,16 @@ def create_app(state: AppState) -> FastAPI:
         if get_market_state is not None:
             try:
                 ms = await get_market_state("BTCUSDT")
-                return ms.model_dump(mode="json")
+                payload = ms.model_dump(mode="json")
+                payload.update(
+                    provider="OKX", source="OKX", status=ms.health.value, data_source="REAL"
+                )
+                return payload
             except Exception as exc:
                 detail = str(exc)
                 return {
-                    "provider": "BINANCE_USDM",
-                    "source": "BINANCE_USDM",
+                    "provider": "OKX",
+                    "source": "OKX",
                     "status": "GEO_RESTRICTED"
                     if "451" in detail or "restricted" in detail.lower()
                     else "UNAVAILABLE",
@@ -312,8 +485,8 @@ def create_app(state: AppState) -> FastAPI:
                 "symbol": "BTCUSDT",
             }
         return {
-            "provider": "BINANCE_USDM",
-            "source": "BINANCE_USDM",
+            "provider": "OKX",
+            "source": "OKX",
             "status": "UNAVAILABLE",
             "data_source": "REAL",
             "symbol": "BTCUSDT",
@@ -408,11 +581,17 @@ def create_app(state: AppState) -> FastAPI:
         if get_market_state is not None:
             try:
                 ms = await get_market_state("BTCUSDT")
-                return {k: v.model_dump(mode="json") for k, v in ms.sources.items()}
+                return {
+                    "provider": "OKX",
+                    "source": "OKX",
+                    "status": ms.health.value,
+                    "data_source": "REAL",
+                    "sources": {k: v.model_dump(mode="json") for k, v in ms.sources.items()},
+                }
             except Exception as exc:
                 return {
-                    "provider": "BINANCE_USDM",
-                    "source": "BINANCE_USDM",
+                    "provider": "OKX",
+                    "source": "OKX",
                     "status": "UNAVAILABLE",
                     "data_source": "REAL",
                     "last_error": str(exc),
@@ -425,8 +604,8 @@ def create_app(state: AppState) -> FastAPI:
                 "data_source": "SYNTHETIC",
             }
         return {
-            "provider": "BINANCE_USDM",
-            "source": "BINANCE_USDM",
+            "provider": "OKX",
+            "source": "OKX",
             "status": "UNAVAILABLE",
             "data_source": "REAL",
         }
@@ -537,14 +716,17 @@ def create_app(state: AppState) -> FastAPI:
         market_snapshot = await market()
         return {
             "market_data": {
-                "provider": "BINANCE_USDM",
+                "provider": "OKX",
                 "mode": "REAL" if state.settings.paper_mode == "PAPER_REAL_MARKET" else "SYNTHETIC",
                 "status": market_snapshot.get("status", "UNAVAILABLE"),
             },
             "execution": {
-                "provider": "OKX",
-                **state.okx_connection.snapshot(),
-                "status": state.okx_connection.health,
+                "provider": "LOCAL_PAPER",
+                "environment": "LOCAL",
+                "configured": True,
+                "authenticated": False,
+                "health": "CONNECTED" if adapter_connected else "DISCONNECTED",
+                "status": "CONNECTED" if adapter_connected else "DISCONNECTED",
             },
             "adapter": "connected" if adapter_connected else "disconnected",
             "mode": state.settings.effective_mode().value,

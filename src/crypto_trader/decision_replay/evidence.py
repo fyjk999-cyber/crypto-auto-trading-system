@@ -24,6 +24,7 @@ class DecisionEvidence:
     decision: dict
     risk_decision: dict
     execution_intent_reference: str = ""
+    domain_model_version: str = ""
     created_at_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict:
@@ -44,6 +45,7 @@ class DecisionEvidence:
             "decision": dict(self.decision),
             "risk_decision": dict(self.risk_decision),
             "execution_intent_reference": self.execution_intent_reference,
+            "domain_model_version": self.domain_model_version,
             "created_at_utc": self.created_at_utc,
         }
 

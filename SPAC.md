@@ -213,3 +213,12 @@ second source of financial truth.
   FORWARD_SHADOW_COMPLETE.
 - Micro-capital deployment requires manual human approval; no automatic live.
 - Live trading remains disabled (LIVE_TRADING_ENABLED=false).
+
+## 21. Phase 8D-1.5 LLM Provider Runtime
+
+- The LLM is shared infrastructure for exactly three brains, not a fourth brain.
+- Provider selection is semantic-route based; keys remain encrypted outside DB rows.
+- LLM output is structured and advisory. RiskEngine and ExecutionAuthority retain
+  final authority, and PAPER-only execution remains unchanged.
+- A real provider qualification is manual and must not be represented as complete
+  until the configured provider passes the six-route inert qualification.

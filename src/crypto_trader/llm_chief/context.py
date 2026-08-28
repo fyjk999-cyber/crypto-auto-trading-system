@@ -43,3 +43,21 @@ class ChiefTraderContext:
             // 4
             + 1000
         )
+
+    def domain_model_context(self) -> dict:
+        """Canonical read-only state consumed by CryptoTrader-Live."""
+        return {
+            "MarketSnapshot": self.market_snapshot,
+            "FactorSnapshot": self.quant_evidence,
+            "FactorHealth": self.risk_summary.get("factor_intelligence", {}),
+            "FactorProfile": self.risk_summary.get("factor_profile", "FULL"),
+            "PortfolioState": self.portfolio_state,
+            "PositionState": self.portfolio_state.get("positions", {}),
+            "RiskContext": self.risk_summary,
+            "RelevantMemory": {
+                "knowledge": self.knowledge,
+                "similar_episodes": self.similar_episodes,
+                "compressed_experience": self.compressed_experience,
+            },
+            "TradingRelease": self.risk_summary.get("trading_release", {}),
+        }

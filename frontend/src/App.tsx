@@ -5,12 +5,21 @@ import { useKlines } from "./hooks/useKlines";
 import { useTradingSnapshot } from "./hooks/useTradingSnapshot";
 import type { ApiState, KlineInterval, Order, Position, TradingSnapshot } from "./types/api";
 
-type Page = "trade" | "positions" | "orders" | "review" | "system";
+type Page = "trade" | "positions" | "orders" | "review" | "llm" | "system";
 type JsonRecord = Record<string, unknown>;
 
 const pages: Array<[Page, string]> = [
-  ["trade", "交易"], ["positions", "持仓"], ["orders", "订单"], ["review", "复盘"], ["system", "系统"],
+  ["trade", "交易"], ["positions", "持仓"], ["orders", "订单"], ["review", "复盘"], ["llm", "LLM / AI 模型"], ["system", "系统"],
 ];
+
+const llmRouteLabels: Record<string, string> = {
+  live_analysis: "Live Analysis",
+  daily_review: "Daily Review",
+  daily_lesson_extraction: "Daily Lesson Extraction",
+  evolution_research: "Evolution Research",
+  evolution_hypothesis: "Evolution Hypothesis",
+  evolution_candidate_reasoning: "Evolution Candidate Reasoning",
+};
 
 const statusLabels: Record<ApiState<unknown>["status"], string> = {
   ready: "已连接", empty: "暂无数据", unavailable: "暂不可用", offline: "后端离线", error: "数据异常", loading: "加载中",
@@ -156,6 +165,7 @@ function OkxConnectionCard() {
 
   const validateCredentials = async () => {
     setBusy(true);
+    setMessage("正在验证 OKX 连接…");
     const response = await sendJson<JsonRecord>("/exchange/okx/validate", "POST");
     setBusy(false);
     if (response.status === "ready" && response.data) {
@@ -171,9 +181,9 @@ function OkxConnectionCard() {
 
   const configured = status.configured === true;
   const health = text(status.health, configured ? "未验证" : "未配置");
-  return <Panel title="OKX 交易所连接" className="okx-panel">
-    <dl className="system-list okx-status"><div><dt>执行交易所</dt><dd>OKX</dd></div><div><dt>环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">{health}</dd></div><div><dt>API Key</dt><dd>{configured ? `已配置（…${text(status.key_suffix)}）` : "未配置"}</dd></div>{Boolean(status.reason_code) && <div><dt>验证状态</dt><dd className="muted-status">{okxValidationLabels[String(status.reason_code)] ?? "OKX 拒绝请求"}</dd></div>}</dl>
-    {!configuring ? <div className="form-actions"><button className="primary-button" type="button" onClick={() => setConfiguring(true)}>配置 API</button>{configured && <button className="secondary-button" type="button" disabled={busy} onClick={() => void validateCredentials()}>验证连接</button>}</div> : <form className="okx-form" onSubmit={(event) => void saveCredentials(event)}>
+  return <Panel title="OKX API 连接" className="okx-panel">
+    <dl className="system-list okx-status"><div><dt>API 服务</dt><dd>OKX</dd></div><div><dt>验证环境</dt><dd>模拟盘 DEMO</dd></div><div><dt>连接状态</dt><dd className="muted-status">{health}</dd></div><div><dt>API Key</dt><dd>{configured ? `已配置（…${text(status.key_suffix)}）` : "未配置"}</dd></div>{Boolean(status.reason_code) && <div><dt>验证状态</dt><dd className="muted-status">{okxValidationLabels[String(status.reason_code)] ?? "OKX 拒绝请求"}</dd></div>}</dl>
+    {!configuring ? <div className="form-actions"><button className="primary-button" type="button" onClick={() => setConfiguring(true)}>配置 API</button>{configured && <button className="secondary-button" type="button" disabled={busy} onClick={() => void validateCredentials()}>{busy ? "验证中…" : "验证连接"}</button>}</div> : <form className="okx-form" onSubmit={(event) => void saveCredentials(event)}>
       <label>API Key<input aria-label="OKX API Key" name="api_key" autoComplete="off" type="password" required /></label>
       <label>Secret Key<input aria-label="OKX Secret Key" name="api_secret" autoComplete="off" type="password" required /></label>
       <label>Passphrase<input aria-label="OKX Passphrase" name="api_passphrase" autoComplete="off" type="password" required /></label>
@@ -199,7 +209,8 @@ function marketSource(snapshot: TradingSnapshot) {
 function marketProvider(snapshot: TradingSnapshot, source: string) {
   const market = record(snapshot.optional["/market"]?.data);
   const dataSource = String(pick(market, "data_source", "source") ?? "").toUpperCase();
-  return source === "SYNTHETIC" || dataSource.includes("SYNTHETIC") ? "后端模拟行情" : "Binance USDⓈ-M";
+  if (source === "SYNTHETIC" || dataSource.includes("SYNTHETIC")) return "后端模拟行情";
+  return dataSource.includes("OKX") ? "OKX" : "行情提供方未知";
 }
 
 function StrategyRows({ snapshot }: { snapshot: TradingSnapshot }) {
@@ -248,6 +259,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const risk = record(snapshot.optional["/risk"]?.data);
   const riskConfig = record(risk.risk_config);
   const decision = direction(pick(signal, "side", "direction", "decision"));
+  const hasSignal = Object.keys(signal).length > 0;
   const positions = Object.values(snapshot.positions.data ?? {}).filter((item) => Number(item.quantity) !== 0);
   const current = positions[0];
   const kline = useKlines(snapshot.lastEvent, snapshot.websocket);
@@ -255,6 +267,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const klineProvider = klineHealthy && kline.state.data?.source === "OKX" ? "OKX" : provider;
   const klineSourceLabel = klineHealthy && kline.state.data?.source === "OKX" ? "实时" : sourceLabel;
   const priceAllowed = !["UNAVAILABLE", "GEO_RESTRICTED", "UNKNOWN"].includes(source);
+  const decisionLabel = !priceAllowed ? "行情不可用，无法判断" : hasSignal ? decision.label : "暂无判断数据";
 
   return <>
     <section className="metrics" aria-label="核心指标">
@@ -266,7 +279,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
     </section>
     <section className="trading-workspace">
       <Panel title="BTCUSDT 行情" className="market-panel" action={<span className={`source-badge ${source.toLowerCase()}`}>{sourceLabel}</span>}>
-        <div className="market-source-header"><strong>BTCUSDT</strong><span>行情源：{klineProvider} · {klineSourceLabel}</span><span>执行交易所：OKX 模拟盘 DEMO</span></div>
+        <div className="market-source-header"><strong>BTCUSDT</strong><span>行情：{klineProvider} · {klineSourceLabel}</span><span>执行：本地 PAPER 模拟成交</span></div>
         <div className="market-strip"><div><strong>{priceAllowed ? money(pick(market, "price", "last_price")) : "--"}</strong><span>当前价格</span></div><div><b>{priceAllowed ? money(market.mark_price) : "--"}</b><span>标记价格</span></div><div><b>{priceAllowed ? money(market.index_price) : "--"}</b><span>指数价格</span></div><div><b>{percent(pick(market, "price_change_percent_24h", "change_24h"))}</b><span>24H 涨跌</span></div><div><b>{percent(market.funding_rate)}</b><span>资金费率</span></div><div><b>{numberText(market.open_interest, 2)}</b><span>未平仓量 OI</span></div></div>
         <div className="market-details"><span>买一 <b>{priceAllowed ? money(market.best_bid) : "--"}</b></span><span>卖一 <b>{priceAllowed ? money(market.best_ask) : "--"}</b></span><span>Spread <b>{priceAllowed ? numberText(market.spread, 4) : "--"}</b></span><span>Basis <b>{percent(market.basis)}</b></span></div>
         <div className="chart-toolbar"><div>{kline.intervals.map((value) => <button key={value} type="button" aria-pressed={kline.interval === value} disabled={!kline.supportedIntervals.includes(value)} onClick={() => kline.setInterval(value as KlineInterval)}>{value}</button>)}</div><span>{snapshot.websocket === "connected" ? "WebSocket 已连接" : "实时同步中断"}</span></div>
@@ -274,7 +287,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
       </Panel>
       <aside className="decision-column">
         <Panel title="当前判断" source={snapshot.optional["/signals"]} className="decision-panel">
-          <div className={`decision ${decision.tone}`}><strong>{decision.label}</strong><span>{decision.code}</span></div>
+          <div className={`decision ${decision.tone}`}><strong>{decisionLabel}</strong><span>{hasSignal ? decision.code : "--"}</span></div>
           <dl className="decision-facts"><div><dt>置信度</dt><dd>{percent(signal.confidence)}</dd></div><div><dt>市场状态</dt><dd>{regimeLabels[String(regime.regime ?? "").toUpperCase()] ?? "--"}</dd></div><div><dt>建议仓位</dt><dd>{text(pick(signal, "suggested_position", "position_size"))}</dd></div><div><dt>建议杠杆</dt><dd>{pick(signal, "leverage", "risk_capped_leverage") === undefined ? "--" : `${numberText(pick(signal, "leverage", "risk_capped_leverage"))}x`}</dd></div><div><dt>风险等级</dt><dd>{text(pick(signal, "risk_level"))}</dd></div></dl>
           <h3>策略共识</h3><StrategyRows snapshot={snapshot} />
           <h3>有效权重</h3><WeightRows snapshot={snapshot} />
@@ -312,6 +325,130 @@ function ReviewPage({ snapshot }: { snapshot: TradingSnapshot }) {
   return <div className="review-layout"><Panel title="今日表现" source={dailyState}><div className="review-metrics"><Metric label="PnL" value={money(pick(daily, "pnl", "net_pnl"))} /><Metric label="胜率" value={percent(pick(daily, "win_rate"))} /><Metric label="Profit Factor" value={numberText(pick(daily, "profit_factor"))} /><Metric label="最大回撤" value={percent(pick(daily, "max_drawdown"))} /><Metric label="交易次数" value={numberText(pick(daily, "trade_count", "trades"), 0)} /><Metric label="手续费 / Funding" value={money(pick(daily, "fees", "funding"))} /></div></Panel><Panel title="策略表现" source={dailyState}>{dailyState.status === "ready" && Object.keys(daily).length ? <p className="muted-line">后端尚未提供结构化的分策略表现字段</p> : <EmptyBlock source={dailyState} unavailable="复盘接口暂未开放" />}</Panel><Panel title="系统学习" source={learningState}><dl className="learning-grid"><div><dt>快速学习</dt><dd>{Object.keys(fast).length ? "已更新" : "--"}</dd></div><div><dt>慢速学习候选模型</dt><dd>{candidates.length ? candidates.map(String).join("、") : "--"}</dd></div><div><dt>当前阶段</dt><dd>{text(pick(learning, "stage", "phase"))}</dd></div></dl></Panel><Panel title="失败记忆" source={dailyState}><p className="muted-line">本日主要问题暂无结构化统计</p><button className="text-button" type="button" disabled>查看全部</button></Panel></div>;
 }
 
+function LLMPage() {
+  const [providers, setProviders] = useState<JsonRecord[]>([]);
+  const [routes, setRoutes] = useState<JsonRecord[]>([]);
+  const [domainModels, setDomainModels] = useState<JsonRecord[]>([]);
+  const [status, setStatus] = useState<JsonRecord>({});
+  const [providerType, setProviderType] = useState("deepseek");
+  const [providerId, setProviderId] = useState("deepseek");
+  const [displayName, setDisplayName] = useState("DeepSeek");
+  const [baseUrl, setBaseUrl] = useState("https://api.deepseek.com");
+  const [apiKey, setApiKey] = useState("");
+  const [defaultModel, setDefaultModel] = useState("deepseek-chat");
+  const [routeModels, setRouteModels] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState("正在读取 LLM 配置…");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    const [providerResponse, routeResponse, statusResponse, domainResponse] = await Promise.all([
+      getJson<JsonRecord>("/llm/providers"), getJson<JsonRecord>("/llm/routes"), getJson<JsonRecord>("/llm/status"),
+      getJson<JsonRecord>("/llm/domain-models"),
+    ]);
+    const nextProviders = list(providerResponse.data && record(providerResponse.data).providers);
+    const nextRoutes = list(routeResponse.data && record(routeResponse.data).routes);
+    setProviders(nextProviders);
+    setRoutes(nextRoutes);
+    setDomainModels(list(domainResponse.data && record(domainResponse.data).domain_models));
+    setStatus(record(statusResponse.data));
+    setRouteModels(Object.fromEntries(nextRoutes.map((route) => [String(route.route_name), String(route.model_name ?? "")])));
+    if (nextProviders[0]) {
+      const provider = nextProviders[0];
+      setProviderId(String(provider.provider_id));
+      setProviderType(String(provider.provider_type));
+      setDisplayName(String(provider.display_name));
+      setBaseUrl(String(provider.base_url));
+      setDefaultModel(String(provider.default_model));
+    }
+    setMessage(statusResponse.status === "ready" ? "" : "LLM 配置接口暂不可用");
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  const providerPayload = () => ({
+    provider_id: providerId,
+    provider_type: providerType,
+    display_name: displayName,
+    base_url: baseUrl,
+    api_key: apiKey || undefined,
+    default_model: defaultModel,
+    enabled: true,
+    timeout_seconds: 30,
+    max_retries: 2,
+  });
+
+  const selectProviderType = (value: string) => {
+    setProviderType(value);
+    if (value === "deepseek") { setProviderId("deepseek"); setDisplayName("DeepSeek"); setBaseUrl("https://api.deepseek.com"); setDefaultModel("deepseek-chat"); }
+    if (value === "openai") { setProviderId("openai"); setDisplayName("OpenAI"); setBaseUrl("https://api.openai.com/v1"); setDefaultModel("gpt-5-mini"); }
+    if (value === "custom") { setProviderId("custom"); setDisplayName("Custom"); setBaseUrl(""); setDefaultModel(""); }
+  };
+
+  const testConnection = async () => {
+    setBusy(true);
+    setMessage("正在进行真实模型连接测试…");
+    const existing = providers.some((provider) => provider.provider_id === providerId);
+    const response = await sendJson<JsonRecord>("/llm/test", "POST", apiKey ? { provider: providerPayload() } : existing ? { provider_id: providerId } : { provider: providerPayload() });
+    setBusy(false);
+    const payload = record(response.data);
+    await load();
+    setMessage(response.status === "ready" && payload.ok === true ? `连接成功 · ${numberText(payload.latency_ms, 0)} ms` : `连接失败 · ${text(payload.error_code, "请检查配置")}`);
+  };
+
+  const saveProvider = async () => {
+    setBusy(true);
+    const existing = providers.some((provider) => provider.provider_id === providerId);
+    const response = await sendJson<JsonRecord>(`/llm/providers${existing ? `/${providerId}` : ""}`, existing ? "PUT" : "POST", providerPayload());
+    setBusy(false);
+    if (response.status === "ready") {
+      setApiKey("");
+      setMessage("Provider 已安全保存，API Key 未保存在浏览器中。");
+      await load();
+    } else setMessage("保存失败，请检查 Provider 配置。");
+  };
+
+  const saveRoutes = async () => {
+    setBusy(true);
+    const payload = Object.keys(llmRouteLabels).map((routeName) => ({
+      route_name: routeName, provider_id: providerId, model_name: routeModels[routeName] || defaultModel,
+      enabled: true, temperature: 0.2, max_tokens: 800, timeout_seconds: 30,
+    }));
+    const response = await sendJson<JsonRecord>("/llm/routes", "PUT", { routes: payload });
+    setBusy(false);
+    setMessage(response.status === "ready" ? "模型路由已热更新，无需重启。" : "路由保存失败。");
+    await load();
+  };
+
+  const health = text(status.health, "NOT CONFIGURED");
+  const usage = record(status.usage);
+  const selected = providers.find((provider) => provider.provider_id === providerId) ?? {};
+  return <div className="llm-layout">
+    <Panel title="LLM Provider" action={<span className={`state-badge ${health === "HEALTHY" ? "ready" : "unavailable"}`}>{health}</span>}>
+      <div className="llm-status-grid"><Metric label="连接" value={health} /><Metric label="延迟" value={selected.latency_ms === undefined ? "--" : `${numberText(selected.latency_ms, 0)} ms`} /><Metric label="最后检查" value={text(selected.checked_at)} /><Metric label="今日调用" value={numberText(usage.today_calls, 0)} /></div>
+      <form className="llm-form" onSubmit={(event) => event.preventDefault()}>
+        <label>Provider<select value={providerType} onChange={(event) => selectProviderType(event.target.value)}><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option><option value="custom">Custom</option></select></label>
+        <label>显示名称<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label>
+        <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required /></label>
+        <label>API Key<input aria-label="LLM API Key" type="password" autoComplete="off" value={apiKey} placeholder={text(selected.api_key_masked, "输入 API Key")} onChange={(event) => setApiKey(event.target.value)} /></label>
+        <label>基础模型 / Base Model<input value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} required /></label>
+      </form>
+      <p className="form-notice">API Key 仅提交到后端加密 SecretStore，不写入 localStorage、IndexedDB 或前端构建。</p>
+      <div className="form-actions"><button className="secondary-button" type="button" disabled={busy || (!apiKey && !selected.configured)} onClick={() => void testConnection()}>{busy ? "处理中…" : "测试连接"}</button><button className="primary-button" type="button" disabled={busy || (!apiKey && !selected.configured)} onClick={() => void saveProvider()}>保存配置</button></div>
+      {message && <p className="form-hint" role="status">{message}</p>}
+    </Panel>
+    <Panel title="领域模型 / Domain Models">
+      <div className="domain-model-list">{domainModels.map((profile) => {
+        const bases = list(profile.routes).map((binding) => binding.provider_id && binding.base_model ? `${text(binding.provider_id)} / ${text(binding.base_model)}` : "未配置").join(" · ");
+        return <article key={text(profile.domain_model_id)}><strong>{text(profile.display_name)}</strong><span>版本：{text(profile.version)}</span><span>基础：{bases || "未配置"}</span><small>Prompt {text(profile.prompt_version)} · Context {text(profile.context_profile_version)} · Schema {text(profile.output_schema_version)}</small></article>;
+      })}</div>
+    </Panel>
+    <Panel title="MODEL ROUTING">
+      <div className="route-list">{Object.entries(llmRouteLabels).map(([routeName, label]) => <div key={routeName}><strong>{label}</strong><label>Provider<select value={providerId} onChange={(event) => setProviderId(event.target.value)}>{providers.length ? providers.map((provider) => <option key={String(provider.provider_id)} value={String(provider.provider_id)}>{text(provider.display_name)}</option>) : <option value={providerId}>{displayName}</option>}</select></label><label>Model<input value={routeModels[routeName] ?? defaultModel} onChange={(event) => setRouteModels((current) => ({ ...current, [routeName]: event.target.value }))} /></label></div>)}</div>
+      <div className="form-actions"><button className="primary-button" type="button" disabled={busy || !providers.length} onClick={() => void saveRoutes()}>保存路由</button></div>
+    </Panel>
+  </div>;
+}
+
 function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const runtime = record(snapshot.runtime.data);
   const exchange = record(snapshot.optional["/exchange-health"]?.data);
@@ -319,8 +456,8 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const source = marketSource(snapshot);
   const execution = record(exchange.execution);
   const marketStatus = String(pick(record(exchange.market_data), "status") ?? source).toUpperCase();
-  const okxOverview = execution.authenticated === true && execution.status === "HEALTHY" ? "已连接" : execution.configured === true ? "已配置" : execution.status === "DEGRADED" ? "异常" : "未配置";
-  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>K线行情</dt><dd>OKX 实时</dd></div><div><dt>Binance 行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">{okxOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
+  const executionOverview = execution.provider === "LOCAL_PAPER" ? "本地 PAPER" : execution.status === "CONNECTED" ? "已连接" : "未连接";
+  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>OKX 行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>执行</dt><dd className="muted-status">{executionOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
 function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot }) {
@@ -328,6 +465,7 @@ function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot
   if (page === "positions") return <PositionsPage snapshot={snapshot} />;
   if (page === "orders") return <OrdersPage snapshot={snapshot} />;
   if (page === "review") return <ReviewPage snapshot={snapshot} />;
+  if (page === "llm") return <LLMPage />;
   return <SystemPage snapshot={snapshot} />;
 }
 
@@ -339,12 +477,15 @@ export default function App() {
   const runtime = record(snapshot.runtime.data);
   const source = marketSource(snapshot);
   const provider = marketProvider(snapshot, source);
+  const okxStatus = record(snapshot.optional["/exchange/okx/status"]?.data);
+  const okxConfigured = okxStatus.configured === true;
+  const okxAuthenticated = okxStatus.authenticated === true;
   const topStates = useMemo(() => [
     { label: String(pick(runtime, "state", "runtime_state", "engine") ?? "").toUpperCase() === "RUNNING" ? "系统运行中" : "系统待机", ok: String(pick(runtime, "state", "runtime_state") ?? "").toUpperCase() === "RUNNING" },
     { label: sourceLabels[source] ? `${provider.replace(" USDⓈ-M", "")}：${sourceLabels[source]}` : `${provider.replace(" USDⓈ-M", "")}：状态未知`, ok: source === "HEALTHY" },
-    { label: "OKX：未配置", ok: false },
+    { label: okxAuthenticated ? "OKX API：已连接" : okxConfigured ? "OKX API：待验证" : "OKX API：未配置", ok: okxAuthenticated },
     { label: snapshot.websocket === "connected" ? "WebSocket 已连接" : "WebSocket 未连接", ok: snapshot.websocket === "connected" },
-  ], [runtime, snapshot.websocket, source, provider]);
+  ], [runtime, snapshot.websocket, source, provider, okxAuthenticated, okxConfigured]);
 
   return <div className="terminal-shell"><header className="terminal-topbar"><div className="identity"><span className="logo">CQ</span><div><strong>量化交易</strong><small>自动交易系统</small></div></div><strong className="symbol">BTCUSDT</strong><div className="top-status"><span className="mode">PAPER</span><span>本地</span>{topStates.map((item) => <span className={item.ok ? "ok" : ""} key={item.label}><i />{item.label}</span>)}</div></header><nav className="primary-nav" aria-label="主导航">{pages.map(([id, label]) => <a key={id} href={`#/${id}`} aria-current={page === id ? "page" : undefined}>{label}</a>)}</nav><main>{offline && <section className="offline-notice" role="alert"><div><strong>后端离线</strong><span>本地 API 暂时不可用，页面会自动重试。</span></div><button type="button" onClick={() => void refresh()}>立即重试</button></section>}<PageContent page={page} snapshot={snapshot} /></main><footer>仅用于 PAPER 模拟交易研究，不连接真实资金，不构成投资建议。</footer></div>;
 }

@@ -14,9 +14,15 @@ from sqlalchemy import text
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
+from crypto_trader.evolution.gateways.research_gateway import ResearchGateway
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.factors.tool_gateway import FactorToolGateway
+from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.llm_runtime.domain_models import DomainModelRuntime
+from crypto_trader.llm_runtime.gateway import GatewayProviderAdapter, LLMGateway
+from crypto_trader.llm_runtime.repository import LLMRepository
+from crypto_trader.llm_runtime.secrets import EncryptedFileSecretStore
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -54,6 +60,11 @@ class RuntimeBundle:
     supervisor: TradingRuntimeSupervisor
     ai_bridge: AIPositionRuntimeBridge
     factor_gateway: FactorToolGateway
+    llm_gateway: LLMGateway
+    domain_model_runtime: DomainModelRuntime
+    llm_repository: LLMRepository
+    daily_review_scheduler: DailyReviewScheduler
+    research_gateway: ResearchGateway
     app_state: AppState
 
 
@@ -70,6 +81,13 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     leases = LeaseManager(database.session_factory)
     reconciliation = ReconciliationService(database.session_factory)
     audit = AuditService(database.session_factory)
+    llm_repository = LLMRepository(database.session_factory)
+    llm_gateway = LLMGateway(
+        llm_repository,
+        EncryptedFileSecretStore(settings.llm_secret_store_path, settings.llm_master_key_path),
+    )
+    await llm_gateway.reload()
+    domain_model_runtime = DomainModelRuntime(llm_gateway)
 
     # Paper is default. SimulatedExchangeAdapter implements the same contract
     # as a live adapter, so LIVE/PAPER/SHADOW share one core.
@@ -94,7 +112,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_position_notional="5000",
         max_leverage="3",
     )
-    chief_trader = ChiefTraderStrategyAdapter(provider=None)
+    chief_trader = ChiefTraderStrategyAdapter(
+        provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime)
+    )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
     perpetual_contract = PerpetualContract(
@@ -109,6 +129,15 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
     bridge = AIPositionRuntimeBridge(perpetual_engine=perpetual_engine)
     factor_gateway = FactorToolGateway()
+    daily_review_scheduler = DailyReviewScheduler(
+        database.session_factory,
+        review_time_utc=settings.daily_review_time_utc,
+        llm_gateway=llm_gateway,
+        domain_model_runtime=domain_model_runtime,
+    )
+    research_gateway = ResearchGateway(
+        llm_gateway=llm_gateway, domain_model_runtime=domain_model_runtime
+    )
     supervisor = TradingRuntimeSupervisor(
         lease_manager=leases,
         ai_position_callback=lambda: bridge.evaluate_active_positions(engine, portfolio),
@@ -149,6 +178,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         supervisor=supervisor,
         ai_bridge=bridge,
         factor_gateway=factor_gateway,
+        llm_gateway=llm_gateway,
+        domain_model_runtime=domain_model_runtime,
+        llm_repository=llm_repository,
+        daily_review_scheduler=daily_review_scheduler,
+        research_gateway=research_gateway,
     )
     return RuntimeBundle(
         settings=settings,
@@ -167,6 +201,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         supervisor=supervisor,
         ai_bridge=bridge,
         factor_gateway=factor_gateway,
+        llm_gateway=llm_gateway,
+        domain_model_runtime=domain_model_runtime,
+        llm_repository=llm_repository,
+        daily_review_scheduler=daily_review_scheduler,
+        research_gateway=research_gateway,
         app_state=app_state,
     )
 

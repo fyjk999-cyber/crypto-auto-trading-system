@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -99,3 +100,56 @@ def test_credential_store_key_suffix_only():
 def test_env_file_is_gitignored():
     root = Path(__file__).resolve().parents[2]
     assert ".env" in (root / ".gitignore").read_text()
+
+
+def test_configured_demo_credentials_are_validated_automatically_on_startup(
+    database, monkeypatch, tmp_path
+):
+    env_file = tmp_path / ".env"
+    monkeypatch.setenv("OKX_CREDENTIALS_ENV_FILE", str(env_file))
+    EnvCredentialStore(env_file).write(
+        {
+            "OKX_API_KEY": "demo-key-1234",
+            "OKX_API_SECRET": "demo-secret",
+            "OKX_API_PASSPHRASE": "demo-pass",
+            "OKX_DEMO": "true",
+        }
+    )
+
+    class ValidDemoAdapter:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+        async def sync_server_time(self):
+            return {"offset_ms": 0}
+
+        async def get_account_config(self):
+            return {"data": [{"acctLv": "2", "posMode": "net_mode"}]}
+
+        async def get_balances(self):
+            return []
+
+        async def get_positions(self):
+            return []
+
+        async def get_pending_orders(self):
+            return {"data": []}
+
+    monkeypatch.setattr("crypto_trader.api.app.OKXAdapter", ValidDemoAdapter)
+    with TestClient(create_app(make_state(database, str(env_file)))) as client:
+        payload = {}
+        for _ in range(20):
+            payload = client.get("/exchange/okx/status").json()
+            if payload.get("authenticated") is True:
+                break
+            time.sleep(0.01)
+
+    assert payload["authenticated"] is True
+    assert payload["health"] == "HEALTHY"
+    assert payload["key_suffix"] == "1234"

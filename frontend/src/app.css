@@ -282,6 +282,20 @@ td, .order-row summary { font-size: var(--font-md); }
 .form-notice { margin: 0; padding: 10px 12px; border-radius: 8px; color: #845710; background: var(--amber-soft); font-size: var(--font-sm); }
 .form-hint { margin: 0; color: var(--muted); font-size: var(--font-sm); }
 .form-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.llm-layout { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 12px; }
+.llm-layout .panel > :not(.panel-header) { margin: 17px; }
+.llm-status-grid { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.llm-status-grid .metric { min-height: 82px; }
+.llm-form { display: grid; grid-template-columns: repeat(2, 1fr); gap: 13px; margin-top: 16px !important; }
+.llm-form label, .route-list label { display: grid; gap: 6px; color: var(--ink); font-size: var(--font-sm); font-weight: 700; }
+.llm-form input, .llm-form select, .route-list input, .route-list select { min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: white; font: inherit; }
+.llm-form label:nth-child(3), .llm-form label:nth-child(4) { grid-column: 1 / -1; }
+.domain-model-list { display: grid; gap: 10px; }
+.domain-model-list article { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 9px; padding: 12px; }
+.domain-model-list article span, .domain-model-list article small { color: var(--muted); }
+.route-list { display: grid; gap: 10px; }
+.route-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(130px, .7fr) minmax(160px, 1fr); gap: 12px; align-items: end; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.route-list strong { align-self: center; font-size: var(--font-md); }
 
 @media (max-width: 1180px) {
   .market-strip { grid-template-columns: repeat(3, 1fr); }
@@ -297,6 +311,9 @@ td, .order-row summary { font-size: var(--font-md); }
   .market-strip div:first-child { grid-column: 1 / -1; }
   .market-details { grid-template-columns: repeat(2, 1fr); }
   .chart-stage, .chart-fallback { height: 360px; }
+  .llm-layout { grid-template-columns: 1fr; }
+  .llm-status-grid, .llm-form { grid-template-columns: repeat(2, 1fr); }
+  .route-list > div { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 420px) {

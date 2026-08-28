@@ -45,6 +45,7 @@ class SqlEvidenceBackend:
                         decision_json=evidence.get("decision", {}),
                         risk_decision_json=evidence.get("risk_decision", {}),
                         execution_intent_reference=evidence.get("execution_intent_reference", ""),
+                        domain_model_version=evidence.get("domain_model_version", ""),
                         created_at_utc=evidence.get("created_at_utc", ""),
                     )
                 )
@@ -78,6 +79,7 @@ class SqlEvidenceBackend:
                 "decision": row.decision_json or {},
                 "risk_decision": row.risk_decision_json or {},
                 "execution_intent_reference": row.execution_intent_reference,
+                "domain_model_version": row.domain_model_version,
                 "created_at_utc": row.created_at_utc,
             }
 

@@ -59,7 +59,18 @@ export function useTradingSnapshot() {
       socket.onerror = () => socket?.close();
     };
     connect();
-    return () => { cancelled = true; if (retry.current) window.clearTimeout(retry.current); socket?.close(); };
+    return () => {
+      cancelled = true;
+      if (retry.current) window.clearTimeout(retry.current);
+      if (!socket) return;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      // React StrictMode immediately cleans up the first development effect. Closing a
+      // still-CONNECTING socket creates a false browser warning, so close it once opened.
+      if (socket.readyState === 0) socket.onopen = () => socket?.close();
+      else socket.close();
+    };
   }, [refresh]);
 
   return { snapshot, refresh };
