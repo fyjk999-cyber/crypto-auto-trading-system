@@ -39,14 +39,28 @@ class MarketState(BaseModel):
     index_price: StrictDecimal = Decimal("0")
     best_bid: StrictDecimal = Decimal("0")
     best_ask: StrictDecimal = Decimal("0")
+    best_bid_size: StrictDecimal | None = None
+    best_ask_size: StrictDecimal | None = None
+    last_size: StrictDecimal | None = None
     spread: StrictDecimal = Decimal("0")
     depth: Decimal = Decimal("0")
     imbalance: Decimal = Decimal("0")
     trade_volume: StrictDecimal = Decimal("0")
     volume: StrictDecimal = Decimal("0")
+    volume_24h: StrictDecimal | None = None
+    quote_volume_24h: StrictDecimal | None = None
+    open_24h: StrictDecimal | None = None
+    high_24h: StrictDecimal | None = None
+    low_24h: StrictDecimal | None = None
+    price_change_24h: StrictDecimal | None = None
+    price_change_percent_24h: StrictDecimal | None = None
+    open_utc0: StrictDecimal | None = None
+    open_utc8: StrictDecimal | None = None
     funding_rate: StrictDecimal | None = None
     next_funding_time: datetime | None = None
     open_interest: StrictDecimal | None = None
+    open_interest_ccy: StrictDecimal | None = None
+    open_interest_usd: StrictDecimal | None = None
     open_interest_change: StrictDecimal | None = None
     basis: StrictDecimal | None = None
     realized_volatility: StrictDecimal | None = None
@@ -84,6 +98,15 @@ class MarketState(BaseModel):
             self.basis = (self.mark_price - self.index_price) / self.index_price
         else:
             self.basis = None
+        self.version += 1
+
+    def compute_24h_change(self) -> None:
+        if self.open_24h is not None and self.open_24h > 0:
+            self.price_change_24h = self.price - self.open_24h
+            self.price_change_percent_24h = self.price_change_24h / self.open_24h
+        else:
+            self.price_change_24h = None
+            self.price_change_percent_24h = None
         self.version += 1
 
     def overall_health(self) -> DataHealth:
