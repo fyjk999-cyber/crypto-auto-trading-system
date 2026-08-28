@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -23,22 +24,39 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         initial_balances=None,
         instruments=None,
         feed: OKXPublicMarketFeed | None = None,
+        feed_factory: Callable[[str], OKXPublicMarketFeed] | None = None,
     ) -> None:
         super().__init__(initial_balances=initial_balances, instruments=instruments)
-        self.feed = feed or OKXPublicMarketFeed(symbol="BTCUSDT")
-        self.public_client = self.feed.client
+        self.mapper = SymbolMapper()
+        self._feed_factory = feed_factory or (lambda symbol: OKXPublicMarketFeed(symbol=symbol))
+        primary_symbol = instruments[0].symbol if instruments else "BTCUSDT"
+        primary_feed = feed or self._feed_factory(primary_symbol)
+        self._feeds: dict[str, OKXPublicMarketFeed] = {primary_feed.symbol: primary_feed}
+        # Compatibility attributes retained for existing diagnostics/tests.
+        self.feed = primary_feed
+        self.public_client = primary_feed.client
+
+    def _feed_for(self, symbol: str) -> OKXPublicMarketFeed:
+        canonical = self.mapper.to_canonical(symbol)
+        current = self._feeds.get(canonical)
+        if current is None:
+            current = self._feed_factory(canonical)
+            self._feeds[canonical] = current
+        return current
 
     async def get_market_state(self, symbol: str) -> MarketState:
-        return await self.feed.refresh()
+        return await self._feed_for(symbol).refresh()
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:
-            provider_symbol = SymbolMapper().to_okx(symbol)
-            raw = await self.public_client.get_orderbook(provider_symbol, limit=limit)
+            canonical = self.mapper.to_canonical(symbol)
+            provider_symbol = self.mapper.to_okx(canonical)
+            feed = self._feed_for(canonical)
+            raw = await feed.client.get_orderbook(provider_symbol, limit=limit)
             payload = raw["data"][0]
             bids = [(D(row[0]), D(row[1])) for row in payload.get("bids", [])]
             asks = [(D(row[0]), D(row[1])) for row in payload.get("asks", [])]
-            book = OrderBook(symbol=symbol, exchange="OKX")
+            book = OrderBook(symbol=canonical, exchange="OKX")
             book.apply_snapshot(
                 int(payload.get("ts", "0")), bids, asks, now=datetime.now(UTC)
             )
@@ -50,15 +68,29 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             ) from exc
 
     async def refresh_market_state(self, symbol: str) -> MarketState:
-        state = await self.feed.refresh()
-        # keep simulated book aligned to the real mid so paper fills reflect real levels
+        canonical = self.mapper.to_canonical(symbol)
+        state = await self._feed_for(canonical).refresh()
+        # Keep simulated book aligned to the real mid so paper fills reflect real levels.
         if state.best_bid > 0 and state.best_ask > 0:
-            book = OrderBook(symbol=symbol, exchange="OKX")
+            book = OrderBook(symbol=canonical, exchange="OKX")
             book.apply_snapshot(
                 int(datetime.now(UTC).timestamp()),
                 [(state.best_bid, Decimal("1"))],
                 [(state.best_ask, Decimal("1"))],
             )
-            self.books[symbol] = book
-            self.sequence[symbol] = book.sequence or 0
+            self.books[canonical] = book
+            self.sequence[canonical] = book.sequence or 0
         return state
+
+    async def disconnect(self) -> None:
+        closed_clients: set[int] = set()
+        for feed in self._feeds.values():
+            client_id = id(feed.client)
+            if client_id in closed_clients:
+                continue
+            closed_clients.add(client_id)
+            try:
+                await feed.close()
+            except Exception:
+                pass
+        await super().disconnect()
