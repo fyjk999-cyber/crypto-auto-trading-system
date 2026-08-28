@@ -1,9 +1,6 @@
 """Canonical symbol mapper: strategies only see canonical symbols."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-
 
 DEFAULT_TRADING_SYMBOLS: tuple[str, ...] = (
     "BTCUSDT",
