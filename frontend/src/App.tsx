@@ -506,22 +506,27 @@ function LLMPage() {
   </div>;
 }
 
-// §29 PAPER exploration indicator (read-only; real values only).
+// §10 PAPER exploration indicator (read-only; real values only).
 function ExplorationPanel({ snapshot }: { snapshot: TradingSnapshot }) {
   const exploration = record(snapshot.optional["/exploration/status"]?.data);
   if (exploration.status !== undefined && exploration.status !== "OK") return null;
   const policy = record(exploration.policy);
   const progress = record(exploration.progress);
+  const coverage = record(exploration.coverage);
+  const decisionCoverage = record(coverage.decision_coverage);
+  const classes = record(decisionCoverage.decision_class_distribution);
   const completed = Number(progress.completed_samples ?? 0);
-  const target = Number(progress.sample_target ?? 0);
   const active = policy.PAPER_EXPLORATION_MODE === true;
   return (
     <Panel title="交易阶段">
       <dl className="system-list">
         <div><dt>交易阶段</dt><dd>{active ? "PAPER EXPLORATION" : "POLICY_INACTIVE"}</dd></div>
+        <div><dt>Strategy Fit 门槛</dt><dd>{text(policy.minimum_strategy_fit)}</dd></div>
+        <div><dt>Confidence 门槛</dt><dd>{text(policy.minimum_trade_confidence)}</dd></div>
         <div><dt>探索率</dt><dd>{text(policy.exploration_probability)}</dd></div>
-        <div><dt>当前入场门槛</dt><dd>Strategy Fit ≥ {text(policy.minimum_strategy_fit)} / Confidence ≥ {text(policy.minimum_trade_confidence)}</dd></div>
-        <div><dt>当前样本</dt><dd>{completed} / {target}</dd></div>
+        <div><dt>Completed samples</dt><dd>{completed}</dd></div>
+        <div><dt>Normal trades</dt><dd>{Number(classes.NORMAL_ENTRY ?? 0)}</dd></div>
+        <div><dt>Exploration trades</dt><dd>{Number(classes.EXPLORATION_ENTRY ?? 0)}</dd></div>
       </dl>
     </Panel>
   );

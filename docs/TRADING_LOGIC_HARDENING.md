@@ -33,26 +33,59 @@ Policy (centralized in `Settings`, guarded `enforce_exploration_safety`):
   LIVE_TRADING_ENABLED=false, REAL_MONEY_ENABLED=false. Unsafe combos are
   REFUSED at config load (§30 hard lock; runtime property
   `exploration_mode_active` re-derives the truth).
-- `exploration_min_fit = 0.40` (pre-LLM evidence gate; §3/§24)
+- `exploration_min_fit = 0.40` (pre-LLM evidence gate)
 - `exploration_min_confidence = 0.45` (post-LLM gate)
-- `exploration_probability = 0.30`: borderline band (fit < 0.65 NORMAL
-  threshold) is SAMPLED before any LLM spend; skipped candidates are persisted
-  as counterfactual NO_TRADE with `EXPLORATION_NOT_SAMPLED` (§6/§12)
-- `exploration_size_fraction = 0.5` → exploration entries use 0.0005 BTC vs
-  0.001 BTC normal (§7). Leverage policy unchanged; no extra leverage for
-  exploration (§8).
-- Decision classes: NORMAL (fit ≥ 0.65 AND confidence ≥ 0.60) vs EXPLORATION
-  (relaxed band) — recorded honestly in DecisionEvidence
-  (`decision_class`, `exploration_mode`, position size, entry price reference,
-  exploration probability) and in SignalIntent metadata (§5/§11)
-- `entry_cooldown_seconds = 240`: separate NEW-entry cooldown distinct from the
-  ~60s LLM cadence (§13); blocked re-entries persist
+- NORMAL band: fit >= 0.55 AND confidence >= 0.55 -> `NORMAL_ENTRY`;
+  otherwise the exploration band -> `EXPLORATION_ENTRY`
+- `exploration_borderline_fit = 0.50`: fit 0.40-0.50 is the BORDERLINE band,
+  sampled at `exploration_probability = 0.30` BEFORE any LLM spend; skips are
+  persisted as counterfactual NO_TRADE with `EXPLORATION_SKIPPED`
+- `exploration_size_fraction = 0.5` -> exploration entries use 0.0005 BTC vs
+  0.001 BTC normal (§5/§7). Leverage policy unchanged; no extra leverage for
+  exploration (§5).
+- Decision classes persisted: `NORMAL_ENTRY` / `EXPLORATION_ENTRY` /
+  `NO_TRADE` / (`EXPLORATION_SKIPPED` as rejection reason), recorded in
+  DecisionEvidence (`decision_class`, `exploration_mode`, position size, entry
+  price reference) and in SignalIntent metadata (§4)
+- `entry_cooldown_seconds = 240` (~3 min, §6): separate NEW-entry cooldown
+  distinct from the ~60s LLM cadence; blocked re-entries persist
   `ENTRY_COOLDOWN_ACTIVE` decisions
-- One open position ⇒ entry path yields `POSITION_ALREADY_OPEN` (§14); ADD
-  stays with the runtime bridge (more conservative than initial entry, §15)
-- §17 time stop: bridge force-closes positions held longer than
+- One open position ⇒ entry path yields `POSITION_ALREADY_OPEN` (§6); ADD
+  stays with the runtime bridge
+- §8 time stop: bridge force-closes positions held longer than
   `exploration_max_holding_seconds` (4h, PAPER exploration only, reduce-only,
-  `EXPLORATION_TIME_STOP`) so entries complete into outcome data
+  `EXPLORATION_TIME_STOP`) so entries complete into outcome data. It is a
+  data-completion guard, not a profit target: 4h respects the strategies'
+  1m-bar horizons without manufacturing samples.
+
+## Factor context fail-closed (§2)
+
+A real FactorSnapshot and a real StrategyEvidencePackage are PREREQUISITES for
+any Live entry evaluation. When the decision-context provider fails, returns
+None (insufficient history), or yields no candidates, the adapter records
+`FACTOR_SNAPSHOT_UNAVAILABLE` / `STRATEGY_EVIDENCE_UNAVAILABLE` NO_TRADE
+decisions and the Live LLM is NOT invoked. Exploration MUST NEVER mean "trade
+without evidence". Position safety (HOLD/ADD/REDUCE/EXIT), RiskEngine,
+ExecutionAuthority, reconciliation and the kill switch live entirely outside
+this entry path and stay alive.
+
+## Memory -> Live (§1)
+
+`LiveMemoryProvider` (llm_chief/memory_retrieval.py) retrieves bounded,
+read-only, relevance-scored memory from the EXISTING canonical stores:
+- `learning_lessons` — CONFIRMED lessons (top by confidence/evidence)
+- `ai_market_patterns` — patterns for the current regime
+- `ai_trade_episodes` — similar episodes (regime+symbol scored, top-5)
+- `ai_compressed_experience` — compressed experience rules
+Retrieved memory populates `ChiefTraderContext.knowledge` /
+`similar_episodes` / `compressed_experience` (LLM prompt) and every
+DecisionEvidence row records `memory_refs` + a memory summary so Daily
+Learning/Evolution can audit what the brain actually saw. Memory is SOFT
+EVIDENCE per the doctrine: retrieval failures are instrumented
+(`LIVE_MEMORY_RETRIEVAL_FAILED`) and never block trading; memory has NO veto
+path. The first seeded confirmed lesson (`lesson_20260828_funding_crowd`)
+documents a real 2026-08-28 runtime observation (funding contradiction
+lowering confidence without veto).
 
 Coverage & calibration (§9/§10/§18–§21): `GET /exploration/status` (read-only)
 aggregates decision classes, rejection reasons, strategy×regime coverage,

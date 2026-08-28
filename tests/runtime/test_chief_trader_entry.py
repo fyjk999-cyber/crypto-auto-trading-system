@@ -59,7 +59,8 @@ async def test_llm_long_maps_to_buy_signal():
     adapter = ChiefTraderStrategyAdapter(
         provider=StubProvider(
             {"action": "LONG", "thesis": "trend", "decision_id": "d2", "model_version": "1"}
-        )
+        ),
+        decision_context_provider=StaticContextProvider(),
     )
     signals = await adapter.on_market_data(make_ctx())
     assert len(signals) == 1
@@ -71,7 +72,8 @@ async def test_llm_short_maps_to_sell_signal():
     adapter = ChiefTraderStrategyAdapter(
         provider=StubProvider(
             {"action": "SHORT", "thesis": "trend down", "decision_id": "d3", "model_version": "1"}
-        )
+        ),
+        decision_context_provider=StaticContextProvider(),
     )
     signals = await adapter.on_market_data(make_ctx())
     assert len(signals) == 1
@@ -113,7 +115,8 @@ class CountingProvider(StubProvider):
 
 async def test_entry_decisions_are_rate_limited():
     adapter = ChiefTraderStrategyAdapter(
-        provider=CountingProvider(), min_decision_interval_seconds=60.0
+        provider=CountingProvider(), min_decision_interval_seconds=60.0,
+        decision_context_provider=StaticContextProvider(),
     )
     first = await adapter.on_market_data(make_ctx())
     second = await adapter.on_market_data(make_ctx())
@@ -150,7 +153,10 @@ async def test_every_decision_is_persisted_as_evidence(database):
             seen[evidence["decision_id"]] = evidence
 
     backend = RecordingBackend()
-    adapter = ChiefTraderStrategyAdapter(provider=StubProvider(), evidence_backend=backend)
+    adapter = ChiefTraderStrategyAdapter(
+        provider=StubProvider(), evidence_backend=backend,
+        decision_context_provider=StaticContextProvider(),
+    )
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
     assert "d1" in seen
@@ -387,20 +393,66 @@ async def test_low_evidence_adjusted_confidence_fails_closed():
     assert signals == []
 
 
-async def test_context_provider_failure_falls_back_to_llm():
+async def test_context_provider_failure_fails_closed():
+    """§2: real FactorSnapshot unavailable -> NO_TRADE, LLM NOT invoked."""
     class BrokenProvider:
         async def build(self, market_data):
             raise RuntimeError("candles unavailable")
 
     provider = ScriptedProvider(_long_response())
+    recorded = {}
+
+    class Backend:
+        async def store_decision(self, evidence_row):
+            recorded.update(evidence_row)
+
     adapter = ChiefTraderStrategyAdapter(
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=BrokenProvider(),
+        evidence_backend=Backend(),
     )
     signals = await adapter.on_market_data(make_ctx())
-    # No evidence -> LLM still judges (as before); entry maps normally.
-    assert len(signals) == 1
-    assert signals[0].metadata["factor_snapshot_id"] == ""
+    assert signals == []
+    assert provider.calls == 0  # LLM NOT invoked without real context
+    assert recorded["decision"]["action"] == "NO_TRADE"
+    assert "FACTOR_CONTEXT_UNAVAILABLE" in recorded["decision"]["reason_codes"]
+
+
+async def test_missing_factor_snapshot_blocks_entry_before_llm():
+    """§2: context provider returns None (insufficient history) -> fail closed."""
+    class NoneProvider:
+        async def build(self, market_data):
+            return None
+
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=NoneProvider(),
+    )
+    assert await adapter.on_market_data(make_ctx()) == []
+    assert provider.calls == 0
+
+
+async def test_missing_strategy_evidence_blocks_entry():
+    """§2: snapshot present but no strategy candidates -> no entry, no LLM."""
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(evidence={}),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert signals == []
+    assert provider.calls == 0
+
+
+async def test_unwired_context_provider_blocks_entry():
+    """§2: without a wired context provider there is NO real factor context."""
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+    )
+    assert await adapter.on_market_data(make_ctx()) == []
+    assert provider.calls == 0
 
 
 async def test_evidence_persistence_failure_is_instrumented(caplog):
@@ -474,9 +526,10 @@ def _exploration_adapter(provider, backend=None, sampler=lambda: 0.0, **override
         exploration_min_fit=0.40,
         exploration_min_confidence=0.45,
         exploration_probability=0.30,
+        exploration_borderline_fit=0.50,
         exploration_size_fraction=0.5,
-        normal_fit_threshold=0.65,
-        normal_confidence_threshold=0.60,
+        normal_fit_threshold=0.55,
+        normal_confidence_threshold=0.55,
         entry_cooldown_seconds=240.0,
         exploration_sampler=sampler,
         evidence_backend=backend,
@@ -486,11 +539,11 @@ def _exploration_adapter(provider, backend=None, sampler=lambda: 0.0, **override
 
 
 def _mid_response(**overrides):
-    """Plausible-but-borderline opportunity: fit 0.50 / confidence 0.49."""
+    """Plausible-but-borderline opportunity: fit 0.42 / confidence 0.49."""
     response = _long_response()
     response.update(
         {
-            "strategy_fit_score": 0.50,
+            "strategy_fit_score": 0.42,
             "raw_llm_confidence": 0.55,
             "evidence_adjusted_confidence": 0.49,
         }
@@ -499,17 +552,48 @@ def _mid_response(**overrides):
     return response
 
 
-async def test_exploration_plausible_fit_trades_small_size():
-    """A 0.50-fit strategy MAY trade in exploration mode: small and tagged."""
+def _fit_evidence(fit: float, direction: str = "LONG") -> dict:
+    """Evidence package with a single candidate at the given fit."""
+    return {
+        "market_regime": "BULL" if direction == "LONG" else "BEAR",
+        "strategy_candidates": [
+            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
+             "direction": direction, "fit_score": fit, "raw_confidence": fit,
+             "supporting_factors": ["trend"], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+        ],
+        "dominant_factors": ["trend"], "risk_flags": [],
+    }
+
+
+async def test_exploration_fit_042_conf_050_trades_small():
+    """§11: fit=0.42 + confidence=0.49 CAN become an exploration trade."""
     provider = ScriptedProvider(_mid_response())
-    adapter = _exploration_adapter(provider)
+    adapter = _exploration_adapter(
+        provider,
+        decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.42)),
+    )
     signals = await adapter.on_market_data(make_ctx())
     assert len(signals) == 1
     metadata = signals[0].metadata
-    assert metadata["decision_class"] == "EXPLORATION"
-    assert metadata["exploration_mode"] == "True"
-    # §7: exploration size is a bounded fraction of the normal PAPER size.
+    assert metadata["decision_class"] == "EXPLORATION_ENTRY"
+    # §5: exploration size is a bounded fraction of the normal PAPER size.
     assert Decimal(signals[0].quantity) == Decimal("0.0005")
+
+
+async def test_exploration_fit_052_above_borderline_unsampled():
+    """fit 0.50-0.55 (above borderline band, below NORMAL) always explores."""
+    provider = ScriptedProvider(
+        _mid_response(strategy_fit_score=0.52, evidence_adjusted_confidence=0.52)
+    )
+    adapter = _exploration_adapter(
+        provider,
+        sampler=lambda: 0.99,  # would skip if borderline sampling applied
+        decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.52)),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    assert signals[0].metadata["decision_class"] == "EXPLORATION_ENTRY"
 
 
 async def test_normal_entry_keeps_full_size_and_class():
@@ -518,32 +602,22 @@ async def test_normal_entry_keeps_full_size_and_class():
     adapter = _exploration_adapter(provider)
     signals = await adapter.on_market_data(make_ctx())
     assert len(signals) == 1
-    assert signals[0].metadata["decision_class"] == "NORMAL"
+    assert signals[0].metadata["decision_class"] == "NORMAL_ENTRY"
     assert Decimal(signals[0].quantity) == Decimal("0.001")
 
 
-async def test_exploration_borderline_not_sampled_records_counterfactual(database):
-    """§12: candidate existed but the sampler skipped it -> persisted NO_TRADE."""
+async def test_exploration_borderline_skipped_records_counterfactual(database):
+    """fit 0.38-0.50 not sampled -> persisted EXPLORATION_SKIPPED."""
     from sqlalchemy import select
 
     from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
     from crypto_trader.persistence.models import DecisionEvidenceORM
 
     provider = ScriptedProvider(_mid_response())
-    borderline_evidence = {
-        "market_regime": "BULL",
-        "strategy_candidates": [
-            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
-             "direction": "LONG", "fit_score": 0.50, "raw_confidence": 0.5,
-             "supporting_factors": ["trend"], "contradicting_factors": [],
-             "reason_codes": [], "data_health": "OK"},
-        ],
-        "dominant_factors": ["trend"], "risk_flags": [],
-    }
     backend = SqlEvidenceBackend(database.session_factory)
     adapter = _exploration_adapter(
         provider, backend=backend, sampler=lambda: 0.99,
-        decision_context_provider=StaticContextProvider(evidence=borderline_evidence),
+        decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.42)),
     )
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
@@ -558,7 +632,7 @@ async def test_exploration_borderline_not_sampled_records_counterfactual(databas
             )
         ).scalar_one()
     assert row.decision_json["action"] == "NO_TRADE"
-    assert "EXPLORATION_NOT_SAMPLED" in row.decision_json["reason_codes"]
+    assert "EXPLORATION_SKIPPED" in row.decision_json["reason_codes"]
     analysis = row.analysis_evidence_json
     if isinstance(analysis, str):
         analysis = json.loads(analysis)
@@ -571,25 +645,19 @@ async def test_exploration_confidence_gate_blocks():
     provider = ScriptedProvider(
         _mid_response(evidence_adjusted_confidence=0.40)
     )
-    adapter = _exploration_adapter(provider)
+    adapter = _exploration_adapter(
+        provider,
+        decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.42)),
+    )
     assert await adapter.on_market_data(make_ctx()) == []
 
 
 async def test_exploration_weak_fit_still_blocked():
     """fit 0.25 is below even the exploration minimum -> no trade."""
-    evidence = {
-        "market_regime": "RANGE",
-        "strategy_candidates": [
-            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
-             "direction": "LONG", "fit_score": 0.25, "raw_confidence": 0.25,
-             "supporting_factors": [], "contradicting_factors": [],
-             "reason_codes": [], "data_health": "OK"},
-        ],
-        "dominant_factors": [], "risk_flags": [],
-    }
     provider = ScriptedProvider(_mid_response(strategy_fit_score=0.25))
     adapter = _exploration_adapter(
-        provider, decision_context_provider=StaticContextProvider(evidence=evidence)
+        provider,
+        decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.25)),
     )
     assert await adapter.on_market_data(make_ctx()) == []
     assert provider.calls == 0  # deterministic gate, no LLM spend
@@ -647,6 +715,237 @@ async def test_exploration_never_activates_in_live_mode():
         trading_mode="PAPER", paper_exploration_mode=False, app_env="test"
     )
     assert off.exploration_mode_active is False
+
+
+# ---------------------------------------------------------------------------
+# Memory -> Live wiring (§1): RelevantMemory as bounded soft evidence
+# ---------------------------------------------------------------------------
+
+async def test_memory_retrieval_feeds_live_context(database):
+    """Confirmed lessons + episodes are retrievable and recorded as refs."""
+
+    from crypto_trader.llm_chief.memory_retrieval import LiveMemoryProvider
+    from crypto_trader.persistence.models import (
+        AITradeEpisodeORM,
+        LessonORM,
+    )
+
+    async with database.session_factory() as session:
+        session.add(
+            LessonORM(
+                lesson_id="lesson_test_1",
+                scope="GLOBAL",
+                type="STRATEGY_FIT",
+                canonical_statement="Trend LONG with crowded funding rarely extends.",
+                recommended_action="reduce confidence",
+                confidence=0.7,
+                status="CONFIRMED",
+                first_seen="2026-08-28T00:00:00+00:00",
+                last_seen="2026-08-28T00:00:00+00:00",
+            )
+        )
+        session.add(
+            AITradeEpisodeORM(
+                episode_id="episode_test_1",
+                symbol="BTCUSDT",
+                market_regime="BULL",
+                strategy_selected="trend_following",
+                result="WIN",
+                pnl="12.5",
+                holding_time_seconds=3600.0,
+            )
+        )
+        await session.commit()
+
+    memory = LiveMemoryProvider(database.session_factory)
+    snapshot = await memory.retrieve(regime="BULL", symbol="BTCUSDT")
+    assert "lesson_test_1" in snapshot["memory_refs"]
+    assert "episode_test_1" in snapshot["memory_refs"]
+    assert snapshot["knowledge"][0]["statement"].startswith("Trend LONG")
+    assert snapshot["similar_episodes"][0]["result"] == "WIN"
+
+    # Live adapter consumes the memory and records the refs with the decision.
+    provider = ScriptedProvider(_long_response())
+    seen = {}
+
+    class Backend:
+        async def store_decision(self, evidence_row):
+            seen.update(evidence_row)
+
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+        memory_provider=memory, evidence_backend=Backend(),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    assert seen["analysis_evidence"]["memory_refs"]
+    assert "lesson_test_1" in seen["analysis_evidence"]["memory_refs"]
+    assert adapter._last_memory["knowledge"]
+
+
+async def test_memory_retrieval_failure_is_non_blocking(caplog):
+    """Memory is soft evidence: retrieval failure never blocks trading."""
+    import logging as _logging
+
+    class BrokenMemory:
+        async def retrieve(self, regime, symbol):
+            raise RuntimeError("memory store down")
+
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+        memory_provider=BrokenMemory(),
+    )
+    with caplog.at_level(_logging.WARNING, logger="crypto_trader.chief_trader"):
+        signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1  # trading NOT blocked
+    assert any("LIVE_MEMORY_RETRIEVAL_FAILED" in r.message for r in caplog.records)
+
+
+async def test_no_historical_memory_live_operates_empty():
+    """Section 7B: no memory rows -> empty RelevantMemory, decision still works."""
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+        memory_provider=None,
+    )
+
+    class EmptyMemory:
+        async def retrieve(self, regime, symbol):
+            return {
+                "memory_refs": [], "knowledge": [], "patterns": [],
+                "similar_episodes": [], "compressed_experience": [],
+            }
+
+    adapter.memory_provider = EmptyMemory()
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1  # empty memory never blocks a valid decision
+    assert adapter._last_memory["memory_refs"] == []
+
+
+async def test_unknown_regime_with_context_failure_blocks_entry():
+    """Section 7E: MarketRegime UNKNOWN from context failure -> no entry, no LLM."""
+    provider = ScriptedProvider(_long_response())
+    evidence = {
+        "market_regime": "UNKNOWN",
+        "strategy_candidates": [
+            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
+             "direction": "LONG", "fit_score": 0.60, "raw_confidence": 0.60,
+             "supporting_factors": [], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+        ],
+        "dominant_factors": [], "risk_flags": [],
+    }
+    recorded = {}
+
+    class Backend:
+        async def store_decision(self, evidence_row):
+            recorded.update(evidence_row)
+
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(evidence=evidence),
+        evidence_backend=Backend(),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert signals == []
+    assert provider.calls == 0
+    assert recorded["decision"]["action"] == "NO_TRADE"
+    assert "MARKET_CONTEXT_UNAVAILABLE" in recorded["decision"]["reason_codes"]
+
+
+async def test_missing_strategy_evidence_persists_no_trade(database):
+    """Section 7D: candidates unavailable -> NO_TRADE persisted, LLM not called."""
+    from sqlalchemy import select
+
+    from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
+    from crypto_trader.persistence.models import DecisionEvidenceORM
+
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(evidence={}),
+        evidence_backend=SqlEvidenceBackend(database.session_factory),
+    )
+    assert await adapter.on_market_data(make_ctx()) == []
+    assert provider.calls == 0
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(DecisionEvidenceORM)
+                .where(DecisionEvidenceORM.strategy_id == "llm_chief_trader")
+                .order_by(DecisionEvidenceORM.timestamp_utc.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+    assert row.decision_json["action"] == "NO_TRADE"
+    assert "STRATEGY_EVIDENCE_UNAVAILABLE" in row.decision_json["reason_codes"]
+
+
+async def test_bridge_time_stop_exit_remains_operational():
+    """Section 7G: position safety (EXIT) works even when factor context fails."""
+    from crypto_trader.runtime.ai_position_bridge import (
+        AIPositionEvaluation,
+        AIPositionRuntimeBridge,
+    )
+
+    class FakeEngine:
+        def __init__(self):
+            self.market_data = None
+            self.submitted = []
+
+        async def process_signal(self, signal):
+            self.submitted.append(signal)
+
+    engine = FakeEngine()
+    bridge = AIPositionRuntimeBridge(time_stop_seconds=0.0)
+    evaluations: list[AIPositionEvaluation] = []
+    await bridge._evaluate_one(
+        engine,
+        evaluations,
+        symbol="BTCUSDT",
+        market_type="PERPETUAL",
+        side="LONG",
+        abs_quantity=0.001,
+        entry_price=100.0,
+        realized_pnl=0.0,
+    )
+    assert evaluations[0].action == "EXIT"
+    assert evaluations[0].reduce_only is True
+    assert len(engine.submitted) == 1
+    assert engine.submitted[0].reduce_only is True
+
+
+def test_invalid_learning_sample_filter():
+    """Section 7H: executed trade missing lineage never counts as a valid sample."""
+    from crypto_trader.runtime.exploration_analytics import (
+        is_valid_learning_sample,
+    )
+
+    valid = {
+        "factor_snapshot_id": "fsnap_1",
+        "factor_set_version": "factorset-v1",
+        "market_regime": "RANGE",
+        "selected_strategy": "mean_reversion",
+        "strategy_fit_score": 0.42,
+        "decision_class": "EXPLORATION_ENTRY",
+    }
+    assert is_valid_learning_sample(valid) is True
+    for key, bad_value in (
+        ("factor_snapshot_id", ""),
+        ("factor_set_version", ""),
+        ("market_regime", "UNKNOWN"),
+        ("selected_strategy", ""),
+        ("strategy_fit_score", None),
+        ("decision_class", ""),
+    ):
+        invalid = dict(valid)
+        invalid[key] = bad_value
+        assert is_valid_learning_sample(invalid) is False, key
+    assert is_valid_learning_sample(None) is False
 
 
 # ---------------------------------------------------------------------------

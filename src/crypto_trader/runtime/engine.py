@@ -265,6 +265,13 @@ class TradingEngine:
                 continue
             self.consecutive_failures = 0
             self.health.set(f"strategy:{strategy.name}", True)
+            if signals:
+                # An LLM-backed strategy may take seconds to decide; refresh
+                # the cached orderbook once so the ExecutionAuthority sees
+                # CURRENT market data at authorization time. The authority's
+                # staleness gate stays the safety check — it is only fed
+                # fresh data, never bypassed.
+                await self._refresh_orderbook(signals[0].symbol)
             for signal in signals:
                 # Active-position priority: suppress accidental duplicate entry
                 # for symbols already held unless this is the AI position path.
@@ -280,6 +287,24 @@ class TradingEngine:
             await self.ai_position_bridge.evaluate_active_positions(self, self.portfolio)
         self.health.set("engine_loop", True)
         return decisions
+
+    async def _refresh_orderbook(self, symbol: str) -> None:
+        """Best-effort orderbook refresh before authorization.
+
+        A FAILED refresh deliberately leaves the previous book state untouched
+        (no invalidate here): the ExecutionAuthority's freshness gate still
+        judges whatever data exists, so fail-closed semantics are preserved.
+        """
+        try:
+            fetched = await self.adapter.get_orderbook(symbol)
+            await self.market_data.ingest_snapshot(
+                symbol,
+                fetched.sequence,
+                [(level.price, level.quantity) for level in fetched.bids.values()],
+                [(level.price, level.quantity) for level in fetched.asks.values()],
+            )
+        except Exception as exc:
+            self.health.set("market_data_refresh", False, f"{symbol}: {type(exc).__name__}")
 
     async def _strategy_context(self) -> StrategyContext | None:
         symbol = getattr(self.strategies[0], "symbol", "BTCUSDT") if self.strategies else "BTCUSDT"

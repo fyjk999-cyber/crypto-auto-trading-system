@@ -20,6 +20,7 @@ from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.llm_chief.memory_retrieval import LiveMemoryProvider
 from crypto_trader.llm_runtime.domain_models import DomainModelRuntime
 from crypto_trader.llm_runtime.gateway import GatewayProviderAdapter, LLMGateway
 from crypto_trader.llm_runtime.provider import OpenAICompatibleProvider
@@ -171,11 +172,13 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         exploration_min_fit=settings.exploration_min_fit,
         exploration_min_confidence=settings.exploration_min_confidence,
         exploration_probability=settings.exploration_probability,
+        exploration_borderline_fit=settings.exploration_borderline_fit,
         exploration_size_fraction=settings.exploration_size_fraction,
         normal_fit_threshold=settings.normal_fit_threshold,
         normal_confidence_threshold=settings.normal_confidence_threshold,
         entry_cooldown_seconds=settings.entry_cooldown_seconds,
         exploration_sampler=random.random,
+        memory_provider=LiveMemoryProvider(database.session_factory),
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 

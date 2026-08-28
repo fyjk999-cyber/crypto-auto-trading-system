@@ -65,12 +65,14 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         exploration_min_fit: float = 0.40,
         exploration_min_confidence: float = 0.45,
         exploration_probability: float = 0.30,
+        exploration_borderline_fit: float = 0.50,
         exploration_size_fraction: float = 0.5,
-        normal_fit_threshold: float = 0.65,
-        normal_confidence_threshold: float = 0.60,
+        normal_fit_threshold: float = 0.55,
+        normal_confidence_threshold: float = 0.55,
         entry_cooldown_seconds: float = 240.0,
         normal_quantity: str = "0.001",
         exploration_sampler=None,
+        memory_provider=None,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -92,12 +94,18 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         self.exploration_min_fit = exploration_min_fit
         self.exploration_min_confidence = exploration_min_confidence
         self.exploration_probability = exploration_probability
+        self.exploration_borderline_fit = exploration_borderline_fit
         self.exploration_size_fraction = exploration_size_fraction
         self.normal_fit_threshold = normal_fit_threshold
         self.normal_confidence_threshold = normal_confidence_threshold
         self.entry_cooldown_seconds = entry_cooldown_seconds
         self.normal_quantity = normal_quantity
         self.exploration_sampler = exploration_sampler
+        # §1 RelevantMemory: read-only retrieval from the canonical memory
+        # stores. Memory is evidence for the LLM (confidence shaping and
+        # selection), NEVER a veto and never a second decision authority.
+        self.memory_provider = memory_provider
+        self._last_memory: dict = {}
         self.evidence_persist_failures = 0
         self._last_entry_initiated_at: float | None = None
         # Entry-path invocation bound: market data ticks arrive far more often
@@ -150,6 +158,22 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 bundle = None
         evidence = bundle.evidence if bundle is not None else {}
         regime = str(evidence.get("market_regime") or "UNKNOWN")
+        memory: dict = {}
+        if self.memory_provider is not None:
+            try:
+                memory = await self.memory_provider.retrieve(
+                    regime=regime, symbol=ctx.symbol
+                )
+            except Exception as exc:
+                # Memory is soft evidence: retrieval failure must never block
+                # trading, but it is never silent.
+                logger.warning(
+                    "LIVE_MEMORY_RETRIEVAL_FAILED symbol=%s error=%s",
+                    ctx.symbol,
+                    type(exc).__name__,
+                )
+                memory = {}
+        self._last_memory = memory
         champion_release = {
             "strategy_version": self.version,
             "entry_strategy": self.name,
@@ -183,6 +207,10 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "factor_intelligence_available": bool(factor_intelligence),
                 "factor_intelligence": factor_intelligence,
             },
+            knowledge=list(memory.get("knowledge", []))
+            + list(memory.get("patterns", [])),
+            similar_episodes=memory.get("similar_episodes", []),
+            compressed_experience=memory.get("compressed_experience", []),
             strategy_evidence=evidence,
             factor_snapshot=bundle.factor_snapshot if bundle is not None else {},
             champion_release=champion_release,
@@ -191,6 +219,49 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
     async def _decide(self, ctx: StrategyContext) -> list[SignalIntent]:
         chief_ctx = await self._build_context(ctx)
         evidence = chief_ctx.strategy_evidence
+
+        # §2 HARD GATE: real factor context unavailable -> NO_NEW_ENTRY and the
+        # Live LLM is NOT invoked. Exploration must never mean "trade without
+        # evidence". Position safety (HOLD/ADD/REDUCE/EXIT), Risk, Execution,
+        # and reconciliation live entirely outside this entry path.
+        snapshot_id = str(
+            chief_ctx.factor_snapshot.get("snapshot_id")
+            or chief_ctx.factor_snapshot.get("id")
+            or ""
+        )
+        if not snapshot_id:
+            decision = self._gate_decision(
+                chief_ctx,
+                reason_code="FACTOR_CONTEXT_UNAVAILABLE",
+                thesis=(
+                    "No real FactorSnapshot available (market data insufficient "
+                    "or provider failure); new entries fail closed"
+                ),
+            )
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
+        if not evidence.get("strategy_candidates"):
+            decision = self._gate_decision(
+                chief_ctx,
+                reason_code="STRATEGY_EVIDENCE_UNAVAILABLE",
+                thesis=(
+                    "No strategy evidence package available; new entries fail "
+                    "closed without LLM evaluation"
+                ),
+            )
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
+        if str(chief_ctx.regime).upper() == "UNKNOWN":
+            decision = self._gate_decision(
+                chief_ctx,
+                reason_code="MARKET_CONTEXT_UNAVAILABLE",
+                thesis=(
+                    "MarketRegime is UNKNOWN despite a real snapshot and "
+                    "strategy candidates; new entries fail closed"
+                ),
+            )
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
 
         # §14 HARD GATE: one active position already exists on this symbol.
         # Entry exploration never pyramids; position management (HOLD/ADD/
@@ -265,19 +336,19 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 await self._persist_evidence(decision, ctx, chief_ctx)
                 return []
 
-            # §6 EXPLORATION BAND: plausible-but-borderline opportunities are
-            # sampled at exploration_probability before spending an LLM call.
-            # Skips are recorded as counterfactual learning data (§12).
+            # §4 BORDERLINE SAMPLING: fit 0.38-0.50 opportunities are sampled
+            # at exploration_probability before spending an LLM call. Skips
+            # are persisted as EXPLORATION_SKIPPED counterfactuals (§12).
             if (
                 self.exploration_mode
                 and best is not None
-                and best_fit < self.normal_fit_threshold
+                and best_fit < self.exploration_borderline_fit
                 and self.exploration_sampler is not None
                 and self.exploration_sampler() >= self.exploration_probability
             ):
                 decision = self._gate_decision(
                     chief_ctx,
-                    reason_code="EXPLORATION_NOT_SAMPLED",
+                    reason_code="EXPLORATION_SKIPPED",
                     thesis=(
                         f"Borderline candidate {best.get('strategy_id')} fit {best_fit} "
                         f"not sampled (exploration_probability={self.exploration_probability})"
@@ -371,9 +442,9 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 fit >= self.normal_fit_threshold
                 and confidence >= self.normal_confidence_threshold
             ):
-                decision_class = "NORMAL"
+                decision_class = "NORMAL_ENTRY"
             else:
-                decision_class = "EXPLORATION"
+                decision_class = "EXPLORATION_ENTRY"
         else:
             decision_class = "NORMAL"
             if (
@@ -467,8 +538,8 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         )
 
     def _entry_quantity(self, decision) -> str:
-        """§7 PAPER sizing: exploration entries use a bounded fraction."""
-        if getattr(decision, "decision_class", "") == "EXPLORATION":
+        """§5 PAPER sizing: exploration entries use a bounded fraction."""
+        if str(getattr(decision, "decision_class", "")).startswith("EXPLORATION"):
             return str(
                 Decimal(self.normal_quantity) * Decimal(str(self.exploration_size_fraction))
             )
@@ -570,6 +641,21 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "evidence_adjusted_confidence": decision.evidence_adjusted_confidence,
                 "position_size_request": decision.position_size_request,
                 "leverage_request": decision.leverage_request,
+                # §1 RelevantMemory provenance: what the Live brain actually
+                # saw from the canonical memory stores (soft evidence only).
+                "memory_refs": list((self._last_memory or {}).get("memory_refs", [])),
+                "memory_summary": {
+                    "confirmed_lessons": len(
+                        (self._last_memory or {}).get("knowledge", [])
+                    ),
+                    "patterns": len((self._last_memory or {}).get("patterns", [])),
+                    "similar_episodes": len(
+                        (self._last_memory or {}).get("similar_episodes", [])
+                    ),
+                    "compressed_experience": len(
+                        (self._last_memory or {}).get("compressed_experience", [])
+                    ),
+                },
                 # §11 PAPER exploration record: decision class, actual PAPER
                 # size and the entry price reference for later outcome pairing.
                 "exploration_mode": self.exploration_mode,

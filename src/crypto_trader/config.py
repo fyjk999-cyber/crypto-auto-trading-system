@@ -88,9 +88,10 @@ class Settings(BaseSettings):
     exploration_min_fit: float = 0.40          # pre-LLM evidence gate
     exploration_min_confidence: float = 0.45   # post-LLM confidence gate
     exploration_probability: float = 0.30      # borderline-band sampling rate
+    exploration_borderline_fit: float = 0.50   # sampling band: fit < this
     exploration_size_fraction: float = 0.5     # 25-50% of normal PAPER size
-    normal_fit_threshold: float = 0.65         # >= -> NORMAL (high-confidence)
-    normal_confidence_threshold: float = 0.60
+    normal_fit_threshold: float = 0.55         # >= -> NORMAL (high-confidence)
+    normal_confidence_threshold: float = 0.55
     entry_cooldown_seconds: float = 240.0      # min interval between NEW entries
     exploration_sample_target: int = 200       # completed-trade guideline
     exploration_max_holding_seconds: float = 4 * 3600  # PAPER time stop

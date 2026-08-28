@@ -36,20 +36,27 @@
 - 2026-08-28 (PAPER exploration + CORE_TRADING_DOCTRINE_V1): STAGE_A_EXPLORATION
   active (.env PAPER_EXPLORATION_MODE=true; guarded by Settings validator that
   REFUSES unsafe configs — exploration only in PAPER with no live/real-money).
-  Relaxed PAPER decision gates: exploration_min_fit=0.40,
+  PAPER decision gates: exploration_min_fit=0.40,
   exploration_min_confidence=0.45, borderline-band sampling
-  exploration_probability=0.30 (skips persisted as EXPLORATION_NOT_SAMPLED
-  counterfactuals), exploration entries 0.5x size (0.0005 vs 0.001 BTC),
-  decision classes NORMAL/EXPLORATION/NO_TRADE recorded in evidence + signal
-  metadata, entry_cooldown_seconds=240 (separate from 60s LLM cadence), one
-  open position blocks new entries (POSITION_ALREADY_OPEN), bridge PAPER time
-  stop 4h (EXPLORATION_TIME_STOP). Learning analytics: GET /exploration/status
-  (coverage strategy x regime x class, rejection reasons, completed-trade
-  outcomes via signal_id->client_order_id->fills, confidence/fit buckets);
-  Daily Learning includes exploration summary. Live prompt carries
-  CORE_TRADING_DOCTRINE_V1 verbatim (factors describe / strategies interpret /
-  LLM selects / RiskEngine decides); doctrine documented in SPAC.md,
-  HARNESS_GOAL.md, docs/TRADING_LOGIC_HARDENING.md with regression tests
-  (doctrine A/D/E/F + 12 exploration tests). Sample target: 200 completed
-  PAPER trades (guideline). Tests: 681 passed. RiskEngine/ExecutionAuthority/
-  Ledger unchanged.
+  exploration_probability=0.30 (fit 0.40-0.50; skips persisted as
+  EXPLORATION_SKIPPED counterfactuals), NORMAL band fit>=0.55 & conf>=0.55,
+  exploration entries 0.5x size (0.0005 vs 0.001 BTC),
+  decision classes NORMAL_ENTRY/EXPLORATION_ENTRY/NO_TRADE recorded in
+  evidence + signal metadata, entry_cooldown_seconds=240 (separate from 60s
+  LLM cadence), one open position blocks new entries (POSITION_ALREADY_OPEN),
+  bridge PAPER time stop 4h (EXPLORATION_TIME_STOP).
+  FINAL CONTEXT PATCH: factor/strategy context fails closed for NEW ENTRY —
+  missing snapshot (FACTOR_CONTEXT_UNAVAILABLE), missing candidates
+  (STRATEGY_EVIDENCE_UNAVAILABLE), or UNKNOWN regime from context failure
+  (MARKET_CONTEXT_UNAVAILABLE) all persist NO_TRADE without calling the
+  Live LLM; position safety remains alive. Real Memory -> Live: bounded
+  read-only LiveMemoryProvider (confirmed lessons <=5, patterns <=5, similar
+  episodes <=5, compressed experience <=5) populates ChiefTraderContext
+  knowledge/similar_episodes/compressed_experience and every DecisionEvidence
+  records memory_refs; memory is soft evidence only. Learning analytics split
+  decision_coverage / executed_trade_coverage / completed_trade_coverage;
+  valid_completed_samples exclude INVALID_LEARNING_SAMPLE (mandatory lineage
+  filter). Live smoke: real factors -> strategy candidates -> memory refs ->
+  LLM -> decision -> signal -> RiskEngine (1 RISK_REJECT SPOT_OVERSHORT)
+  verified; LLM invoked on eligible decisions only. Tests: 692 passed.
+  RiskEngine/ExecutionAuthority/Ledger unchanged.

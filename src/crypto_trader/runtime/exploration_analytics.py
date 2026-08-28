@@ -27,6 +27,30 @@ from crypto_trader.config import Settings
 _CHIEF_STRATEGY = "llm_chief_trader"
 
 
+def is_valid_learning_sample(decision: dict | None) -> bool:
+    """§5 mandatory lineage for a completed learning sample.
+
+    A PAPER trade counts toward the 200-sample target only when its entry
+    decision carries the full evidence lineage. Missing lineage does NOT
+    block trading; it blocks contamination of later calibration.
+    """
+    if not decision:
+        return False
+    if not decision.get("factor_snapshot_id"):
+        return False
+    if not decision.get("factor_set_version"):
+        return False
+    if str(decision.get("market_regime", "")).upper() in ("", "UNKNOWN"):
+        return False
+    if not decision.get("selected_strategy"):
+        return False
+    if decision.get("strategy_fit_score") in (None, ""):
+        return False
+    if not decision.get("decision_class"):
+        return False
+    return True
+
+
 def _bucket(value: float | None) -> str:
     if value is None:
         return "UNKNOWN"
@@ -57,6 +81,7 @@ def _summary(returns: list[float], holdings: list[float] | None = None) -> dict:
         "expectancy": round(statistics.fmean(returns), 8),
         "max_adverse_excursion": "NOT_AVAILABLE",
         "max_favorable_excursion": "NOT_AVAILABLE",
+        "exit_reason": "NOT_AVAILABLE",
     }
     if holdings:
         summary["average_holding_seconds"] = round(statistics.fmean(holdings), 1)
@@ -216,6 +241,9 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
     trades: list[dict] = []
     open_lot: dict[str, dict] = {}
     net: dict[str, float] = {}
+    executed_strategy_counts: dict[str, int] = {}
+    executed_regime_counts: dict[str, int] = {}
+    executed_strategy_regime: dict[str, dict[str, int]] = {}
     for fill in fill_rows:
         symbol = str(fill.symbol)
         price = float(fill.price or 0)
@@ -250,7 +278,24 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
                 "regime": meta.get("market_regime") if meta else None,
                 "decision_class": meta.get("decision_class") if meta else None,
                 "decision_id": meta.get("decision_id") if meta else None,
+                "valid_sample": is_valid_learning_sample(meta),
             }
+            executed_strategy = meta.get("selected_strategy") if meta else None
+            executed_regime = meta.get("market_regime") if meta else None
+            if executed_strategy:
+                executed_strategy_counts[executed_strategy] = (
+                    executed_strategy_counts.get(executed_strategy, 0) + 1
+                )
+                executed_strategy_regime.setdefault(
+                    executed_strategy, {}
+                ).setdefault(executed_regime or "UNKNOWN", 0)
+                executed_strategy_regime[executed_strategy][
+                    executed_regime or "UNKNOWN"
+                ] += 1
+            if executed_regime:
+                executed_regime_counts[executed_regime] = (
+                    executed_regime_counts.get(executed_regime, 0) + 1
+                )
             continue
         lot = open_lot.pop(symbol, None)
         if lot is None:
@@ -277,28 +322,64 @@ async def exploration_status(source: AsyncEngine | Any, settings: Settings) -> d
                 "market_regime": lot["regime"],
                 "decision_class": lot["decision_class"],
                 "decision_id": lot["decision_id"],
+                "valid_sample": lot.get("valid_sample", False),
             }
         )
 
     completed = len(trades)
+    valid_completed = sum(1 for t in trades if t.get("valid_sample"))
+    invalid_learning_samples = completed - valid_completed
+    completed_strategy_counts: dict[str, int] = {}
+    completed_regime_counts: dict[str, int] = {}
+    completed_strategy_regime: dict[str, dict[str, int]] = {}
+    for trade in trades:
+        strategy = str(trade.get("selected_strategy") or "")
+        regime = str(trade.get("market_regime") or "")
+        if not strategy:
+            continue
+        completed_strategy_counts[strategy] = (
+            completed_strategy_counts.get(strategy, 0) + 1
+        )
+        completed_strategy_regime.setdefault(strategy, {}).setdefault(
+            regime, 0
+        )
+        completed_strategy_regime[strategy][regime] += 1
+        if regime:
+            completed_regime_counts[regime] = (
+                completed_regime_counts.get(regime, 0) + 1
+            )
     holdings = [t["holding_seconds"] for t in trades if t.get("holding_seconds")]
     overall = _summary([t["return_rate"] for t in trades], holdings)
     progress = {
-        "completed_samples": completed,
+        "valid_completed_samples": valid_completed,
+        "completed_samples": valid_completed,  # frontend/status backward-compat
         "sample_target": settings.exploration_sample_target,
-        "target_reached": completed >= settings.exploration_sample_target,
+        "target_reached": valid_completed >= settings.exploration_sample_target,
         "executed_entries": executed_entries,
         "total_decisions": len(decisions),
+        "invalid_learning_samples": invalid_learning_samples,
         "rejected_opportunities": sum(rejection_reasons.values()),
         "rejection_reasons": rejection_reasons,
         "mae_mfe": "NOT_AVAILABLE (tick-level excursion tracking is future work)",
     }
 
     coverage = {
-        "decision_class_distribution": class_counts,
-        "regime_distribution": regime_counts,
-        "strategy_distribution": strategy_counts,
-        "strategy_by_regime": strategy_regime,
+        "decision_coverage": {
+            "decision_class_distribution": class_counts,
+            "strategy_distribution": strategy_counts,
+            "regime_distribution": regime_counts,
+            "strategy_by_regime": strategy_regime,
+        },
+        "executed_trade_coverage": {
+            "strategy_distribution": executed_strategy_counts,
+            "regime_distribution": executed_regime_counts,
+            "strategy_by_regime": executed_strategy_regime,
+        },
+        "completed_trade_coverage": {
+            "strategy_distribution": completed_strategy_counts,
+            "regime_distribution": completed_regime_counts,
+            "strategy_by_regime": completed_strategy_regime,
+        },
     }
 
     calibration = {
