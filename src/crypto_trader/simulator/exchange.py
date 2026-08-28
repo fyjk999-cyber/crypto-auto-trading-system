@@ -450,6 +450,38 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             for currency, amount in sorted(self.balances.items())
         ]
 
+    async def hydrate_from_ledger(self, session_factory) -> None:
+        """Ledger-first startup: adopt the persistent ledger projection.
+
+        The simulated exchange state is in-memory; without hydration every
+        restart diverges from the persistent ledger and the reconciliation
+        service (correctly) halts all execution. The ledger is the source of
+        truth, so the paper exchange adopts it on startup.
+        """
+        from crypto_trader.ledger.projections import replay_projections
+
+        async with session_factory() as session:
+            snapshot = await replay_projections(session)
+        if snapshot.balances:
+            self.balances = {
+                currency: D(row["total"])
+                for currency, row in snapshot.balances.items()
+            }
+        hydrated_positions: dict[str, Position] = {}
+        for symbol, view in snapshot.positions.items():
+            if view.quantity == 0:
+                continue
+            hydrated_positions[symbol] = Position(
+                symbol=symbol,
+                base_asset=view.base_asset,
+                quote_asset=view.quote_asset,
+                quantity=view.quantity,
+                avg_entry_price=view.avg_entry_price,
+                cost_basis=view.cost_basis,
+                realized_pnl=view.realized_pnl,
+            )
+        self.positions = hydrated_positions
+
     async def get_positions(self) -> list[Position]:
         self._ensure_connected()
         return list(self.positions.values())

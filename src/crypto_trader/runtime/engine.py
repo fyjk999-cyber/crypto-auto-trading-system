@@ -147,6 +147,11 @@ class TradingEngine:
         self.state_machine.transition(RuntimeState.RECOVERING)
         await self._persist_run(RuntimeState.RECOVERING)
         await self._seed_initial_balances()
+        # Ledger-first paper execution: adopt the persistent ledger state so
+        # restarts never diverge from the ledger (reconciliation halt guard).
+        hydrate = getattr(self.adapter, "hydrate_from_ledger", None)
+        if hydrate is not None:
+            await hydrate(self.database.session_factory)
         await self._load_instruments()
         self.order_manager.settlement_callback = self._settle_fill
         await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
