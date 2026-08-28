@@ -85,6 +85,31 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             self.sequence[canonical] = book.sequence or 0
         return state
 
+    async def submit_order(self, order):
+        """Real-price PAPER execution.
+
+        CRITICAL price-integrity rule (no fake fills): the simulated matcher
+        must never fall back to its seeded synthetic book (mid=100). Before
+        matching, refresh this adapter's book for the order symbol from the
+        REAL OKX public feed. If the real reference price is unavailable the
+        submission fails closed -- no fill at a fabricated level.
+        """
+        from crypto_trader.domain.errors import ExchangeError
+
+        try:
+            canonical = self.mapper.to_canonical(order.symbol)
+            state = await self.refresh_market_state(canonical)
+        except Exception as exc:
+            raise ExchangeError(
+                f"REAL_REFERENCE_PRICE_UNAVAILABLE for {order.symbol}: "
+                f"{type(exc).__name__}"
+            ) from exc
+        if state is None or state.best_bid <= 0 or state.best_ask <= 0:
+            raise ExchangeError(
+                f"REAL_REFERENCE_PRICE_UNAVAILABLE for {order.symbol}"
+            )
+        return await super().submit_order(order)
+
     async def disconnect(self) -> None:
         closed_clients: set[int] = set()
         for feed in self._feeds.values():

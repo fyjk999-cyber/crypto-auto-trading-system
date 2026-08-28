@@ -656,7 +656,11 @@ def create_app(state: AppState) -> FastAPI:
 
         from sqlalchemy import text
 
-        since = (datetime.now(UTC) - timedelta(hours=max(1, min(hours, 720)))).isoformat()
+        # SQLite stores naive datetimes with a space separator; isoformat
+        # "T" would break every string comparison below.
+        since = (
+            datetime.now(UTC) - timedelta(hours=max(1, min(hours, 720)))
+        ).isoformat().replace("T", " ")
         out: dict = {"window_hours": hours, "since_utc": since}
         async with state.database.session_factory() as session:
             row = (
