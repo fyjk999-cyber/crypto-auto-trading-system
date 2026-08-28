@@ -106,7 +106,8 @@ describe("OKX market intelligence dock", () => {
     expect(screen.getByText("24H 涨跌幅")).toBeTruthy();
     expect(screen.getByText("OI USD")).toBeTruthy();
     expect(screen.getByText("Orderbook Imbalance")).toBeTruthy();
-    expect(screen.getByText("当前没有 Opportunity Ranking；不会因此阻止 AI 分析。")).toBeFalsy;
+    expect(screen.getByText("#1 ETHUSDT")).toBeTruthy();
+    expect(screen.getByText("LONG_BIAS")).toBeTruthy();
   });
 
   it("renders every technical indicator and keeps missing values explicit", async () => {
