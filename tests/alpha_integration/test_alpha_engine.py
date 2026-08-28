@@ -25,7 +25,9 @@ def seed_uptrend_mde(symbol="BTCUSDT", n=120):
 async def test_alpha_plugin_drives_paper_engine_long(database):
     sim = SimulatedExchangeAdapter(initial_balances={"USDT": Decimal("10000")})
     await sim.connect()
-    sim.seed_book("BTCUSDT", mid="112", spread="0.05", depth=10)
+    # Seed BELOW the alpha limit price: the alpha posts a passive LIMIT bid
+    # (~111.9 from its own MDE mid); the book must cross it for the fill.
+    sim.seed_book("BTCUSDT", mid="111.9", spread="0.01", depth=10)
     alpha = MultiStrategyAlpha(
         "BTCUSDT",
         risk_per_trade="0.0001",
