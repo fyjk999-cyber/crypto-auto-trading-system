@@ -5,6 +5,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+DEFAULT_TRADING_SYMBOLS: tuple[str, ...] = (
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "BNBUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "AVAXUSDT",
+    "LINKUSDT",
+    "SUIUSDT",
+    "LTCUSDT",
+    "BCHUSDT",
+    "DOTUSDT",
+    "NEARUSDT",
+    "APTUSDT",
+    "ARBUSDT",
+    "OPUSDT",
+    "TONUSDT",
+    "TRXUSDT",
+    "UNIUSDT",
+)
+
+
 @dataclass(frozen=True)
 class SymbolMapping:
     canonical: str
@@ -14,27 +38,34 @@ class SymbolMapping:
 
 class SymbolMapper:
     MAPPINGS = {
-        "BTCUSDT": SymbolMapping(canonical="BTCUSDT", binance="BTCUSDT", okx="BTC-USDT-SWAP"),
-        "ETHUSDT": SymbolMapping(canonical="ETHUSDT", binance="ETHUSDT", okx="ETH-USDT-SWAP"),
-        "SOLUSDT": SymbolMapping(canonical="SOLUSDT", binance="SOLUSDT", okx="SOL-USDT-SWAP"),
+        symbol: SymbolMapping(
+            canonical=symbol,
+            binance=symbol,
+            okx=f"{symbol.removesuffix('USDT')}-USDT-SWAP",
+        )
+        for symbol in DEFAULT_TRADING_SYMBOLS
     }
 
     def to_binance(self, canonical: str) -> str:
-        mapping = self.MAPPINGS.get(canonical)
+        mapping = self.MAPPINGS.get(canonical.upper())
         if mapping is None:
             raise ValueError(f"unknown canonical symbol: {canonical}")
         return mapping.binance
 
     def to_okx(self, canonical: str) -> str:
-        mapping = self.MAPPINGS.get(canonical)
+        mapping = self.MAPPINGS.get(canonical.upper())
         if mapping is None:
             raise ValueError(f"unknown canonical symbol: {canonical}")
         return mapping.okx
 
     def to_canonical(self, raw: str) -> str:
-        if raw in self.MAPPINGS:
-            return raw
+        normalized = raw.upper()
+        if normalized in self.MAPPINGS:
+            return normalized
         for mapping in self.MAPPINGS.values():
-            if raw in (mapping.binance, mapping.okx):
+            if normalized in (mapping.binance, mapping.okx):
                 return mapping.canonical
         raise ValueError(f"unknown exchange symbol: {raw}")
+
+    def supported_symbols(self) -> tuple[str, ...]:
+        return tuple(self.MAPPINGS)
