@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -639,6 +640,133 @@ def create_app(state: AppState) -> FastAPI:
         return await exploration_status(
             state.database.session_factory, get_settings()
         )
+
+    @app.get("/trading-funnel")
+    async def trading_funnel(hours: int = 24):
+        """Read-only PAPER trade funnel observability.
+
+        Answers, for a time window: Live LLM calls (all routes vs
+        live_analysis), decision distribution (LONG/SHORT/NO_TRADE/WAIT +
+        classes + gate reasons), Risk APPROVE/REJECT, Execution
+        APPROVE/HOLD/REJECT, orders, and fills. Built from the existing
+        canonical tables only (DecisionEvidence, LLMUsage, RiskDecision,
+        Order, Fill, Audit) -- no second database.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import text
+
+        since = (datetime.now(UTC) - timedelta(hours=max(1, min(hours, 720)))).isoformat()
+        out: dict = {"window_hours": hours, "since_utc": since}
+        async with state.database.session_factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT MAX(timestamp_utc) FROM decision_evidence")
+                )
+            ).fetchone()
+            out["latest_decision_utc"] = row[0] if row else None
+            decision_rows = (
+                await session.execute(
+                    text(
+                        "SELECT decision_json, analysis_evidence_json FROM decision_evidence "
+                        "WHERE timestamp_utc >= :since"
+                    ),
+                    {"since": since},
+                )
+            ).fetchall()
+            decisions = {"LONG": 0, "SHORT": 0, "NO_TRADE": 0, "WAIT": 0}
+            decision_classes: dict = {}
+            gate_reasons: dict = {}
+            for d_json, a_json in decision_rows:
+                d = json.loads(d_json or "{}")
+                a = json.loads(a_json or "{}")
+                action = str(d.get("action", "")).upper()
+                if action in decisions:
+                    decisions[action] += 1
+                cls = a.get("decision_class") or (
+                    action if action == "NO_TRADE" else "UNKNOWN"
+                )
+                decision_classes[cls] = decision_classes.get(cls, 0) + 1
+                for reason in d.get("reason_codes") or []:
+                    gate_reasons[reason] = gate_reasons.get(reason, 0) + 1
+            out["decisions"] = {
+                "total": len(decision_rows),
+                "by_action": decisions,
+                "by_class": decision_classes,
+                "reason_codes": gate_reasons,
+            }
+            llm_rows = (
+                await session.execute(
+                    text(
+                        "SELECT route, success, COUNT(*) FROM llm_usage "
+                        "WHERE timestamp >= :since GROUP BY route, success"
+                    ),
+                    {"since": since},
+                )
+            ).fetchall()
+            per_route: dict = {}
+            total = failed = live_calls = live_ok = 0
+            for route, success, count in llm_rows:
+                per_route.setdefault(route, {"total": 0, "success": 0})
+                per_route[route]["total"] += count
+                total += count
+                if not success:
+                    failed += count
+                else:
+                    per_route[route]["success"] += count
+                if route == "live_analysis":
+                    live_calls += count
+                    live_ok += count if success else 0
+            out["llm"] = {
+                "total_calls": total,
+                "failed_calls": failed,
+                "live_analysis_calls": live_calls,
+                "live_analysis_success": live_ok,
+                "by_route": per_route,
+            }
+            risk_rows = (
+                await session.execute(
+                    text(
+                        "SELECT decision, reason, COUNT(*) FROM risk_decisions "
+                        "WHERE timestamp >= :since GROUP BY decision, reason"
+                    ),
+                    {"since": since},
+                )
+            ).fetchall()
+            risk_summary: dict = {}
+            for decision, reason, count in risk_rows:
+                key = f"{decision}:{reason or 'RISK_PASS'}"
+                risk_summary[key] = risk_summary.get(key, 0) + count
+            out["risk"] = risk_summary
+            execution_rows = (
+                await session.execute(
+                    text(
+                        "SELECT action, COUNT(*) FROM audit_events "
+                        "WHERE timestamp >= :since AND action LIKE 'AUTHORITY_%' "
+                        "GROUP BY action"
+                    ),
+                    {"since": since},
+                )
+            ).fetchall()
+            out["execution"] = {a: n for a, n in execution_rows}
+            order_rows = (
+                await session.execute(
+                    text(
+                        "SELECT status, COUNT(*) FROM orders WHERE created_at >= :since "
+                        "GROUP BY status"
+                    ),
+                    {"since": since},
+                )
+            ).fetchall()
+            out["orders"] = {s: n for s, n in order_rows}
+            fill_row = (
+                await session.execute(
+                    text("SELECT COUNT(*) FROM fills WHERE timestamp >= :since"),
+                    {"since": since},
+                )
+            ).fetchone()
+            out["fills"] = fill_row[0] if fill_row else 0
+        return out
 
     @app.get("/decision-context")
     async def decision_context():

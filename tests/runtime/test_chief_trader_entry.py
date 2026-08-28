@@ -346,7 +346,8 @@ async def test_position_management_actions_produce_no_entry():
         assert await adapter.on_market_data(make_ctx()) == [], action
 
 
-async def test_scenario_E_all_weak_fit_blocks_before_llm():
+async def test_scenario_E_weak_fit_still_reaches_ai():
+    """CORE_TRADING_DOCTRINE_V1: low strategy fit is EVIDENCE, not a gate."""
     evidence = {
         "market_regime": "RANGE",
         "strategy_candidates": [
@@ -374,15 +375,15 @@ async def test_scenario_E_all_weak_fit_blocks_before_llm():
         decision_context_provider=StaticContextProvider(evidence=evidence),
         evidence_backend=Backend(),
     )
-    assert await adapter.on_market_data(make_ctx()) == []
-    assert provider.calls == 0  # LLM not invoked: deterministic gate
-    assert recorded["decision"]["action"] == "NO_TRADE"
-    assert "INSUFFICIENT_STRATEGY_EDGE" in recorded["decision"]["reason_codes"]
+    signals = await adapter.on_market_data(make_ctx())
+    assert provider.calls == 1  # weak fit still reaches the AI
+    assert len(signals) == 1  # AI decision maps to signal; Risk decides later
     assert recorded["factor_snapshot_id"] == "fsnap_test_1"
     assert recorded["factor_set_version"] == "factorset-v2"
 
 
-async def test_low_evidence_adjusted_confidence_fails_closed():
+async def test_low_confidence_does_not_veto_ai():
+    """CORE_TRADING_DOCTRINE_V1: low confidence is evidence, never a veto."""
     provider = ScriptedProvider(_long_response(evidence_adjusted_confidence=0.40))
     adapter = ChiefTraderStrategyAdapter(
         provider=provider, min_decision_interval_seconds=0.0,
@@ -390,7 +391,8 @@ async def test_low_evidence_adjusted_confidence_fails_closed():
         min_trade_confidence=0.55,
     )
     signals = await adapter.on_market_data(make_ctx())
-    assert signals == []
+    assert provider.calls == 1
+    assert len(signals) == 1  # AI decision proceeds; RiskEngine stays final
 
 
 async def test_context_provider_failure_fails_closed():
@@ -640,8 +642,8 @@ async def test_exploration_borderline_skipped_records_counterfactual(database):
     assert analysis["decision_class"] == "NO_TRADE"
 
 
-async def test_exploration_confidence_gate_blocks():
-    """conf 0.40 < exploration minimum 0.45 -> fail closed, no order."""
+async def test_exploration_low_confidence_still_trades_small():
+    """AI-FIRST: low confidence is evidence; exploration entry stays small."""
     provider = ScriptedProvider(
         _mid_response(evidence_adjusted_confidence=0.40)
     )
@@ -649,18 +651,22 @@ async def test_exploration_confidence_gate_blocks():
         provider,
         decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.42)),
     )
-    assert await adapter.on_market_data(make_ctx()) == []
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    assert signals[0].metadata["decision_class"] == "EXPLORATION_ENTRY"
+    assert Decimal(signals[0].quantity) == Decimal("0.0005")
 
 
-async def test_exploration_weak_fit_still_blocked():
-    """fit 0.25 is below even the exploration minimum -> no trade."""
+async def test_exploration_weak_fit_reaches_ai():
+    """AI-FIRST: fit 0.25 is evidence for the AI, never a hard gate."""
     provider = ScriptedProvider(_mid_response(strategy_fit_score=0.25))
     adapter = _exploration_adapter(
         provider,
         decision_context_provider=StaticContextProvider(evidence=_fit_evidence(0.25)),
     )
-    assert await adapter.on_market_data(make_ctx()) == []
-    assert provider.calls == 0  # deterministic gate, no LLM spend
+    signals = await adapter.on_market_data(make_ctx())
+    assert provider.calls == 1  # the AI judges, not the quant gate
+    assert len(signals) == 1
 
 
 async def test_entry_cooldown_blocks_immediate_reentry():
@@ -826,8 +832,8 @@ async def test_no_historical_memory_live_operates_empty():
     assert adapter._last_memory["memory_refs"] == []
 
 
-async def test_unknown_regime_with_context_failure_blocks_entry():
-    """Section 7E: MarketRegime UNKNOWN from context failure -> no entry, no LLM."""
+async def test_unknown_regime_reaches_ai_as_evidence():
+    """AI-FIRST: UNKNOWN regime is passed to the AI, never a hard gate."""
     provider = ScriptedProvider(_long_response())
     evidence = {
         "market_regime": "UNKNOWN",
@@ -839,22 +845,13 @@ async def test_unknown_regime_with_context_failure_blocks_entry():
         ],
         "dominant_factors": [], "risk_flags": [],
     }
-    recorded = {}
-
-    class Backend:
-        async def store_decision(self, evidence_row):
-            recorded.update(evidence_row)
-
     adapter = ChiefTraderStrategyAdapter(
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence=evidence),
-        evidence_backend=Backend(),
     )
     signals = await adapter.on_market_data(make_ctx())
-    assert signals == []
-    assert provider.calls == 0
-    assert recorded["decision"]["action"] == "NO_TRADE"
-    assert "MARKET_CONTEXT_UNAVAILABLE" in recorded["decision"]["reason_codes"]
+    assert provider.calls == 1  # AI consulted with UNKNOWN regime as evidence
+    assert len(signals) == 1
 
 
 async def test_missing_strategy_evidence_persists_no_trade(database):
@@ -998,14 +995,16 @@ async def test_doctrine_D_raw_factor_without_strategy_interpretation_no_trade():
         "dominant_factors": ["volume"],
         "risk_flags": [],
     }
-    provider = ScriptedProvider(_long_response())
+    # AI consulted; with all candidates NO_TRADE the AI (stubbed here) answers
+    # NO_TRADE -> no order. The system itself never maps a raw factor to one.
+    provider = ScriptedProvider(_long_response(action="NO_TRADE"))
     adapter = ChiefTraderStrategyAdapter(
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence=evidence),
     )
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
-    assert provider.calls == 0
+    assert provider.calls == 1
 
 
 def test_doctrine_E_risk_engine_rejection_blocks_execution():

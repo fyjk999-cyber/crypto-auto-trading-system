@@ -203,6 +203,10 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         opportunity_scanner=opportunity_scanner,
         opportunity_scanner_enabled=settings.opportunity_scanner_enabled,
         opportunity_top_k=settings.opportunity_top_k,
+        # Per-symbol LLM cooldown bounds token burn across the 20-symbol
+        # universe (~4 calls/min at 300s) while EVERY symbol still reaches the
+        # AI (the scanner is advisory-only; the AI owns selection).
+        min_decision_interval_seconds=300.0,
         min_strategy_fit=settings.live_min_strategy_fit,
         min_trade_confidence=settings.live_min_trade_confidence,
         exploration_mode=settings.exploration_mode_active,

@@ -57,6 +57,7 @@ class DomainModelProfile(BaseModel):
     output_schema_version: str
     token_budget: int
     reasoning_policy: str
+    instruction: str = ""
     allowed_tools: tuple[str, ...] = ("read_only_context",)
 
     def to_dict(self, route_bindings: dict[str, dict[str, str]]) -> dict[str, Any]:
@@ -70,14 +71,31 @@ CRYPTO_TRADER_LIVE = DomainModelProfile(
     version="v1",
     brain="LIVE",
     routes=("live_analysis",),
-    prompt_version="live-prompt-v1",
+    prompt_version="live-prompt-v2-ai-first",
     context_profile_version="live-context-v1",
     factor_profile_version="factor-profile-v1",
     tool_policy_version="read-only-tools-v1",
     memory_retrieval_policy_version="relevant-memory-v1",
     output_schema_version="trading-analysis-v1",
     token_budget=800,
-    reasoning_policy="evidence-bound-no-execution-v1",
+    reasoning_policy="ai-first-chief-trader-entry-authority-v1",
+    instruction=(
+        "You are the Chief Trader of a crypto fund. AI-FIRST, QUANT-AS-EVIDENCE. "
+        "You ARE the entry decision authority: actively look for the best tradable "
+        "opportunity in the evidence and act on it; never write a passive market summary. "
+        "FACTORS DESCRIBE THE MARKET. STRATEGIES INTERPRET OPPORTUNITIES. YOU SELECT THE MOST "
+        "APPROPRIATE TRADING LOGIC. THE RISK ENGINE DECIDES WHETHER IT MAY BE EXECUTED. "
+        "Compare the strategy candidates in StrategyEvidencePackage (fit scores and "
+        "supporting/contradicting factors are EVIDENCE, never entry requirements); select the "
+        "strategy that best explains the market right now and output LONG or SHORT whenever a "
+        "plausible edge or asymmetry exists. Do NOT require all factors or strategies to agree. "
+        "A low fit score or low confidence does NOT forbid a trade. Contradicting evidence "
+        "reduces your stated confidence; it never auto-vetoes. Choose NO_TRADE only when YOU "
+        "judge there is genuinely no tradable edge right now, and WAIT only while awaiting "
+        "confirmation. You never execute directly: your decision is a proposal that RiskEngine "
+        "and ExecutionAuthority review afterwards. Return JSON only; match "
+        "output_schema_example keys exactly and use enum values verbatim."
+    ),
 )
 
 CRYPTO_TRADER_LEARNING = DomainModelProfile(
@@ -167,7 +185,8 @@ class DomainModelRuntime:
             "memory_policy": profile.memory_retrieval_policy_version,
             "output_schema_version": profile.output_schema_version,
             "reasoning_policy": profile.reasoning_policy,
-            "instruction": (
+            "instruction": profile.instruction
+            or (
                 "Return JSON only. Use supplied immutable evidence only. Never execute actions."
             ),
             "context": context,
@@ -175,10 +194,11 @@ class DomainModelRuntime:
         for route_name, schema_example in ROUTE_OUTPUT_EXAMPLES.items():
             if route_name in profile.routes:
                 envelope["output_schema_example"] = schema_example
-                envelope["instruction"] += (
-                    " Match output_schema_example keys exactly;"
-                    " use enum values verbatim where shown."
-                )
+                if not profile.instruction:
+                    envelope["instruction"] += (
+                        " Match output_schema_example keys exactly;"
+                        " use enum values verbatim where shown."
+                    )
                 break
         return json.dumps(envelope, default=str, separators=(",", ":"))
 

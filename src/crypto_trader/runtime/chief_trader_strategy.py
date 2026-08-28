@@ -259,17 +259,9 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             )
             await self._persist_evidence(decision, ctx, chief_ctx)
             return []
-        if str(chief_ctx.regime).upper() == "UNKNOWN":
-            decision = self._gate_decision(
-                chief_ctx,
-                reason_code="MARKET_CONTEXT_UNAVAILABLE",
-                thesis=(
-                    "MarketRegime is UNKNOWN despite a real snapshot and "
-                    "strategy candidates; new entries fail closed"
-                ),
-            )
-            await self._persist_evidence(decision, ctx, chief_ctx)
-            return []
+        # CORE_TRADING_DOCTRINE_V1: an UNKNOWN MarketRegime is EVIDENCE for
+        # the AI, not a hard gate. Only genuinely missing context (no real
+        # FactorSnapshot / no StrategyEvidence) may block before the LLM.
 
         # §14 HARD GATE: one active position already exists on this symbol.
         # Entry exploration never pyramids; position management (HOLD/ADD/
@@ -331,67 +323,45 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             await self._persist_evidence(decision, ctx, chief_ctx)
             return []
 
-        # HARD GATE (PAPER, configurable): no strategy currently carries a
-        # regime-adjusted fit above the minimum edge. The LLM is not invoked;
-        # the decision is recorded honestly as NO_TRADE. Only applies when a
-        # real evidence package exists; without one the LLM judges as before.
-        evidence_present = bool(evidence.get("strategy_candidates"))
+        # CORE_TRADING_DOCTRINE_V1: strategy fit is EVIDENCE for the AI, never
+        # a hard gate. Every real evidence package reaches the Live LLM; the
+        # fits/edge travel inside the StrategyEvidencePackage in the prompt.
         candidates = [
             c for c in (evidence.get("strategy_candidates") or [])
             if c.get("direction") in ("LONG", "SHORT")
         ]
-        best = None
-        if evidence_present:
-            best = (
-                max(candidates, key=lambda c: float(c.get("fit_score", 0)))
-                if candidates
-                else None
-            )
-            best_fit = float(best.get("fit_score", 0)) if best is not None else 0.0
-            min_fit = (
-                self.exploration_min_fit if self.exploration_mode else self.min_strategy_fit
-            )
-            if best_fit < min_fit:
-                decision = self._gate_decision(
-                    chief_ctx,
-                    reason_code="INSUFFICIENT_STRATEGY_EDGE",
-                    thesis=(
-                        (
-                            f"Best strategy {best.get('strategy_id')} fit "
-                            f"{best.get('fit_score')} below minimum "
-                            f"{min_fit}"
-                        )
-                        if best is not None
-                        else "No directional strategy candidate fits the current market"
-                    ),
-                    selected_strategy=str(best.get("strategy_id", "")) if best else "",
-                    fit_score=best_fit,
-                )
-                await self._persist_evidence(decision, ctx, chief_ctx)
-                return []
+        best = (
+            max(candidates, key=lambda c: float(c.get("fit_score", 0)))
+            if candidates
+            else None
+        )
+        best_fit = float(best.get("fit_score", 0)) if best is not None else 0.0
 
-            # §4 BORDERLINE SAMPLING: fit 0.38-0.50 opportunities are sampled
-            # at exploration_probability before spending an LLM call. Skips
-            # are persisted as EXPLORATION_SKIPPED counterfactuals (§12).
-            if (
-                self.exploration_mode
-                and best is not None
-                and best_fit < self.exploration_borderline_fit
-                and self.exploration_sampler is not None
-                and self.exploration_sampler() >= self.exploration_probability
-            ):
-                decision = self._gate_decision(
-                    chief_ctx,
-                    reason_code="EXPLORATION_SKIPPED",
-                    thesis=(
-                        f"Borderline candidate {best.get('strategy_id')} fit {best_fit} "
-                        f"not sampled (exploration_probability={self.exploration_probability})"
-                    ),
-                    selected_strategy=str(best.get("strategy_id", "")),
-                    fit_score=best_fit,
-                )
-                await self._persist_evidence(decision, ctx, chief_ctx)
-                return []
+        # §4 BORDERLINE SAMPLING (exploration stage only): fit below the
+        # borderline band is sampled at exploration_probability before an LLM
+        # call. Skips are persisted as EXPLORATION_SKIPPED counterfactuals.
+        # This is an exploration-budget control inside the existing design --
+        # it never overrides an AI decision and is disabled entirely when no
+        # directional candidate exists (the AI still judges those).
+        if (
+            self.exploration_mode
+            and best is not None
+            and best_fit < self.exploration_borderline_fit
+            and self.exploration_sampler is not None
+            and self.exploration_sampler() >= self.exploration_probability
+        ):
+            decision = self._gate_decision(
+                chief_ctx,
+                reason_code="EXPLORATION_SKIPPED",
+                thesis=(
+                    f"Borderline candidate {best.get('strategy_id')} fit {best_fit} "
+                    f"not sampled (exploration_probability={self.exploration_probability})"
+                ),
+                selected_strategy=str(best.get("strategy_id", "")),
+                fit_score=best_fit,
+            )
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
 
         decision = await self.engine.decide(chief_ctx)
         decision = self._enrich_from_evidence(decision, chief_ctx)
@@ -419,26 +389,13 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         )
 
     def _classify_and_gate(self, decision, chief_ctx: ChiefTraderContext):
-        """§5 exploration band: NORMAL vs EXPLORATION vs fail-closed NO_TRADE.
+        """Classify the AI's entry decision (NORMAL vs EXPLORATION).
 
-        Returns (decision, classification) where classification is
-        "TRADE" or "BLOCKED". In exploration mode the decision thresholds are
-        the relaxed exploration values; the decision class is recorded
-        honestly (an exploration trade is never presented as high-confidence).
-        The fit floor applies only when a real evidence package exists: with
-        no evidence the LLM's own judgement is the sole available evidence
-        (historical fallback path), and only the confidence gate can block.
+        CORE_TRADING_DOCTRINE_V1: fit and confidence are EVIDENCE recorded
+        with the decision -- they NEVER veto the AI's choice. RiskEngine and
+        ExecutionAuthority remain the only post-decision authorities.
+        Returns (decision, classification) where classification is "TRADE".
         """
-        if self.exploration_mode:
-            min_fit = self.exploration_min_fit
-            min_confidence = self.exploration_min_confidence
-        else:
-            min_fit = self.min_strategy_fit
-            min_confidence = self.min_trade_confidence
-
-        evidence_present = bool(
-            (chief_ctx.strategy_evidence or {}).get("strategy_candidates")
-        )
         fit = float(
             decision.strategy_fit_score
             or self._selected_candidate_fit(chief_ctx, decision.selected_strategy)
@@ -448,51 +405,16 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         if confidence <= 0.0:
             confidence = float(decision.raw_llm_confidence or 0.0)
 
-        if evidence_present and fit < min_fit:
-            decision = decision.model_copy(
-                update={
-                    "action": "NO_TRADE",
-                    "reason_codes": list(decision.reason_codes)
-                    + ["INSUFFICIENT_STRATEGY_EDGE"],
-                }
-            )
-            return decision, "BLOCKED"
-
-        # Confidence gate: in exploration mode the LLM is expected to report a
-        # usable confidence (schema requires raw_llm_confidence); missing
-        # confidence in NON-exploration mode keeps the historical behavior
-        # (only a reported evidence_adjusted_confidence below threshold blocks).
-        if self.exploration_mode:
-            if confidence < min_confidence:
-                decision = decision.model_copy(
-                    update={
-                        "action": "NO_TRADE",
-                        "reason_codes": list(decision.reason_codes)
-                        + ["INSUFFICIENT_EVIDENCE_ADJUSTED_CONFIDENCE"],
-                    }
-                )
-                return decision, "BLOCKED"
-            if (
-                fit >= self.normal_fit_threshold
-                and confidence >= self.normal_confidence_threshold
-            ):
-                decision_class = "NORMAL_ENTRY"
-            else:
-                decision_class = "EXPLORATION_ENTRY"
+        if (
+            self.exploration_mode
+            and fit >= self.normal_fit_threshold
+            and confidence >= self.normal_confidence_threshold
+        ):
+            decision_class = "NORMAL_ENTRY"
+        elif self.exploration_mode:
+            decision_class = "EXPLORATION_ENTRY"
         else:
-            decision_class = "NORMAL"
-            if (
-                decision.evidence_adjusted_confidence
-                and decision.evidence_adjusted_confidence < self.min_trade_confidence
-            ):
-                decision = decision.model_copy(
-                    update={
-                        "action": "NO_TRADE",
-                        "reason_codes": list(decision.reason_codes)
-                        + ["INSUFFICIENT_EVIDENCE_ADJUSTED_CONFIDENCE"],
-                    }
-                )
-                return decision, "BLOCKED"
+            decision_class = "NORMAL_ENTRY"
 
         decision = decision.model_copy(
             update={

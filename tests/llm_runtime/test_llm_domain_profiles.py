@@ -56,7 +56,8 @@ async def test_live_domain_model_wraps_canonical_context_and_uses_structured_sch
     assert gateway.response_model is TradingAnalysisResult
     assert '"domain_model":"CryptoTrader-Live-v1"' in gateway.request.prompt
     assert '"MarketSnapshot"' in gateway.request.prompt
-    assert "Never execute actions." in gateway.request.prompt
+    assert "You ARE the entry decision authority" in gateway.request.prompt
+    assert "THE RISK ENGINE DECIDES WHETHER IT MAY BE EXECUTED" in gateway.request.prompt
     assert gateway.request.route == "live_analysis"
     assert gateway.request.brain == "LIVE"
 

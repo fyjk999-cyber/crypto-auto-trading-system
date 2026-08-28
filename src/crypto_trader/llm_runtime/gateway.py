@@ -483,7 +483,16 @@ class GatewayProviderAdapter:
         return bool(self.gateway.secret_store.get(provider.api_key_secret_ref))
 
     def healthy(self) -> bool:
-        return self.route_ready() and self.gateway.status()["health"] == "HEALTHY"
+        """LLM availability for the Live entry path.
+
+        AI-FIRST doctrine: the Live LLM is AVAILABLE when the route resolves
+        to an enabled provider with a usable secret. A missing in-process
+        health probe (UNVERIFIED) must never be interpreted as "LLM
+        unavailable" -- that would silently stall every decision after a
+        restart. Actual invocation failures remain fail-closed at call time
+        (gateway invoke error handling) and are surfaced through llm_usage.
+        """
+        return self.route_ready()
 
     @property
     def domain_model_version(self) -> str:
