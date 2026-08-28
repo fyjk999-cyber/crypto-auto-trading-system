@@ -43,6 +43,7 @@ from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
+from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
@@ -187,6 +188,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     decision_context_provider = LiveDecisionContextProvider(
         candle_provider=_live_candle_provider,
         symbol=symbols[0],
+        candle_cache_seconds=settings.opportunity_candle_cache_seconds,
+    )
+    opportunity_scanner = CheapOpportunityScanner(
+        min_score=settings.opportunity_min_score,
+        max_spread_bps=settings.opportunity_max_spread_bps,
     )
 
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
@@ -194,6 +200,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
         evidence_backend=SqlEvidenceBackend(database.session_factory),
         decision_context_provider=decision_context_provider,
+        opportunity_scanner=opportunity_scanner,
+        opportunity_scanner_enabled=settings.opportunity_scanner_enabled,
+        opportunity_top_k=settings.opportunity_top_k,
         min_strategy_fit=settings.live_min_strategy_fit,
         min_trade_confidence=settings.live_min_trade_confidence,
         exploration_mode=settings.exploration_mode_active,
