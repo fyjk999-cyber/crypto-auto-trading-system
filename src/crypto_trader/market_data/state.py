@@ -48,7 +48,7 @@ class MarketState(BaseModel):
     trade_volume: StrictDecimal = Decimal("0")
     volume: StrictDecimal = Decimal("0")
     volume_24h: StrictDecimal | None = None
-    quote_volume_24h: StrictDecimal | None = None
+    volume_ccy_24h: StrictDecimal | None = None
     open_24h: StrictDecimal | None = None
     high_24h: StrictDecimal | None = None
     low_24h: StrictDecimal | None = None
