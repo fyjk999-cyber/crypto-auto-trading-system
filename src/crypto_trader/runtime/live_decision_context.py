@@ -60,7 +60,12 @@ class LiveDecisionContextProvider:
         self.symbol = self.mapper.to_canonical(symbol)
         self.evidence_builder = self._builder_for(self.symbol)
 
-    async def get_candles(self, symbol: str, *, max_age_seconds: float | None = None) -> list[dict]:
+    async def get_candles(
+        self,
+        symbol: str,
+        *,
+        max_age_seconds: float | None = None,
+    ) -> list[dict]:
         """Return real candles with a short per-symbol cache.
 
         Failed/empty fetches are deliberately not cached, so a transient provider
@@ -68,7 +73,11 @@ class LiveDecisionContextProvider:
         for the current entry decision.
         """
         current_symbol = self.mapper.to_canonical(symbol)
-        ttl = self.candle_cache_seconds if max_age_seconds is None else max(float(max_age_seconds), 0.0)
+        ttl = (
+            self.candle_cache_seconds
+            if max_age_seconds is None
+            else max(float(max_age_seconds), 0.0)
+        )
         now = time.monotonic()
         cached = self._candle_cache.get(current_symbol)
         if cached is not None and now - cached[0] <= ttl:
