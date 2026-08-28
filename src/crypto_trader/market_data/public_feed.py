@@ -13,6 +13,7 @@ from crypto_trader.exchange.binance_futures_public import (
 )
 from crypto_trader.exchange.okx import OKXAdapter
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
+from crypto_trader.market_data.okx_public_data import OKXPublicDataClient
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import DataHealth, MarketState, SourceStatus
 
@@ -167,6 +168,7 @@ class OKXPublicMarketFeed:
         self.symbol = symbol
         self.mapper = SymbolMapper()
         self.client = client or OKXAdapter()
+        self.public_data = OKXPublicDataClient(self.client)
         self.state = MarketState(symbol=symbol, source="OKX_PUBLIC", exchange="OKX")
         self._oi_prev: Decimal | None = None
 
@@ -193,7 +195,7 @@ class OKXPublicMarketFeed:
         inst_id = self.mapper.to_okx(self.symbol)
         index_id = inst_id.removesuffix("-SWAP")
         try:
-            ticker = await self.client.get_ticker(inst_id)
+            ticker = await self.public_data.get_ticker(inst_id)
             book_payload = await self.client.get_orderbook(inst_id)
             book_raw = book_payload["data"][0]
             bids = [(D(row[0]), D(row[1])) for row in book_raw.get("bids", [])]
