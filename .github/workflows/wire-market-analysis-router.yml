@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   wire:
-    if: github.event.head_commit.message == 'chore: wire market analysis router'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
