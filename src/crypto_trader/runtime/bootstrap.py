@@ -15,8 +15,11 @@ from sqlalchemy import text
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
+from crypto_trader.domain.models import Instrument
 from crypto_trader.evolution.gateways.research_gateway import ResearchGateway
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
@@ -26,6 +29,7 @@ from crypto_trader.llm_runtime.gateway import GatewayProviderAdapter, LLMGateway
 from crypto_trader.llm_runtime.provider import OpenAICompatibleProvider
 from crypto_trader.llm_runtime.repository import LLMRepository
 from crypto_trader.llm_runtime.secrets import EncryptedFileSecretStore
+from crypto_trader.market_data.public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -36,9 +40,9 @@ from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
-from crypto_trader.runtime.chief_trader_strategy import ChiefTraderStrategyAdapter
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
+from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
@@ -95,25 +99,44 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     await llm_gateway.reload()
     domain_model_runtime = DomainModelRuntime(llm_gateway)
 
+    configured_symbols = settings.symbol_universe
+    symbols = configured_symbols if settings.scanner_enabled else configured_symbols[:1]
+    instruments = [
+        Instrument(
+            symbol=symbol,
+            base_asset=symbol.removesuffix("USDT"),
+            quote_asset="USDT",
+            exchange="OKX_PUBLIC_PAPER",
+        )
+        for symbol in symbols
+    ]
+
     # Paper is default. SimulatedExchangeAdapter implements the same contract
-    # as a live adapter, so LIVE/PAPER/SHADOW share one core.
+    # as a live adapter, so LIVE/PAPER/SHADOW share one core. PAPER_REAL_MARKET
+    # uses credential-free OKX SWAP data; execution remains simulated.
     if settings.paper_mode == "PAPER_REAL_MARKET":
         adapter = PaperRealMarketAdapter(
             initial_balances={
                 settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
-            }
+            },
+            instruments=instruments,
+            feed_factory=lambda symbol: OKXPublicMarketFeed(
+                symbol=symbol,
+                client=OKXAdapter(base_url=settings.okx_base_url),
+            ),
         )
     else:
         adapter = SimulatedExchangeAdapter(
             initial_balances={
                 settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
-            }
+            },
+            instruments=instruments,
         )
 
     # MultiStrategyAlpha remains a shadow/benchmark evidence provider. It is no
     # longer the canonical entry strategy in LLM trading mode.
     alpha = MultiStrategyAlpha(
-        symbol="BTCUSDT",
+        symbol=symbols[0],
         risk_per_trade="0.0005",
         max_position_notional="5000",
         max_leverage="3",
@@ -121,14 +144,18 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     from datetime import UTC, datetime
 
     from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
-    from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
     from crypto_trader.runtime.live_decision_context import LiveDecisionContextProvider
 
+    mapper = SymbolMapper()
+
     async def _live_candle_provider(symbol: str) -> list[dict]:
-        """Public OKX 1m candles, oldest-first. Real market data only; on any
-        failure returns [] and the entry path fails closed (no synthetic data).
+        """Public OKX SWAP 1m candles, oldest-first, for any configured symbol.
+
+        Real market data only: failures return [] and the entry path fails
+        closed. There is never a synthetic fallback in PAPER_REAL_MARKET.
         """
-        provider_symbol = "BTC-USDT-SWAP" if symbol.upper() == "BTCUSDT" else symbol.upper()
+        canonical = mapper.to_canonical(symbol)
+        provider_symbol = mapper.to_okx(canonical)
         client = OKXAdapter(base_url=settings.okx_base_url)
         try:
             rows = await client.get_candles(provider_symbol, "1m", 200)
@@ -137,7 +164,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 try:
                     open_time = datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC).isoformat()
                     by_open_time[open_time] = {
-                        "symbol": symbol.upper(),
+                        "symbol": canonical,
                         "interval": "1m",
                         "open_time": open_time,
                         "open": str(row[1]),
@@ -159,10 +186,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
     decision_context_provider = LiveDecisionContextProvider(
         candle_provider=_live_candle_provider,
-        symbol="BTCUSDT",
+        symbol=symbols[0],
     )
 
-    chief_trader = ChiefTraderStrategyAdapter(
+    chief_trader = MultiSymbolChiefTraderStrategyAdapter(
+        symbols=symbols,
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
         evidence_backend=SqlEvidenceBackend(database.session_factory),
         decision_context_provider=decision_context_provider,
@@ -182,6 +210,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
+    # The legacy perpetual paper-position engine remains BTC-only. The new
+    # 20-symbol universe expands real market observation + SPOT paper entry;
+    # it does not silently broaden perpetual execution authority.
     perpetual_contract = PerpetualContract(
         symbol="BTCUSDT_PERP",
         base="BTC",
