@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime
 
 from crypto_trader.governance.daily_review import DailyReview
@@ -14,6 +15,8 @@ from crypto_trader.llm_runtime.contracts import (
     LessonExtractionResult,
     LLMRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DailyLLMRetryableError(RuntimeError):
@@ -45,6 +48,20 @@ class DailyReviewScheduler:
             if record.failure_class is not None:
                 failure_memory.record(record.decision_id, record.failure_class)
         stats = DailyReview(trade_memory, failure_memory).run(date)
+        # §18 exploration comparison: HIGH-CONFIDENCE (NORMAL) vs EXPLORATION
+        # trade buckets from decision evidence (read-only; degrades to None).
+        exploration_summary = None
+        try:
+            from crypto_trader.config import get_settings
+            from crypto_trader.runtime.exploration_analytics import (
+                exploration_status,
+            )
+
+            exploration_summary = await exploration_status(
+                self.session_factory, get_settings()
+            )
+        except Exception as exc:  # daily review must never crash trading
+            logger.warning("exploration summary unavailable: %s", exc)
         semantic_review = None
         semantic_lessons = None
         if self.llm_gateway is not None:
@@ -54,6 +71,7 @@ class DailyReviewScheduler:
                 "daily_pnl": str(stats.daily_pnl),
                 "win_rate": str(stats.win_rate),
                 "failure_distribution": stats.failure_distribution,
+                "exploration_summary": exploration_summary,
             }
             if self.domain_model_runtime is not None:
                 review_response = await self.domain_model_runtime.invoke(
@@ -114,6 +132,7 @@ class DailyReviewScheduler:
             "profit_factor": str(stats.profit_factor),
             "llm_review": semantic_review,
             "llm_lessons": semantic_lessons,
+            "exploration_summary": exploration_summary,
         }
 
     async def loop(self) -> None:

@@ -6,6 +6,7 @@ Test/API/CLI must not each assemble a different core. They should call
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -166,6 +167,15 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         decision_context_provider=decision_context_provider,
         min_strategy_fit=settings.live_min_strategy_fit,
         min_trade_confidence=settings.live_min_trade_confidence,
+        exploration_mode=settings.exploration_mode_active,
+        exploration_min_fit=settings.exploration_min_fit,
+        exploration_min_confidence=settings.exploration_min_confidence,
+        exploration_probability=settings.exploration_probability,
+        exploration_size_fraction=settings.exploration_size_fraction,
+        normal_fit_threshold=settings.normal_fit_threshold,
+        normal_confidence_threshold=settings.normal_confidence_threshold,
+        entry_cooldown_seconds=settings.entry_cooldown_seconds,
+        exploration_sampler=random.random,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
@@ -179,7 +189,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     perpetual_engine = PerpetualPaperEngine(database.session_factory, perpetual_contract)
 
-    bridge = AIPositionRuntimeBridge(perpetual_engine=perpetual_engine)
+    bridge = AIPositionRuntimeBridge(
+        perpetual_engine=perpetual_engine,
+        time_stop_seconds=(
+            settings.exploration_max_holding_seconds
+            if settings.exploration_mode_active
+            else None
+        ),
+    )
     factor_gateway = FactorToolGateway()
     daily_review_scheduler = DailyReviewScheduler(
         database.session_factory,

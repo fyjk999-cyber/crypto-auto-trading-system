@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from crypto_trader.domain.enums import TradingMode
@@ -79,6 +79,22 @@ class Settings(BaseSettings):
     live_min_strategy_fit: float = 0.45
     live_min_trade_confidence: float = 0.55
 
+    # ---- PAPER EXPLORATION MODE (learning-data collection) ----------------
+    # More small experiments, never more risk: RiskEngine/ExecutionAuthority
+    # unchanged; exploration only loosens the DECISION thresholds, tags trades
+    # as EXPLORATION for later calibration, and shrinks position size.
+    paper_exploration_mode: bool = False
+    real_money_enabled: bool = False
+    exploration_min_fit: float = 0.40          # pre-LLM evidence gate
+    exploration_min_confidence: float = 0.45   # post-LLM confidence gate
+    exploration_probability: float = 0.30      # borderline-band sampling rate
+    exploration_size_fraction: float = 0.5     # 25-50% of normal PAPER size
+    normal_fit_threshold: float = 0.65         # >= -> NORMAL (high-confidence)
+    normal_confidence_threshold: float = 0.60
+    entry_cooldown_seconds: float = 240.0      # min interval between NEW entries
+    exploration_sample_target: int = 200       # completed-trade guideline
+    exploration_max_holding_seconds: float = 4 * 3600  # PAPER time stop
+
     @field_validator("trading_mode", mode="before")
     @classmethod
     def normalize_testnet_mode(cls, value):
@@ -86,6 +102,30 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.upper() == "TESTNET":
             return TradingMode.PAPER
         return value
+
+    @model_validator(mode="after")
+    def enforce_exploration_safety(self):
+        """PAPER_EXPLORATION_MODE must never exist outside safe PAPER config."""
+        if self.paper_exploration_mode and (
+            self.trading_mode != TradingMode.PAPER
+            or self.live_trading_enabled
+            or self.real_money_enabled
+        ):
+            raise ValueError(
+                "PAPER_EXPLORATION_MODE requires TRADING_MODE=PAPER, "
+                "LIVE_TRADING_ENABLED=false and REAL_MONEY_ENABLED=false"
+            )
+        return self
+
+    @property
+    def exploration_mode_active(self) -> bool:
+        """Runtime truth: exploration policy applies ONLY in safe PAPER mode."""
+        return (
+            self.paper_exploration_mode
+            and self.effective_mode() == TradingMode.PAPER
+            and not self.live_trading_enabled
+            and not self.real_money_enabled
+        )
 
     @property
     def live_enabled(self) -> bool:

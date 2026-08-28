@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getJson, websocketUrl } from "../api/client";
 import type { Account, KillSwitch, Order, Position, RuntimeHealth, TradingSnapshot } from "../types/api";
 
-const optionalPaths = ["/market", "/market/sources", "/regime", "/signals", "/strategies", "/risk", "/margin", "/reviews", "/daily-reviews", "/learning", "/exchange/okx/status", "/exchange-health", "/version", "/decision-context"] as const;
+const optionalPaths = ["/market", "/market/sources", "/regime", "/signals", "/strategies", "/risk", "/margin", "/reviews", "/daily-reviews", "/learning", "/exchange/okx/status", "/exchange-health", "/version", "/decision-context", "/exploration/status"] as const;
 
 const loading = { status: "loading" } as const;
 const initial: TradingSnapshot = {

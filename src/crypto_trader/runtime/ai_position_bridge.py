@@ -52,6 +52,7 @@ class AIPositionRuntimeBridge:
         brain: AITradingBrain | None = None,
         cooldown_seconds: float = 5.0,
         perpetual_engine=None,
+        time_stop_seconds: float | None = None,
     ) -> None:
         self.brain = brain or AITradingBrain()
         self.cooldown_seconds = cooldown_seconds
@@ -62,6 +63,13 @@ class AIPositionRuntimeBridge:
         self.thesis_overrides: dict[str, str] = {}
         self.requested_change_overrides: dict[str, float] = {}
         self.hard_risk_overrides: dict[str, bool] = {}
+        # §17 PAPER time stop: exploration entries must COMPLETE to produce
+        # outcome data. When set (PAPER exploration only), a position held
+        # longer than time_stop_seconds is force-closed reduce-only. Position
+        # age is tracked in-memory from the first tick a position is seen open
+        # (slight undercount; documented for PAPER v1).
+        self.time_stop_seconds = time_stop_seconds
+        self._first_seen_open: dict[str, datetime] = {}
 
     def evaluate(
         self,
@@ -161,7 +169,9 @@ class AIPositionRuntimeBridge:
                 pass
 
         evaluations: list[AIPositionEvaluation] = []
+        seen_symbols: set[str] = set()
         for symbol, market_type, side, abs_quantity, entry_price, realized_pnl in candidates:
+            seen_symbols.add(symbol)
             await self._evaluate_one(
                 engine,
                 evaluations,
@@ -172,6 +182,9 @@ class AIPositionRuntimeBridge:
                 entry_price=entry_price,
                 realized_pnl=realized_pnl,
             )
+        # Positions no longer open: forget their age tracking.
+        for stale in set(self._first_seen_open) - seen_symbols:
+            self._first_seen_open.pop(stale, None)
         return evaluations
 
     async def _evaluate_one(
@@ -215,6 +228,39 @@ class AIPositionRuntimeBridge:
             "hard_risk_exit": self.hard_risk_overrides.get(symbol, False),
             "requested_change": self.requested_change_overrides.get(symbol, 0.0),
         }
+        # §17 PAPER exploration time stop (checked before the AI brain so a
+        # stale position exits even if the brain is unavailable).
+        if self.time_stop_seconds is not None:
+            first_seen = self._first_seen_open.setdefault(symbol, datetime.now(UTC))
+            age_seconds = (datetime.now(UTC) - first_seen).total_seconds()
+            if age_seconds >= self.time_stop_seconds:
+                close_side = "SELL" if side == "LONG" else "BUY"
+                evaluation = AIPositionEvaluation(
+                    symbol=symbol,
+                    action="EXIT",
+                    confidence=1.0,
+                    reason=(
+                        f"EXPLORATION_TIME_STOP held {age_seconds:.0f}s >= "
+                        f"{self.time_stop_seconds:.0f}s"
+                    ),
+                    thesis_status="THESIS_EXPIRED",
+                    executable=True,
+                    side=close_side,
+                    quantity=abs_quantity,
+                    reduce_only=True,
+                    market_type=market_type,
+                    position_side=side,
+                )
+                self.last_decision[symbol] = "EXIT"
+                self.last_evaluation[symbol] = datetime.now(UTC).isoformat()
+                self.decision_history.append(
+                    {"symbol": symbol, "action": "EXIT", "reason": evaluation.reason,
+                     "time_stop": True, "at": self.last_evaluation[symbol]}
+                )
+                evaluations.append(evaluation)
+                if evaluation.executable:
+                    await self._apply_to_engine(engine, symbol, evaluation)
+                return
         evaluation = self.evaluate(symbol=symbol, active_position=active_position)
         evaluations.append(evaluation)
         if evaluation.executable and evaluation.action in ("ADD", "REDUCE", "EXIT"):

@@ -506,6 +506,27 @@ function LLMPage() {
   </div>;
 }
 
+// §29 PAPER exploration indicator (read-only; real values only).
+function ExplorationPanel({ snapshot }: { snapshot: TradingSnapshot }) {
+  const exploration = record(snapshot.optional["/exploration/status"]?.data);
+  if (exploration.status !== undefined && exploration.status !== "OK") return null;
+  const policy = record(exploration.policy);
+  const progress = record(exploration.progress);
+  const completed = Number(progress.completed_samples ?? 0);
+  const target = Number(progress.sample_target ?? 0);
+  const active = policy.PAPER_EXPLORATION_MODE === true;
+  return (
+    <Panel title="交易阶段">
+      <dl className="system-list">
+        <div><dt>交易阶段</dt><dd>{active ? "PAPER EXPLORATION" : "POLICY_INACTIVE"}</dd></div>
+        <div><dt>探索率</dt><dd>{text(policy.exploration_probability)}</dd></div>
+        <div><dt>当前入场门槛</dt><dd>Strategy Fit ≥ {text(policy.minimum_strategy_fit)} / Confidence ≥ {text(policy.minimum_trade_confidence)}</dd></div>
+        <div><dt>当前样本</dt><dd>{completed} / {target}</dd></div>
+      </dl>
+    </Panel>
+  );
+}
+
 function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const runtime = record(snapshot.runtime.data);
   const exchange = record(snapshot.optional["/exchange-health"]?.data);
@@ -514,7 +535,7 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const execution = record(exchange.execution);
   const marketStatus = String(pick(record(exchange.market_data), "status") ?? source).toUpperCase();
   const executionOverview = execution.provider === "LOCAL_PAPER" ? "本地 PAPER" : execution.status === "CONNECTED" ? "已连接" : "未连接";
-  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>OKX 行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>执行</dt><dd className="muted-status">{executionOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
+  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>OKX 行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>执行</dt><dd className="muted-status">{executionOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><ExplorationPanel snapshot={snapshot} /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
 function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot }) {

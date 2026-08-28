@@ -44,6 +44,11 @@ class ChiefTraderDecision(BaseModel):
     contradicting_factors: list[str] = Field(default_factory=list)
     dominant_factor: str = ""
     evidence_adjusted_confidence: float = 0.0
+    # Exploration policy record (PAPER): NORMAL (high-confidence) vs
+    # EXPLORATION (learning sample) vs NO_TRADE. An exploration trade is
+    # never presented as a high-confidence trade.
+    decision_class: str = ""
+    exploration_mode: bool = False
     factor_snapshot_id: str = ""
     factor_set_version: str = ""
     model_version: str = "0"

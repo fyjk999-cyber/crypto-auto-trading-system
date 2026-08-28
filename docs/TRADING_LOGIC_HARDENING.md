@@ -5,6 +5,68 @@
 - Baseline after this change: see `.ai-memory/CURRENT_STATE.md`
 - Safety authority untouched: RiskEngine, ExecutionAuthority, Ledger, Kill Switch unchanged.
 
+## CORE_TRADING_DOCTRINE_V1 (permanent)
+
+因子负责描述市场，策略负责解释机会，LLM 负责选择当前最合适的交易逻辑，RiskEngine 决定能不能执行。
+
+FACTORS DESCRIBE THE MARKET.
+STRATEGIES INTERPRET OPPORTUNITIES.
+THE LLM SELECTS THE MOST APPROPRIATE TRADING LOGIC.
+THE RISK ENGINE DECIDES WHETHER IT MAY BE EXECUTED.
+
+The Live prompt carries this doctrine verbatim (`ChiefTraderEngine.render_prompt`).
+Regression contract: `tests/runtime/test_chief_trader_entry.py`
+(`test_doctrine_A/D/E/F`, exploration block). The doctrine survives exploration,
+Daily Learning, Evolution, strategy contraction and any future real-money stage:
+factors never execute, strategies never execute, the LLM only proposes,
+RiskEngine always decides.
+
+## PAPER exploration stage (STAGE_A_EXPLORATION)
+
+Purpose (§0/§32): more realistic learning data — more completed trades, more
+strategy/regime/factor coverage, honest positive AND negative samples. Explicitly
+NOT short-term PAPER-PnL optimization. 多尝试 + 小仓位 + 更多完成交易 + 完整记录
+原因 + 接受亏损样本.
+
+Policy (centralized in `Settings`, guarded `enforce_exploration_safety`):
+- `PAPER_EXPLORATION_MODE` valid ONLY when TRADING_MODE=PAPER,
+  LIVE_TRADING_ENABLED=false, REAL_MONEY_ENABLED=false. Unsafe combos are
+  REFUSED at config load (§30 hard lock; runtime property
+  `exploration_mode_active` re-derives the truth).
+- `exploration_min_fit = 0.40` (pre-LLM evidence gate; §3/§24)
+- `exploration_min_confidence = 0.45` (post-LLM gate)
+- `exploration_probability = 0.30`: borderline band (fit < 0.65 NORMAL
+  threshold) is SAMPLED before any LLM spend; skipped candidates are persisted
+  as counterfactual NO_TRADE with `EXPLORATION_NOT_SAMPLED` (§6/§12)
+- `exploration_size_fraction = 0.5` → exploration entries use 0.0005 BTC vs
+  0.001 BTC normal (§7). Leverage policy unchanged; no extra leverage for
+  exploration (§8).
+- Decision classes: NORMAL (fit ≥ 0.65 AND confidence ≥ 0.60) vs EXPLORATION
+  (relaxed band) — recorded honestly in DecisionEvidence
+  (`decision_class`, `exploration_mode`, position size, entry price reference,
+  exploration probability) and in SignalIntent metadata (§5/§11)
+- `entry_cooldown_seconds = 240`: separate NEW-entry cooldown distinct from the
+  ~60s LLM cadence (§13); blocked re-entries persist
+  `ENTRY_COOLDOWN_ACTIVE` decisions
+- One open position ⇒ entry path yields `POSITION_ALREADY_OPEN` (§14); ADD
+  stays with the runtime bridge (more conservative than initial entry, §15)
+- §17 time stop: bridge force-closes positions held longer than
+  `exploration_max_holding_seconds` (4h, PAPER exploration only, reduce-only,
+  `EXPLORATION_TIME_STOP`) so entries complete into outcome data
+
+Coverage & calibration (§9/§10/§18–§21): `GET /exploration/status` (read-only)
+aggregates decision classes, rejection reasons, strategy×regime coverage,
+completed-trade outcomes (fills paired per symbol; attribution via
+`signal_id` embedded in `client_order_id`), confidence/fit buckets. MAE/MFE are
+NOT_AVAILABLE v1 (honest gap). Daily Learning includes the exploration summary
+(`DailyReviewScheduler.run_once` → evidence + result) comparing NORMAL vs
+EXPLORATION. Stages §22–§27: sample target 200 completed PAPER trades
+(guideline, never a reason to bypass quality gates); STAGE_B CALIBRATION and
+beyond are Evolution responsibilities via Candidate → Validation → SafePromotion.
+
+Frontend (§29): System page 交易阶段 panel — 交易阶段 / 探索率 / 当前入场门槛 /
+当前样本 (n / 200), real values only.
+
 ## 1. Philosophy change
 
 The Live Trading Brain no longer behaves like an all-conditions AND gate. The

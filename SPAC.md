@@ -2,6 +2,32 @@
 
 > SPAC is the single source of truth for this project. When code and SPAC disagree, decide which one is wrong (code bug vs stale SPAC), fix the wrong side, and record the decision.
 
+## CORE_TRADING_DOCTRINE_V1 (permanent architectural truth)
+
+因子负责描述市场，策略负责解释机会，LLM 负责选择当前最合适的交易逻辑，RiskEngine 决定能不能执行。
+
+FACTORS DESCRIBE THE MARKET.
+STRATEGIES INTERPRET OPPORTUNITIES.
+THE LLM SELECTS THE MOST APPROPRIATE TRADING LOGIC.
+THE RISK ENGINE DECIDES WHETHER IT MAY BE EXECUTED.
+
+- Factors are observations/evidence only; a raw factor must NEVER map directly to BUY/SELL.
+- Strategies interpret factor combinations into candidates (strategy_id, direction,
+  fit_score, supporting/contradicting factors); strategies do not execute and do not
+  need to agree with each other.
+- CryptoTrader-Live (LLM) is the strategy selector: it compares candidates under the
+  current regime, weighs supporting and contradicting evidence, and outputs a
+  structured PROPOSAL (LONG/SHORT/NO_TRADE/WAIT). It has no execution authority.
+- RiskEngine (with ExecutionAuthority) is the final permission gate: Kill Switch,
+  market health, exposure, reversal, drawdown and failure limits always override any
+  proposal.
+- Soft evidence adjusts confidence/selection; it never auto-vetoes. Hard gates
+  (unavailable/stale data, corrupted FactorSnapshot, LLM unavailable when required,
+  RiskEngine/ExecutionAuthority rejection) may block entry.
+- Every decision is reconstructable: FactorSnapshot -> strategy candidates ->
+  selected_strategy -> memory refs -> structured decision -> RiskDecision ->
+  orders/fills/outcome (DecisionEvidence).
+
 ## 1. Project Goal
 Build a **Crypto-Native Automated Trading Infrastructure** that is exchange-independent, event-driven, ledger-first, idempotent, and recoverable. The system reliably moves a signal through Risk -> ExecutionAuthority -> OrderManager -> ExchangeAdapter -> Ledger -> Projections with full auditability.
 

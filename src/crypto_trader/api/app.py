@@ -622,6 +622,21 @@ def create_app(state: AppState) -> FastAPI:
             "reasons": alpha.last_meta.reason_codes,
         }
 
+    @app.get("/exploration/status")
+    async def exploration_status_endpoint():
+        """Read-only PAPER exploration learning-coverage report.
+
+        Aggregates decision evidence (incl. rejected opportunities and
+        not-sampled counterfactuals) and completed-trade outcomes into the
+        exploration-stage coverage and calibration metrics. Never fabricates:
+        buckets fill as real PAPER trades accumulate.
+        """
+        from crypto_trader.runtime.exploration_analytics import exploration_status
+
+        return await exploration_status(
+            state.database.session_factory, get_settings()
+        )
+
     @app.get("/decision-context")
     async def decision_context():
         """Read-only latest Live decision context (real persisted evidence).

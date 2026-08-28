@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderSide, OrderType
 from crypto_trader.domain.identifiers import new_id
@@ -60,6 +61,16 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         decision_context_provider=None,
         min_strategy_fit: float = 0.45,
         min_trade_confidence: float = 0.55,
+        exploration_mode: bool = False,
+        exploration_min_fit: float = 0.40,
+        exploration_min_confidence: float = 0.45,
+        exploration_probability: float = 0.30,
+        exploration_size_fraction: float = 0.5,
+        normal_fit_threshold: float = 0.65,
+        normal_confidence_threshold: float = 0.60,
+        entry_cooldown_seconds: float = 240.0,
+        normal_quantity: str = "0.001",
+        exploration_sampler=None,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -73,7 +84,22 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # reaches RiskEngine. Never tuned to manufacture trades.
         self.min_strategy_fit = min_strategy_fit
         self.min_trade_confidence = min_trade_confidence
+        # §2-§8 PAPER exploration policy: lower decision thresholds for MORE
+        # SMALL EXPERIMENTS (never more risk), explicit EXPLORATION tagging,
+        # borderline-band sampling, and reduced position size. RiskEngine and
+        # ExecutionAuthority remain the final authorities unchanged.
+        self.exploration_mode = exploration_mode
+        self.exploration_min_fit = exploration_min_fit
+        self.exploration_min_confidence = exploration_min_confidence
+        self.exploration_probability = exploration_probability
+        self.exploration_size_fraction = exploration_size_fraction
+        self.normal_fit_threshold = normal_fit_threshold
+        self.normal_confidence_threshold = normal_confidence_threshold
+        self.entry_cooldown_seconds = entry_cooldown_seconds
+        self.normal_quantity = normal_quantity
+        self.exploration_sampler = exploration_sampler
         self.evidence_persist_failures = 0
+        self._last_entry_initiated_at: float | None = None
         # Entry-path invocation bound: market data ticks arrive far more often
         # than a Chief Trader decision is needed. Existing-position safety
         # (reduce/exit/stop) does NOT depend on this interval: it lives in the
@@ -166,6 +192,40 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         chief_ctx = await self._build_context(ctx)
         evidence = chief_ctx.strategy_evidence
 
+        # §14 HARD GATE: one active position already exists on this symbol.
+        # Entry exploration never pyramids; position management (HOLD/ADD/
+        # REDUCE/EXIT) is owned by the independent runtime bridge.
+        if any(float(p.quantity or 0) != 0 for p in ctx.positions.values()):
+            decision = self._gate_decision(
+                chief_ctx,
+                reason_code="POSITION_ALREADY_OPEN",
+                thesis=(
+                    "Entry skipped: an active position exists; management is "
+                    "handled by the runtime bridge"
+                ),
+            )
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
+
+        # §13 HARD GATE: separate entry cooldown (distinct from the ~60s LLM
+        # evaluation cadence) bounds how often NEW entries may be initiated.
+        now_monotonic = time.monotonic()
+        if (
+            self._last_entry_initiated_at is not None
+            and now_monotonic - self._last_entry_initiated_at < self.entry_cooldown_seconds
+        ):
+            decision = self._gate_decision(
+                chief_ctx,
+                reason_code="ENTRY_COOLDOWN_ACTIVE",
+                thesis=(
+                    "Entry skipped: last entry "
+                    f"{now_monotonic - self._last_entry_initiated_at:.0f}s ago, "
+                    f"cooldown {self.entry_cooldown_seconds:.0f}s"
+                ),
+            )
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
+
         # HARD GATE (PAPER, configurable): no strategy currently carries a
         # regime-adjusted fit above the minimum edge. The LLM is not invoked;
         # the decision is recorded honestly as NO_TRADE. Only applies when a
@@ -175,6 +235,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             c for c in (evidence.get("strategy_candidates") or [])
             if c.get("direction") in ("LONG", "SHORT")
         ]
+        best = None
         if evidence_present:
             best = (
                 max(candidates, key=lambda c: float(c.get("fit_score", 0)))
@@ -182,7 +243,10 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 else None
             )
             best_fit = float(best.get("fit_score", 0)) if best is not None else 0.0
-            if best_fit < self.min_strategy_fit:
+            min_fit = (
+                self.exploration_min_fit if self.exploration_mode else self.min_strategy_fit
+            )
+            if best_fit < min_fit:
                 decision = self._gate_decision(
                     chief_ctx,
                     reason_code="INSUFFICIENT_STRATEGY_EDGE",
@@ -190,7 +254,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                         (
                             f"Best strategy {best.get('strategy_id')} fit "
                             f"{best.get('fit_score')} below minimum "
-                            f"{self.min_strategy_fit}"
+                            f"{min_fit}"
                         )
                         if best is not None
                         else "No directional strategy candidate fits the current market"
@@ -201,12 +265,117 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 await self._persist_evidence(decision, ctx, chief_ctx)
                 return []
 
+            # §6 EXPLORATION BAND: plausible-but-borderline opportunities are
+            # sampled at exploration_probability before spending an LLM call.
+            # Skips are recorded as counterfactual learning data (§12).
+            if (
+                self.exploration_mode
+                and best is not None
+                and best_fit < self.normal_fit_threshold
+                and self.exploration_sampler is not None
+                and self.exploration_sampler() >= self.exploration_probability
+            ):
+                decision = self._gate_decision(
+                    chief_ctx,
+                    reason_code="EXPLORATION_NOT_SAMPLED",
+                    thesis=(
+                        f"Borderline candidate {best.get('strategy_id')} fit {best_fit} "
+                        f"not sampled (exploration_probability={self.exploration_probability})"
+                    ),
+                    selected_strategy=str(best.get("strategy_id", "")),
+                    fit_score=best_fit,
+                )
+                await self._persist_evidence(decision, ctx, chief_ctx)
+                return []
+
         decision = await self.engine.decide(chief_ctx)
         decision = self._enrich_from_evidence(decision, chief_ctx)
 
-        # HARD GATE (PAPER, configurable): the LLM proposes an entry, but its
-        # evidence-adjusted confidence does not clear the minimum. Fail closed.
         if decision.action in ("LONG", "SHORT"):
+            decision, classification = self._classify_and_gate(decision, chief_ctx)
+            if classification != "TRADE":
+                await self._persist_evidence(decision, ctx, chief_ctx)
+                return []
+
+        # Map first so the persisted evidence can reference the entry signal
+        # (signal_id -> client_order_id join enables outcome attribution).
+        signals = self._map_to_signals(decision, ctx, chief_ctx)
+        if signals:
+            self._last_entry_initiated_at = now_monotonic
+        await self._persist_evidence(
+            decision, ctx, chief_ctx,
+            execution_reference=signals[0].signal_id if signals else "",
+        )
+        return signals
+
+    def _confidence_of(self, decision) -> float:
+        return float(
+            decision.evidence_adjusted_confidence or decision.raw_llm_confidence or 0.0
+        )
+
+    def _classify_and_gate(self, decision, chief_ctx: ChiefTraderContext):
+        """§5 exploration band: NORMAL vs EXPLORATION vs fail-closed NO_TRADE.
+
+        Returns (decision, classification) where classification is
+        "TRADE" or "BLOCKED". In exploration mode the decision thresholds are
+        the relaxed exploration values; the decision class is recorded
+        honestly (an exploration trade is never presented as high-confidence).
+        The fit floor applies only when a real evidence package exists: with
+        no evidence the LLM's own judgement is the sole available evidence
+        (historical fallback path), and only the confidence gate can block.
+        """
+        if self.exploration_mode:
+            min_fit = self.exploration_min_fit
+            min_confidence = self.exploration_min_confidence
+        else:
+            min_fit = self.min_strategy_fit
+            min_confidence = self.min_trade_confidence
+
+        evidence_present = bool(
+            (chief_ctx.strategy_evidence or {}).get("strategy_candidates")
+        )
+        fit = float(
+            decision.strategy_fit_score
+            or self._selected_candidate_fit(chief_ctx, decision.selected_strategy)
+            or 0.0
+        )
+        confidence = self._confidence_of(decision)
+        if confidence <= 0.0:
+            confidence = float(decision.raw_llm_confidence or 0.0)
+
+        if evidence_present and fit < min_fit:
+            decision = decision.model_copy(
+                update={
+                    "action": "NO_TRADE",
+                    "reason_codes": list(decision.reason_codes)
+                    + ["INSUFFICIENT_STRATEGY_EDGE"],
+                }
+            )
+            return decision, "BLOCKED"
+
+        # Confidence gate: in exploration mode the LLM is expected to report a
+        # usable confidence (schema requires raw_llm_confidence); missing
+        # confidence in NON-exploration mode keeps the historical behavior
+        # (only a reported evidence_adjusted_confidence below threshold blocks).
+        if self.exploration_mode:
+            if confidence < min_confidence:
+                decision = decision.model_copy(
+                    update={
+                        "action": "NO_TRADE",
+                        "reason_codes": list(decision.reason_codes)
+                        + ["INSUFFICIENT_EVIDENCE_ADJUSTED_CONFIDENCE"],
+                    }
+                )
+                return decision, "BLOCKED"
+            if (
+                fit >= self.normal_fit_threshold
+                and confidence >= self.normal_confidence_threshold
+            ):
+                decision_class = "NORMAL"
+            else:
+                decision_class = "EXPLORATION"
+        else:
+            decision_class = "NORMAL"
             if (
                 decision.evidence_adjusted_confidence
                 and decision.evidence_adjusted_confidence < self.min_trade_confidence
@@ -218,25 +387,23 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                         + ["INSUFFICIENT_EVIDENCE_ADJUSTED_CONFIDENCE"],
                     }
                 )
-            else:
-                selected = next(
-                    (
-                        c
-                        for c in candidates
-                        if c.get("strategy_id") == decision.selected_strategy
-                    ),
-                    None,
-                )
-                if selected is not None and not decision.strategy_fit_score:
-                    decision = decision.model_copy(
-                        update={
-                            "strategy_fit_score": float(selected.get("fit_score", 0.0)),
-                            "strategy_version": selected.get("strategy_version", ""),
-                        }
-                    )
+                return decision, "BLOCKED"
 
-        await self._persist_evidence(decision, ctx, chief_ctx)
-        return self._map_to_signals(decision, ctx, chief_ctx)
+        decision = decision.model_copy(
+            update={
+                "decision_class": decision_class,
+                "exploration_mode": self.exploration_mode,
+                "evidence_adjusted_confidence": decision.evidence_adjusted_confidence
+                or decision.raw_llm_confidence,
+            }
+        )
+        return decision, "TRADE"
+
+    def _selected_candidate_fit(self, chief_ctx: ChiefTraderContext, strategy_id: str) -> float:
+        for candidate in (chief_ctx.strategy_evidence or {}).get("strategy_candidates") or []:
+            if candidate.get("strategy_id") == strategy_id:
+                return float(candidate.get("fit_score", 0))
+        return 0.0
 
     def _enrich_from_evidence(self, decision, chief_ctx: ChiefTraderContext):
         """Fill lineage + attribution fields the LLM may have left empty."""
@@ -275,8 +442,13 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         return decision.model_copy(update=updates)
 
     def _gate_decision(
-        self, chief_ctx: ChiefTraderContext, *, reason_code: str, thesis: str,
-        selected_strategy: str, fit_score: float,
+        self,
+        chief_ctx: ChiefTraderContext,
+        *,
+        reason_code: str,
+        thesis: str,
+        selected_strategy: str = "",
+        fit_score: float = 0.0,
     ):
         from crypto_trader.llm_chief.decision import ChiefTraderDecision
 
@@ -284,6 +456,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             decision_id=f"gate_{datetime.now(UTC).timestamp()}",
             symbol=chief_ctx.symbol,
             action="NO_TRADE",
+            decision_class="NO_TRADE",
             market_regime=chief_ctx.regime,
             thesis=thesis,
             reason_codes=[reason_code],
@@ -292,6 +465,14 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             model_version=self.engine.model_version,
             created_at=datetime.now(UTC).isoformat(),
         )
+
+    def _entry_quantity(self, decision) -> str:
+        """§7 PAPER sizing: exploration entries use a bounded fraction."""
+        if getattr(decision, "decision_class", "") == "EXPLORATION":
+            return str(
+                Decimal(self.normal_quantity) * Decimal(str(self.exploration_size_fraction))
+            )
+        return self.normal_quantity
 
     def _map_to_signals(
         self, decision, ctx: StrategyContext, chief_ctx: ChiefTraderContext
@@ -312,7 +493,8 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 decision.decision_id,
             )
             return []
-        quantity = "0.001"
+        # §7 exploration sizing: smaller experiments, same risk authority.
+        quantity = self._entry_quantity(decision)
         return [
             SignalIntent(
                 signal_id=new_id("llm"),
@@ -336,12 +518,18 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                     "evidence_adjusted_confidence": str(
                         decision.evidence_adjusted_confidence
                     ),
+                    "decision_class": decision.decision_class or "NORMAL",
+                    "exploration_mode": str(decision.exploration_mode),
                 },
             )
         ]
 
     async def _persist_evidence(
-        self, decision, ctx: StrategyContext, chief_ctx: ChiefTraderContext
+        self,
+        decision,
+        ctx: StrategyContext,
+        chief_ctx: ChiefTraderContext,
+        execution_reference: str = "",
     ) -> None:
         """Persist every completed decision as DecisionEvidence (best-effort).
 
@@ -382,6 +570,16 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "evidence_adjusted_confidence": decision.evidence_adjusted_confidence,
                 "position_size_request": decision.position_size_request,
                 "leverage_request": decision.leverage_request,
+                # §11 PAPER exploration record: decision class, actual PAPER
+                # size and the entry price reference for later outcome pairing.
+                "exploration_mode": self.exploration_mode,
+                "decision_class": decision.decision_class
+                or ("NO_TRADE" if decision.action == "NO_TRADE" else ""),
+                "position_size": self._entry_quantity(decision),
+                "entry_price_reference": str(ctx.mark_price or ""),
+                "exploration_probability": self.exploration_probability
+                if self.exploration_mode
+                else None,
                 "strategy_candidates": (
                     chief_ctx.strategy_evidence or {}
                 ).get("strategy_candidates", []),
@@ -392,7 +590,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "status": "PENDING",
                 "note": "NO_TRADE decisions are never submitted to RiskEngine",
             },
-            "execution_intent_reference": "",
+            "execution_intent_reference": execution_reference,
             "created_at_utc": now,
         }
         try:

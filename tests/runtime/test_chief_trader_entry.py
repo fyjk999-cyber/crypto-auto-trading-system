@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from decimal import Decimal
 
@@ -438,3 +439,303 @@ async def test_short_and_buy_sell_mapping_exhaustive():
     )
     signals2 = await adapter2.on_market_data(make_ctx())
     assert signals2[0].side.value == "BUY"
+
+
+# ---------------------------------------------------------------------------
+# PAPER EXPLORATION MODE (STAGE A) - §31 test contract
+# ---------------------------------------------------------------------------
+
+def make_signal(qty="1"):
+    from crypto_trader.domain.enums import OrderSide
+    from crypto_trader.domain.models import SignalIntent as _SignalIntent
+
+    return _SignalIntent(
+        signal_id="sig_1",
+        strategy_id="test",
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        quantity=qty,
+        limit_price="100",
+    )
+
+
+def make_account(equity="10000"):
+    from crypto_trader.domain.models import Account as _Account
+
+    return _Account(equity=Decimal(equity))
+
+
+def _exploration_adapter(provider, backend=None, sampler=lambda: 0.0, **overrides):
+    params = dict(
+        provider=provider,
+        min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(),
+        exploration_mode=True,
+        exploration_min_fit=0.40,
+        exploration_min_confidence=0.45,
+        exploration_probability=0.30,
+        exploration_size_fraction=0.5,
+        normal_fit_threshold=0.65,
+        normal_confidence_threshold=0.60,
+        entry_cooldown_seconds=240.0,
+        exploration_sampler=sampler,
+        evidence_backend=backend,
+    )
+    params.update(overrides)
+    return ChiefTraderStrategyAdapter(**params)
+
+
+def _mid_response(**overrides):
+    """Plausible-but-borderline opportunity: fit 0.50 / confidence 0.49."""
+    response = _long_response()
+    response.update(
+        {
+            "strategy_fit_score": 0.50,
+            "raw_llm_confidence": 0.55,
+            "evidence_adjusted_confidence": 0.49,
+        }
+    )
+    response.update(overrides)
+    return response
+
+
+async def test_exploration_plausible_fit_trades_small_size():
+    """A 0.50-fit strategy MAY trade in exploration mode: small and tagged."""
+    provider = ScriptedProvider(_mid_response())
+    adapter = _exploration_adapter(provider)
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    metadata = signals[0].metadata
+    assert metadata["decision_class"] == "EXPLORATION"
+    assert metadata["exploration_mode"] == "True"
+    # §7: exploration size is a bounded fraction of the normal PAPER size.
+    assert Decimal(signals[0].quantity) == Decimal("0.0005")
+
+
+async def test_normal_entry_keeps_full_size_and_class():
+    """fit 0.81 / conf 0.69 clears the NORMAL band: full size, tagged NORMAL."""
+    provider = ScriptedProvider(_long_response())
+    adapter = _exploration_adapter(provider)
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+    assert signals[0].metadata["decision_class"] == "NORMAL"
+    assert Decimal(signals[0].quantity) == Decimal("0.001")
+
+
+async def test_exploration_borderline_not_sampled_records_counterfactual(database):
+    """§12: candidate existed but the sampler skipped it -> persisted NO_TRADE."""
+    from sqlalchemy import select
+
+    from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
+    from crypto_trader.persistence.models import DecisionEvidenceORM
+
+    provider = ScriptedProvider(_mid_response())
+    borderline_evidence = {
+        "market_regime": "BULL",
+        "strategy_candidates": [
+            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
+             "direction": "LONG", "fit_score": 0.50, "raw_confidence": 0.5,
+             "supporting_factors": ["trend"], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+        ],
+        "dominant_factors": ["trend"], "risk_flags": [],
+    }
+    backend = SqlEvidenceBackend(database.session_factory)
+    adapter = _exploration_adapter(
+        provider, backend=backend, sampler=lambda: 0.99,
+        decision_context_provider=StaticContextProvider(evidence=borderline_evidence),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert signals == []
+    assert provider.calls == 0  # sampled out BEFORE the LLM call
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(DecisionEvidenceORM)
+                .where(DecisionEvidenceORM.strategy_id == "llm_chief_trader")
+                .order_by(DecisionEvidenceORM.timestamp_utc.desc())
+                .limit(1)
+            )
+        ).scalar_one()
+    assert row.decision_json["action"] == "NO_TRADE"
+    assert "EXPLORATION_NOT_SAMPLED" in row.decision_json["reason_codes"]
+    analysis = row.analysis_evidence_json
+    if isinstance(analysis, str):
+        analysis = json.loads(analysis)
+    assert analysis["exploration_mode"] is True
+    assert analysis["decision_class"] == "NO_TRADE"
+
+
+async def test_exploration_confidence_gate_blocks():
+    """conf 0.40 < exploration minimum 0.45 -> fail closed, no order."""
+    provider = ScriptedProvider(
+        _mid_response(evidence_adjusted_confidence=0.40)
+    )
+    adapter = _exploration_adapter(provider)
+    assert await adapter.on_market_data(make_ctx()) == []
+
+
+async def test_exploration_weak_fit_still_blocked():
+    """fit 0.25 is below even the exploration minimum -> no trade."""
+    evidence = {
+        "market_regime": "RANGE",
+        "strategy_candidates": [
+            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
+             "direction": "LONG", "fit_score": 0.25, "raw_confidence": 0.25,
+             "supporting_factors": [], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+        ],
+        "dominant_factors": [], "risk_flags": [],
+    }
+    provider = ScriptedProvider(_mid_response(strategy_fit_score=0.25))
+    adapter = _exploration_adapter(
+        provider, decision_context_provider=StaticContextProvider(evidence=evidence)
+    )
+    assert await adapter.on_market_data(make_ctx()) == []
+    assert provider.calls == 0  # deterministic gate, no LLM spend
+
+
+async def test_entry_cooldown_blocks_immediate_reentry():
+    """§13: a second NEW entry inside the cooldown is recorded, not traded."""
+    provider = ScriptedProvider(_long_response())
+    adapter = _exploration_adapter(provider)
+    first = await adapter.on_market_data(make_ctx())
+    assert len(first) == 1
+    second = await adapter.on_market_data(make_ctx())
+    assert second == []
+    assert provider.calls == 1  # cooldown checked before the LLM
+
+
+async def test_active_position_blocks_new_entry():
+    """§14: one open position -> no repeated entries for data collection."""
+    from crypto_trader.domain.models import Position
+
+    provider = ScriptedProvider(_long_response())
+    adapter = _exploration_adapter(provider)
+    ctx = make_ctx()
+    ctx.positions["BTCUSDT"] = Position(
+        symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT",
+        quantity=Decimal("0.001"),
+    )
+    signals = await adapter.on_market_data(ctx)
+    assert signals == []
+    assert provider.calls == 0  # no LLM spend while a position is open
+
+
+async def test_exploration_never_activates_in_live_mode():
+    """§30 hard lock: exploration config is REFUSED outside safe PAPER."""
+    import pytest
+    from pydantic import ValidationError
+
+    from crypto_trader.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(
+            trading_mode="LIVE", live_trading_enabled=True,
+            paper_exploration_mode=True, app_env="test",
+        )
+    with pytest.raises(ValidationError):
+        Settings(
+            trading_mode="PAPER", real_money_enabled=True,
+            paper_exploration_mode=True, app_env="test",
+        )
+    safe = Settings(
+        trading_mode="PAPER", paper_exploration_mode=True, app_env="test"
+    )
+    assert safe.exploration_mode_active is True
+    off = Settings(
+        trading_mode="PAPER", paper_exploration_mode=False, app_env="test"
+    )
+    assert off.exploration_mode_active is False
+
+
+# ---------------------------------------------------------------------------
+# CORE_TRADING_DOCTRINE_V1 regression contract (§14)
+# ---------------------------------------------------------------------------
+
+async def test_doctrine_A_single_strong_strategy_suffices():
+    """One strong strategy + weak others -> trade still occurs (no unanimity)."""
+    evidence = {
+        "market_regime": "BULL",
+        "strategy_candidates": [
+            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
+             "direction": "LONG", "fit_score": 0.72, "raw_confidence": 0.7,
+             "supporting_factors": ["trend"], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+            {"strategy_id": "momentum", "strategy_version": "0.1.0",
+             "direction": "NO_TRADE", "fit_score": 0.0, "raw_confidence": 0.0,
+             "supporting_factors": [], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+            {"strategy_id": "breakout", "strategy_version": "0.1.0",
+             "direction": "NO_TRADE", "fit_score": 0.0, "raw_confidence": 0.0,
+             "supporting_factors": [], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+        ],
+        "dominant_factors": ["trend"], "risk_flags": [],
+    }
+    provider = ScriptedProvider(_long_response(strategy_fit_score=0.72))
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(evidence=evidence),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert len(signals) == 1
+
+
+async def test_doctrine_D_raw_factor_without_strategy_interpretation_no_trade():
+    """A strong factor alone NEVER creates an order: no valid interpreter."""
+    evidence = {
+        "market_regime": "RANGE",
+        "strategy_candidates": [
+            {"strategy_id": "trend_following", "strategy_version": "0.1.0",
+             "direction": "NO_TRADE", "fit_score": 0.0, "raw_confidence": 0.0,
+             "supporting_factors": ["volume"], "contradicting_factors": [],
+             "reason_codes": ["EMA_FLAT"], "data_health": "OK"},
+            {"strategy_id": "momentum", "strategy_version": "0.1.0",
+             "direction": "NO_TRADE", "fit_score": 0.0, "raw_confidence": 0.0,
+             "supporting_factors": ["volume"], "contradicting_factors": [],
+             "reason_codes": [], "data_health": "OK"},
+        ],
+        "dominant_factors": ["volume"],
+        "risk_flags": [],
+    }
+    provider = ScriptedProvider(_long_response())
+    adapter = ChiefTraderStrategyAdapter(
+        provider=provider, min_decision_interval_seconds=0.0,
+        decision_context_provider=StaticContextProvider(evidence=evidence),
+    )
+    signals = await adapter.on_market_data(make_ctx())
+    assert signals == []
+    assert provider.calls == 0
+
+
+def test_doctrine_E_risk_engine_rejection_blocks_execution():
+    """LLM proposal + RiskEngine REJECT -> no execution path exists."""
+    from crypto_trader.domain.enums import ExecutionDecision
+    from crypto_trader.risk.engine import RiskConfig, RiskEngine
+
+    config = RiskConfig(max_position_notional=Decimal("50"))
+    engine = RiskEngine(config)
+    decision = engine.check(
+        make_signal(qty="10"),
+        account=make_account(),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+    )
+    assert decision.decision == ExecutionDecision.REJECT
+
+
+def test_doctrine_F_risk_engine_approval_allows_paper_execution():
+    from crypto_trader.domain.enums import ExecutionDecision
+    from crypto_trader.risk.engine import RiskEngine
+
+    engine = RiskEngine()
+    decision = engine.check(
+        make_signal(qty="0.001"),
+        account=make_account(),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+    )
+    assert decision.decision == ExecutionDecision.APPROVE
