@@ -210,7 +210,9 @@ class OKXPublicMarketFeed:
             self.state.high_24h = self._optional_decimal(ticker.get("high_24h"))
             self.state.low_24h = self._optional_decimal(ticker.get("low_24h"))
             self.state.volume_24h = self._optional_decimal(ticker.get("volume_24h"))
-            self.state.quote_volume_24h = self._optional_decimal(ticker.get("quote_volume_24h"))
+            self.state.volume_ccy_24h = self._optional_decimal(
+                ticker.get("volume_ccy_24h")
+            )
             self.state.volume = self.state.volume_24h or D("0")
             self.state.last_size = self._optional_decimal(ticker.get("last_size"))
             self.state.best_bid_size = self._optional_decimal(ticker.get("bid_size"))
