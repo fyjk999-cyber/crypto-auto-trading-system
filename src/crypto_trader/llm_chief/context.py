@@ -19,6 +19,9 @@ class ChiefTraderContext:
     coin_profile: dict = field(default_factory=dict)
     compressed_experience: list[dict] = field(default_factory=list)
     failure_warnings: list[str] = field(default_factory=list)
+    strategy_evidence: dict = field(default_factory=dict)
+    factor_snapshot: dict = field(default_factory=dict)
+    champion_release: dict = field(default_factory=dict)
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def estimate_tokens(self) -> int:
@@ -48,9 +51,11 @@ class ChiefTraderContext:
         """Canonical read-only state consumed by CryptoTrader-Live."""
         return {
             "MarketSnapshot": self.market_snapshot,
-            "FactorSnapshot": self.quant_evidence,
+            "MarketRegime": self.regime,
+            "FactorSnapshot": self.factor_snapshot or self.quant_evidence,
             "FactorHealth": self.risk_summary.get("factor_intelligence", {}),
             "FactorProfile": self.risk_summary.get("factor_profile", "FULL"),
+            "StrategyEvidencePackage": self.strategy_evidence,
             "PortfolioState": self.portfolio_state,
             "PositionState": self.portfolio_state.get("positions", {}),
             "RiskContext": self.risk_summary,
@@ -59,5 +64,6 @@ class ChiefTraderContext:
                 "similar_episodes": self.similar_episodes,
                 "compressed_experience": self.compressed_experience,
             },
-            "TradingRelease": self.risk_summary.get("trading_release", {}),
+            "TradingRelease": self.champion_release
+            or self.risk_summary.get("trading_release", {}),
         }

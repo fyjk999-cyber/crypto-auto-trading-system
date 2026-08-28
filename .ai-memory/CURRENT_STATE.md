@@ -21,3 +21,15 @@
   market-data DNS outage handled fail-closed. See docs/PAPER_SMOKE_TEST_REPORT.md.
   Blocked for Chapter 10: PostgreSQL absent on this machine; local VPN DNS unstable.
   PAPER ONLY: REAL_MONEY_READY=NO, REAL_MONEY_ENABLED=NO, LIVE_TRADING_ENABLED=false.
+- 2026-08-28 (trading logic wiring hardening, PAPER only): Live decision philosophy
+  changed from all-conditions gating to STRATEGY SELECTION + EVIDENCE WEIGHTING.
+  Five canonical strategies now produce regime-adjusted fit-score candidates
+  (StrategyEvidenceBuilder); real FactorSnapshot lineage wired into every Live
+  decision (snapshot_id + factor_set_version, no more ""); deterministic PAPER
+  gates live_min_strategy_fit=0.45 / live_min_trade_confidence=0.55 (Settings,
+  documented); exhaustive entry action mapping (WAIT/unknown/ADD/REDUCE/EXIT
+  fail closed, never SELL); evidence persistence instrumented (never silent);
+  /decision-context read-only API + frontend strategy-fit panel (real values).
+  See docs/TRADING_LOGIC_HARDENING.md. Tests: 669 passed. New baseline recorded
+  at the hardening commit SHA (git log -1). RiskEngine/ExecutionAuthority/Ledger
+  untouched.

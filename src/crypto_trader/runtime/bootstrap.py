@@ -116,11 +116,56 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_position_notional="5000",
         max_leverage="3",
     )
+    from datetime import UTC, datetime
+
     from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
+    from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
+    from crypto_trader.runtime.live_decision_context import LiveDecisionContextProvider
+
+    async def _live_candle_provider(symbol: str) -> list[dict]:
+        """Public OKX 1m candles, oldest-first. Real market data only; on any
+        failure returns [] and the entry path fails closed (no synthetic data).
+        """
+        provider_symbol = "BTC-USDT-SWAP" if symbol.upper() == "BTCUSDT" else symbol.upper()
+        client = OKXAdapter(base_url=settings.okx_base_url)
+        try:
+            rows = await client.get_candles(provider_symbol, "1m", 200)
+            by_open_time: dict[str, dict] = {}
+            for row in rows:
+                try:
+                    open_time = datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC).isoformat()
+                    by_open_time[open_time] = {
+                        "symbol": symbol.upper(),
+                        "interval": "1m",
+                        "open_time": open_time,
+                        "open": str(row[1]),
+                        "high": str(row[2]),
+                        "low": str(row[3]),
+                        "close": str(row[4]),
+                        "volume": str(row[5]),
+                        "source": "OKX",
+                    }
+                except (TypeError, ValueError, IndexError) as exc:
+                    raise OKXDiagnosticError(
+                        "MALFORMED_RESPONSE", "invalid candle row"
+                    ) from exc
+            return [by_open_time[key] for key in sorted(by_open_time)]
+        except Exception:
+            return []
+        finally:
+            await client.disconnect()
+
+    decision_context_provider = LiveDecisionContextProvider(
+        candle_provider=_live_candle_provider,
+        symbol="BTCUSDT",
+    )
 
     chief_trader = ChiefTraderStrategyAdapter(
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
         evidence_backend=SqlEvidenceBackend(database.session_factory),
+        decision_context_provider=decision_context_provider,
+        min_strategy_fit=settings.live_min_strategy_fit,
+        min_trade_confidence=settings.live_min_trade_confidence,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 

@@ -277,6 +277,32 @@ function RiskPanel({ risk, killSwitchFallback }: { risk: JsonRecord; killSwitchF
   );
 }
 
+function StrategyFitRows({ snapshot }: { snapshot: TradingSnapshot }) {
+  // Real persisted decision context from /decision-context; nothing fabricated.
+  const payload = record(snapshot.optional["/decision-context"]?.data);
+  if (payload.status !== "OK") return null;
+  const fit = payload.strategy_fit_score;
+  const factors = (value: unknown) => {
+    const items = list(value).map((item) => String(item));
+    return items.length ? items.join(" / ") : "NOT_AVAILABLE";
+  };
+  return (
+    <>
+      <h3>策略适配（真实证据）</h3>
+      <dl className="decision-facts">
+        <div><dt>市场状态</dt><dd>{text(payload.market_regime, "NOT_AVAILABLE")}</dd></div>
+        <div><dt>主策略</dt><dd>{text(payload.selected_strategy, "NOT_AVAILABLE")}</dd></div>
+        <div><dt>适配度</dt><dd>{fit === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : percent(fit)}</dd></div>
+        <div><dt>主要因子</dt><dd>{text(payload.dominant_factor, "NOT_AVAILABLE")}</dd></div>
+        <div><dt>支持</dt><dd>{factors(payload.supporting_factors)}</dd></div>
+        <div><dt>冲突</dt><dd>{factors(payload.contradicting_factors)}</dd></div>
+        <div><dt>决策</dt><dd>{text(payload.action, "NOT_AVAILABLE")}</dd></div>
+        <div><dt>证据调整置信度</dt><dd>{payload.evidence_adjusted_confidence === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : percent(payload.evidence_adjusted_confidence)}</dd></div>
+      </dl>
+    </>
+  );
+}
+
 function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const marketState = snapshot.optional["/market"] ?? { status: "loading" as const };
   const market = record(marketState.data);
@@ -319,6 +345,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
         <Panel title="当前判断" source={snapshot.optional["/signals"]} className="decision-panel">
           <div className={`decision ${decision.tone}`}><strong>{decisionLabel}</strong><span>{hasSignal ? decision.code : "--"}</span></div>
           <dl className="decision-facts"><div><dt>置信度</dt><dd>{percent(signal.confidence)}</dd></div><div><dt>市场状态</dt><dd>{regimeLabels[String(regime.regime ?? "").toUpperCase()] ?? "--"}</dd></div><div><dt>建议仓位</dt><dd>{text(pick(signal, "suggested_position", "position_size"))}</dd></div><div><dt>建议杠杆</dt><dd>{pick(signal, "leverage", "risk_capped_leverage") === undefined ? "--" : `${numberText(pick(signal, "leverage", "risk_capped_leverage"))}x`}</dd></div><div><dt>风险等级</dt><dd>{text(pick(signal, "risk_level"))}</dd></div></dl>
+          <StrategyFitRows snapshot={snapshot} />
           <h3>策略共识</h3><StrategyRows snapshot={snapshot} />
           <h3>有效权重</h3><WeightRows snapshot={snapshot} />
           <details className="why"><summary>为什么？</summary><dl><div><dt>市场阶段 Regime</dt><dd>{text(regime.regime)}</dd></div><div><dt>原因代码</dt><dd>{Array.isArray(signal.reasons) ? signal.reasons.join("、") || "--" : "--"}</dd></div><div><dt>原始置信度</dt><dd>{percent(pick(signal, "raw_confidence", "confidence"))}</dd></div><div><dt>校准置信度</dt><dd>{percent(signal.calibrated_confidence)}</dd></div><div><dt>风控后杠杆</dt><dd>{text(signal.risk_capped_leverage)}</dd></div><div><dt>复核结果</dt><dd>{text(signal.review_result)}</dd></div><div><dt>压力测试</dt><dd>{text(signal.stress_result)}</dd></div></dl></details>

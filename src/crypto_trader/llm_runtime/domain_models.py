@@ -24,11 +24,19 @@ class TradingAnalysisResult(BaseModel):
     symbol: str
     action: Literal["LONG", "SHORT", "NO_TRADE", "WAIT"]
     market_regime: str = "UNKNOWN"
+    selected_strategy: str = ""
+    strategy_fit_score: float = 0.0
+    secondary_strategies: list[str] = Field(default_factory=list)
+    supporting_factors: list[str] = Field(default_factory=list)
+    contradicting_factors: list[str] = Field(default_factory=list)
+    dominant_factor: str = ""
     thesis: str = ""
     reason_codes: list[str] = Field(default_factory=list)
     position_size_request: float = 0.0
     leverage_request: float = 0.0
     raw_llm_confidence: float = 0.0
+    evidence_adjusted_confidence: float = 0.0
+    invalidation_conditions: list[str] = Field(default_factory=list)
 
 
 class DomainModelProfile(BaseModel):
@@ -180,12 +188,20 @@ ROUTE_OUTPUT_EXAMPLES: dict[str, dict[str, Any]] = {
         "decision_id": "<copy context.DecisionId>",
         "symbol": "<string>",
         "action": "LONG|SHORT|NO_TRADE|WAIT",
-        "market_regime": "<string>",
+        "market_regime": "<copy context.MarketRegime>",
+        "selected_strategy": "<one strategy_id from context.StrategyEvidencePackage>",
+        "strategy_fit_score": 0.0,
+        "secondary_strategies": ["<strategy_id>"],
+        "supporting_factors": ["<factor_id>"],
+        "contradicting_factors": ["<factor_id>"],
+        "dominant_factor": "<factor_id>",
         "thesis": "<string>",
         "reason_codes": ["<string>"],
         "position_size_request": 0.0,
         "leverage_request": 0.0,
         "raw_llm_confidence": 0.0,
+        "evidence_adjusted_confidence": 0.0,
+        "invalidation_conditions": ["<string>"],
     },
     "daily_review": {
         "summary": "<string>",

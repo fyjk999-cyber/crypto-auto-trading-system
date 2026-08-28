@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     # LLM transport when local VPN/TUN fake-IP DNS hangs TLS to a provider. Empty
     # disables the behaviour entirely.
     llm_doh_resolver: str = ""
+    # PAPER-only Live decision gates (strategy-selection philosophy). NOT
+    # unanimity gates: min_strategy_fit blocks entry only when the BEST
+    # regime-adjusted strategy fit is below noise level; min_trade_confidence
+    # blocks only when the LLM's own evidence-adjusted confidence is below
+    # coin-flip. Defaults chosen conservatively (0.45 / 0.55); Evolution may
+    # propose changes through the candidate pipeline, never silently.
+    live_min_strategy_fit: float = 0.45
+    live_min_trade_confidence: float = 0.55
 
     @field_validator("trading_mode", mode="before")
     @classmethod

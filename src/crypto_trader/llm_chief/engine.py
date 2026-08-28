@@ -42,19 +42,64 @@ class ChiefTraderEngine:
     def render_prompt(self, ctx: ChiefTraderContext) -> str:
         return (
             "You are the Chief Trader of a crypto fund. Return JSON only.\n"
+            "Determine which available trading strategy best fits the current market"
+            " state. You do NOT need all strategies or all factors to agree. Select"
+            " the dominant strategy based on regime and evidence. Contradicting"
+            " factors should lower confidence or alter sizing, but should not"
+            " automatically veto a trade unless they invalidate the selected"
+            " strategy. Only choose NO_TRADE when no strategy currently has"
+            " sufficient evidence-adjusted edge or a hard safety gate prevents"
+            " entry.\n"
             f"Symbol: {ctx.symbol}\nRegime: {ctx.regime}\n"
-            f"Market: {ctx.market_snapshot}\nQuantEvidence: {ctx.quant_evidence}\n"
+            f"Market: {ctx.market_snapshot}\n"
+            f"StrategyEvidencePackage: {ctx.strategy_evidence}\n"
+            f"FactorSnapshot: {ctx.factor_snapshot}\n"
+            f"QuantEvidence: {ctx.quant_evidence}\n"
             f"Portfolio: {ctx.portfolio_state}\nRisk: {ctx.risk_summary}\n"
             f"Knowledge: {ctx.knowledge}\nSimilarEpisodes: {ctx.similar_episodes}\n"
             f"CoinProfile: {ctx.coin_profile}\nExperience: {ctx.compressed_experience}\n"
-            "Output keys: decision_id,symbol,action,market_regime,strategy_selected,thesis,"
-            "position_size_request,leverage_request,raw_llm_confidence,reason_codes."
+            "Output keys: decision_id,symbol,action(LONG|SHORT|NO_TRADE|WAIT),"
+            "market_regime,selected_strategy,strategy_fit_score,secondary_strategies,"
+            "supporting_factors,contradicting_factors,dominant_factor,thesis,"
+            "position_size_request,leverage_request,raw_llm_confidence,"
+            "evidence_adjusted_confidence,invalidation_conditions,reason_codes."
         )
 
+    # Entry vocabulary only. Position management actions (ADD/REDUCE/EXIT) and
+    # anything unknown fail closed to WAIT (never an entry signal).
+    _ACTION_ALIASES = {
+        "LONG": "LONG", "OPEN_LONG": "LONG", "BUY": "LONG",
+        "SHORT": "SHORT", "OPEN_SHORT": "SHORT", "SELL": "SHORT",
+        "NO_TRADE": "NO_TRADE", "WAIT": "WAIT",
+    }
+
     def parse_decision(self, raw: dict, ctx: ChiefTraderContext) -> ChiefTraderDecision:
+        raw = dict(raw)
         raw.setdefault("decision_id", f"llm_{datetime.now(UTC).timestamp()}")
         raw.setdefault("symbol", ctx.symbol)
         raw.setdefault("market_regime", ctx.regime)
-        raw.setdefault("action", "NO_TRADE")
+        raw_action = str(raw.get("action", "NO_TRADE")).upper()
+        raw["action"] = self._ACTION_ALIASES.get(raw_action, "WAIT")
+        if raw["action"] == "WAIT":
+            raw.setdefault("reason_codes", [])
+            if "ACTION_UNRECOGNIZED_FAIL_CLOSED" not in raw["reason_codes"]:
+                raw["reason_codes"] = list(raw["reason_codes"]) + [
+                    "ACTION_UNRECOGNIZED_FAIL_CLOSED"
+                ]
         raw.setdefault("created_at", datetime.now(UTC).isoformat())
-        return ChiefTraderDecision(**raw)
+        allowed = set(ChiefTraderDecision.model_fields)
+        filtered = {k: v for k, v in raw.items() if k in allowed}
+        decision = ChiefTraderDecision(**filtered)
+        if not decision.selected_strategy:
+            dominant = (ctx.strategy_evidence or {}).get("strategy_candidates") or []
+            directional = [c for c in dominant if c.get("direction") in ("LONG", "SHORT")]
+            if directional:
+                best = max(directional, key=lambda c: float(c.get("fit_score", 0)))
+                decision = decision.model_copy(
+                    update={
+                        "selected_strategy": best["strategy_id"],
+                        "strategy_version": best.get("strategy_version", ""),
+                        "strategy_fit_score": float(best.get("fit_score", 0.0)),
+                    }
+                )
+        return decision

@@ -622,6 +622,55 @@ def create_app(state: AppState) -> FastAPI:
             "reasons": alpha.last_meta.reason_codes,
         }
 
+    @app.get("/decision-context")
+    async def decision_context():
+        """Read-only latest Live decision context (real persisted evidence).
+
+        Surfaces the strategy-selection philosophy to the frontend: dominant
+        strategy, fit, supporting/contradicting factors, confidence. Values
+        come from the newest llm_chief_trader DecisionEvidence row; when none
+        exists the endpoint reports NOT_AVAILABLE rather than fabricating.
+        """
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import DecisionEvidenceORM
+
+        async with state.database.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(DecisionEvidenceORM)
+                    .where(DecisionEvidenceORM.strategy_id == "llm_chief_trader")
+                    .order_by(DecisionEvidenceORM.timestamp_utc.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return {"status": "NOT_AVAILABLE"}
+        evidence = row.analysis_evidence_json or {}
+        decision = row.decision_json or {}
+        return {
+            "status": "OK",
+            "symbol": row.symbol,
+            "timestamp_utc": row.timestamp_utc,
+            "decision_id": row.decision_id,
+            "market_regime": evidence.get("market_regime") or "NOT_AVAILABLE",
+            "selected_strategy": evidence.get("selected_strategy") or "NOT_AVAILABLE",
+            "strategy_version": evidence.get("strategy_version") or "NOT_AVAILABLE",
+            "strategy_fit_score": evidence.get("strategy_fit_score", "NOT_AVAILABLE"),
+            "dominant_factor": evidence.get("dominant_factor") or "NOT_AVAILABLE",
+            "supporting_factors": evidence.get("supporting_factors") or [],
+            "contradicting_factors": evidence.get("contradicting_factors") or [],
+            "action": decision.get("action") or "NOT_AVAILABLE",
+            "raw_llm_confidence": decision.get("raw_llm_confidence", "NOT_AVAILABLE"),
+            "evidence_adjusted_confidence": decision.get(
+                "evidence_adjusted_confidence", "NOT_AVAILABLE"
+            ),
+            "reason_codes": decision.get("reason_codes") or [],
+            "factor_snapshot_id": row.factor_snapshot_id or "NOT_AVAILABLE",
+            "factor_set_version": row.factor_set_version or "NOT_AVAILABLE",
+            "llm_invocation_id": evidence.get("llm_invocation_id") or "NOT_AVAILABLE",
+        }
+
     @app.get("/signals")
     async def signals(limit: int = 50):
         alpha = _alpha_from_state()

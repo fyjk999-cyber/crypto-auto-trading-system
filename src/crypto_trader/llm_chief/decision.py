@@ -36,6 +36,16 @@ class ChiefTraderDecision(BaseModel):
     expected_risk: float = 0.0
     reason_codes: list[str] = Field(default_factory=list)
     llm_invocation_id: str = ""
+    selected_strategy: str = ""
+    strategy_version: str = ""
+    strategy_fit_score: float = 0.0
+    secondary_strategies: list[str] = Field(default_factory=list)
+    supporting_factors: list[str] = Field(default_factory=list)
+    contradicting_factors: list[str] = Field(default_factory=list)
+    dominant_factor: str = ""
+    evidence_adjusted_confidence: float = 0.0
+    factor_snapshot_id: str = ""
+    factor_set_version: str = ""
     model_version: str = "0"
     knowledge_version: str = "0"
     memory_version: str = "0"
