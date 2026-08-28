@@ -276,7 +276,7 @@ class TradingEngine:
                 # CURRENT market data at authorization time. The authority's
                 # staleness gate stays the safety check — it is only fed
                 # fresh data, never bypassed.
-                await self._refresh_orderbook(signals[0].symbol)
+                await self._refresh_orderbook(reference_symbol_for(signals[0].symbol))
             for signal in signals:
                 # Active-position priority: suppress accidental duplicate entry
                 # for symbols already held unless this is the AI position path.
