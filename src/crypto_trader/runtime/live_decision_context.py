@@ -9,7 +9,7 @@ they never become a trade gate or decision authority.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
@@ -24,7 +24,7 @@ class LiveDecisionBundle:
     factor_set_version: str
     factor_snapshot: dict
     evidence: dict  # StrategyEvidencePackage.to_dict()
-    technical_indicators: dict
+    technical_indicators: dict = field(default_factory=dict)
 
 
 class LiveDecisionContextProvider:
