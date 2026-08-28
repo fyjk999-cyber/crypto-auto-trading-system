@@ -681,6 +681,7 @@ def create_app(state: AppState) -> FastAPI:
                 "evidence_adjusted_confidence", "NOT_AVAILABLE"
             ),
             "reason_codes": decision.get("reason_codes") or [],
+            "strategy_candidates": evidence.get("strategy_candidates") or [],
             "factor_snapshot_id": row.factor_snapshot_id or "NOT_AVAILABLE",
             "factor_set_version": row.factor_set_version or "NOT_AVAILABLE",
             "llm_invocation_id": evidence.get("llm_invocation_id") or "NOT_AVAILABLE",

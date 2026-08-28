@@ -64,27 +64,27 @@ function pick(source: JsonRecord, ...keys: string[]) {
   return undefined;
 }
 
-function text(value: unknown, fallback = "--") {
+function text(value: unknown, fallback = "NOT_AVAILABLE") {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value ? "是" : "否";
   return String(value);
 }
 
 function numberText(value: unknown, digits = 2) {
-  if (value === undefined || value === null || value === "") return "--";
+  if (value === undefined || value === null || value === "") return "NOT_AVAILABLE";
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "--";
+  return Number.isFinite(parsed) ? parsed.toLocaleString("zh-CN", { maximumFractionDigits: digits }) : "NOT_AVAILABLE";
 }
 
 function money(value: unknown) {
   const rendered = numberText(value, 2);
-  return rendered === "--" ? rendered : `$${rendered}`;
+  return rendered === "NOT_AVAILABLE" ? rendered : `$${rendered}`;
 }
 
 function percent(value: unknown) {
-  if (value === undefined || value === null || value === "") return "--";
+  if (value === undefined || value === null || value === "") return "NOT_AVAILABLE";
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return "--";
+  if (!Number.isFinite(parsed)) return "NOT_AVAILABLE";
   const normalized = Math.abs(parsed) <= 1 ? parsed * 100 : parsed;
   return `${normalized.toFixed(2)}%`;
 }
@@ -96,18 +96,83 @@ function metricOrNA(value: unknown, naLabel = "NOT_AVAILABLE") {
   return String(value);
 }
 
+// Canonical three-state display contract:
+//   VALUE          -> real computed value (including a real 0 / 0.00%)
+//   NO_TRADE       -> full data chain computed but no trading signal
+//   NOT_AVAILABLE  -> endpoint / capability / data source unavailable
+type TradingDisplayState = "VALUE" | "NO_TRADE" | "NOT_AVAILABLE";
+
+function isRealField(value: unknown) {
+  return value !== undefined && value !== null && value !== "" && value !== "NOT_AVAILABLE";
+}
+
+function hasRealFactorSnapshot(decisionContext: JsonRecord) {
+  return isRealField(pick(decisionContext, "factor_snapshot_id"));
+}
+
+function resolveTradingDisplayState(
+  decisionContext: JsonRecord,
+  field: string,
+): TradingDisplayState {
+  const status = String(pick(decisionContext, "status") ?? "");
+  if (status !== "OK") return "NOT_AVAILABLE";
+  const action = String(decisionContext.action ?? "");
+  const value = decisionContext[field];
+  const real = isRealField(value);
+  const snapshotReal = hasRealFactorSnapshot(decisionContext);
+  switch (field) {
+    case "action":
+      return real ? "VALUE" : "NOT_AVAILABLE";
+    case "market_regime":
+      return real ? "VALUE" : "NOT_AVAILABLE";
+    case "strategy_fit_score":
+    case "evidence_adjusted_confidence":
+    case "raw_llm_confidence":
+      // A computed zero is a REAL value and must stay 0.00%.
+      if (value === 0 || value === "0" || value === "0.0") return "VALUE";
+      return real ? "VALUE" : "NOT_AVAILABLE";
+    case "selected_strategy":
+    case "dominant_factor":
+    case "supporting_factors":
+    case "contradicting_factors": {
+      if (real) return "VALUE";
+      // Full evidence computed (real snapshot) but the current decision is
+      // NO_TRADE with no supporting/directing content -> that IS the signal.
+      if (action === "NO_TRADE" && snapshotReal) return "NO_TRADE";
+      return "NOT_AVAILABLE";
+    }
+    default:
+      return real ? "VALUE" : "NOT_AVAILABLE";
+  }
+}
+
+function renderTradingDisplay(decisionContext: JsonRecord, field: string): string {
+  const state = resolveTradingDisplayState(decisionContext, field);
+  if (state === "NO_TRADE") return "NO_TRADE";
+  if (state === "NOT_AVAILABLE") return "NOT_AVAILABLE";
+  const value = decisionContext[field];
+  if (field === "strategy_fit_score" || field === "evidence_adjusted_confidence" || field === "raw_llm_confidence") {
+    return percent(value);
+  }
+  if (field === "supporting_factors" || field === "contradicting_factors") {
+    const items = list(value).map((item) => String(item));
+    return items.length ? items.join(" / ") : "NO_TRADE";
+  }
+  return String(value);
+}
+
 function direction(value: unknown) {
   const side = String(value ?? "").toUpperCase();
   if (["BUY", "LONG"].includes(side)) return { label: "做多", code: "LONG", tone: "long" };
   if (["SELL", "SHORT"].includes(side)) return { label: "做空", code: "SHORT", tone: "short" };
-  return { label: "观望", code: "--", tone: "neutral" };
+  return { label: "观望", code: "NO_TRADE", tone: "neutral" };
 }
 
 function positionDirection(position: Position) {
   const quantity = Number(position.quantity);
   if (quantity > 0) return { label: "做多", code: "LONG", tone: "long" };
   if (quantity < 0) return { label: "做空", code: "SHORT", tone: "short" };
-  return { label: "空仓", code: "--", tone: "neutral" };
+  return { label: "空仓", code: "空仓", tone: "neutral" };
 }
 
 function StateBadge({ source }: { source: ApiState<unknown> }) {
@@ -221,16 +286,27 @@ function marketProvider(snapshot: TradingSnapshot, source: string) {
 }
 
 function StrategyRows({ snapshot }: { snapshot: TradingSnapshot }) {
-  const payload = record(snapshot.optional["/strategies"]?.data);
-  const strategies = list(payload.strategies);
-  const names = strategies.length ? strategies : [
-    { name: "trend" }, { name: "momentum" }, { name: "breakout" }, { name: "mean_reversion" }, { name: "funding_basis" },
-  ];
-  const labels: Record<string, string> = { trend: "趋势", momentum: "动量", breakout: "突破", mean_reversion: "均值回归", funding_basis: "资金 / 基差" };
-  return <div className="strategy-list">{names.slice(0, 5).map((item, index) => {
-    const name = String(item.name ?? `strategy-${index}`);
-    const vote = direction(pick(item, "side", "direction", "vote"));
-    return <div key={name}><span>{labels[name.toLowerCase()] ?? name}</span><b className={vote.tone}>{vote.code === "--" ? "--" : vote.label}</b><em>{percent(pick(item, "confidence"))}</em></div>;
+  // Canonical five-strategy candidates from the newest real decision context.
+  const decisionPayload = record(snapshot.optional["/decision-context"]?.data);
+  const candidates = list(decisionPayload.strategy_candidates);
+  const labels: Record<string, string> = {
+    trend_following: "Trend Following", momentum: "Momentum", breakout: "Breakout",
+    mean_reversion: "Mean Reversion", funding_basis: "Funding Basis",
+    trend: "Trend Following",
+  };
+  const known = ["trend_following", "momentum", "breakout", "mean_reversion", "funding_basis"];
+  const rows: JsonRecord[] = candidates.length ? candidates : known.map((name) => ({ strategy_id: name }));
+  return <div className="strategy-list">{rows.slice(0, 5).map((item, index) => {
+    const id = String(item.strategy_id ?? item.name ?? `strategy-${index}`);
+    const knownId = known.includes(id) ? id : "";
+    const directionValue = String(item.direction ?? "").toUpperCase();
+    const directionLabel = directionValue === "LONG" ? { code: "LONG", label: "做多", tone: "long" }
+      : directionValue === "SHORT" ? { code: "SHORT", label: "做空", tone: "short" }
+      : directionValue === "NO_TRADE" ? { code: "NO_TRADE", label: "NO_TRADE", tone: "neutral" }
+      : candidates.length ? { code: "NOT_AVAILABLE", label: "NOT_AVAILABLE", tone: "neutral" }
+      : { code: "NOT_AVAILABLE", label: "NOT_AVAILABLE", tone: "neutral" };
+    const fit = candidates.length ? percent(item.fit_score) : "NOT_AVAILABLE";
+    return <div key={knownId || id}><span>{labels[id] ?? knownId ?? id}</span><b className={directionLabel.tone}>{directionLabel.code}</b><em>{fit}</em></div>;
   })}</div>;
 }
 
@@ -241,7 +317,7 @@ function WeightRows({ snapshot }: { snapshot: TradingSnapshot }) {
   return <div className="weights">{weighted.slice(0, 5).map((item, index) => {
     const value = Number(pick(item, "effective_weight", "weight"));
     const normalized = Number.isFinite(value) ? Math.min(100, Math.max(0, Math.abs(value) <= 1 ? value * 100 : value)) : 0;
-    return <div key={String(item.name ?? index)}><span>{text(item.name)}</span><i><b style={{ width: `${normalized}%` }} /></i><em>{Number.isFinite(value) ? `${normalized.toFixed(0)}%` : "--"}</em></div>;
+    return <div key={String(item.name ?? index)}><span>{text(item.name)}</span><i><b style={{ width: `${normalized}%` }} /></i><em>{Number.isFinite(value) ? `${normalized.toFixed(0)}%` : "NOT_AVAILABLE"}</em></div>;
   })}</div>;
 }
 
@@ -251,7 +327,7 @@ function CurrentPosition({ snapshot, compact = false }: { snapshot: TradingSnaps
   const position = positions[0];
   const side = positionDirection(position);
   const market = record(snapshot.optional["/market"]?.data);
-  return <div className={`current-position ${compact ? "compact" : ""}`}><div className="position-title"><strong>{position.symbol}</strong><span className={side.tone}>{side.code}</span><b>{numberText(Math.abs(Number(position.quantity)), 8)} BTC</b></div><dl><div><dt>入场价</dt><dd>{money(position.avg_entry_price)}</dd></div><div><dt>标记价格</dt><dd>{money(pick(market, "mark_price", "price"))}</dd></div><div><dt>未实现盈亏</dt><dd>--</dd></div><div><dt>已实现盈亏</dt><dd>{money(position.realized_pnl)}</dd></div><div><dt>杠杆</dt><dd>--</dd></div><div><dt>爆仓距离</dt><dd>--</dd></div></dl></div>;
+  return <div className={`current-position ${compact ? "compact" : ""}`}><div className="position-title"><strong>{position.symbol}</strong><span className={side.tone}>{side.code}</span><b>{numberText(Math.abs(Number(position.quantity)), 8)} BTC</b></div><dl><div><dt>入场价</dt><dd>{money(position.avg_entry_price)}</dd></div><div><dt>标记价格</dt><dd>{money(pick(market, "mark_price", "price"))}</dd></div><div><dt>未实现盈亏</dt><dd>NOT_AVAILABLE</dd></div><div><dt>已实现盈亏</dt><dd>{money(position.realized_pnl)}</dd></div><div><dt>杠杆</dt><dd>NOT_AVAILABLE</dd></div><div><dt>爆仓距离</dt><dd>NOT_AVAILABLE</dd></div></dl></div>;
 }
 
 function RiskPanel({ risk, killSwitchFallback }: { risk: JsonRecord; killSwitchFallback?: boolean }) {
@@ -279,25 +355,23 @@ function RiskPanel({ risk, killSwitchFallback }: { risk: JsonRecord; killSwitchF
 
 function StrategyFitRows({ snapshot }: { snapshot: TradingSnapshot }) {
   // Real persisted decision context from /decision-context; nothing fabricated.
+  // Display semantics follow the canonical three-state contract:
+  // VALUE (real data, incl. real 0.00%) / NO_TRADE (data complete, no signal)
+  // / NOT_AVAILABLE (data or capability unavailable).
   const payload = record(snapshot.optional["/decision-context"]?.data);
-  if (payload.status !== "OK") return null;
-  const fit = payload.strategy_fit_score;
-  const factors = (value: unknown) => {
-    const items = list(value).map((item) => String(item));
-    return items.length ? items.join(" / ") : "NOT_AVAILABLE";
-  };
+  if (String(pick(payload, "status") ?? "") !== "OK") return null;
   return (
     <>
       <h3>策略适配（真实证据）</h3>
       <dl className="decision-facts">
-        <div><dt>市场状态</dt><dd>{text(payload.market_regime, "NOT_AVAILABLE")}</dd></div>
-        <div><dt>主策略</dt><dd>{text(payload.selected_strategy, "NOT_AVAILABLE")}</dd></div>
-        <div><dt>适配度</dt><dd>{fit === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : percent(fit)}</dd></div>
-        <div><dt>主要因子</dt><dd>{text(payload.dominant_factor, "NOT_AVAILABLE")}</dd></div>
-        <div><dt>支持</dt><dd>{factors(payload.supporting_factors)}</dd></div>
-        <div><dt>冲突</dt><dd>{factors(payload.contradicting_factors)}</dd></div>
-        <div><dt>决策</dt><dd>{text(payload.action, "NOT_AVAILABLE")}</dd></div>
-        <div><dt>证据调整置信度</dt><dd>{payload.evidence_adjusted_confidence === "NOT_AVAILABLE" ? "NOT_AVAILABLE" : percent(payload.evidence_adjusted_confidence)}</dd></div>
+        <div><dt>市场状态</dt><dd>{renderTradingDisplay(payload, "market_regime")}</dd></div>
+        <div><dt>主策略</dt><dd>{renderTradingDisplay(payload, "selected_strategy")}</dd></div>
+        <div><dt>适配度</dt><dd>{renderTradingDisplay(payload, "strategy_fit_score")}</dd></div>
+        <div><dt>主要因子</dt><dd>{renderTradingDisplay(payload, "dominant_factor")}</dd></div>
+        <div><dt>支持</dt><dd>{renderTradingDisplay(payload, "supporting_factors")}</dd></div>
+        <div><dt>冲突</dt><dd>{renderTradingDisplay(payload, "contradicting_factors")}</dd></div>
+        <div><dt>决策</dt><dd>{renderTradingDisplay(payload, "action")}</dd></div>
+        <div><dt>证据调整置信度</dt><dd>{renderTradingDisplay(payload, "evidence_adjusted_confidence")}</dd></div>
       </dl>
     </>
   );
@@ -309,13 +383,17 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const source = marketSource(snapshot);
   const sourceLabel = sourceLabels[source] ?? "状态未知";
   const provider = marketProvider(snapshot, source);
-  const signals = list(record(snapshot.optional["/signals"]?.data).signals);
-  const signal = signals[0] ?? {};
-  const regime = record(snapshot.optional["/regime"]?.data);
+  const signal = list(record(snapshot.optional["/signals"]?.data).signals)[0] ?? {};
   const risk = record(snapshot.optional["/risk"]?.data);
   const riskConfig = record(risk.risk_config);
-  const decision = direction(pick(signal, "side", "direction", "decision"));
-  const hasSignal = Object.keys(signal).length > 0;
+  const decisionState = snapshot.optional["/decision-context"] ?? { status: "loading" as const };
+  const decisionPayload = record(decisionState.data);
+  const decisionAction = String(pick(decisionPayload, "action") ?? "");
+  const topDecision = decisionAction === "LONG" ? { label: "做多", code: "LONG", tone: "long" }
+    : decisionAction === "SHORT" ? { label: "做空", code: "SHORT", tone: "short" }
+    : decisionAction === "WAIT" ? { label: "WAIT", code: "WAIT", tone: "neutral" }
+    : decisionAction === "NO_TRADE" ? { label: "NO_TRADE", code: "NO_TRADE", tone: "neutral" }
+    : { label: "NOT_AVAILABLE", code: "NOT_AVAILABLE", tone: "neutral" };
   const positions = Object.values(snapshot.positions.data ?? {}).filter((item) => Number(item.quantity) !== 0);
   const current = positions[0];
   const kline = useKlines(snapshot.lastEvent, snapshot.websocket);
@@ -323,32 +401,44 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
   const klineProvider = klineHealthy && kline.state.data?.source === "OKX" ? "OKX" : provider;
   const klineSourceLabel = klineHealthy && kline.state.data?.source === "OKX" ? "实时" : sourceLabel;
   const priceAllowed = !["UNAVAILABLE", "GEO_RESTRICTED", "UNKNOWN"].includes(source);
-  const decisionLabel = !priceAllowed ? "行情不可用，无法判断" : hasSignal ? decision.label : "暂无判断数据";
 
   return <>
     <section className="metrics" aria-label="核心指标">
       <Metric label="账户净值" value={money(snapshot.account.data?.equity)} />
-      <Metric label="今日盈亏" value="--" />
+      <Metric label="今日盈亏" value="NOT_AVAILABLE" />
       <Metric label="当前仓位" value={current ? `${positionDirection(current).code} ${numberText(Math.abs(Number(current.quantity)), 8)} BTC` : "空仓"} tone={current ? positionDirection(current).tone : ""} />
       <Metric label="当前回撤" value={percent(pick(risk, "current_drawdown", "drawdown"))} />
-      <Metric label="有效杠杆" value={pick(risk, "effective_leverage") === undefined ? "--" : `${numberText(risk.effective_leverage)}x`} />
+      <Metric label="有效杠杆" value={pick(risk, "effective_leverage") === undefined ? "NOT_AVAILABLE" : `${numberText(risk.effective_leverage)}x`} />
     </section>
     <section className="trading-workspace">
       <Panel title="BTCUSDT 行情" className="market-panel" action={<span className={`source-badge ${source.toLowerCase()}`}>{sourceLabel}</span>}>
         <div className="market-source-header"><strong>BTCUSDT</strong><span>行情：{klineProvider} · {klineSourceLabel}</span><span>执行：本地 PAPER 模拟成交</span></div>
-        <div className="market-strip"><div><strong>{priceAllowed ? money(pick(market, "price", "last_price")) : "--"}</strong><span>当前价格</span></div><div><b>{priceAllowed ? money(market.mark_price) : "--"}</b><span>标记价格</span></div><div><b>{priceAllowed ? money(market.index_price) : "--"}</b><span>指数价格</span></div><div><b>{percent(pick(market, "price_change_percent_24h", "change_24h"))}</b><span>24H 涨跌</span></div><div><b>{percent(market.funding_rate)}</b><span>资金费率</span></div><div><b>{numberText(market.open_interest, 2)}</b><span>未平仓量 OI</span></div></div>
-        <div className="market-details"><span>买一 <b>{priceAllowed ? money(market.best_bid) : "--"}</b></span><span>卖一 <b>{priceAllowed ? money(market.best_ask) : "--"}</b></span><span>Spread <b>{priceAllowed ? numberText(market.spread, 4) : "--"}</b></span><span>Basis <b>{percent(market.basis)}</b></span></div>
+        <div className="market-strip"><div><strong>{priceAllowed ? money(pick(market, "price", "last_price")) : "NOT_AVAILABLE"}</strong><span>当前价格</span></div><div><b>{priceAllowed ? money(market.mark_price) : "NOT_AVAILABLE"}</b><span>标记价格</span></div><div><b>{priceAllowed ? money(market.index_price) : "NOT_AVAILABLE"}</b><span>指数价格</span></div><div><b>{percent(pick(market, "price_change_percent_24h", "change_24h"))}</b><span>24H 涨跌</span></div><div><b>{percent(market.funding_rate)}</b><span>资金费率</span></div><div><b>{numberText(market.open_interest, 2)}</b><span>未平仓量 OI</span></div></div>
+        <div className="market-details"><span>买一 <b>{priceAllowed ? money(market.best_bid) : "NOT_AVAILABLE"}</b></span><span>卖一 <b>{priceAllowed ? money(market.best_ask) : "NOT_AVAILABLE"}</b></span><span>Spread <b>{priceAllowed ? numberText(market.spread, 4) : "NOT_AVAILABLE"}</b></span><span>Basis <b>{percent(market.basis)}</b></span></div>
         <div className="chart-toolbar"><div>{kline.intervals.map((value) => <button key={value} type="button" aria-pressed={kline.interval === value} disabled={!kline.supportedIntervals.includes(value)} onClick={() => kline.setInterval(value as KlineInterval)}>{value}</button>)}</div><span>{snapshot.websocket === "connected" ? "WebSocket 已连接" : "实时同步中断"}</span></div>
         <MarketChart source={kline.state} websocket={snapshot.websocket} />
       </Panel>
       <aside className="decision-column">
-        <Panel title="当前判断" source={snapshot.optional["/signals"]} className="decision-panel">
-          <div className={`decision ${decision.tone}`}><strong>{decisionLabel}</strong><span>{hasSignal ? decision.code : "--"}</span></div>
-          <dl className="decision-facts"><div><dt>置信度</dt><dd>{percent(signal.confidence)}</dd></div><div><dt>市场状态</dt><dd>{regimeLabels[String(regime.regime ?? "").toUpperCase()] ?? "--"}</dd></div><div><dt>建议仓位</dt><dd>{text(pick(signal, "suggested_position", "position_size"))}</dd></div><div><dt>建议杠杆</dt><dd>{pick(signal, "leverage", "risk_capped_leverage") === undefined ? "--" : `${numberText(pick(signal, "leverage", "risk_capped_leverage"))}x`}</dd></div><div><dt>风险等级</dt><dd>{text(pick(signal, "risk_level"))}</dd></div></dl>
+        <Panel title="当前判断" source={decisionState} className="decision-panel">
+          <div className={`decision ${topDecision.tone}`}><strong>{topDecision.code}</strong><span>{topDecision.code}</span></div>
+          <dl className="decision-facts">
+            <div><dt>置信度</dt><dd>{renderTradingDisplay(decisionPayload, "evidence_adjusted_confidence")}</dd></div>
+            <div><dt>市场状态</dt><dd>{renderTradingDisplay(decisionPayload, "market_regime")}</dd></div>
+            <div><dt>建议仓位</dt><dd>{text(pick(signal, "suggested_position", "position_size"))}</dd></div>
+            <div><dt>建议杠杆</dt><dd>{pick(signal, "leverage", "risk_capped_leverage") === undefined ? "NOT_AVAILABLE" : `${numberText(pick(signal, "leverage", "risk_capped_leverage"))}x`}</dd></div>
+            <div><dt>风险等级</dt><dd>{text(pick(signal, "risk_level"))}</dd></div>
+          </dl>
           <StrategyFitRows snapshot={snapshot} />
-          <h3>策略共识</h3><StrategyRows snapshot={snapshot} />
+          <h3>策略适配</h3><StrategyRows snapshot={snapshot} />
           <h3>有效权重</h3><WeightRows snapshot={snapshot} />
-          <details className="why"><summary>为什么？</summary><dl><div><dt>市场阶段 Regime</dt><dd>{text(regime.regime)}</dd></div><div><dt>原因代码</dt><dd>{Array.isArray(signal.reasons) ? signal.reasons.join("、") || "--" : "--"}</dd></div><div><dt>原始置信度</dt><dd>{percent(pick(signal, "raw_confidence", "confidence"))}</dd></div><div><dt>校准置信度</dt><dd>{percent(signal.calibrated_confidence)}</dd></div><div><dt>风控后杠杆</dt><dd>{text(signal.risk_capped_leverage)}</dd></div><div><dt>复核结果</dt><dd>{text(signal.review_result)}</dd></div><div><dt>压力测试</dt><dd>{text(signal.stress_result)}</dd></div></dl></details>
+          <details className="why"><summary>为什么？</summary><dl>
+            <div><dt>决策 ID</dt><dd>{text(pick(decisionPayload, "decision_id"))}</dd></div>
+            <div><dt>原因代码</dt><dd>{Array.isArray(decisionPayload.reason_codes) ? (decisionPayload.reason_codes as unknown[]).join("、") || "NOT_AVAILABLE" : "NOT_AVAILABLE"}</dd></div>
+            <div><dt>原始置信度</dt><dd>{renderTradingDisplay(decisionPayload, "raw_llm_confidence")}</dd></div>
+            <div><dt>Factor Snapshot</dt><dd>{text(pick(decisionPayload, "factor_snapshot_id"))}</dd></div>
+            <div><dt>Factor Set</dt><dd>{text(pick(decisionPayload, "factor_set_version"))}</dd></div>
+            <div><dt>LLM Invocation</dt><dd>{text(pick(decisionPayload, "llm_invocation_id"))}</dd></div>
+          </dl></details>
         </Panel>
       </aside>
     </section>
@@ -362,7 +452,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
 function PositionsPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const rows = Object.values(snapshot.positions.data ?? {});
   const market = record(snapshot.optional["/market"]?.data);
-  return <Panel title="持仓明细" source={snapshot.positions}>{snapshot.positions.status !== "ready" || !rows.length ? <EmptyBlock source={snapshot.positions} /> : <div className="table-wrap"><table><thead><tr><th>交易对</th><th>方向</th><th>数量</th><th>入场价</th><th>标记价格</th><th>未实现盈亏</th><th>已实现盈亏</th><th>杠杆</th><th>爆仓价</th></tr></thead><tbody>{rows.map((position) => { const side = positionDirection(position); return <tr key={position.symbol}><td><strong>{position.symbol}</strong></td><td><span className={side.tone}>{side.code}</span></td><td>{numberText(Math.abs(Number(position.quantity)), 8)}</td><td>{money(position.avg_entry_price)}</td><td>{money(pick(market, "mark_price", "price"))}</td><td>--</td><td>{money(position.realized_pnl)}</td><td>--</td><td>--</td></tr>; })}</tbody></table></div>}</Panel>;
+  return <Panel title="持仓明细" source={snapshot.positions}>{snapshot.positions.status !== "ready" || !rows.length ? <EmptyBlock source={snapshot.positions} /> : <div className="table-wrap"><table><thead><tr><th>交易对</th><th>方向</th><th>数量</th><th>入场价</th><th>标记价格</th><th>未实现盈亏</th><th>已实现盈亏</th><th>杠杆</th><th>爆仓价</th></tr></thead><tbody>{rows.map((position) => { const side = positionDirection(position); return <tr key={position.symbol}><td><strong>{position.symbol}</strong></td><td><span className={side.tone}>{side.code}</span></td><td>{numberText(Math.abs(Number(position.quantity)), 8)}</td><td>{money(position.avg_entry_price)}</td><td>{money(pick(market, "mark_price", "price"))}</td><td>NOT_AVAILABLE</td><td>{money(position.realized_pnl)}</td><td>NOT_AVAILABLE</td><td>NOT_AVAILABLE</td></tr>; })}</tbody></table></div>}</Panel>;
 }
 
 const orderStatus: Record<string, string> = { NEW: "待成交", OPEN: "挂单中", PARTIALLY_FILLED: "部分成交", FILLED: "已成交", CANCELLED: "已取消", REJECTED: "已拒绝", EXPIRED: "已过期", UNKNOWN: "状态未知" };

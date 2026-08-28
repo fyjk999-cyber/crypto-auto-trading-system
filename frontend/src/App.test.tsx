@@ -228,13 +228,14 @@ describe("中文加密交易终端 V2", () => {
     expect(screen.getByText("买一")).toBeTruthy();
   });
 
-  it("没有信号时显示暂无判断而不是观望", async () => {
+  it("没有决策上下文时显示 NOT_AVAILABLE 而不是观望", async () => {
     setup(backend({
       "/market": { symbol: "BTCUSDT", source: "OKX", status: "HEALTHY", price: "100", health: "HEALTHY" },
       "/market/sources": { provider: "OKX", status: "HEALTHY", sources: {} },
       "/signals": { signals: [] },
+      "/decision-context": { status: "NOT_AVAILABLE" },
     }));
-    await waitFor(() => expect(screen.getByText("暂无判断数据")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("NOT_AVAILABLE").length).toBeGreaterThan(0));
     expect(screen.queryByText("观望")).toBeNull();
   });
 
@@ -333,5 +334,75 @@ describe("中文加密交易终端 V2", () => {
     await waitFor(() => expect(screen.getByText("状态未知")).toBeTruthy());
     expect(screen.getByText(/内部订单 ID：o-1/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "订单记录" })).toBeTruthy();
+  });
+
+  const decisionContext = (overrides: Record<string, unknown> = {}) => ({
+    status: "OK", symbol: "BTCUSDT", timestamp_utc: "2026-08-28T00:00:00+00:00",
+    decision_id: "dec_test_1", market_regime: "RANGE", selected_strategy: "NOT_AVAILABLE",
+    strategy_version: "NOT_AVAILABLE", strategy_fit_score: 0.0,
+    dominant_factor: "NOT_AVAILABLE", supporting_factors: [], contradicting_factors: [],
+    action: "NO_TRADE", raw_llm_confidence: 0.0, evidence_adjusted_confidence: 0.0,
+    reason_codes: ["INSUFFICIENT_STRATEGY_EDGE"], strategy_candidates: [
+      { strategy_id: "trend_following", direction: "NO_TRADE", fit_score: 0.21, raw_confidence: 0.21 },
+      { strategy_id: "momentum", direction: "NO_TRADE", fit_score: 0.18, raw_confidence: 0.18 },
+      { strategy_id: "breakout", direction: "NO_TRADE", fit_score: 0.11, raw_confidence: 0.11 },
+      { strategy_id: "mean_reversion", direction: "NO_TRADE", fit_score: 0.09, raw_confidence: 0.09 },
+      { strategy_id: "funding_basis", direction: "NOT_AVAILABLE", fit_score: "NOT_AVAILABLE", raw_confidence: "NOT_AVAILABLE" },
+    ],
+    factor_snapshot_id: "fsnap_1", factor_set_version: "factorset-v1", llm_invocation_id: "NOT_AVAILABLE",
+    ...overrides,
+  });
+
+  it("数据完整且决策为 NO_TRADE 时显示 NO_TRADE（而非 NOT_AVAILABLE）", async () => {
+    setup(backend({ "/decision-context": decisionContext() }));
+    await waitFor(() => expect(screen.getAllByText("NO_TRADE").length).toBeGreaterThan(0));
+    expect(screen.queryByText("暂无判断数据")).toBeNull();
+  });
+
+  it("数据完整且 fit 为真实 0 时显示 0.00%（而非 NOT_AVAILABLE）", async () => {
+    setup(backend({ "/decision-context": decisionContext({ strategy_fit_score: 0.0 }) }));
+    await waitFor(() => expect(screen.getAllByText("0.00%").length).toBeGreaterThan(0));
+  });
+
+  it("决策接口不可用时显示 NOT_AVAILABLE", async () => {
+    setup(backend({ "/decision-context": { status: "NOT_AVAILABLE" } }));
+    await waitFor(() => expect(screen.getAllByText("NOT_AVAILABLE").length).toBeGreaterThan(0));
+  });
+
+  it("后端离线时决策区显示 NOT_AVAILABLE", async () => {
+    setup(vi.fn(async () => { throw new Error("offline"); }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("后端离线"));
+    await waitFor(() => expect(screen.getAllByText("NOT_AVAILABLE").length).toBeGreaterThan(0));
+  });
+
+  it("LONG 决策原样显示 LONG", async () => {
+    setup(backend({
+      "/decision-context": decisionContext({
+        action: "LONG", selected_strategy: "trend_following", strategy_fit_score: 0.68,
+        dominant_factor: "trend", supporting_factors: ["momentum"], contradicting_factors: ["funding_rate"],
+        evidence_adjusted_confidence: 0.61, market_regime: "BULL",
+        strategy_candidates: [
+          { strategy_id: "trend_following", direction: "LONG", fit_score: 0.68, raw_confidence: 0.68 },
+          { strategy_id: "momentum", direction: "NO_TRADE", fit_score: 0.21, raw_confidence: 0.21 },
+        ],
+      }),
+    }));
+    await waitFor(() => expect(screen.getAllByText("LONG").length).toBeGreaterThan(0));
+  });
+
+  it("WAIT 决策原样显示 WAIT", async () => {
+    setup(backend({ "/decision-context": decisionContext({ action: "WAIT" }) }));
+    await waitFor(() => expect(screen.getAllByText("WAIT").length).toBeGreaterThan(0));
+  });
+
+  it("未实现风险指标显示 NOT_AVAILABLE", async () => {
+    setup(backend({ "/risk": { risk_config: {}, kill_switch: { enabled: false }, metrics: { current_drawdown: "NOT_AVAILABLE", risk_multiplier: "NOT_AVAILABLE", effective_leverage: "0", margin_ratio: "NOT_AVAILABLE", flat: false } } }));
+    await waitFor(() => expect(screen.getAllByText("NOT_AVAILABLE").length).toBeGreaterThan(0));
+  });
+
+  it("空仓时显示空仓和无保证金占用", async () => {
+    setup(backend({ "/risk": { risk_config: {}, kill_switch: { enabled: false }, metrics: { current_drawdown: "NOT_AVAILABLE", risk_multiplier: "NOT_AVAILABLE", effective_leverage: "0", margin_ratio: "0", flat: true } } }));
+    await waitFor(() => expect(screen.getByText("空仓")).toBeTruthy());
+    expect(screen.getByText("无保证金占用")).toBeTruthy();
   });
 });
