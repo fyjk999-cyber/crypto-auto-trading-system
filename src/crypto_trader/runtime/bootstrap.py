@@ -17,9 +17,9 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.domain.models import Instrument
 from crypto_trader.evolution.gateways.research_gateway import ResearchGateway
-from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
+from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
