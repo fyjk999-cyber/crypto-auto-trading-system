@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     paper_settlement_asset: str = "USDT"
     daily_review_time_utc: str = "00:05"
 
+    # Cheap pre-LLM opportunity ranking. This never creates orders; it only
+    # limits which symbols are allowed into StrategyEvidence + Chief Trader.
+    opportunity_scanner_enabled: bool = True
+    opportunity_top_k: int = 5
+    opportunity_min_score: float = 0.20
+    opportunity_max_spread_bps: float = 15.0
+    opportunity_candle_cache_seconds: float = 10.0
+
     # Runtime
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3
@@ -138,6 +146,18 @@ class Settings(BaseSettings):
                 "PAPER_EXPLORATION_MODE requires TRADING_MODE=PAPER, "
                 "LIVE_TRADING_ENABLED=false and REAL_MONEY_ENABLED=false"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_opportunity_scanner(self):
+        if not 1 <= self.opportunity_top_k <= 50:
+            raise ValueError("OPPORTUNITY_TOP_K must be between 1 and 50")
+        if not 0.0 <= self.opportunity_min_score <= 1.0:
+            raise ValueError("OPPORTUNITY_MIN_SCORE must be between 0 and 1")
+        if self.opportunity_max_spread_bps <= 0:
+            raise ValueError("OPPORTUNITY_MAX_SPREAD_BPS must be positive")
+        if self.opportunity_candle_cache_seconds < 0:
+            raise ValueError("OPPORTUNITY_CANDLE_CACHE_SECONDS cannot be negative")
         return self
 
     @property
