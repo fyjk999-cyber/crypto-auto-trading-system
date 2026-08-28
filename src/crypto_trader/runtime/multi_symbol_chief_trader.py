@@ -2,10 +2,12 @@
 
 TradingEngine intentionally remains unchanged. It asks the first strategy for
 its current ``symbol`` when building StrategyContext; this adapter rotates that
-symbol across the configured universe one coin per engine tick. A cheap,
-deterministic opportunity scanner ranks the full universe first, and only the
-Top-K symbols are allowed into StrategyEvidence + Chief Trader LLM evaluation.
-LLM decision throttling remains independent per symbol.
+symbol across the configured universe one coin per engine tick.
+
+Architecture doctrine: AI-FIRST, QUANT-AS-EVIDENCE.
+The cheap opportunity scanner is advisory only. It may summarize/rank market
+conditions for observability, but it must never block the Chief Trader from
+seeing a symbol. LLM decision throttling remains independent per symbol.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ logger = logging.getLogger("crypto_trader.multi_symbol_chief")
 
 
 class MultiSymbolChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
-    version = "2.2.0"
+    version = "2.3.0"
 
     def __init__(
         self,
@@ -47,14 +49,11 @@ class MultiSymbolChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
         self._last_decision_completed_by_symbol: dict[str, float] = {}
         self.opportunity_scanner_enabled = bool(opportunity_scanner_enabled)
         self.opportunity_scanner = opportunity_scanner or CheapOpportunityScanner()
+        # Retained as an observability/UI preference only; it is NOT an entry gate.
         self.opportunity_top_k = max(1, min(int(opportunity_top_k), len(normalized)))
         self._opportunity_scores: dict[str, OpportunityScore] = {}
         self._seen_in_round: set[str] = set()
-        self._eligible_symbols: set[str] = (
-            set(normalized) if not self.opportunity_scanner_enabled else set()
-        )
         self._opportunity_ranking: list[OpportunityScore] = []
-        self._ranking_ready = not self.opportunity_scanner_enabled
         self._ranking_generation = 0
 
     @property
@@ -71,23 +70,24 @@ class MultiSymbolChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
 
     @property
     def eligible_symbols(self) -> tuple[str, ...]:
-        return tuple(symbol for symbol in self.symbols if symbol in self._eligible_symbols)
+        """Compatibility view of the advisory Top-K ranking.
+
+        This property no longer controls whether a symbol may reach the LLM.
+        """
+        return tuple(item.symbol for item in self._opportunity_ranking[: self.opportunity_top_k])
 
     async def on_market_data(self, ctx: StrategyContext) -> list[SignalIntent]:
-        # Keep the canonical fail-closed provider checks while making the
-        # expensive-decision cadence independent for every coin.
+        # Provider/data-route health remains a real safety prerequisite.
         if self.provider is None or not self.provider.healthy():
             return []
         if not getattr(self.provider, "route_ready", lambda: True)():
             return []
 
+        # Quant/opportunity analysis is evidence and observability only. A low
+        # score, non-Top-K rank, or incomplete ranking must never veto AI.
         if self.opportunity_scanner_enabled:
             score = await self._score_opportunity(ctx)
             self._record_opportunity(score)
-            # Startup and failed scans are fail-closed: until one complete
-            # universe pass exists, no symbol is permitted to invoke the LLM.
-            if not self._ranking_ready or ctx.symbol not in self._eligible_symbols:
-                return []
 
         now = time.monotonic()
         last = self._last_decision_completed_by_symbol.get(ctx.symbol)
@@ -145,17 +145,17 @@ class MultiSymbolChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
         if len(self._seen_in_round) < len(self.symbols):
             return
 
+        # Keep every observed symbol in the ranking, including low-score and
+        # ineligible entries. The ranking is informational only.
         ranked = sorted(
-            (item for item in self._opportunity_scores.values() if item.eligible),
+            self._opportunity_scores.values(),
             key=lambda item: (-item.score, item.symbol),
         )
         self._opportunity_ranking = ranked
-        self._eligible_symbols = {item.symbol for item in ranked[: self.opportunity_top_k]}
-        self._ranking_ready = True
         self._ranking_generation += 1
         self._seen_in_round.clear()
         logger.info(
-            "OPPORTUNITY_RANKING_READY generation=%s eligible=%s",
+            "OPPORTUNITY_RANKING_UPDATED generation=%s advisory_top=%s",
             self._ranking_generation,
             ",".join(item.symbol for item in ranked[: self.opportunity_top_k]) or "NONE",
         )
