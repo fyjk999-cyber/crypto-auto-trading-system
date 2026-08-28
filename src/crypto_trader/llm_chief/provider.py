@@ -16,6 +16,7 @@ class LLMResponse:
     parsed_json: dict | None = None
     ok: bool = True
     error: str | None = None
+    invocation_id: str = ""
 
 
 class LLMProvider(Protocol):

@@ -116,8 +116,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_position_notional="5000",
         max_leverage="3",
     )
+    from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
+
     chief_trader = ChiefTraderStrategyAdapter(
-        provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime)
+        provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
+        evidence_backend=SqlEvidenceBackend(database.session_factory),
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 

@@ -133,3 +133,80 @@ async def test_route_not_ready_blocks_invocation():
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
     assert provider.calls == 0
+
+
+async def test_every_decision_is_persisted_as_evidence(database):
+    """NO_TRADE included: decision chain stays auditable (smoke gate)."""
+    from sqlalchemy import select
+
+    from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
+    from crypto_trader.persistence.models import DecisionEvidenceORM
+
+    seen = {}
+
+    class RecordingBackend:
+        async def store_decision(self, evidence):
+            seen[evidence["decision_id"]] = evidence
+
+    backend = RecordingBackend()
+    adapter = ChiefTraderStrategyAdapter(provider=StubProvider(), evidence_backend=backend)
+    signals = await adapter.on_market_data(make_ctx())
+    assert signals == []
+    assert "d1" in seen
+    evidence = seen["d1"]
+    assert evidence["strategy_id"] == "llm_chief_trader"
+    assert evidence["decision"]["action"] == "NO_TRADE"
+    assert evidence["analysis_evidence"]["llm_invocation_id"] == ""
+
+    # The real SQL backend accepts the same shape.
+    sql_backend = SqlEvidenceBackend(database.session_factory)
+    await sql_backend.store_decision(evidence)
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(DecisionEvidenceORM).where(DecisionEvidenceORM.decision_id == "d1")
+            )
+        ).scalar_one()
+        assert row.symbol == "BTCUSDT"
+
+
+async def test_sql_evidence_backend_is_idempotent(database):
+    from sqlalchemy import func, select
+
+    from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
+    from crypto_trader.persistence.models import DecisionEvidenceORM
+
+    adapter = ChiefTraderStrategyAdapter(provider=StubProvider())
+    signals = await adapter.on_market_data(make_ctx())
+    assert signals == []
+    sql_backend = SqlEvidenceBackend(database.session_factory)
+    evidence = {
+        "decision_id": "d1",
+        "timestamp_utc": "2026-08-28T00:00:00+00:00",
+        "symbol": "BTCUSDT",
+        "timeframe": "runtime",
+        "strategy_id": "llm_chief_trader",
+        "strategy_version": "1.1.0",
+        "model_version": "0",
+        "prompt_version": "chief-prompt-v1",
+        "factor_snapshot_id": "",
+        "factor_set_version": "factorset-v1",
+        "factor_profile": "FULL",
+        "market_data_reference": "tick",
+        "analysis_evidence": {},
+        "decision": {"action": "NO_TRADE"},
+        "risk_decision": {},
+        "execution_intent_reference": "",
+        "created_at_utc": "2026-08-28T00:00:00+00:00",
+    }
+    await sql_backend.store_decision(evidence)
+    await sql_backend.store_decision(evidence)
+    async with database.session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count()).select_from(DecisionEvidenceORM).where(
+                    DecisionEvidenceORM.decision_id == "d1"
+                )
+            )
+        ).scalar_one()
+    assert count == 1

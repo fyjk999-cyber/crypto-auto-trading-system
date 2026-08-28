@@ -22,14 +22,17 @@ class ChiefTraderEngine:
             )
         else:
             response = await self.provider.complete_json(prompt=prompt) if self.provider else None
+        invocation_id = getattr(response, "invocation_id", "") if response else ""
         if response is not None and response.ok and response.parsed_json:
-            return self.parse_decision(response.parsed_json, ctx)
+            decision = self.parse_decision(response.parsed_json, ctx)
+            return decision.model_copy(update={"llm_invocation_id": invocation_id})
         # Fail safe: LLM unavailable or invalid JSON -> NO_TRADE
         return ChiefTraderDecision(
             decision_id=f"fail_{datetime.now(UTC).timestamp()}",
             symbol=ctx.symbol,
             action="NO_TRADE",
             market_regime=ctx.regime,
+            llm_invocation_id=invocation_id,
             thesis="LLM_UNAVAILABLE",
             reason_codes=["LLM_UNAVAILABLE"],
             model_version=self.model_version,

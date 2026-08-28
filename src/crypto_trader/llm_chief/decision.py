@@ -35,6 +35,7 @@ class ChiefTraderDecision(BaseModel):
     expected_return: float = 0.0
     expected_risk: float = 0.0
     reason_codes: list[str] = Field(default_factory=list)
+    llm_invocation_id: str = ""
     model_version: str = "0"
     knowledge_version: str = "0"
     memory_version: str = "0"

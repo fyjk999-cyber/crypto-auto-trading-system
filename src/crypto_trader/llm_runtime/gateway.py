@@ -510,6 +510,7 @@ class GatewayProviderAdapter:
             parsed_json=response.content,
             ok=response.ok,
             error=response.error_code.value if response.error_code else None,
+            invocation_id=response.invocation_id,
         )
 
     async def complete_domain_analysis(self, *, context: dict):
@@ -529,4 +530,5 @@ class GatewayProviderAdapter:
             parsed_json=response.content,
             ok=response.ok,
             error=response.error_code.value if response.error_code else None,
+            invocation_id=response.invocation_id,
         )
