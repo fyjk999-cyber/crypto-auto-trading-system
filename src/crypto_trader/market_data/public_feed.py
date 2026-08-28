@@ -168,6 +168,7 @@ class OKXPublicMarketFeed:
         self.mapper = SymbolMapper()
         self.client = client or OKXAdapter()
         self.state = MarketState(symbol=symbol, source="OKX_PUBLIC", exchange="OKX")
+        self._oi_prev: Decimal | None = None
 
     def _healthy(self, name: str, now: datetime) -> None:
         self.state.sources[name] = SourceStatus(
@@ -177,6 +178,15 @@ class OKXPublicMarketFeed:
             updated_at=now,
             data_source="REAL",
         )
+
+    @staticmethod
+    def _optional_decimal(value: object) -> Decimal | None:
+        if value is None or value == "":
+            return None
+        try:
+            return D(str(value))
+        except (ValueError, ArithmeticError):
+            return None
 
     async def refresh(self) -> MarketState:
         now = datetime.now(UTC)
@@ -194,11 +204,26 @@ class OKXPublicMarketFeed:
             self.state.best_bid = bid.price if bid else D("0")
             self.state.best_ask = ask.price if ask else D("0")
             self.state.price = D(ticker.get("last", "0"))
-            self.state.volume = D(ticker.get("volume_24h", "0"))
+            self.state.open_24h = self._optional_decimal(ticker.get("open_24h"))
+            self.state.high_24h = self._optional_decimal(ticker.get("high_24h"))
+            self.state.low_24h = self._optional_decimal(ticker.get("low_24h"))
+            self.state.volume_24h = self._optional_decimal(ticker.get("volume_24h"))
+            self.state.quote_volume_24h = self._optional_decimal(ticker.get("quote_volume_24h"))
+            self.state.volume = self.state.volume_24h or D("0")
+            self.state.last_size = self._optional_decimal(ticker.get("last_size"))
+            self.state.best_bid_size = self._optional_decimal(ticker.get("bid_size"))
+            self.state.best_ask_size = self._optional_decimal(ticker.get("ask_size"))
+            self.state.open_utc0 = self._optional_decimal(ticker.get("open_utc0"))
+            self.state.open_utc8 = self._optional_decimal(ticker.get("open_utc8"))
+            self.state.compute_24h_change()
             self.state.spread = self.state.best_ask - self.state.best_bid
             self.state.depth = sum(
                 (level.quantity for level in book.bids.values()), D("0")
             ) + sum((level.quantity for level in book.asks.values()), D("0"))
+            if self.state.depth > 0:
+                bid_depth = sum((level.quantity for level in book.bids.values()), D("0"))
+                ask_depth = sum((level.quantity for level in book.asks.values()), D("0"))
+                self.state.imbalance = (bid_depth - ask_depth) / self.state.depth
             self._healthy("ticker", now)
             self._healthy("orderbook", now)
 
@@ -208,8 +233,19 @@ class OKXPublicMarketFeed:
             oi = await self.client.get_public_open_interest(inst_id)
             self.state.mark_price = D(mark.get("markPx", "0"))
             self.state.index_price = D(index.get("idxPx", "0"))
-            self.state.funding_rate = D(funding.get("fundingRate", "0"))
-            self.state.open_interest = D(oi.get("oi", "0"))
+            self.state.funding_rate = self._optional_decimal(funding.get("fundingRate"))
+            funding_time = funding.get("fundingTime") or funding.get("nextFundingTime")
+            if funding_time:
+                self.state.next_funding_time = datetime.fromtimestamp(
+                    int(funding_time) / 1000.0, tz=UTC
+                )
+            current_oi = self._optional_decimal(oi.get("oi"))
+            if current_oi is not None and self._oi_prev is not None:
+                self.state.open_interest_change = current_oi - self._oi_prev
+            self.state.open_interest = current_oi
+            self.state.open_interest_ccy = self._optional_decimal(oi.get("oiCcy"))
+            self.state.open_interest_usd = self._optional_decimal(oi.get("oiUsd"))
+            self._oi_prev = current_oi
             for name in ("mark_price", "index_price", "funding", "open_interest"):
                 self._healthy(name, now)
         except Exception as exc:
