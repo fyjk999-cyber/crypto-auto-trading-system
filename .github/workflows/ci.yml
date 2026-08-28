@@ -32,6 +32,21 @@ jobs:
       - run: uv sync --dev
       - run: uv run pytest tests/integration tests/runtime_unit tests/e2e tests/chaos tests/cloud_unit tests/perpetual_unit tests/perpetual_integration tests/governance_unit tests/alpha_unit tests/alpha_integration -q
 
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run check
+
   cloudflare-worker:
     runs-on: ubuntu-latest
     steps:
