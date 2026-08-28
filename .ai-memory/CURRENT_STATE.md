@@ -1,14 +1,23 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-27T15:55:08.447656+00:00
+- Updated: 2026-08-28T05:52:00+00:00
 - EXECUTION LOCK ACTIVE. POST_COMPLETION_MAINTENANCE_MODE = NOT_ACTIVE.
 - PRE_COMPLETION_AUDIT_ONLY = YES.
 - CHAPTER 10 = BLOCKED_BY_ENVIRONMENT.
-- Frozen runtime qualification baseline: af9e393bc8c07bd0bbab8cfdc35421e9c707660b
+- Frozen runtime qualification baseline: 7b746df09ba5a8e2e9e10cd676fa5d14a2535f10
 - REAL_MONEY_READY = NO. REAL_MONEY_ENABLED = NO.
-- Phase 8D-1.5 LLM provider runtime is configured for PAPER-only three-brain use; real-provider validation remains NOT_RUN.
-- 2026-08-28 (harness LLM takeover): Shared LLM runtime integrated and committed at
-  NEW_RUNTIME_QUALIFICATION_BASELINE_SHA = 20a4db82865f0b212094df92ae909b884ea15c13.
-  PREVIOUS_RUNTIME_BASELINE = af9e393bc8c07bd0bbab8cfdc35421e9c707660b (superseded).
-  DeepSeek provider configured (deepseek-chat, 6 routes, encrypted SecretStore).
+- LLM provider runtime: VALIDATED (deepseek-chat, 6/6 routes) for PAPER-only three-brain use.
+- PAPER_SMOKE_TEST = PASS. 24H_PAPER_QUALIFICATION_READY = NO (environment only).
+- 2026-08-28 (harness LLM takeover): Shared LLM runtime integrated; earlier baseline
+  20a4db8... superseded by
+  NEW_RUNTIME_QUALIFICATION_BASELINE_SHA = 7b746df09ba5a8e2e9e10cd676fa5d14a2535f10.
+  Session commits: efc25b1 (opt-in DoH transport against fake-IP VPN DNS + route
+  output schema examples + DecisionId anchoring + 60s entry decision rate limit),
+  e5e3711 (honest /risk metrics + frontend NOT_AVAILABLE/空仓 rendering),
+  7b746df (DecisionEvidence persistence for every live decision incl. NO_TRADE,
+  with llm_invocation_id correlation).
+  Smoke evidence: 27 live correlated decisions, 0 orders/fills, LLM failure
+  isolation proven live (disable -> 0 invocations -> re-enable -> recovery),
+  market-data DNS outage handled fail-closed. See docs/PAPER_SMOKE_TEST_REPORT.md.
+  Blocked for Chapter 10: PostgreSQL absent on this machine; local VPN DNS unstable.
   PAPER ONLY: REAL_MONEY_READY=NO, REAL_MONEY_ENABLED=NO, LIVE_TRADING_ENABLED=false.

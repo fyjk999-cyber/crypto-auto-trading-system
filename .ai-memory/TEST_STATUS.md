@@ -9,3 +9,6 @@
 - 2026-08-28: uv run pytest: 651 passed, 7 skipped (4 documented engine-loop bare
   skips + 3 postgres-URL-conditional), 0 failed. ruff check .: PASS.
   Frontend: 21 tests passed, typecheck+build PASS. Alembic: 0017_domain_model_evidence (head).
+- 2026-08-28 (final smoke baseline 7b746df): uv run pytest 654 passed, 7 skipped,
+  0 failed; ruff check . PASS; frontend 21 tests + typecheck + build PASS.
+  LLM qualification 6/6 PASS live; paper smoke PASS (docs/PAPER_SMOKE_TEST_REPORT.md).
