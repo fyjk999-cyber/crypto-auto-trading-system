@@ -15,12 +15,14 @@ class OKXPublicDataClient:
         self.adapter = adapter
 
     async def get_ticker(self, inst_id: str) -> dict:
-        data = await self.adapter._public_request(  # noqa: SLF001 - shared canonical transport
+        data = await self.adapter._public_request(  # noqa: SLF001
             "GET", "/api/v5/market/ticker", params={"instId": inst_id}
         )
         rows = data.get("data")
         if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
-            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX ticker response is incomplete")
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX ticker response is incomplete"
+            )
         raw = rows[0]
         return {
             "symbol": raw.get("instId", inst_id),
@@ -34,7 +36,7 @@ class OKXPublicDataClient:
             "high_24h": raw.get("high24h"),
             "low_24h": raw.get("low24h"),
             "volume_24h": raw.get("vol24h"),
-            "quote_volume_24h": raw.get("volCcy24h"),
+            "volume_ccy_24h": raw.get("volCcy24h"),
             "open_utc0": raw.get("sodUtc0"),
             "open_utc8": raw.get("sodUtc8"),
             "timestamp": raw.get("ts", "0"),
@@ -98,7 +100,9 @@ class OKXPublicDataClient:
         after: str | None = None
         pages = 0
         while max_pages is None or pages < max_pages:
-            rows = await self.get_history_candles(inst_id, bar, after=after, limit=100)
+            rows = await self.get_history_candles(
+                inst_id, bar, after=after, limit=100
+            )
             if not rows:
                 break
             for row in rows:
@@ -119,7 +123,9 @@ class OKXPublicDataClient:
         )
         rows = data.get("data")
         if not isinstance(rows, list):
-            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX trades response is incomplete")
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX trades response is incomplete"
+            )
         return [row for row in rows if isinstance(row, dict)]
 
     async def get_trade_history(
@@ -185,7 +191,11 @@ class OKXPublicDataClient:
         after: str | None = None,
         limit: int = 100,
     ) -> list[list[str]]:
-        path = "/api/v5/market/history-index-candles" if history else "/api/v5/market/index-candles"
+        path = (
+            "/api/v5/market/history-index-candles"
+            if history
+            else "/api/v5/market/index-candles"
+        )
         params: dict[str, object] = {
             "instId": index_id,
             "bar": bar,
@@ -193,7 +203,9 @@ class OKXPublicDataClient:
         }
         if after:
             params["after"] = after
-        data = await self.adapter._public_request("GET", path, params=params)  # noqa: SLF001
+        data = await self.adapter._public_request(  # noqa: SLF001
+            "GET", path, params=params
+        )
         return self._candle_rows(data, "index candle", minimum_fields=6)
 
     async def get_mark_price_candles(
@@ -217,14 +229,26 @@ class OKXPublicDataClient:
         }
         if after:
             params["after"] = after
-        data = await self.adapter._public_request("GET", path, params=params)  # noqa: SLF001
+        data = await self.adapter._public_request(  # noqa: SLF001
+            "GET", path, params=params
+        )
         return self._candle_rows(data, "mark-price candle", minimum_fields=6)
 
     @staticmethod
-    def _candle_rows(data: dict, name: str, minimum_fields: int = 6) -> list[list[str]]:
+    def _candle_rows(
+        data: dict,
+        name: str,
+        minimum_fields: int = 6,
+    ) -> list[list[str]]:
         rows = data.get("data")
         if not isinstance(rows, list):
-            raise OKXDiagnosticError("MALFORMED_RESPONSE", f"OKX {name} response is incomplete")
-        if not all(isinstance(row, list) and len(row) >= minimum_fields for row in rows):
-            raise OKXDiagnosticError("MALFORMED_RESPONSE", f"OKX {name} response has invalid rows")
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", f"OKX {name} response is incomplete"
+            )
+        if not all(
+            isinstance(row, list) and len(row) >= minimum_fields for row in rows
+        ):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", f"OKX {name} response has invalid rows"
+            )
         return rows
