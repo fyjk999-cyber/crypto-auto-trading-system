@@ -1,12 +1,9 @@
 """Live decision context: real FactorSnapshot + strategy evidence per symbol.
 
-Wires the canonical factor system (FactorToolGateway.calculate_snapshot) and
-StrategyEvidenceBuilder into the Live LLM decision context. The provider is
-symbol-aware and keeps independent evidence builders so regime history cannot
-leak between different coins. Real candles are cached briefly so the cheap
-opportunity scanner and the full Chief Trader context reuse the same market
-sample instead of issuing duplicate exchange requests. If real candles cannot
-be fetched, it returns None and the entry path fails closed.
+Wires the canonical factor system (FactorToolGateway.calculate_snapshot), a
+broad technical-indicator evidence layer, and StrategyEvidenceBuilder into the
+Live LLM decision context. Technical indicators are advisory evidence only:
+they never become a trade gate or decision authority.
 """
 
 from __future__ import annotations
@@ -18,6 +15,7 @@ from datetime import UTC, datetime
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.llm_chief.strategy_evidence import StrategyEvidenceBuilder
+from crypto_trader.market_data.technical_indicators import calculate_technical_indicators
 
 
 @dataclass
@@ -26,6 +24,7 @@ class LiveDecisionBundle:
     factor_set_version: str
     factor_snapshot: dict
     evidence: dict  # StrategyEvidencePackage.to_dict()
+    technical_indicators: dict
 
 
 class LiveDecisionContextProvider:
@@ -105,12 +104,17 @@ class LiveDecisionContextProvider:
             candles=candles,
             market_data=market_data,
         )
+        technical = calculate_technical_indicators(candles)
+        factor_snapshot = snapshot.to_dict()
+        factor_snapshot["technical_indicators"] = technical
+        factor_snapshot["technical_indicator_authority"] = "ADVISORY"
         evidence = self._builder_for(current_symbol).build(
             candles, market_data, timestamp=datetime.now(UTC).isoformat()
         )
         return LiveDecisionBundle(
             factor_snapshot_id=snapshot.snapshot_id,
             factor_set_version=snapshot.factor_set_version,
-            factor_snapshot=snapshot.to_dict(),
+            factor_snapshot=factor_snapshot,
             evidence=evidence.model_dump(mode="json"),
+            technical_indicators=technical,
         )
