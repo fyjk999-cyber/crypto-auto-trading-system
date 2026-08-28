@@ -7,6 +7,7 @@ from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from crypto_trader.domain.enums import TradingMode
+from crypto_trader.exchange.symbol_mapper import DEFAULT_TRADING_SYMBOLS, SymbolMapper
 
 
 class Settings(BaseSettings):
@@ -36,6 +37,7 @@ class Settings(BaseSettings):
     # Local paper runtime
     auto_start_runtime: bool = True
     scanner_enabled: bool = True
+    trading_symbols: str = ",".join(DEFAULT_TRADING_SYMBOLS)
     paper_mode: str = (
         "PAPER_REAL_MARKET"  # PAPER_REAL_MARKET default; PAPER_SYNTHETIC explicit dev/test only
     )
@@ -104,6 +106,26 @@ class Settings(BaseSettings):
             return TradingMode.PAPER
         return value
 
+    @field_validator("trading_symbols", mode="before")
+    @classmethod
+    def normalize_trading_symbols(cls, value):
+        """Normalize the configured universe to unique canonical exchange symbols."""
+        if value is None:
+            value = ",".join(DEFAULT_TRADING_SYMBOLS)
+        if isinstance(value, (list, tuple)):
+            raw_symbols = [str(item) for item in value]
+        else:
+            raw_symbols = str(value).split(",")
+        mapper = SymbolMapper()
+        symbols = [mapper.to_canonical(item.strip()) for item in raw_symbols if item.strip()]
+        if not symbols:
+            raise ValueError("TRADING_SYMBOLS must contain at least one supported symbol")
+        if len(symbols) != len(set(symbols)):
+            raise ValueError("TRADING_SYMBOLS must not contain duplicates")
+        if len(symbols) > 50:
+            raise ValueError("TRADING_SYMBOLS is capped at 50 symbols")
+        return ",".join(symbols)
+
     @model_validator(mode="after")
     def enforce_exploration_safety(self):
         """PAPER_EXPLORATION_MODE must never exist outside safe PAPER config."""
@@ -117,6 +139,10 @@ class Settings(BaseSettings):
                 "LIVE_TRADING_ENABLED=false and REAL_MONEY_ENABLED=false"
             )
         return self
+
+    @property
+    def symbol_universe(self) -> tuple[str, ...]:
+        return tuple(symbol for symbol in self.trading_symbols.split(",") if symbol)
 
     @property
     def exploration_mode_active(self) -> bool:
