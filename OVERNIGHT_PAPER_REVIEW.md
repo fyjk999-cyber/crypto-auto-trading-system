@@ -82,6 +82,13 @@ Layer counts (all-time decision_evidence, /trading-funnel):
 6.14 UNIUSDT LONG 0.001 @ 4.384 - 04:32:33Z. OPEN. Real price.
 6.15 TRXUSDT LONG 0.001 @ 0.33993 - 04:51:19Z. OPEN. Real price.
 
+7.1 LINKUSDT LONG 0.001 @ 11.32 - 07:25:48Z - dec_4ad69b3e793d41f481,
+    support_resistance_reversal, fit 0.7874/conf 0.65, eir
+    llm_4eac17a730314491b265, fill fill_f81a5d94bd324d71b2d83642f818b6ec /
+    ord_71ce62d353954cfd9c03771b66bb6064. FIRST RE-ENTRY after the P1
+    exit cycle: full entry->exit->re-entry lifecycle now proven live.
+    Thesis: testing lower support 11.312 with rejection up. OPEN.
+
 ## D. Best Trades
 
 TBD — positions still open. Early observation: BTC entry thesis was
@@ -181,6 +188,12 @@ not an AI judgment error — AI reasoning itself was consistent.
   100 NO_TRADE gates, 0 errors, overall OK. Note: /positions unrealized_pnl
   displayed 0 for the perp despite mark < entry - verify PnL display math
   at next checkpoint (low priority).
+- 07:18-07:19Z (P1 fix 8d6f505): 11 reduce-only time-stop EXITs, all real
+  prices, BTC_PERP closed (FUTURES_REALIZED_PNL -0.6539 USDT recorded in
+  ledger). Positions 19 -> 9. First realized-PnL outcome sample recorded.
+- Checkpoint 07:30Z: LLM flow RESUMED (10 live_analysis all success);
+  first re-entry LINK @ 11.32 (AI decision, full lineage). factor_snapshots
+  persisting (31 rows). 0 errors, 0 stuck orders, overall OK.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

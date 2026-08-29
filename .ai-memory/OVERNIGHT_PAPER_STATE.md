@@ -30,7 +30,7 @@ Latest Learning Run: none yet (first Daily Review fires at configured window)
 Candidate Lessons: none (session just entered PHASE 2)
 Confirmed Lessons: see memory (CANDIDATE/VALIDATING/CONFIRMED lifecycle unchanged)
 Repeated Mistakes: none observed post-fix
-Expected: BTCUSDT_PERP bridge time-stop exit ~06:08Z (bridge first_seen reset at 02:08 restart; 4h from first evaluation). Watch for first realized-PnL outcome sample.
+Completed (P1 fix 8d6f505): 11 reduce-only EXITs at real prices 07:18-07:19Z (incl BTC_PERP @77492.15, FUTURES_REALIZED_PNL posted); positions 19->9; LLM flow resumed; LINK re-entry @11.32 (dec_4ad69b3e, support_resistance_reversal, fit 0.7874). factor_snapshots persisting (31 rows). Remaining 8 legacy positions exit at true 4h anniversaries 07:31-08:51Z.
 
 Current Issues:
   - MAE/MFE tracking = NOT_AVAILABLE (documented; episodes carry mfe/mae columns, capture pending)

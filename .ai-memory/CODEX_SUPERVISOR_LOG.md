@@ -1,0 +1,5 @@
+# CODEX SUPERVISOR LOG
+
+- 2026-08-29T06:24:34+00:00 | HEAD `a7facc2` | Runtime HEALTHY / PAPER IDLE | 95 NO_TRADE position gates, 0 Live LLM, 0 orders/fills, 19 open positions | P1 missed position time-stop; P2 FactorSnapshot persistence gap; legacy ETH 100.05 remains quarantined evidence | Action: CORRECT | Next: 06:54Z
+- 2026-08-29T06:48:44+00:00 | HEAD `a7facc2` | Harness ACTIVE with 4 runtime files + exit-lifecycle test uncommitted | Runtime HEALTHY / PAPER IDLE | 100 NO_TRADE position gates, 0 LLM/risk/execution/orders/fills, 19 open; recon 61 OK | Architecture authority PASS; P2 exit retry sentinel, silent snapshot durability failure, focused tests 68 pass/1 fail | Action: CORRECT (`CS-20260829-064844-P2-EXIT`) | Next: 07:18Z
+- 2026-08-29T07:22:30+00:00 | HEAD `8d6f505` | Harness committed/deployed lifecycle + snapshot repair; post-restart checkpoint active | Runtime HEALTHY / PAPER ACTIVE | 113 decisions, 2 live LLM, 11 reduce-only orders/fills, 8 open, 19 durable snapshots; recon 59 OK | Authority PASS; P2 remains for reject/hold retry, silent snapshot failure, and tainted ETH-derived PnL | Action: CORRECT (`CS-20260829-064844-P2-EXIT`) | Next: 07:52Z
