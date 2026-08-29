@@ -8,7 +8,7 @@ Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
 Market: OKX REAL (public data only)
 
-Trades: 18 entry fills + 14 exit fills + 4 AI re-entries (LINK @11.32, XRP @1.3809, AVAX @7.27, SUI @0.7361) + BTC_PERP re-open SHORT 0.001 @77582.55 - full lifecycle live
+Trades: 18 entry fills + 15 exit fills + 5 AI re-entries (LINK, XRP, AVAX, SUI, ETH @2435 - clean cycle replacing legacy taint) + BTC_PERP re-open SHORT @77582.55 - full lifecycle live
 Wins: 0 (no closed rounds yet)
 Losses: 0
 Realized PnL: 0 (all positions open; bridge owns exits)

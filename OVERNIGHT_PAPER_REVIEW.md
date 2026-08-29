@@ -82,6 +82,13 @@ Layer counts (all-time decision_evidence, /trading-funnel):
 6.14 UNIUSDT LONG 0.001 @ 4.384 - 04:32:33Z. OPEN. Real price.
 6.15 TRXUSDT LONG 0.001 @ 0.33993 - 04:51:19Z. OPEN. Real price.
 
+8.1 ETHUSDT LONG 0.001 @ 2435 - 07:56:16Z - dec_14c2312ed7614dc2b3,
+    support_resistance_reversal, fit 0.7905/conf 0.6, eir
+    llm_2927f4016b674140b674, fill fill_8df3ef96c8bf45eeaad4b4c3bd848cbb /
+    ord_8374b96c24154609bcf884057a5ccec3. SYMBOLIC: the formerly tainted
+    symbol now runs a fully CLEAN real-price cycle (tainted 100.05 entry
+    quarantined; this entry is real OKX price). OPEN.
+
 7.1 LINKUSDT LONG 0.001 @ 11.32 - 07:25:48Z - dec_4ad69b3e793d41f481,
     support_resistance_reversal, fit 0.7874/conf 0.65, eir
     llm_4eac17a730314491b265, fill fill_f81a5d94bd324d71b2d83642f818b6ec /
@@ -206,6 +213,9 @@ not an AI judgment error — AI reasoning itself was consistent.
 - Checkpoint 07:56Z (queued 07:30 firing): delta only - NEARUSDT time-stop
   exit @1.789 (real price, true 4h anniversary), positions 11 -> 10. Health
   OK, 0 errors, LLM flow active.
+- Checkpoint 08:00Z: ETH AI re-entry @2435 (clean cycle on formerly tainted
+  symbol). 19 decisions (18 NT / 1 L), 1 live_analysis success, fsnap 152
+  rows, 0 errors, 0 stuck, overall OK.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

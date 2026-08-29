@@ -1,20 +1,20 @@
 # CODEX SUPERVISOR STATUS
 
-Timestamp: 2026-08-29T07:22:30+00:00
+Timestamp: 2026-08-29T07:56:00+00:00
 
-HEAD: `91c9c1a29eb97b005473d46001dcc57d2947e979` (detached at `origin/main`)
+HEAD: `6c5112e27849a4b93e0ccab5a969c5a5d34888` (detached at `origin/main`)
 
-Harness Current Task: Observe the deployed position-lifecycle and FactorSnapshot fixes, continue long-run PAPER trading, and resolve the remaining items in Directive `CS-20260829-064844-P2-EXIT`.
+Harness Current Task: Continue long-run PAPER trading, observe the full position lifecycle, and resolve the remaining PASS CONDITIONS in Directive `CS-20260829-064844-P2-EXIT`.
 
-Harness Activity Last 30m: ACTIVE. Harness deployed `8d6f505`, completed the post-restart checkpoint, committed state updates in `88b1b14` and `91c9c1a`, and the Chief Trader produced a new fully traced LINKUSDT LONG PAPER fill. Harness also marked the Directive RESOLVED without satisfying or obtaining independent Supervisor closure; that status was rejected and restored to ACTIVE.
+Harness Activity Last 30m: ACTIVE. Harness maintained the canonical PAPER Runtime, produced two valid reduce-only exits and five new AI entries, investigated an apparent decision stall, identified the diagnosis as a UTC/time-base error, added crash-loop logging, restarted safely for verification, and updated checkpoint documentation.
 
-New Commits: 3 — `8d6f505` runtime repair; `88b1b14` and `91c9c1a` state/checkpoint updates only
+New Commits: 3 — `91c9c1a`, `d1f60c0`, and `6c5112e`; all are state/checkpoint/decision-log commits. No committed trading-authority change. `src/crypto_trader/runtime/supervisor.py` has one uncommitted observability-only logging change.
 
 Runtime: HEALTHY
 
 PAPER Trading: ACTIVE
 
-Current Runtime Stage: Post-restart long-run PAPER trading. Eleven due positions closed through reduce-only PAPER fills at real OKX reference prices; Chief Trader analysis resumed and independently opened LINKUSDT LONG at 11.32 through the full FactorSnapshot/LLM/Risk/Execution/Order/Fill/Ledger/Position chain. Nine positions are now open.
+Current Runtime Stage: Long-run PAPER trading with real OKX public market data. Decisions, FactorSnapshots and live-analysis calls are advancing; valid entries/exits continue through RiskEngine, ExecutionAuthority, PAPER orders/fills, ledger and positions.
 
 Architecture Integrity: WARN
 
@@ -36,40 +36,41 @@ Logging Integrity: WARN
 
 ## LAST 30 MINUTES
 
-- Market Cycles / Decisions: 113
-- FactorSnapshots: 112 referenced IDs in the previous full window; durable table has grown to 38 rows after deployment
-- Strategy Evidence Packages: 113 decision records with candidate evidence
-- LLM Total Calls: 2
-- Live LLM Calls: 2
-- LLM Success: 2
+- Market Cycles / Decisions: 114
+- FactorSnapshots: 114 durable rows; 0 unresolved decision references
+- Strategy Evidence Packages: 114
+- LLM Total Calls: 36
+- Live LLM Calls: 36
+- LLM Success: 36
 - LLM Failure: 0
-- LONG: 0
-- SHORT: 1
-- NO_TRADE: 112
+- LONG: 4
+- SHORT: 2
+- NO_TRADE: 108
 - WAIT: 0
-- Signals reaching RiskEngine: 973 (inflated by 951 pre-restart EXIT retries)
-- Risk APPROVE: 962
-- Risk REJECT: 11 (10 controlled-restart kill-switch rejects; 1 `SPOT_OVERSHORT`)
-- Execution APPROVE: 11 evidenced by created/finalized orders
-- Execution HOLD: 951, all before the corrected restart
+- Signals reaching RiskEngine: 8
+- Risk APPROVE: 7
+- Risk REJECT: 1 (`SPOT_OVERSHORT`, safety-preserving)
+- Execution APPROVE: 7 evidenced by finalized orders/fills
+- Execution HOLD: 0 observed
 - Execution REJECT: 0 observed
-- Orders: 11, all reduce-only and FILLED
-- Fills: 11, all reduce-only PAPER fills
-- Open Positions: 9 after the new LINKUSDT AI re-entry
-- Closed Positions: 11 in this window
-- Realized PnL projection total: `2.331243575` USDT, contaminated by the historical ETH 100.05 basis
-- Reconciliation: 59 `OK`; latest diff `{}`, alerts `[]`
+- Orders: 7, all PAPER and FILLED
+- Fills: 7, all at plausible real-market prices
+- Open Positions: 11 total (10 spot + 1 BTC perpetual SHORT)
+- Closed Positions: 2 in this window (ARBUSDT and LTCUSDT reduce-only exits)
+- Fees: `0.041298005` USDT-equivalent recorded in this window
+- Spot realized-PnL projection: `2.331510545`, still contaminated by the quarantined historical ETH 100.05 entry basis
+- Reconciliation: 60 `OK`; latest diff `{}`, alerts `[]`
 - Duplicate client order IDs / exchange order IDs / fill IDs: 0 / 0 / 0
 - Unbalanced ledger transactions: 0
 
-Current Harness Blocker: The deployed path is operational and no current exit is stuck, but Directive closure is blocked by three correctness gaps: rejected/held EXIT retry behavior is still not result-aware or regression-tested; FactorSnapshot persistence failures remain silent; and the real-price ETH exit converted the quarantined fake entry basis into a derived realized-PnL value that can still contaminate performance/learning unless the entire episode is excluded.
+Current Harness Blocker: Runtime is operational, but Directive closure remains blocked. EXIT retry state is not yet proven result-aware after Risk/Execution rejection or hold; FactorSnapshot persistence failure remains silent; the whole tainted ETH episode and its derived realized PnL are not yet excluded from clean analytics/learning; SQLite/PostgreSQL quarantine JSON behavior remains unverified.
 
-Latest Harness Change: `8d6f505` remains the latest production-code change. `88b1b14`/`91c9c1a` changed only `.ai-memory`/overnight records. New runtime evidence confirms LINKUSDT LONG lineage: durable `fsnap_cae178...`, successful `live_analysis` invocation `llm_d215...`, Risk APPROVE, PAPER fill `fill_f81a...` at 11.32, balanced ledger postings and position update.
+Latest Harness Change: Uncommitted `supervisor.py` change logs `RUNTIME_LOOP_CRASHED` before an independent loop restart. This is observability-only and does not change AI, Quant, Risk or Execution authority. Independent focused validation: `24 passed, 4 skipped`; Ruff and `git diff --check` pass.
 
-Suspicious Change: No forced trade, Quant hard gate, AI action rewrite, Risk bypass, or Execution bypass found. The 951 authority holds were generated by the old pre-restart retry loop and stopped after deployment. Process concern: Harness changed the Supervisor Directive to RESOLVED although the result-aware retry, failure observability, PostgreSQL JSON and tainted-derived-PnL PASS CONDITIONS remain unmet; Supervisor restored it to ACTIVE.
+Suspicious Change: No LIVE enablement, remote real-money order, synthetic/fake fill, hardcoded/fallback direction, forced trade, Quant hard gate, AI action rewrite, Risk bypass or Execution bypass found. The apparent runtime hang was a time-base diagnosis error, not an engine outage. Documentation remains internally stale in `OVERNIGHT_PAPER_STATE.md` (05:00 checkpoint/open-position/PnL fields conflict with current DB truth).
 
 Supervisor Action: CORRECT
 
 Directive ID: `CS-20260829-064844-P2-EXIT`
 
-Next Scheduled Review: 2026-08-29T07:52:30+00:00
+Next Scheduled Review: 2026-08-29T08:26:00+00:00

@@ -4,6 +4,8 @@ Directive ID: `CS-20260829-064844-P2-EXIT`
 
 Timestamp: 2026-08-29T07:22:30+00:00
 
+Last Supervisor Recheck: 2026-08-29T07:56:00+00:00
+
 Status: ACTIVE — PARTIALLY VERIFIED (Harness resolution claim not accepted; only Codex Supervisor may close after all PASS CONDITIONS are independently verified)
 
 Severity: P2 - runtime correctness and derived evidence integrity
@@ -22,6 +24,10 @@ The primary position-lifecycle and FactorSnapshot defects are operationally repa
 - Full-suite evidence reported by Harness: `734 passed` with 2 documented pre-existing live-OKX failures; TEST_STATUS/CHANGELOG/CURRENT_STATE have not yet recorded this run.
 - `_exit_in_flight` is still set before `process_signal()` and cleared only after the position disappears. No test proves retry after Risk REJECT or Execution HOLD/REJECT.
 - The legacy ETH entry remains immutable and quarantined, but closing it generated `2.33499` USDT realized PnL derived from the fake 100.05 basis.
+- Latest independent 30-minute audit: 114 decisions, 114 durable FactorSnapshots with 0 unresolved references, 36/36 successful `live_analysis` calls, 7 PAPER orders/fills at plausible real-market prices, 60 clean reconciliations, zero duplicate IDs and zero ledger imbalance.
+- No new code addresses the remaining PASS CONDITIONS. The only current source diff adds `RUNTIME_LOOP_CRASHED` logging in `runtime/supervisor.py`; focused validation is `24 passed, 4 skipped`, Ruff clean.
+- The apparent 07:26-07:37 decision stall was a UTC/time-base diagnosis error. Runtime evidence remained healthy; this does not close the result-aware EXIT retry or evidence-integrity requirements.
+- `OVERNIGHT_PAPER_STATE.md` still contains stale 05:00 checkpoint, position and realized-PnL fields that conflict with current database truth.
 
 ## Affected Runtime Stage
 
@@ -47,7 +53,7 @@ No AI-FIRST authority violation is present. The remaining issues can suppress a 
 - RiskEngine / ExecutionAuthority checks
 - Append-only raw order/fill/ledger/audit evidence
 - Single canonical engine and ledger
-- The eight remaining positions before their own valid exit conditions
+- Remaining positions before their own valid exit conditions
 
 ## Files Likely Affected
 
