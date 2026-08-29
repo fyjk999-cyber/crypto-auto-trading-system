@@ -80,6 +80,39 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
             await self._persist_evidence(decision, ctx, chief_ctx)
             return []
 
+        # §10 duplicate-entry gate includes PAPER PERPETUAL state: a new
+        # ChiefTrader entry can never stack on an open BTCUSDT_PERP LONG/SHORT.
+        # Position management (HOLD/ADD/REDUCE/EXIT) is owned by the bridge.
+        # If the perpetual state check itself fails, fail closed: unknown
+        # position state must never permit pyramiding.
+        if self.perpetual_position_provider is not None:
+            try:
+                has_perp = self.perpetual_position_provider()
+                if hasattr(has_perp, "__await__"):
+                    has_perp = await has_perp
+                if has_perp:
+                    decision = self._gate_decision(
+                        chief_ctx,
+                        reason_code="POSITION_ALREADY_OPEN",
+                        thesis=(
+                            "Entry skipped: a PAPER PERPETUAL position is already "
+                            "open; management is handled by the runtime bridge"
+                        ),
+                    )
+                    await self._persist_evidence(decision, ctx, chief_ctx)
+                    return []
+            except Exception:
+                decision = self._gate_decision(
+                    chief_ctx,
+                    reason_code="PERPETUAL_STATE_UNAVAILABLE",
+                    thesis=(
+                        "Entry skipped: perpetual position state could not be "
+                        "verified; fail closed rather than risk pyramiding"
+                    ),
+                )
+                await self._persist_evidence(decision, ctx, chief_ctx)
+                return []
+
         # Temporal safety remains distinct from quant judgement.
         now_monotonic = time.monotonic()
         if (

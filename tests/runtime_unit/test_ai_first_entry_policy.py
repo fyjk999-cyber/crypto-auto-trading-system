@@ -156,3 +156,54 @@ async def test_missing_real_factor_snapshot_remains_fail_closed_before_ai():
     assert signals == []
     assert adapter.engine.calls == 0
     assert adapter.persisted[-1].reason_codes == ["FACTOR_CONTEXT_UNAVAILABLE"]
+
+
+@pytest.mark.asyncio
+async def test_open_perpetual_position_gates_new_entry_before_ai():
+    adapter = _TestAIFirstAdapter(
+        _chief_context(fit=0.60, regime="BULL"),
+        _long_decision(fit=0.60, confidence=0.70),
+    )
+    adapter.perpetual_position_provider = lambda: True
+    ctx = SimpleNamespace(symbol="ETHUSDT", positions={})
+
+    signals = await adapter._decide(ctx)
+
+    assert adapter.engine.calls == 0  # AI is never consulted for pyramiding
+    assert signals == []
+    assert "POSITION_ALREADY_OPEN" in adapter.persisted[-1].reason_codes
+
+
+@pytest.mark.asyncio
+async def test_perpetual_state_check_failure_fails_closed():
+    adapter = _TestAIFirstAdapter(
+        _chief_context(fit=0.60, regime="BULL"),
+        _long_decision(fit=0.60, confidence=0.70),
+    )
+
+    async def _broken_provider():
+        raise RuntimeError("state store unavailable")
+
+    adapter.perpetual_position_provider = _broken_provider
+    ctx = SimpleNamespace(symbol="ETHUSDT", positions={})
+
+    signals = await adapter._decide(ctx)
+
+    assert adapter.engine.calls == 0
+    assert signals == []
+    assert "PERPETUAL_STATE_UNAVAILABLE" in adapter.persisted[-1].reason_codes
+
+
+@pytest.mark.asyncio
+async def test_flat_perpetual_state_does_not_block_entry():
+    adapter = _TestAIFirstAdapter(
+        _chief_context(fit=0.60, regime="BULL"),
+        _long_decision(fit=0.60, confidence=0.70),
+    )
+    adapter.perpetual_position_provider = lambda: False
+    ctx = SimpleNamespace(symbol="ETHUSDT", positions={})
+
+    signals = await adapter._decide(ctx)
+
+    assert adapter.engine.calls == 1
+    assert len(signals) == 1
