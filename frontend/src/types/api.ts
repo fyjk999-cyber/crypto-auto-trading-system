@@ -33,15 +33,33 @@ export type Position = {
 export type Order = {
   internal_order_id: string;
   client_order_id: string;
+  exchange_order_id?: string | null;
   symbol: string;
   side: string;
   order_type: string;
   price?: string | null;
+  avg_fill_price?: string | null;
   quantity: string;
   filled_quantity: string;
   status: string;
   created_at: string;
   updated_at: string;
+  market_type?: string;
+  position_side?: string;
+  strategy_id?: string;
+  run_id?: string | null;
+  reduce_only?: boolean;
+  rejection_reason?: string | null;
+  fee_total?: string | null;
+  fee_currency?: string | null;
+  fill_count?: number;
+  realized_pnl?: string | null;
+  unrealized_pnl?: string | null;
+  pnl_percent?: string | null;
+  pnl_scope?: string | null;
+  trade_status?: string | null;
+  decision_id?: string | null;
+  signal_id?: string | null;
 };
 
 export type RuntimeHealth = Record<string, unknown>;

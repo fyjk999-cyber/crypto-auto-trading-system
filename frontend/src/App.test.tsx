@@ -105,7 +105,7 @@ describe("中文加密交易终端 V2", () => {
     const nav = screen.getByRole("navigation", { name: "主导航" });
     expect(within(nav).getAllByRole("link")).toHaveLength(6);
     expect(within(nav).getByRole("link", { name: "交易" }).getAttribute("aria-current")).toBe("page");
-    await waitFor(() => expect(screen.getByText("$125.5")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("$125.50")).toBeTruthy());
     expect(screen.getByRole("heading", { name: "BTCUSDT 行情" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "当前判断" })).toBeTruthy();
   });
@@ -334,6 +334,89 @@ describe("中文加密交易终端 V2", () => {
     await waitFor(() => expect(screen.getByText("状态未知")).toBeTruthy());
     expect(screen.getByText(/内部订单 ID：o-1/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "订单记录" })).toBeTruthy();
+  });
+
+  it("已成交市价单显示市价+真实成交均价+手续费，而不是 NOT_AVAILABLE", async () => {
+    window.location.hash = "#/orders";
+    setup(backend({
+      "/orders": [{
+        internal_order_id: "o-mkt", client_order_id: "llm_chief_trader_x", symbol: "TAOUSDT_PERP",
+        side: "SELL", order_type: "MARKET", price: null, avg_fill_price: "234.45",
+        quantity: "0.0005", filled_quantity: "0.0005", status: "FILLED",
+        created_at: "2026-08-29T11:18:00Z", updated_at: "2026-08-29T11:18:00Z",
+        market_type: "PERPETUAL", position_side: "SHORT", reduce_only: false,
+        fee_total: "0.0000586125", fee_currency: "USDT", fill_count: 1,
+        unrealized_pnl: "0.0123", pnl_percent: "1.28", pnl_scope: "POSITION_LEVEL",
+        trade_status: "OPEN_POSITION", decision_id: "dec_40e217ac", signal_id: "llm_c88989a6",
+      }],
+    }));
+    await waitFor(() => expect(screen.getByText("市价")).toBeTruthy());
+    expect(screen.getByText("$234.45")).toBeTruthy();
+    expect(screen.getByText(/0\.0000586|0\.000059/)).toBeTruthy();
+    expect(screen.getByText("$0.01")).toBeTruthy();
+    expect(screen.getByText(/浮动/)).toBeTruthy();
+  });
+
+  it("未成交 LIMIT 单显示委托价与未成交，不伪造成交价", async () => {
+    window.location.hash = "#/orders";
+    setup(backend({
+      "/orders": [{
+        internal_order_id: "o-lim", client_order_id: "c-lim", symbol: "BTCUSDT",
+        side: "BUY", order_type: "LIMIT", price: "63000", avg_fill_price: null,
+        quantity: "0.001", filled_quantity: "0", status: "SUBMITTED",
+        created_at: "2026-08-29T11:00:00Z", updated_at: "2026-08-29T11:00:00Z",
+      }],
+    }));
+    await waitFor(() => expect(screen.getByText("$63,000.00")).toBeTruthy());
+    expect(screen.getByText("未成交")).toBeTruthy();
+  });
+
+  it("SHORT 亏损与 LONG 亏损都以负值显示（按盈亏方向着色）", async () => {
+    window.location.hash = "#/orders";
+    setup(backend({
+      "/orders": [{
+        internal_order_id: "o-short-loss", client_order_id: "c-sl", symbol: "WLDUSDT_PERP",
+        side: "SELL", order_type: "MARKET", price: null, avg_fill_price: "0.37705",
+        quantity: "0.001", filled_quantity: "0.001", status: "FILLED",
+        created_at: "2026-08-29T10:48:56Z", updated_at: "2026-08-29T10:48:56Z",
+        market_type: "PERPETUAL", position_side: "SHORT", reduce_only: false,
+        unrealized_pnl: "-0.002", trade_status: "OPEN_POSITION",
+      }, {
+        internal_order_id: "o-long-loss", client_order_id: "c-ll", symbol: "ADAUSDT",
+        side: "BUY", order_type: "MARKET", price: null, avg_fill_price: "0.1994",
+        quantity: "0.001", filled_quantity: "0.001", status: "FILLED",
+        created_at: "2026-08-29T10:06:50Z", updated_at: "2026-08-29T10:06:50Z",
+        market_type: "SPOT", reduce_only: false,
+        unrealized_pnl: "-0.003", trade_status: "OPEN_POSITION",
+      }],
+    }));
+    await waitFor(() => {
+      const negCells = screen.getAllByText((_, el) => el?.className === "pnl-neg");
+      expect(negCells.length).toBe(2);
+    });
+  });
+
+  it("已实现盈亏与真实 0 的展示", async () => {
+    window.location.hash = "#/orders";
+    setup(backend({
+      "/orders": [{
+        internal_order_id: "o-closed", client_order_id: "ai_brain_ai_BTCUSDT_1", symbol: "BTCUSDT_PERP",
+        side: "SELL", order_type: "MARKET", price: null, avg_fill_price: "77492.15",
+        quantity: "0.002", filled_quantity: "0.002", status: "FILLED",
+        created_at: "2026-08-29T07:18:00Z", updated_at: "2026-08-29T07:18:00Z",
+        market_type: "PERPETUAL", reduce_only: true,
+        realized_pnl: "-0.45610", pnl_scope: "TRADE_LEVEL", trade_status: "CLOSED",
+      }, {
+        internal_order_id: "o-zero", client_order_id: "c-zero", symbol: "XLMUSDT",
+        side: "BUY", order_type: "MARKET", price: null, avg_fill_price: "0.17722",
+        quantity: "0.001", filled_quantity: "0.001", status: "FILLED",
+        created_at: "2026-08-29T11:40:00Z", updated_at: "2026-08-29T11:40:00Z",
+        market_type: "SPOT", unrealized_pnl: "0",
+      }],
+    }));
+    await waitFor(() => expect(screen.getByText("-$0.46")).toBeTruthy());
+    expect(screen.getByText(/已实现/)).toBeTruthy();
+    expect(screen.getByText("$0.00")).toBeTruthy();
   });
 
   const decisionContext = (overrides: Record<string, unknown> = {}) => ({

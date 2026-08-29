@@ -77,8 +77,14 @@ function numberText(value: unknown, digits = 2) {
 }
 
 function money(value: unknown) {
+  // Money display: always two decimals so a REAL zero renders "$0.00"
+  // (requirement: never collapse true zero into "0" or NOT_AVAILABLE).
   const rendered = numberText(value, 2);
-  return rendered === "NOT_AVAILABLE" ? rendered : `$${rendered}`;
+  if (rendered === "NOT_AVAILABLE") return rendered;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return rendered;
+  const fixed = parsed.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${parsed < 0 ? "-" : ""}$${parsed < 0 ? fixed.slice(1) : fixed}`;
 }
 
 function percent(value: unknown) {
@@ -463,7 +469,28 @@ const orderStatus: Record<string, string> = { NEW: "待成交", OPEN: "挂单中
 
 function OrdersPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const rows = snapshot.orders.data ?? [];
-  return <Panel title="订单记录" source={snapshot.orders}>{snapshot.orders.status !== "ready" || !rows.length ? <EmptyBlock source={snapshot.orders} /> : <div className="order-list"><div className="order-head"><span>时间</span><span>交易对</span><span>方向</span><span>类型</span><span>价格</span><span>数量 / 成交</span><span>状态</span></div>{rows.map((order: Order) => <details className={`order-row ${order.status === "UNKNOWN" ? "unknown" : ""}`} key={order.internal_order_id}><summary><time>{new Date(order.updated_at).toLocaleString("zh-CN")}</time><strong>{order.symbol}</strong><span className={direction(order.side).tone}>{direction(order.side).code}</span><span>{order.order_type}</span><span>{money(order.price)}</span><span>{numberText(order.quantity, 8)} / {numberText(order.filled_quantity, 8)}</span><b>{orderStatus[order.status] ?? order.status}</b></summary><div><span>内部订单 ID：{order.internal_order_id}</span><span>客户端订单 ID：{order.client_order_id}</span></div></details>)}</div>}</Panel>;
+  const orderPrice = (order: Order) => {
+    // order.price is the ORDER REQUEST price. A MARKET order has none by
+    // definition: display the order type, never a fabricated number.
+    if (order.order_type === "MARKET") return "市价";
+    return money(order.price);
+  };
+  const orderAvgFill = (order: Order) => {
+    if (Number(order.filled_quantity) === 0) return "未成交";
+    return money(order.avg_fill_price);
+  };
+  const pnlCell = (order: Order) => {
+    if (order.unrealized_pnl !== undefined && order.unrealized_pnl !== null && order.unrealized_pnl !== "" && order.unrealized_pnl !== "NOT_AVAILABLE") {
+      const value = Number(order.unrealized_pnl);
+      if (Number.isFinite(value)) return { text: money(order.unrealized_pnl), tone: value > 0 ? "pnl-pos" : value < 0 ? "pnl-neg" : "pnl-zero", label: "浮动" };
+    }
+    if (order.realized_pnl !== undefined && order.realized_pnl !== null && order.realized_pnl !== "" && order.realized_pnl !== "NOT_AVAILABLE") {
+      const value = Number(order.realized_pnl);
+      if (Number.isFinite(value)) return { text: money(order.realized_pnl), tone: value > 0 ? "pnl-pos" : value < 0 ? "pnl-neg" : "pnl-zero", label: "已实现" };
+    }
+    return { text: "NOT_AVAILABLE", tone: "", label: "" };
+  };
+  return <Panel title="订单记录" source={snapshot.orders}>{snapshot.orders.status !== "ready" || !rows.length ? <EmptyBlock source={snapshot.orders} /> : <div className="order-list"><div className="order-head"><span>时间</span><span>交易对</span><span>方向</span><span>类型</span><span>委托价</span><span>成交均价</span><span>数量 / 成交</span><span>手续费</span><span>盈亏</span><span>状态</span></div>{rows.map((order: Order) => { const pnl = pnlCell(order); return <details className={`order-row ${order.status === "UNKNOWN" ? "unknown" : ""}`} key={order.internal_order_id}><summary><time>{new Date(order.updated_at).toLocaleString("zh-CN")}</time><strong>{order.symbol}</strong><span className={direction(order.side).tone}>{direction(order.side).code}</span><span>{order.order_type}</span><span>{orderPrice(order)}</span><span>{orderAvgFill(order)}</span><span>{numberText(order.quantity, 8)} / {numberText(order.filled_quantity, 8)}</span><span>{order.fee_total && order.fee_total !== "NOT_AVAILABLE" ? `${numberText(order.fee_total, 6)} ${order.fee_currency ?? "USDT"}` : "NOT_AVAILABLE"}</span><b className={pnl.tone}>{pnl.text}{pnl.label ? <small>{pnl.label}</small> : null}</b><b>{orderStatus[order.status] ?? order.status}</b></summary><div><span>内部订单 ID：{order.internal_order_id}</span><span>客户端订单 ID：{order.client_order_id}</span><span>交易所订单 ID：{order.exchange_order_id ?? "NOT_AVAILABLE"}</span>{order.decision_id ? <span>Decision：{order.decision_id}</span> : null}{order.signal_id ? <span>Signal：{order.signal_id}</span> : null}{order.strategy_id ? <span>Strategy：{order.strategy_id}</span> : null}<span>市场：{order.market_type ?? "NOT_AVAILABLE"}</span><span>持仓方向：{order.position_side ?? "NOT_AVAILABLE"}</span><span>Reduce Only：{order.reduce_only ? "是" : "否"}</span><span>笔数：{order.fill_count ?? "NOT_AVAILABLE"}</span>{order.pnl_percent && order.pnl_percent !== "NOT_AVAILABLE" ? <span>盈亏率：{Number(order.pnl_percent).toFixed(2)}%</span> : null}{order.trade_status ? <span>交易状态：{order.trade_status}{order.pnl_scope ? `（${order.pnl_scope}）` : ""}</span> : null}{order.rejection_reason ? <span>拒绝原因：{order.rejection_reason}</span> : null}</div></details>; })}</div>}</Panel>;
 }
 
 function ReviewPage({ snapshot }: { snapshot: TradingSnapshot }) {

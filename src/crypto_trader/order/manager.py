@@ -445,6 +445,24 @@ class OrderManager:
             await self.settlement_callback(fill)
         return order, fill, True
 
+    async def list_fills_for_orders(self, order_ids: list[str]) -> list[Fill]:
+        """Read-only: canonical fills for a batch of orders (observability).
+
+        Used by the API read model to aggregate avg_fill_price checks, fees
+        and lineage without N+1 HTTP queries. Never mutates state.
+        """
+        if not order_ids:
+            return []
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FillORM)
+                    .where(FillORM.order_id.in_(order_ids))
+                    .order_by(FillORM.timestamp.asc())
+                )
+            ).scalars().all()
+            return [_orm_to_fill(row) for row in rows]
+
     async def get_fill(self, fill_id: str) -> Fill | None:
         async with self.session_factory() as session:
             row = (

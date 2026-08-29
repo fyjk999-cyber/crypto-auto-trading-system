@@ -18,7 +18,7 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.api.market_analysis import create_market_analysis_router
 from crypto_trader.config import get_settings
 from crypto_trader.credentials import EnvCredentialStore
-from crypto_trader.domain.enums import OrderSide
+from crypto_trader.domain.enums import OrderSide, OrderStatus
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.binance_futures_public import (
     BinancePublicDataUnavailable,
@@ -69,6 +69,102 @@ class LLMTestRequest(BaseModel):
 
 class LLMRoutesRequest(BaseModel):
     routes: list[ModelRoute]
+
+
+async def _positions_view(state: AppState) -> dict[str, dict]:
+    """Canonical position read model shared by /positions and /orders.
+
+    Single source of truth for per-symbol marks and PnL so both pages can
+    never disagree (no second algorithm in the frontend or in /orders).
+    """
+    positions = await state.portfolio.get_positions()
+    payload: dict[str, dict] = {}
+    for symbol, pos in positions.items():
+        if Decimal(str(pos.quantity)) == 0:
+            continue
+        book = state.market_data.books.get(symbol)
+        mark_price = book.mid_price() if book is not None else None
+        entry = pos.avg_entry_price
+        unrealized = None
+        if mark_price is not None and entry is not None:
+            unrealized = (Decimal(str(mark_price)) - Decimal(str(entry))) * Decimal(
+                str(pos.quantity)
+            )
+        payload[symbol] = {
+            **pos.model_dump(mode="json"),
+            "market_type": "SPOT",
+            "mark_price": (
+                str(mark_price) if mark_price is not None else "NOT_AVAILABLE"
+            ),
+            "unrealized_pnl": (
+                str(unrealized) if unrealized is not None else "NOT_AVAILABLE"
+            ),
+            "leverage": "NOT_APPLICABLE",
+            "liquidation_price": "NOT_APPLICABLE",
+        }
+    try:
+        if state.engine is not None and state.engine.perpetual_engine is not None:
+            engine = state.engine.perpetual_engine
+            perp_state = await engine.load_state()
+            for symbol, position in perp_state.positions.items():
+                if position.is_flat:
+                    continue
+                contract = engine.contract_for(symbol)
+                book = state.market_data.books.get(reference_symbol_for(symbol))
+                mark_price = book.mid_price() if book is not None else None
+                if mark_price is not None:
+                    position = await engine.mark_to_market(
+                        Decimal(str(mark_price)), symbol
+                    )
+                position = position or perp_state.positions.get(symbol)
+                if position is None or position.is_flat:
+                    continue
+                payload[symbol] = {
+                    "symbol": symbol,
+                    "base_asset": (
+                        contract.base if contract is not None else "NOT_AVAILABLE"
+                    ),
+                    "quote_asset": (
+                        contract.quote if contract is not None else "NOT_AVAILABLE"
+                    ),
+                    "quantity": str(position.quantity),
+                    "avg_entry_price": str(position.avg_entry_price),
+                    "cost_basis": str(position.initial_margin),
+                    "realized_pnl": str(position.realized_pnl),
+                    "updated_at": position.ts.isoformat(),
+                    "market_type": "PERPETUAL",
+                    "side": position.side.value,
+                    "unrealized_pnl": (
+                        str(position.unrealized_pnl)
+                        if mark_price is not None
+                        else "NOT_AVAILABLE"
+                    ),
+                    "leverage": (
+                        str(
+                            abs(position.quantity)
+                            * position.avg_entry_price
+                            / position.initial_margin
+                        )
+                        if position.initial_margin
+                        else "NOT_AVAILABLE"
+                    ),
+                    "initial_margin": str(position.initial_margin),
+                    "liquidation_price": str(
+                        position.liquidation_price
+                        if position.liquidation_price is not None
+                        else "NOT_AVAILABLE"
+                    ),
+                    "mark_price": (
+                        str(mark_price)
+                        if mark_price is not None
+                        else "NOT_AVAILABLE"
+                    ),
+                }
+    except Exception:
+        # Perpetual projection is read-only state; failure must never break
+        # the spot positions endpoint.
+        pass
+    return payload
 
 
 def create_app(state: AppState) -> FastAPI:
@@ -1041,7 +1137,134 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/orders")
     async def orders(limit: int = 200):
-        return [serialize_order(o) for o in await state.order_manager.list_all(limit=limit)]
+        # ORDER/FILL/PnL read model (observability only; no trading change).
+        #
+        # - order.price stays the ORDER REQUEST/LIMIT price (MARKET => null is
+        #   correct semantics; the frontend renders it as "market order").
+        # - Execution truth comes from canonical Fill rows: fee_total is the
+        #   SUM of real fill fees; avg_fill_price is maintained by the order
+        #   manager's weighted-average accounting.
+        # - PnL is POSITION_LEVEL (open positions, same source as /positions)
+        #   or TRADE_LEVEL (realized PnL matched from the canonical
+        #   FUTURES_REALIZED_PNL ledger row of this exact closing order).
+        #   Anything that cannot be attributed stays NOT_AVAILABLE - never
+        #   faked, never the current ticker.
+        orders = await state.order_manager.list_all(limit=limit)
+        order_ids = [o.internal_order_id for o in orders]
+        fills = await state.order_manager.list_fills_for_orders(order_ids)
+        fees: dict[str, dict] = {}
+        lineage: dict[str, dict] = {}
+        for f in fills:
+            agg = fees.setdefault(
+                f.order_id, {"fee_total": Decimal("0"), "fee_currency": f.fee_currency}
+            )
+            agg["fee_total"] += Decimal(str(f.fee))
+            if f.order_id not in lineage and f.payload:
+                lineage[f.order_id] = {
+                    "decision_id": f.payload.get("decision_id"),
+                    "signal_id": f.payload.get("signal_id"),
+                }
+        # Realized PnL: only from canonical ledger rows of closing orders.
+        realized_by_order: dict[str, str] = {}
+        try:
+            async with state.database.session_factory() as session:
+                rows = (
+                    await session.execute(
+                        text(
+                            "SELECT order_id, metadata_json FROM ledger_transactions "
+                            "WHERE entry_type = 'FUTURES_REALIZED_PNL' AND order_id IS NOT NULL"
+                        )
+                    )
+                ).all()
+                for row in rows:
+                    meta = row[1]
+                    if isinstance(meta, str):
+                        try:
+                            meta = json.loads(meta)
+                        except (TypeError, ValueError):
+                            meta = {}
+                    if isinstance(meta, dict) and meta.get("realized_pnl") is not None:
+                        realized_by_order[row[0]] = str(meta["realized_pnl"])
+        except Exception:
+            realized_by_order = {}
+        positions = await _positions_view(state)
+
+        views = []
+        # Episode guard (requirement: never overlay CURRENT position PnL on
+        # OLD already-closed entries of the same symbol): only the MOST
+        # RECENT non-reduce-only filled order per (symbol, market_type) may
+        # carry the open position's floating PnL. Older entries of previous
+        # episodes honestly stay NOT_AVAILABLE.
+        latest_entry_by_key: dict[tuple[str, str], str] = {}
+        for o in orders:
+            if (
+                o.status == OrderStatus.FILLED
+                and not o.reduce_only
+                and f"{o.symbol}|{o.market_type.value}" not in latest_entry_by_key
+            ):
+                latest_entry_by_key[f"{o.symbol}|{o.market_type.value}"] = (
+                    o.internal_order_id
+                )
+        for o in orders:
+            view = serialize_order(o)
+            agg = fees.get(o.internal_order_id)
+            view["fee_total"] = (
+                str(agg["fee_total"]) if agg is not None else "NOT_AVAILABLE"
+            )
+            view["fee_currency"] = (
+                agg["fee_currency"] if agg is not None else "NOT_AVAILABLE"
+            )
+            view["fill_count"] = sum(
+                1 for f in fills if f.order_id == o.internal_order_id
+            )
+            view.update(lineage.get(o.internal_order_id, {}))
+            view["unrealized_pnl"] = "NOT_AVAILABLE"
+            view["realized_pnl"] = "NOT_AVAILABLE"
+            view["pnl_percent"] = "NOT_AVAILABLE"
+            view["pnl_scope"] = None
+            view["trade_status"] = None
+            position = positions.get(o.symbol)
+            is_latest_entry = (
+                latest_entry_by_key.get(f"{o.symbol}|{o.market_type.value}")
+                == o.internal_order_id
+            )
+            if (
+                position is not None
+                and position.get("market_type") == o.market_type.value
+                and not o.reduce_only
+                and is_latest_entry
+            ):
+                # Entry into a still-open position: floating PnL at the
+                # position level (same numbers as the positions page).
+                view["unrealized_pnl"] = position.get("unrealized_pnl", "NOT_AVAILABLE")
+                view["pnl_scope"] = "POSITION_LEVEL"
+                view["trade_status"] = "OPEN_POSITION"
+                if o.market_type.value == "PERPETUAL":
+                    margin = position.get("initial_margin")
+                    try:
+                        if (
+                            margin not in (None, "NOT_AVAILABLE")
+                            and view["unrealized_pnl"] != "NOT_AVAILABLE"
+                            and Decimal(str(margin)) != 0
+                        ):
+                            view["pnl_percent"] = str(
+                                Decimal(view["unrealized_pnl"])
+                                / Decimal(str(margin))
+                                * 100
+                            )
+                    except (ArithmeticError, ValueError):
+                        pass
+            if o.reduce_only or (
+                o.status == OrderStatus.FILLED
+                and o.market_type.value == "PERPETUAL"
+            ):
+                closed_realized = realized_by_order.get(o.internal_order_id)
+                if closed_realized is not None:
+                    view["realized_pnl"] = closed_realized
+                    view["pnl_scope"] = "TRADE_LEVEL"
+                    view["trade_status"] = "CLOSED"
+            views.append(view)
+        return views
 
     @app.get("/orders/{order_id}")
     async def order(order_id: str):
@@ -1056,115 +1279,12 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/positions")
     async def positions():
-        # §20: one read-only position truth. Spot positions + PAPER PERPETUAL
-        # state are merged so the frontend can never show "空仓" while
-        # BTCUSDT_PERP LONG/SHORT is actually open.
-        #
-        # POSITION READ-MODEL CONTRACT (2026-08-29 repair):
-        # - Every mark price comes from THAT symbol's own real OKX reference
-        #   market (canonical symbol book / <REF>_PERP -> REF book). Cross-
-        #   symbol fallback (e.g. ETH inheriting the global BTC mark) is
-        #   forbidden: a missing price is surfaced as "NOT_AVAILABLE" and
-        #   fails visibly.
-        # - PnL accounting lives HERE (backend), never in the frontend.
-        #   SPOT: unrealized = (real mark - avg_entry) * quantity.
-        #   PERPETUAL: the perpetual engine's own accounting via
-        #   mark_to_market(mark, symbol) per registered contract.
-        # - NOT_AVAILABLE = data should exist but its real source is
-        #   currently unavailable. NOT_APPLICABLE = the field does not apply
-        #   to this product type (SPOT leverage / liquidation price).
-        # - Zero-quantity positions are history, not current positions.
-        positions = await state.portfolio.get_positions()
-        payload: dict[str, dict] = {}
-        for symbol, pos in positions.items():
-            if Decimal(str(pos.quantity)) == 0:
-                continue
-            book = state.market_data.books.get(symbol)
-            mark_price = book.mid_price() if book is not None else None
-            entry = pos.avg_entry_price
-            unrealized = None
-            if mark_price is not None and entry is not None:
-                unrealized = (Decimal(str(mark_price)) - Decimal(str(entry))) * Decimal(
-                    str(pos.quantity)
-                )
-            payload[symbol] = {
-                **pos.model_dump(mode="json"),
-                "market_type": "SPOT",
-                "mark_price": (
-                    str(mark_price) if mark_price is not None else "NOT_AVAILABLE"
-                ),
-                "unrealized_pnl": (
-                    str(unrealized) if unrealized is not None else "NOT_AVAILABLE"
-                ),
-                "leverage": "NOT_APPLICABLE",
-                "liquidation_price": "NOT_APPLICABLE",
-            }
-        try:
-            if state.engine is not None and state.engine.perpetual_engine is not None:
-                engine = state.engine.perpetual_engine
-                perp_state = await engine.load_state()
-                for symbol, position in perp_state.positions.items():
-                    if position.is_flat:
-                        continue
-                    contract = engine.contract_for(symbol)
-                    book = state.market_data.books.get(reference_symbol_for(symbol))
-                    mark_price = book.mid_price() if book is not None else None
-                    if mark_price is not None:
-                        # Reuse the perpetual engine's own accounting for the
-                        # per-symbol mark (LONG/SHORT aware, contract_size
-                        # aware). Never recomputed in the frontend.
-                        position = await engine.mark_to_market(
-                            Decimal(str(mark_price)), symbol
-                        )
-                    position = position or perp_state.positions.get(symbol)
-                    if position is None or position.is_flat:
-                        continue
-                    payload[symbol] = {
-                        "symbol": symbol,
-                        "base_asset": (
-                            contract.base if contract is not None else "NOT_AVAILABLE"
-                        ),
-                        "quote_asset": (
-                            contract.quote if contract is not None else "NOT_AVAILABLE"
-                        ),
-                        "quantity": str(position.quantity),
-                        "avg_entry_price": str(position.avg_entry_price),
-                        "cost_basis": str(position.initial_margin),
-                        "realized_pnl": str(position.realized_pnl),
-                        "updated_at": position.ts.isoformat(),
-                        "market_type": "PERPETUAL",
-                        "side": position.side.value,
-                        "unrealized_pnl": (
-                            str(position.unrealized_pnl)
-                            if mark_price is not None
-                            else "NOT_AVAILABLE"
-                        ),
-                        "leverage": (
-                            str(
-                                abs(position.quantity)
-                                * position.avg_entry_price
-                                / position.initial_margin
-                            )
-                            if position.initial_margin
-                            else "NOT_AVAILABLE"
-                        ),
-                        "initial_margin": str(position.initial_margin),
-                        "liquidation_price": str(
-                            position.liquidation_price
-                            if position.liquidation_price is not None
-                            else "NOT_AVAILABLE"
-                        ),
-                        "mark_price": (
-                            str(mark_price)
-                            if mark_price is not None
-                            else "NOT_AVAILABLE"
-                        ),
-                    }
-        except Exception:
-            # Perpetual projection is read-only state; failure must never break
-            # the spot positions endpoint.
-            pass
-        return payload
+        # § 20: one read-only position truth (spot + PAPER PERPETUAL merged).
+        # See _positions_view for the read-model contract: per-symbol real
+        # marks only (cross-symbol fallback forbidden, NOT_AVAILABLE fails
+        # visibly), backend PnL accounting, NOT_AVAILABLE vs NOT_APPLICABLE
+        # semantics, zero-quantity rows excluded (history, not positions).
+        return await _positions_view(state)
 
     @app.get("/account")
     async def account():
