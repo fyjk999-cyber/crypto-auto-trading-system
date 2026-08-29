@@ -72,6 +72,13 @@ Layer counts (all-time decision_evidence, /trading-funnel):
     health recovered after the 03:05Z transient - gate worked, then healed.)
 6.9 NEARUSDT LONG 0.001 @ 1.802 - 03:54:55Z. OPEN. Real price.
 
+6.10 DOTUSDT LONG 0.001 @ 0.8398 - 04:01:00Z. OPEN. Real price.
+6.11 BCHUSDT LONG 0.001 @ 246.6 - 04:19:20Z. OPEN. Real price.
+6.12 OPUSDT LONG 0.001 @ 0.08947 - 04:27:35Z. OPEN. Real price.
+6.13 NOTE: BCHUSDT AI SHORT (fit 0.4861, resistance rejection 247.0) at
+    04:13:09Z was REJECTED by RiskEngine SPOT_OVERSHORT - the AI decided,
+    the safety layer protected; both layers worked as designed.
+
 ## D. Best Trades
 
 TBD — positions still open. Early observation: BTC entry thesis was
@@ -101,6 +108,9 @@ not an AI judgment error — AI reasoning itself was consistent.
 
 ## H. AI vs Quant
 
+- 04:13Z BCHUSDT: AI SHORT with strategy_fit 0.4861 (resistance rejection
+  thesis) - overridden weak quant fit; RiskEngine correctly blocked the
+  spot SHORT. Full AI-vs-quant + safety-layer sample in one.
 - 03:31Z ARBUSDT: AI LONG with strategy_fit 0.4637 (below the 0.55 normal
   band) - the AI overrode weak quant fit on its own reading (prior-high
   retest, positive momentum). Exactly the AI-FIRST sample class; outcome
@@ -153,6 +163,9 @@ not an AI judgment error — AI reasoning itself was consistent.
 - Checkpoint 04:00Z: 3 new clean fills (ARB 0.08759, LTC 48.91, NEAR 1.802),
   105 decisions (101 NO_TRADE / 3 LONG / 1 SHORT), 18 live_analysis all
   success, 0 stuck orders, 0 errors, overall OK. LTC fully recovered.
+- Checkpoint 04:30Z: 3 new clean fills (DOT 0.8398, BCH 246.6, OP 0.08947),
+  99 decisions (95 NO_TRADE / 3 LONG / 1 SHORT), 11 live_analysis all
+  success, 0 errors, overall OK. BCH AI SHORT correctly risk-blocked.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id
