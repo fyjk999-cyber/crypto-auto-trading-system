@@ -1,5 +1,9 @@
 # TEST_STATUS
 
+- 2026-08-29: backend 725 passed / 7 skipped / 2 failed (pre-existing
+  live-OKX fixture tests, unrelated); ruff clean; frontend 34 tests + tsc +
+  build OK. New regression tests: futures-aware reconciliation, perp
+  duplicate-entry gate (open/failed/flat), fake-price match guard.
 - Updated: 2026-08-27T14:36:17.029344+00:00
 - pytest: 628 passed, 8 skipped
 - ruff: PASS

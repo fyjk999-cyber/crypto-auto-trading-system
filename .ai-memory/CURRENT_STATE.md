@@ -1,5 +1,25 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T01:40:00+00:00
+- **PAPER_TRADE_E2E_READY = YES** (see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md).
+- Clean E2E proof: run_256d3e15648542ee976cbefa55bb9cd4 / decision
+  dec_a6d0a388dbc34ab082fd / LLM llm_d30a4f2b3429456ca423be4bec8ce7f4
+  (LIVE, live_analysis, deepseek-chat) / risk APPROVE RISK_PASS / order
+  ord_6a07813a44df44b3b471ebedea407b16 / fill
+  fill_8396534b10d74e25843509a357d6e0ab @ 77753.05 REAL OKX price
+  (BTCUSDT_PERP LONG 0.001, fee 0.038876525) / ledger txn_467ed207928443e98aa35a09.
+- Runtime live: PAPER_REAL_MARKET, OKX REAL feeds healthy (age 0s), recon ok,
+  overall OK, LLM_PROVIDER_RUNTIME_VALIDATED=YES.
+- Anti-pyramiding: symbol-scoped perp gate restored in AI-first path
+  (af426a1 + 53d46c4). A stacked 0.002 BTC position exists from the gate-gap
+  window; the bridge owns its HOLD/time-stop; not counted as clean evidence.
+- Missing (documented, non-blocking): multi-symbol perpetual registry,
+  MAE/MFE tracking, funding scheduler, stale-lease takeover UX, 2 live-OKX
+  test fixtures. See MISSING_FEATURE_REPORT.md.
+- REAL_MONEY_READY = NO. REAL_MONEY_ENABLED = NO. TRADING_MODE = PAPER only.
+
+## Historical (2026-08-28)
+
 - Updated: 2026-08-28T05:52:00+00:00
 - EXECUTION LOCK ACTIVE. POST_COMPLETION_MAINTENANCE_MODE = NOT_ACTIVE.
 - PRE_COMPLETION_AUDIT_ONLY = YES.
