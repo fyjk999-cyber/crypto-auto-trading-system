@@ -99,3 +99,12 @@
 - Expected effect: slower re-entry cadence (~17% fewer decision slots per symbol/hour); should reduce flip churn while NOT gating AI authority (cooldown is temporal safety, not a quant gate)
 - ROLLBACK PLAN (sec.64): if window 10-11 show flip churn gone AND healthy fills continue, restore 240. If NO_TRADE rate spikes >99% with no structural reason, restore 240 immediately
 - Next review: 2026-08-29T22:00Z
+
+## 2026-08-29T22:00Z (Phase G window 10)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 10 / decisions 145 (2L/3S/140NT) / fills 6 / rejects 0 / episodes 78 (+4)
+- PnL: RPNL 12h improved -0.7172 -> -0.2611 (16 rows; FIL/ZEC closes positive); open 19
+- ACTION: HOLD (staged cooldown 300 remains; rollback review next window)
+- Changes: none (staged CONTRACT from window 9 NOT yet effective - runtime unchanged)
+- Reason: churn pattern CLEARED organically (no intra-5min flips; HYPE/ZEC/FIL re-entries are 2-4h TIME_STOP cycles = healthy lifecycle); PnL improved; LLM calls down (10 vs 15). Per sec.64 do not one-way push: keep 300 staged one more window; if window 11 also clean -> rollback to 240 (cancel staged) to avoid unnecessary tightening
+- Expected effect: none now; decision on staged-300 rollback at window 11
+- Next review: 2026-08-29T22:30Z
