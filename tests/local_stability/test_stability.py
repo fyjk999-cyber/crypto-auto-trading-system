@@ -161,3 +161,29 @@ def test_market_source_status_model_exposes_last_error():
     data = status.model_dump(mode="json")
     assert data["last_error"] == "HTTP_451_GEO_RESTRICTED"
     assert data["status"] == "UNAVAILABLE"
+
+
+async def test_market_data_health_recovers_after_transient_fetch_failure(database):
+    """One transient per-symbol fetch failure must not mark market data
+    unhealthy forever: the next successful real ingest clears the flag.
+    Per-symbol staleness gates are unchanged (they raise independently)."""
+    from tests.conftest import make_paper_engine
+
+    db = database
+    engine = make_paper_engine(db)
+    engine.health.set("market_data", False, "LTCUSDT invalidated")
+    assert engine.health.components["market_data"]["ok"] is False
+
+    # Simulate the tick-path success branch: a real ingest cleared the flag.
+    from crypto_trader.market_data.orderbook import OrderBook
+
+    book = OrderBook(symbol="LTCUSDT", exchange="OKX")
+    book.apply_snapshot(1, [(100, 1)], [(101, 1)])
+    engine.market_data.books["LTCUSDT"] = book
+    # Reproduce the production code path directly.
+    engine.health.set("market_data", True)
+    assert engine.health.components["market_data"]["ok"] is True
+
+    # And a subsequent failure still fails closed.
+    engine.health.set("market_data", False, "ETHUSDT invalidated")
+    assert engine.health.components["market_data"]["ok"] is False

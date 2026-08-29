@@ -329,6 +329,10 @@ class TradingEngine:
                 [(level.price, level.quantity) for level in fetched.asks.values()],
             )
             book = self.market_data.books[symbol]
+            # A successful real ingest IS the recovery signal: clear the
+            # market-data health flag set by any earlier transient fetch
+            # failure. Per-symbol staleness/health gates are unchanged.
+            self.health.set("market_data", True)
         except Exception:
             # P0: never let a stale cached orderbook authorize new risk.
             if book is not None:
