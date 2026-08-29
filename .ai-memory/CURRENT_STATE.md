@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-29T05:30:00+00:00 (checkpoint cron-2: no fills - 19/20 symbols position-gated, correct anti-pyramiding; BTC perp exit expected ~06:08Z; health OK)
+- Updated: 2026-08-29T06:00:00+00:00 (checkpoint cron-2: still fully position-gated, no fills; BTC perp open, exit window approaching; health OK)
 - **PHASE 2  OVERNIGHT LONG-RUN PAPER OBSERVATION MODE**
 - FIRST_AI_PAPER_FILL = YES
 - PAPER_TRADE_E2E_READY = YES (PHASE 1 milestone; see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md)

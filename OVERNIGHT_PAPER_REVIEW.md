@@ -176,6 +176,11 @@ not an AI judgment error — AI reasoning itself was consistent.
   positions; anti-pyramiding gates correctly prevent stacking). 100
   NO_TRADE gate decisions, 0 errors, overall OK. BTC perp bridge time-stop
   exit expected ~06:08Z (in-memory first_seen reset at 02:08 restart).
+- Checkpoint 06:00Z: no fills (still fully position-gated - correct). BTC
+  perp still open (0.002, mark 77595.85); time-stop window approaching.
+  100 NO_TRADE gates, 0 errors, overall OK. Note: /positions unrealized_pnl
+  displayed 0 for the perp despite mark < entry - verify PnL display math
+  at next checkpoint (low priority).
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id
