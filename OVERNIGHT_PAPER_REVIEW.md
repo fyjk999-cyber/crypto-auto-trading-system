@@ -39,6 +39,15 @@ Layer counts (all-time decision_evidence, /trading-funnel):
 
 ## C. All Trades
 
+6.1 SOLUSDT LONG 0.001 @ 103. 02:20: dec_24527f3c3ed64908a3,
+    mean_reversion, fit 1.0/conf 0.8, eir llm_b7410973bfdb..., fill
+    fill_5619c1d6089f4f188c5a084b6a9608a1 / ord_2eb4b05d409e4c51bed1c12e4f20d1e0.
+    Thesis: oversold RSI14 23.4, z -2.52, near support. OPEN.
+6.2 ADAUSDT LONG 0.001 @ 0. 02:26: dec_fc27c3ad6678491f90,
+    mean_reversion, fit 1.0/conf 0.8, eir llm_5076eafe4d9e410c84da, fill
+    fill_e8fe91ae129a47a1ab6c47cea2734b7e / ord_bf34cab0f9884d4c83b10fd024fc6d56.
+    Thesis: RSI14 15.38, z -1.79, lower band + support 0.2011, volume rising. OPEN.
+
 1. BTCUSDT_PERP LONG 0.001 @ 77753.05 — mean_reversion (AI fit 1.0/conf 0.8),
    thesis: oversold RSI6 4.98 / RSI14 28.75, z -1.75, support 77734.3.
    OPEN. Clean proof fill (§6 lineage in PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md).
@@ -113,6 +122,8 @@ not an AI judgment error — AI reasoning itself was consistent.
 
 ## N. System Errors
 
+- Checkpoint 02:30Z: 0 errors, 0 stuck orders, 0 execution holds, recon OK,
+  overall OK. 2 new clean AI fills at real prices since last checkpoint.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id
