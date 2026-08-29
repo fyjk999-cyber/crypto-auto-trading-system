@@ -18,3 +18,10 @@
   LLM qualification 6/6 PASS live; paper smoke PASS (docs/PAPER_SMOKE_TEST_REPORT.md).
 
 - 2026-08-29T07:25:18+00:00: 734 passed / 7 skipped / 2 failed (pre-existing live-OKX, unrelated). Added test_exit_lifecycle.py (6): reduce-only time-stop EXIT through Risk+Execution, duplicate-EXIT guard, age hydration, snapshot persistence, settlement robustness.
+
+
+## 2026-08-29T09:43Z (bb4fa37)
+- test_exit_lifecycle.py: 10 passed (risk-reject retry, authority-hold retry, outstanding-order duplicate suppression, quarantine JSON dialects, snapshot-failure observability + prior 5).
+- test_symbol_expansion.py: 8 passed (registry mapping, 30 universe, new-symbol perp SHORT via real Risk+Execution, SPOT_OVERSHORT preserved, symbol-scoped gate, fail-closed unregistered perp, restart idempotency, multi-perp reconciliation).
+- Full suite: 746 passed / 7 skipped / 2 pre-existing live-OKX network failures (documented).
+- Chaos contract updated: process_signal returns the FINAL authority outcome.

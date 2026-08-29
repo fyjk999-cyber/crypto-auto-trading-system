@@ -18,3 +18,7 @@
 - reduce-only settlement survives None avg entry
 - factor snapshots persisted at decision time; EVIDENCE_QUARANTINE enforced for learning
 - SQLite WAL + busy_timeout
+
+
+## bb4fa37 - 20->30 universe + generic paper-perpetual registry (2026-08-29T09:43Z)
+- 10 new OKX-verified symbols under a generic registry; 11 paper-perp contracts on one engine; fail-closed unregistered perp; SPOT_OVERSHORT intact; final-outcome process_signal return; snapshot persistence telemetry; full ETH episode quarantine; lease-loss invariants in DECISIONS.md.

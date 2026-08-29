@@ -93,3 +93,10 @@
   LLM -> decision -> signal -> RiskEngine (1 RISK_REJECT SPOT_OVERSHORT)
   verified; LLM invoked on eligible decisions only. Tests: 692 passed.
   RiskEngine/ExecutionAuthority/Ledger unchanged.
+
+
+## 2026-08-29T09:43Z - P2 closure + 30-symbol expansion deployed (bb4fa37)
+- P2 CS-20260829-064844-P2-EXIT pass conditions implemented+tested (d26e4e8): result-aware EXIT retry (Risk REJECT / authority HOLD-REJECT / exception / stale in-flight clear suppression; process_signal returns the FINAL authority outcome), snapshot durability telemetry (SNAPSHOT_PERSIST_FAILED audit + health flag + evidence marker factor_snapshot_persist_ok), whole tainted ETH episode quarantined (derived exit fill + memory rows; loader handles SQLite TEXT JSON + PG native JSON). 10 exit-lifecycle tests; suite 746 passed (2 documented live-OKX network failures only).
+- INCIDENT root-caused: 09:18-09:26Z kill switch execution-lease-lost - harness deleted the active canonical runtime_leases row while the Runtime ran. Recovery via normal single-writer launcher restart; kill switch never bypassed; acceptance: duplicate fill/order/client_order/decision/trade IDs 0, kill-window fills/orders 0, positions intact, reconciliation 9/9 OK. Invariants in DECISIONS.md. Harness stashes now exclude .ai-memory/CODEX_SUPERVISOR_*.
+- EXPANSION (bb4fa37): universe 20 -> 30 (HYPE ZEC ENA WLD ONDO FIL TAO AAVE XLM HBAR - all verified live OKX SPOT+SWAP pre-deploy). Generic bidirectional paper-perpetual registry: one PerpetualPaperEngine, 11 contracts via contract_for(symbol); unregistered perp fails closed; SPOT_OVERSHORT preserved; no new engines/forced trades; AI authority untouched. 8 expansion tests.
+- Deployed with corrected restart procedure (all processes stopped -> lease cleared -> single launch). Post-deploy health: all OK, one renewing lease, kill switch clear.
