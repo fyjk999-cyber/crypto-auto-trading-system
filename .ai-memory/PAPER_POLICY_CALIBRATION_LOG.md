@@ -31,3 +31,12 @@
 - Reason: stable window; NO_TRADE 93.3% still natural; fills diverse across 5 symbols incl 3 perp - no concentration, no re-entry anomaly (DOGE/LINK pattern from window 1 did not repeat)
 - Expected effect: none; watch HYPE/ZEC/FIL perp exit reasons at next episode completion
 - Next review: 2026-08-29T18:30Z
+## 2026-08-29T18:30Z (Phase G window 3)
+- Runtime: OK; Coverage: registry 2029 (runtime fixed-universe; Phase C/D pending)
+- Funnel: LLM 15 / decisions 138 (0L/4S/134NT=97.1%) / fills 1 / FILLED 2 / rejects 0 / episodes 55
+- PnL: RPNL 12h -0.3939 unchanged; open 22
+- ACTION: HOLD
+- Changes: none
+- Reason: quiet window (1 fill); NO_TRADE 97.1% natural 47 - market has no edge claim, NOT a bug; SHORT-side activity continues on perp. LOW_SAMPLE_SIZE still applies to policy params (3 windows < 15 completed episodes total)
+- Expected effect: none; continue baseline accumulation
+- Next review: 2026-08-29T19:00Z
