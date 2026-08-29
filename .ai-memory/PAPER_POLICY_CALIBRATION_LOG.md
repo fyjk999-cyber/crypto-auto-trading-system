@@ -40,3 +40,12 @@
 - Reason: quiet window (1 fill); NO_TRADE 97.1% natural 47 - market has no edge claim, NOT a bug; SHORT-side activity continues on perp. LOW_SAMPLE_SIZE still applies to policy params (3 windows < 15 completed episodes total)
 - Expected effect: none; continue baseline accumulation
 - Next review: 2026-08-29T19:00Z
+## 2026-08-29T19:00Z (Phase G window 4)
+- Runtime: OK; Coverage: registry 2029 (runtime fixed-universe; Phase C/D pending)
+- Funnel: LLM 11 / decisions 146 (2L/1S/143NT=97.9%) / fills 3 / FILLED 2 / rejects 0 / episodes 55 (+1 ADA TIME_STOP LOSS)
+- PnL: RPNL 12h -0.3939 unchanged; open 24
+- ACTION: HOLD
+- Changes: none
+- Reason: ADA round-trip within 5min (SELL 0.2007 -> BUY 0.2009) is a direction flip not re-entry churn; episode attribution clean (TIME_STOP). 4 windows cumulative still LOW_SAMPLE_SIZE; no repeated-mistake pattern
+- Expected effect: none; watch ADA flip frequency - if it recurs 2+ consecutive windows, consider CONTRACT via cooldown +60s (bounded)
+- Next review: 2026-08-29T19:30Z
