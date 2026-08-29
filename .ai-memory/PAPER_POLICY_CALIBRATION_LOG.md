@@ -21,3 +21,13 @@
 - Reason: first window on new policy params = LOW_SAMPLE_SIZE; 96.6% NO_TRADE is natural (no market edge claim), NOT under-trading bug - fills flowing, round-trips closing
 - Expected effect: baseline established; next windows watch re-entry frequency (DOGE/LINK twice each in-window - monitor, not yet abnormal) and NO_TRADE reason quality
 - Next review: 2026-08-29T18:00Z
+
+## 2026-08-29T18:00Z (Phase G window 2)
+- Runtime: OK; Coverage: registry 2029 (runtime still fixed-universe; Phase C/D pending)
+- Funnel: LLM 9 / decisions 145 (2L/3S/140NT=93.3%) / fills 5 / FILLED 5 / rejects 0 / episodes 54
+- PnL: RPNL 12h -0.3939 unchanged (no perp closes this window); open 22
+- ACTION: HOLD
+- Changes: none
+- Reason: stable window; NO_TRADE 93.3% still natural; fills diverse across 5 symbols incl 3 perp - no concentration, no re-entry anomaly (DOGE/LINK pattern from window 1 did not repeat)
+- Expected effect: none; watch HYPE/ZEC/FIL perp exit reasons at next episode completion
+- Next review: 2026-08-29T18:30Z

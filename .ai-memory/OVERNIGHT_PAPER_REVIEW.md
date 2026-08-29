@@ -52,3 +52,5 @@ N) Next: 8 new-symbol perp positions (opened 10:13-11:24Z) reach their own 4h an
   window). Raw orders/fills/ledger/audit evidence untouched.
 
 - [2026-08-29T17:30Z] Window 17:00-17:30Z lineage (Section C): 7 fills all REAL market prices, no ~100 synthetic. KEY: LINKUSDT SELL 0.0005@11.415 (17:02) then BUY 0.001@11.392 (17:28); DOGEUSDT SELL 0.001@0.08523 (17:07) then BUY 0.001@0.08505 (17:22) - natural round-trips. ENAUSDT_PERP reduce-only SELL 0.001@0.157285 (17:17). NO_TRADE ratio 96.6% (140/145) - AI-FIRST discipline intact, no forced trades. Section H (AI vs Quant): fit distribution this window showed AI acting on evidence packages with mixed fits - no new disagreement anomalies vs prior baseline.
+
+- [2026-08-29T18:00Z] Window 17:30-18:00Z lineage (Section C): APTUSDT BUY 0.0005@0.5407 (17:35); HYPEUSDT_PERP SELL 0.001@82.9625 (17:41); AVAXUSDT SELL 0.001@7.28 (17:44); ZECUSDT_PERP SELL 0.0005@835.085 (17:47); FILUSDT_PERP BUY 0.0005@0.67965 (17:59) - all real-market prices. NO_TRADE 93.3% natural. Regime diversity: perp exits + spot entries mixed; funding-basis-like perp activity (HYPE/ZEC/FIL) continues.
