@@ -335,6 +335,87 @@ class OKXAdapter(ExchangeAdapter):
         )
         return data["data"][0]
 
+    # ------------------------------------------------------------------
+    # Phase B: batch public market datasets (rate-limit aware: ONE call per
+    # product class instead of per-symbol polling).
+    # ------------------------------------------------------------------
+
+    async def get_instruments(self, inst_type: str, uly: str | None = None) -> list[dict]:
+        """Full instrument metadata for one product class (discovery)."""
+        params: dict = {"instType": inst_type}
+        if uly:
+            params["uly"] = uly
+        data = await self._public_request(
+            "GET", "/api/v5/public/instruments", params=params
+        )
+        return list(data.get("data") or [])
+
+    async def get_all_tickers(self, inst_type: str = "SPOT") -> list[dict]:
+        """Batch tickers for an entire product class in ONE request.
+
+        Returns last/bid/ask/sizes/24h stats for every instrument - the
+        Layer-1 factual scan foundation for the Market Observer.
+        """
+        data = await self._public_request(
+            "GET", "/api/v5/market/tickers", params={"instType": inst_type}
+        )
+        return list(data.get("data") or [])
+
+    async def get_open_interest_batch(self, inst_type: str = "SWAP") -> list[dict]:
+        """Batch open interest (oi / oiCcy / oiUsd) for one product class."""
+        data = await self._public_request(
+            "GET", "/api/v5/public/open-interest", params={"instType": inst_type}
+        )
+        return list(data.get("data") or [])
+
+    async def get_funding_rate_history(
+        self, inst_id: str, limit: int = 100, before: str | None = None, after: str | None = None
+    ) -> list[dict]:
+        """Historical funding rates (paginated via before/after)."""
+        params: dict = {"instId": inst_id, "limit": str(limit)}
+        if before:
+            params["before"] = before
+        if after:
+            params["after"] = after
+        data = await self._public_request(
+            "GET", "/api/v5/public/funding-rate-history", params=params
+        )
+        return list(data.get("data") or [])
+
+    async def get_history_candles(
+        self, inst_id: str, bar: str = "1D", limit: int = 100,
+        after: str | None = None, before: str | None = None,
+    ) -> list[list[str]]:
+        """Historical candles (research/backfill; paginated, on-demand)."""
+        params: dict = {"instId": inst_id, "bar": bar, "limit": str(limit)}
+        if after:
+            params["after"] = after
+        if before:
+            params["before"] = before
+        data = await self._public_request(
+            "GET", "/api/v5/market/history-candles", params=params
+        )
+        return list(data.get("data") or [])
+
+    async def get_recent_trades(self, inst_id: str, limit: int = 100) -> list[dict]:
+        """Recent public trades snapshot."""
+        data = await self._public_request(
+            "GET", "/api/v5/market/trades", params={"instId": inst_id, "limit": str(limit)}
+        )
+        return list(data.get("data") or [])
+
+    async def get_history_trades(
+        self, inst_id: str, limit: int = 100, after: str | None = None
+    ) -> list[dict]:
+        """Historical public trades (paginated via after tradeId)."""
+        params: dict = {"instId": inst_id, "limit": str(limit)}
+        if after:
+            params["after"] = after
+        data = await self._public_request(
+            "GET", "/api/v5/market/history-trades", params=params
+        )
+        return list(data.get("data") or [])
+
     async def get_public_open_interest(self, inst_id: str) -> dict:
         data = await self._public_request(
             "GET", "/api/v5/public/open-interest", params={"instType": "SWAP", "instId": inst_id}

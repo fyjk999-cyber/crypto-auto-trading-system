@@ -1093,3 +1093,35 @@ class LLMUsageORM(Base):
     error_classification: Mapped[str | None] = mapped_column(String(40))
     correlation_id: Mapped[str | None] = mapped_column(String(100))
     request_hash: Mapped[str] = mapped_column(String(64))
+
+
+class OkxInstrumentORM(Base):
+    """Dynamic OKX instrument registry (Phase B: OKX all-market data layer).
+
+    One row per OKX instrument, refreshed from /api/v5/public/instruments.
+    This is the truth source for the dynamic market universe; hardcoded
+    symbol constants are deprecated for universe membership decisions.
+    """
+
+    __tablename__ = "okx_instruments"
+
+    inst_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    inst_type: Mapped[str] = mapped_column(String(16), index=True)
+    uly: Mapped[str | None] = mapped_column(String(64))
+    inst_family: Mapped[str | None] = mapped_column(String(64))
+    base_ccy: Mapped[str | None] = mapped_column(String(32))
+    quote_ccy: Mapped[str | None] = mapped_column(String(32))
+    settle_ccy: Mapped[str | None] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(16), index=True)
+    tick_sz: Mapped[str | None] = mapped_column(String(32))
+    lot_sz: Mapped[str | None] = mapped_column(String(32))
+    min_sz: Mapped[str | None] = mapped_column(String(32))
+    ct_val: Mapped[str | None] = mapped_column(String(32))
+    ct_val_ccy: Mapped[str | None] = mapped_column(String(32))
+    ct_type: Mapped[str | None] = mapped_column(String(16))
+    lever: Mapped[str | None] = mapped_column(String(32))
+    exp_time: Mapped[str | None] = mapped_column(String(32))
+    list_time: Mapped[str | None] = mapped_column(String(32))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
