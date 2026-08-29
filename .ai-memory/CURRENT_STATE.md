@@ -1,5 +1,11 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T17:35:00+00:00 (P0 corrections committed 28c5d1a and
+  pushed to origin/main; episodes re-derived 52 clean rows; NOTE: the RUNNING
+  runtime PID 48151 still executes pre-correction code until the
+  Supervisor-authorized restart - any episodes inserted before that restart
+  bind leverage=0 and MUST be re-derived (delete + record_all_cycles_sync) as
+  part of the restart procedure; fail-closed routes activate on restart)
 - Updated: 2026-08-29T17:20:00+00:00 (P0 corrections implemented + committed for Supervisor review: fail-closed manual routes, real-mark perp read model, symbol-scoped cooldown P1, episode quarantine/leverage/migration corrections, canonical episodes rebuilt 50; runtime PID 48151 still stable since 15:11Z, zero restarts; frontend CONNECTED)
 - Updated: 2026-08-29T16:30:00+00:00 (P2 BACKEND AVAILABILITY: canonical supervisor .ops/backend_supervisor.sh active, blind lease DELETE removed, cron-6 monitor-only, runtime PID 48151 stable since 15:11Z with zero restarts, frontend 5173 relaunched and CONNECTED, WS 101 OK, recon PASS, episodes 47)
 - Updated: 2026-08-29T15:31:00+00:00 (cron-5 deep: 16 open positions, FUTURES_RPNL cum -0.503194, episodes 46 all TIME_STOP, zero errors) (checkpoint: 15 fills/13 LLM/44 episodes since 13:35Z; backend ALIVE via cron-4 revive; PAPER confirmed; TRADE_EPISODE_PIPELINE operational) (P2 TRADE EPISODE PIPELINE COMPLETE + runtime
