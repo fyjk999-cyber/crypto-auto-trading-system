@@ -11,10 +11,27 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from crypto_trader.domain.enums import LedgerEntryType
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.persistence.models import ReconciliationRunORM
+
+# The paper exchange view is the SPOT view: perpetual settlement (margin
+# post/release, funding, realized PnL, perpetual trading fee) lives inside
+# the perpetual engine and is never reflected in the paper spot adapter's
+# balances. Reconciliation replays the ledger with the same scope, or every
+# perpetual fill would produce a false BALANCE_MISMATCH and (correctly)
+# halt execution forever. Perpetual integrity is verified by the perpetual
+# engine's own margin math and position state.
+_FUTURES_ENTRY_TYPES: tuple[str, ...] = tuple(
+    t.value
+    for t in LedgerEntryType
+    if t.value.startswith("FUTURES_")
+) + (
+    LedgerEntryType.FUNDING_PAYMENT.value,
+    LedgerEntryType.FUNDING_RECEIPT.value,
+)
 
 
 @dataclass
@@ -37,7 +54,9 @@ class ReconciliationService:
         run_id = new_id("recon")
         alerts: list[str] = []
         async with self.session_factory() as session:
-            local = await replay_projections(session)
+            local = await replay_projections(
+                session, exclude_entry_types=_FUTURES_ENTRY_TYPES
+            )
         exchange_balances = {b.currency: str(b.total) for b in (await adapter.get_balances())}
         local_balances = {c: str(r["total"]) for c, r in local.balances.items()}
         for currency in sorted(set(local_balances) | set(exchange_balances)):

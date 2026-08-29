@@ -506,3 +506,36 @@ async def test_positions_and_risk_show_perpetual_short(database):
     assert risk["metrics"]["effective_leverage"] != "0"
     await bundle.engine.stop()
     await bundle.database.close()
+
+
+# RECONCILIATION: futures-aware spot-scope comparison
+async def test_reconciliation_ignores_perpetual_settlement_but_catches_spot_drift(database):
+    from crypto_trader.domain.enums import ExecutionDecision as _ED  # noqa: F401
+
+    bundle = await _make_bundle(database)
+    await _seed_book(bundle)
+    decision = await bundle.engine.process_signal(
+        _perp_signal(
+            OrderSide.BUY, "1.0", position_side=PositionSide.LONG,
+            reduce_only=False, signal_id="sig_recon",
+        )
+    )
+    assert decision.decision == ExecutionDecision.APPROVE
+    pos = await _perp_position(bundle)
+    assert pos is not None
+
+    # The perpetual fill posts FUTURES_* ledger entries the paper SPOT
+    # exchange view never sees; reconciliation must not false-positive.
+    report = await bundle.reconciliation.reconcile(bundle.adapter)
+    assert report.halt is False, report.alerts
+    assert not any(a.startswith("BALANCE_MISMATCH") for a in report.alerts), report.alerts
+
+    # A REAL spot divergence still halts (the halt gate itself is untouched).
+    bundle.adapter.balances["USDT"] = bundle.adapter.balances.get(
+        "USDT", Decimal("0")
+    ) - Decimal("500")
+    report = await bundle.reconciliation.reconcile(bundle.adapter)
+    assert report.halt is True
+    assert any(a.startswith("BALANCE_MISMATCH") for a in report.alerts)
+    await bundle.engine.stop()
+    await bundle.database.close()

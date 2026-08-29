@@ -166,7 +166,14 @@ async def replay_projections(
     session: AsyncSession,
     initial_balances: dict[str, Decimal] | None = None,
     account_id: str = "default",
+    exclude_entry_types: tuple[str, ...] = (),
 ) -> ProjectionSnapshot:
+    """Replay the ledger into balances/positions.
+
+    `exclude_entry_types` scopes the replay (e.g. the spot exchange view
+    skips FUTURES_* postings, which the paper spot adapter never sees
+    because perpetual settlement lives inside the perpetual engine).
+    """
     result = await session.execute(
         select(LedgerTransactionORM)
         .options(selectinload(LedgerTransactionORM.entries))
@@ -174,6 +181,8 @@ async def replay_projections(
     )
     builder = ProjectionBuilder(initial_balances=initial_balances, account_id=account_id)
     for txn in result.scalars().all():
+        if exclude_entry_types and str(txn.entry_type) in exclude_entry_types:
+            continue
         builder.apply_transaction(txn)
     return builder.finalize()
 
