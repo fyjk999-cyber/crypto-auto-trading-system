@@ -194,6 +194,15 @@ not an AI judgment error — AI reasoning itself was consistent.
 - Checkpoint 07:30Z: LLM flow RESUMED (10 live_analysis all success);
   first re-entry LINK @ 11.32 (AI decision, full lineage). factor_snapshots
   persisting (31 rows). 0 errors, 0 stuck orders, overall OK.
+- Checkpoint 07:54Z (date -u anchored): full lifecycle CONTINUOUS - more
+  time-stop exits (ARB 0.08753, LTC 49.19 at true 4h anniversaries), AI
+  re-entries (XRP 1.3809, AVAX 7.27, SUI 0.7361), BTC_PERP re-opened SHORT
+  0.001 @77582.55 (AI bidirectional decision). Since 07:00Z: 18 fills, 196
+  decisions (189 NT / 4 L / 3 S), 38 live_analysis all success, fsnap 133
+  rows, 0 errors, 0 stuck orders. NOTE: an apparent 07:26-07:37 engine
+  hang was a DIAGNOSIS TIME-BASE ERROR (internal clock drift vs date -u);
+  the engine never hung. Supervisor silent-loop-restart logging added
+  regardless (observability).
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

@@ -4,7 +4,7 @@ Directive ID: `CS-20260829-064844-P2-EXIT`
 
 Timestamp: 2026-08-29T07:22:30+00:00
 
-Status: RESOLVED (P1 + P2 both fixed, production-verified; see Resolution) — PARTIALLY VERIFIED
+Status: ACTIVE — PARTIALLY VERIFIED (Harness resolution claim not accepted; only Codex Supervisor may close after all PASS CONDITIONS are independently verified)
 
 Severity: P2 - runtime correctness and derived evidence integrity
 

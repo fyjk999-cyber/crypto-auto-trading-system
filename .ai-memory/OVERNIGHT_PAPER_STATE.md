@@ -8,7 +8,7 @@ Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
 Market: OKX REAL (public data only)
 
-Trades: 18 clean AI fills (+ DOTUSDT @0.8398, BCHUSDT @246.6, OPUSDT @0.08947, UNIUSDT @4.384, TRXUSDT @0.33993)
+Trades: 18 entry fills + 14 exit fills + 4 AI re-entries (LINK @11.32, XRP @1.3809, AVAX @7.27, SUI @0.7361) + BTC_PERP re-open SHORT 0.001 @77582.55 - full lifecycle live
 Wins: 0 (no closed rounds yet)
 Losses: 0
 Realized PnL: 0 (all positions open; bridge owns exits)

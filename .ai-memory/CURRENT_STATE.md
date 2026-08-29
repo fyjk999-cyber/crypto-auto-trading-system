@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-29T07:30:00+00:00 (checkpoint cron-2: P1 exits complete 19->9; LLM resumed; first re-entry LINK @11.32; fsnap 31 rows; health OK)
+- Updated: 2026-08-29T07:54:00+00:00 (checkpoint cron-2: full lifecycle live - exits at true anniversaries + AI re-entries + BTC_PERP SHORT re-open; 38 LLM calls, 0 errors; health OK)
 - **PHASE 2  OVERNIGHT LONG-RUN PAPER OBSERVATION MODE**
 - FIRST_AI_PAPER_FILL = YES
 - PAPER_TRADE_E2E_READY = YES (PHASE 1 milestone; see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md)
