@@ -79,6 +79,9 @@ Layer counts (all-time decision_evidence, /trading-funnel):
     04:13:09Z was REJECTED by RiskEngine SPOT_OVERSHORT - the AI decided,
     the safety layer protected; both layers worked as designed.
 
+6.14 UNIUSDT LONG 0.001 @ 4.384 - 04:32:33Z. OPEN. Real price.
+6.15 TRXUSDT LONG 0.001 @ 0.33993 - 04:51:19Z. OPEN. Real price.
+
 ## D. Best Trades
 
 TBD — positions still open. Early observation: BTC entry thesis was
@@ -166,6 +169,9 @@ not an AI judgment error — AI reasoning itself was consistent.
 - Checkpoint 04:30Z: 3 new clean fills (DOT 0.8398, BCH 246.6, OP 0.08947),
   99 decisions (95 NO_TRADE / 3 LONG / 1 SHORT), 11 live_analysis all
   success, 0 errors, overall OK. BCH AI SHORT correctly risk-blocked.
+- Checkpoint 05:00Z: 2 new clean fills (UNI 4.384, TRX 0.33993), 104
+  decisions (101 NO_TRADE / 2 LONG / 1 SHORT), 5 live_analysis all success,
+  0 errors, overall OK.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

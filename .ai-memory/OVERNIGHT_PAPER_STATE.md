@@ -2,13 +2,13 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T04:30:00Z
+Latest Checkpoint: 2026-08-29T05:00:00Z
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
 Market: OKX REAL (public data only)
 
-Trades: 16 clean AI fills (+ DOTUSDT @0.8398, BCHUSDT @246.6, OPUSDT @0.08947)
+Trades: 18 clean AI fills (+ DOTUSDT @0.8398, BCHUSDT @246.6, OPUSDT @0.08947, UNIUSDT @4.384, TRXUSDT @0.33993)
 Wins: 0 (no closed rounds yet)
 Losses: 0
 Realized PnL: 0 (all positions open; bridge owns exits)
@@ -21,7 +21,7 @@ Open Positions:
   - SOLUSDT 0.001 @ 103.89 (AI fill 02:20:52Z, real price)
   - ADAUSDT 0.001 @ 0.2012 (AI fill 02:26:54Z, real price)
 
-Live LLM Calls (overnight window): 48+ live_analysis / 0 failed
+Live LLM Calls (overnight window): 80+ live_analysis / 0 failed
 LONG: 26  SHORT: 21  NO_TRADE: 1029  WAIT: 8  (all-time decision_evidence counts)
 Risk Reject: 6 (all SPOT_OVERSHORT on non-BTC symbols — correct protection)
 Execution Hold: 0 since final fixes
