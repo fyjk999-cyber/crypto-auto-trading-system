@@ -28,8 +28,13 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         instruments=None,
         feed: OKXPublicMarketFeed | None = None,
         feed_factory: Callable[[str], OKXPublicMarketFeed] | None = None,
+        order_id_namespace: str = "",
     ) -> None:
-        super().__init__(initial_balances=initial_balances, instruments=instruments)
+        super().__init__(
+            initial_balances=initial_balances,
+            instruments=instruments,
+            order_id_namespace=order_id_namespace,
+        )
         self.mapper = SymbolMapper()
         self._feed_factory = feed_factory or (lambda symbol: OKXPublicMarketFeed(symbol=symbol))
         primary_symbol = instruments[0].symbol if instruments else "BTCUSDT"

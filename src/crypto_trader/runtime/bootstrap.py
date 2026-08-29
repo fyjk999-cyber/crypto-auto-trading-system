@@ -7,6 +7,7 @@ Test/API/CLI must not each assemble a different core. They should call
 from __future__ import annotations
 
 import random
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -116,8 +117,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     # Paper is default. SimulatedExchangeAdapter implements the same contract
     # as a live adapter, so LIVE/PAPER/SHADOW share one core. PAPER_REAL_MARKET
     # uses credential-free OKX SWAP data; execution remains simulated.
+    # Per-process exchange-order-id namespace: the simulated exchange
+    # restarts its sequence every run while orders persist, and
+    # UNIQUE(orders.exchange_order_id) would collide without this.
+    adapter_order_id_namespace = f"p{uuid.uuid4().hex[:10]}-"
+
     if settings.paper_mode == "PAPER_REAL_MARKET":
         adapter = PaperRealMarketAdapter(
+            order_id_namespace=adapter_order_id_namespace,
             initial_balances={
                 settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
             },
@@ -129,6 +136,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         )
     else:
         adapter = SimulatedExchangeAdapter(
+            order_id_namespace=adapter_order_id_namespace,
             initial_balances={
                 settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
             },

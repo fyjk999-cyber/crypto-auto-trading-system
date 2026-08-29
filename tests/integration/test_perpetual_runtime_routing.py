@@ -539,3 +539,80 @@ async def test_reconciliation_ignores_perpetual_settlement_but_catches_spot_drif
     assert any(a.startswith("BALANCE_MISMATCH") for a in report.alerts)
     await bundle.engine.stop()
     await bundle.database.close()
+
+
+async def test_restart_does_not_collide_with_persisted_exchange_order_ids(database):
+    """A fresh simulated-exchange process must not reuse exchange_order_ids
+    that already exist in the persistent orders table (UNIQUE constraint),
+    which previously left every new order stuck at SUBMITTED."""
+    from datetime import UTC, datetime
+
+    from crypto_trader.domain.enums import OrderSide, OrderStatus, OrderType
+    from crypto_trader.domain.models import SignalIntent
+    from crypto_trader.persistence.models import OrderORM
+
+    # Seed an order row that an earlier process already persisted with the
+    # id the next fresh adapter would hand out (sim_1000).
+    async with database.session_factory() as session:
+        session.add(
+            OrderORM(
+                internal_order_id="ord_legacy_collision",
+                client_order_id="legacy",
+                symbol="ADAUSDT",
+                side="BUY",
+                order_type="MARKET",
+                time_in_force="GTC",
+                quantity="1",
+                filled_quantity="0",
+                status="REJECTED",
+                trading_mode="PAPER",
+                strategy_id="legacy",
+                market_type="SPOT",
+                position_side="FLAT",
+                reduce_only=False,
+                exchange_order_id="sim_1000",
+                run_id="run_legacy",
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_REAL_MARKET",
+        engine_tick_seconds=3600,
+        run_lease_renew_interval_seconds=3600,
+    )
+    bundle = await build_system(settings)
+    assert bundle.adapter.order_id_namespace  # namespaced per process
+    await bundle.engine.start()
+
+    fetched = await bundle.adapter.get_orderbook("ADAUSDT")
+    await bundle.market_data.ingest_snapshot(
+        "ADAUSDT", fetched.sequence,
+        [(Decimal("0.2"), Decimal("10"))],
+        [(Decimal("0.21"), Decimal("10"))],
+    )
+    decision = await bundle.engine.process_signal(
+        SignalIntent(
+            signal_id="sig_collide", strategy_id="test", symbol="ADAUSDT",
+            side=OrderSide.BUY, quantity="0.001", order_type=OrderType.MARKET,
+            reason="test",
+        )
+    )
+    assert decision.decision == ExecutionDecision.APPROVE
+    async with database.session_factory() as session:
+        row = await session.get(OrderORM, "ord_legacy_collision")
+        assert row.exchange_order_id == "sim_1000"  # untouched
+    await bundle.engine.wait_for_event_queue()
+    order = await bundle.order_manager.get_by_client("test_sig_collide")
+    assert order is not None and order.status == OrderStatus.FILLED
+    assert order.exchange_order_id != "sim_1000"
+    await bundle.engine.stop()
+    await bundle.database.close()

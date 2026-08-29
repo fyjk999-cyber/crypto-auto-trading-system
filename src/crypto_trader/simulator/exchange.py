@@ -40,6 +40,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         initial_balances: dict[str, Decimal] | None = None,
         instruments: list[Instrument] | None = None,
         fee_rate: Decimal = Decimal("0.001"),
+        order_id_namespace: str = "",
     ) -> None:
         self.balances: dict[str, Decimal] = {
             k: D(v) for k, v in (initial_balances or {"USDT": Decimal("100000")}).items()
@@ -53,6 +54,12 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self._handlers: dict[str, Callable[[ExchangeEvent], Awaitable[None]]] = {}
         self._sub_counter = 0
         self.next_exchange_order_id = 1000
+        # A fresh process restarts the sequence at 1000 while the persistent
+        # ledger/orders keep historical sim_N ids; without a per-process
+        # namespace the DB UNIQUE(exchange_order_id) would collide on the
+        # first order of every restart. The namespace is injected per run.
+        self.order_id_namespace: str = order_id_namespace
+
         self.event_log: list[ExchangeEvent] = []
 
         # chaos / fault injection hooks
@@ -188,7 +195,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         return Order(
             internal_order_id=raw.internal_order_id,
             client_order_id=raw.client_order_id,
-            exchange_order_id=f"sim_{self.next_exchange_order_id}",
+            exchange_order_id=f"sim_{self.order_id_namespace}{self.next_exchange_order_id}",
             symbol=raw.symbol,
             side=raw.side,
             order_type=raw.order_type,
