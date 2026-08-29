@@ -172,6 +172,10 @@ not an AI judgment error — AI reasoning itself was consistent.
 - Checkpoint 05:00Z: 2 new clean fills (UNI 4.384, TRX 0.33993), 104
   decisions (101 NO_TRADE / 2 LONG / 1 SHORT), 5 live_analysis all success,
   0 errors, overall OK.
+- Checkpoint 05:30Z: no fills (expected - 19/20 symbols hold open
+  positions; anti-pyramiding gates correctly prevent stacking). 100
+  NO_TRADE gate decisions, 0 errors, overall OK. BTC perp bridge time-stop
+  exit expected ~06:08Z (in-memory first_seen reset at 02:08 restart).
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

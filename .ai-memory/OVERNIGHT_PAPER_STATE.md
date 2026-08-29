@@ -30,6 +30,8 @@ Latest Learning Run: none yet (first Daily Review fires at configured window)
 Candidate Lessons: none (session just entered PHASE 2)
 Confirmed Lessons: see memory (CANDIDATE/VALIDATING/CONFIRMED lifecycle unchanged)
 Repeated Mistakes: none observed post-fix
+Expected: BTCUSDT_PERP bridge time-stop exit ~06:08Z (bridge first_seen reset at 02:08 restart; 4h from first evaluation). Watch for first realized-PnL outcome sample.
+
 Current Issues:
   - MAE/MFE tracking = NOT_AVAILABLE (documented; episodes carry mfe/mae columns, capture pending)
   - FIXED 03:05Z: market_data health flag stuck UNHEALTHY after transient LTC fetch error (tick path never cleared flag) - ef2cd42, runtime restarted, overall OK restored. LTC fail-closed gate itself worked correctly.
