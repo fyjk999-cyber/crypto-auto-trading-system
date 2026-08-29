@@ -2,7 +2,7 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T10:10Z (cron-2; quick re-fire after 10:05Z checkpoint, no delta)
+Latest Checkpoint: 2026-08-29T10:12Z (cron-2; covers the missed 10:06:50Z ADA fill)
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
@@ -45,6 +45,10 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 
 ## 2026-08-29T10:10Z quick re-fire (cron-2)
 - 3-minute window after the 10:05Z checkpoint: 0 new fills (total 55), 0 stuck orders, 0 risk decisions, 0 LLM rows, 0 audit errors. Health ALL OK, lease held, kill switch clear, TRADING_MODE=PAPER, single backend PID. Gate decisions continuing across the 30-symbol universe. No other section changes warranted.
+
+## 2026-08-29T10:12Z checkpoint (cron-2)
+- New fill caught between re-fires: ADAUSDT BUY 0.001 @0.1994 @10:06:50Z (real price, full lineage in REVIEW C). fills total 56; 0 stuck orders; 0 errors; health ALL OK; lease held; kill switch clear; TRADING_MODE=PAPER.
+- Watch: second consecutive strategy_fit_score=1.0 entry (OP 10:01, ADA 10:06) — evidence-adjusted fit appears to saturate at the ceiling when strategies align; does not gate trading legality (Risk/Authority unchanged) but flag for Daily Learning review.
 
 
 ## Latest Checkpoint: 2026-08-29T10:05Z (cron-2)
