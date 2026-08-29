@@ -126,3 +126,12 @@
 - Reason: THIRD consecutive clean window (no intra-5min flips); all re-entries are 3h+ lifecycle cycles or >12min flips = healthy cadence. ROLLBACK decision validated (churn resolved organically, baseline performs). LOW_SAMPLE_SIZE persists for other params
 - Expected effect: none; steady state. Next milestone: window 13+ monitors for churn recurrence only
 - Next review: 2026-08-29T23:30Z
+
+## 2026-08-29T23:30Z (Phase G window 13)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 11 / decisions 141 (4L/1S/136NT=96.5%) / fills 8 / rejects 0 / episodes 85 (+4)
+- PnL: RPNL 12h -0.2614 stable (21 rows); open 20
+- ACTION: HOLD
+- Changes: none
+- Reason: FOURTH consecutive clean window; churn gone; 4h TIME_STOP lifecycle functioning exactly as designed (TAO/AVAX/XLM/HBAR cycles closed at ~4h). Baseline steady state validated over 4 windows
+- Expected effect: none; steady state. Phase G parameter baseline confirmed; next-change triggers unchanged (churn recurrence or LOW_SAMPLE_SIZE clear)
+- Next review: 2026-08-30T00:00Z
