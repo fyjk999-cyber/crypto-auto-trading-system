@@ -42,3 +42,13 @@ Truth sources (never duplicate): data/crypto_trader.db tables
 (decision_evidence, llm_usage, risk_decisions, audit_events, orders, fills,
 ledger_transactions, positions_projection, ai_trade_episodes,
 trade_memory_records, daily reviews). This file is an INDEX ONLY.
+
+
+## Latest Checkpoint: 2026-08-29T10:05Z (cron-2)
+- Health: ALL OK; execution lease held (single backend PID); kill switch clear; TRADING_MODE=PAPER verified.
+- Incident closed: 09:18-09:26Z lease-loss (harness deleted active lease row) -> normal single-writer recovery; kill switch never bypassed; zero duplicates; recon 9/9 OK. Invariants in DECISIONS.md.
+- Expansion LIVE since ~09:36Z (bb4fa37): universe 30, 11 paper-perp contracts on one engine; new symbols observing (gate NO_TRADE rows legal); new-symbol decisions accumulating.
+- Defect found by observation + fixed (1da8fee): EXPLORATION_ENTRY (0.0005) failed PAPER perp precision (step 0.001) -> AUTHORITY fail-closed (correct); contract quantity_step now 1e-5 so legal exploration sizes pass; regression test added; deployed 09:58Z.
+- Fills since 09:30Z: TRXUSDT BUY 0.001 @0.33804 (09:43:08); OPUSDT BUY 0.001 @0.08775 (10:01:41). Both real market prices, full lineage. fills total 55, orders total 60; 0 stuck orders; 0 audit errors since 09:30Z.
+- LLM: 15 live_analysis calls 09:30-09:50Z, all success. Risk: 4 decisions (2 SPOT_OVERSHORT rejects = correct protection; 2 APPROVE). Open positions: 15.
+- Wins/Losses: no exits this window; realized PnL unchanged this window.
