@@ -54,6 +54,7 @@ class AIPositionRuntimeBridge:
         cooldown_seconds: float = 5.0,
         perpetual_engine=None,
         time_stop_seconds: float | None = None,
+        position_opened_at_provider=None,
     ) -> None:
         self.brain = brain or AITradingBrain()
         self.cooldown_seconds = cooldown_seconds
@@ -70,7 +71,17 @@ class AIPositionRuntimeBridge:
         # age is tracked in-memory from the first tick a position is seen open
         # (slight undercount; documented for PAPER v1).
         self.time_stop_seconds = time_stop_seconds
+        # Optional async (symbol, side) -> datetime | None: the REAL open
+        # time of the current position episode. Hydrating the time-stop age
+        # from it keeps the clock honest across process restarts (a restart
+        # must never silently grant positions a fresh holding window).
+        self.position_opened_at_provider = position_opened_at_provider
         self._first_seen_open: dict[str, datetime] = {}
+        self._missing_since: dict[str, datetime] = {}
+        # Reduce-only EXITs already applied but not yet observed flat: a
+        # later evaluation round (tick path AND supervisor 5s callback can
+        # interleave) must not fire a duplicate EXIT for the same symbol.
+        self._exit_in_flight: set[str] = set()
 
     def evaluate(
         self,
@@ -173,6 +184,8 @@ class AIPositionRuntimeBridge:
         seen_symbols: set[str] = set()
         for symbol, market_type, side, abs_quantity, entry_price, realized_pnl in candidates:
             seen_symbols.add(symbol)
+            if symbol in self._exit_in_flight:
+                continue
             await self._evaluate_one(
                 engine,
                 evaluations,
@@ -183,9 +196,21 @@ class AIPositionRuntimeBridge:
                 entry_price=entry_price,
                 realized_pnl=realized_pnl,
             )
-        # Positions no longer open: forget their age tracking.
-        for stale in set(self._first_seen_open) - seen_symbols:
-            self._first_seen_open.pop(stale, None)
+        # Positions no longer open: forget their age tracking. A transient
+        # empty/partial position read must NOT reset the time-stop clock for
+        # still-open positions, so a symbol is only forgotten after it has
+        # been continuously absent for a full grace window.
+        now_utc = datetime.now(UTC)
+        grace = max(60.0, float(self.cooldown_seconds or 0.0))
+        for symbol in set(self._first_seen_open) - seen_symbols:
+            missing_since = self._missing_since.setdefault(symbol, now_utc)
+            if (now_utc - missing_since).total_seconds() >= grace:
+                self._first_seen_open.pop(symbol, None)
+                self._missing_since.pop(symbol, None)
+        for symbol in seen_symbols:
+            self._missing_since.pop(symbol, None)
+        for symbol in set(self._exit_in_flight) - seen_symbols:
+            self._exit_in_flight.discard(symbol)
         return evaluations
 
     async def _evaluate_one(
@@ -235,7 +260,16 @@ class AIPositionRuntimeBridge:
         # §17 PAPER exploration time stop (checked before the AI brain so a
         # stale position exits even if the brain is unavailable).
         if self.time_stop_seconds is not None:
-            first_seen = self._first_seen_open.setdefault(symbol, datetime.now(UTC))
+            first_seen = self._first_seen_open.get(symbol)
+            if first_seen is None:
+                first_seen = None
+                if self.position_opened_at_provider is not None:
+                    try:
+                        first_seen = await self.position_opened_at_provider(symbol, side)
+                    except Exception:
+                        first_seen = None
+                first_seen = first_seen or datetime.now(UTC)
+                self._first_seen_open[symbol] = first_seen
             age_seconds = (datetime.now(UTC) - first_seen).total_seconds()
             if age_seconds >= self.time_stop_seconds:
                 close_side = "SELL" if side == "LONG" else "BUY"
@@ -257,6 +291,7 @@ class AIPositionRuntimeBridge:
                 )
                 self.last_decision[symbol] = "EXIT"
                 self.last_evaluation[symbol] = datetime.now(UTC).isoformat()
+                self._exit_in_flight.add(symbol)
                 self.decision_history.append(
                     {"symbol": symbol, "action": "EXIT", "reason": evaluation.reason,
                      "time_stop": True, "at": self.last_evaluation[symbol]}

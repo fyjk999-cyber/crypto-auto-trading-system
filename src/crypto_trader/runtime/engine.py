@@ -8,6 +8,7 @@ Market Event -> StrategyPlugin -> SignalIntent -> PreTrade Risk
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -126,9 +127,33 @@ class TradingEngine:
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
+        self.quarantined_fill_ids: set[str] = set()
 
     # ------------------------------------------------------------------ state
+    async def _load_quarantined_fill_ids(self) -> set[str]:
+        """Fills quarantined by an EVIDENCE_QUARANTINE audit event are
+        excluded from learning (trade_memory_records) while every raw audit
+        fact stays untouched. Best-effort: no rows means no quarantines."""
+        from sqlalchemy import text
+        try:
+            async with self.database.session_factory() as session:
+                result = await session.execute(
+                    text("SELECT after_json FROM audit_events WHERE action='EVIDENCE_QUARANTINE'")
+                )
+                rows = result.all()
+        except Exception:
+            return set()
+        quarantined: set[str] = set()
+        for row in rows:
+            try:
+                payload = json.loads(row[0] or '{}')
+                quarantined.update(payload.get('tainted_fill_ids') or [])
+            except Exception:
+                continue
+        return quarantined
+
     async def start(self, run_id: str | None = None) -> str:
+        self.quarantined_fill_ids = await self._load_quarantined_fill_ids()
         if self._running:
             return self.run_id
         self.run_id = run_id or new_id("run")
@@ -504,6 +529,18 @@ class TradingEngine:
             if market_type == MarketType.PERPETUAL
             else symbol
         )
+        # Pre-authorization refresh for THIS signal's symbol: every
+        # authorization path (strategy entries AND bridge reduce-only EXITs)
+        # must price against a fresh real book, not whatever stale state a
+        # previous tick happened to leave. Best-effort: a failed refresh
+        # keeps the previous book and the RiskEngine/ExecutionAuthority
+        # freshness gates still judge it (fail-closed semantics unchanged).
+        # Only real-market adapters refresh here: a simulated adapter may
+        # fabricate a seeded book on get_orderbook, which would substitute a
+        # synthetic price into authorization (the exact thing the no-fake-
+        # price rules forbid). Synthetic harnesses seed explicitly.
+        if hasattr(self.adapter, "refresh_market_state"):
+            await self._refresh_orderbook(reference_symbol)
         book = self.market_data.books.get(reference_symbol)
         market_price = D("0")
         if book is not None:
@@ -840,6 +877,8 @@ class TradingEngine:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return
+        if fill.fill_id in self.quarantined_fill_ids:
+            return
         try:
             persistence = MemoryPersistence(self.database.session_factory)
             await persistence.save_trade_memory(
@@ -869,13 +908,20 @@ class TradingEngine:
         position = await self.portfolio.get_position(fill.symbol)
         cost_released = None
         if order.side == OrderSide.SELL:
+            # avg_entry_price can be None on a legacy/partially-known
+            # position; fall back to the fill price so settlement never
+            # crashes on a None * Decimal multiplication (the reduce-only
+            # EXIT path depends on this settlement completing).
+            avg_entry = None
+            if position is not None:
+                avg_entry = position.avg_entry_price or fill.price
+            else:
+                avg_entry = fill.price
             if position is None or position.quantity < fill.quantity:
                 # conservative: use current average cost for the filled slice
-                cost_released = (
-                    position.avg_entry_price if position else Decimal("0")
-                ) * fill.quantity
+                cost_released = avg_entry * fill.quantity
             else:
-                cost_released = (position.avg_entry_price or Decimal("0")) * fill.quantity
+                cost_released = avg_entry * fill.quantity
         postings, metadata = build_trade_entries(
             side=order.side,
             symbol=order.symbol,

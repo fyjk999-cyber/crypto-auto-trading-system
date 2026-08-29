@@ -21,6 +21,7 @@ from crypto_trader.evolution.gateways.research_gateway import ResearchGateway
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.factors.service import FactorService
 from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
@@ -194,10 +195,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         finally:
             await client.disconnect()
 
+    factor_service = FactorService(database.session_factory)
     decision_context_provider = LiveDecisionContextProvider(
         candle_provider=_live_candle_provider,
         symbol=symbols[0],
         candle_cache_seconds=settings.opportunity_candle_cache_seconds,
+        # Directive P2: persist every decision-time factor snapshot so the
+        # fsnap_* ids referenced by decision evidence resolve after restart.
+        snapshot_persister=factor_service.save_snapshot,
     )
     opportunity_scanner = CheapOpportunityScanner(
         min_score=settings.opportunity_min_score,
@@ -257,6 +262,33 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
     chief_trader.perpetual_position_provider = _has_open_perpetual_position
 
+    async def _position_opened_at(symbol: str, side: str):
+        """Real open time of the current position episode, derived from the
+        latest entry-side fill for the symbol. Keeps the bridge time-stop
+        age honest across process restarts."""
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        from sqlalchemy import text
+
+        entry_side = "SELL" if str(side).upper() == "SHORT" else "BUY"
+        async with database.session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT MAX(timestamp) FROM fills "
+                        "WHERE symbol = :symbol AND side = :side"
+                    ),
+                    {"symbol": symbol, "side": entry_side},
+                )
+            ).first()
+        if row is None or row[0] is None:
+            return None
+        ts = _dt.fromisoformat(str(row[0]))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return ts
+
     bridge = AIPositionRuntimeBridge(
         perpetual_engine=perpetual_engine,
         time_stop_seconds=(
@@ -264,6 +296,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             if settings.exploration_mode_active
             else None
         ),
+        position_opened_at_provider=_position_opened_at,
     )
     factor_gateway = FactorToolGateway()
     daily_review_scheduler = DailyReviewScheduler(

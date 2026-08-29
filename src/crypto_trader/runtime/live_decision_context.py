@@ -36,9 +36,17 @@ class LiveDecisionContextProvider:
         symbol: str = "BTCUSDT",
         min_candles: int = 30,
         candle_cache_seconds: float = 10.0,
+        snapshot_persister=None,
     ) -> None:
-        """candle_provider: async (symbol) -> list[dict] oldest-first candles."""
+        """candle_provider: async (symbol) -> list[dict] oldest-first candles.
+
+        snapshot_persister: async (snapshot) ->  durable store hook so
+        every decision-time factor snapshot (fsnap_* id) stays replayable
+        after restart. Best-effort: persistence failure must never block a
+        decision.
+        """
         self.candle_provider = candle_provider
+        self.snapshot_persister = snapshot_persister
         self.factor_gateway = factor_gateway or FactorToolGateway()
         self.mapper = SymbolMapper()
         self.symbol = self.mapper.to_canonical(symbol)
@@ -104,6 +112,13 @@ class LiveDecisionContextProvider:
             candles=candles,
             market_data=market_data,
         )
+        if self.snapshot_persister is not None:
+            try:
+                await self.snapshot_persister(snapshot)
+            except Exception:
+                # Evidence durability is important but must not gate the
+                # decision itself; the AI decision path continues either way.
+                pass
         technical = calculate_technical_indicators(candles)
         factor_snapshot = snapshot.to_dict()
         factor_snapshot["technical_indicators"] = technical

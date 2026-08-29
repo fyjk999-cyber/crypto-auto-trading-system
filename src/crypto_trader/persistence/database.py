@@ -16,7 +16,22 @@ def create_db_engine(database_url: str, **kwargs) -> AsyncEngine:
         # Let concurrent readers/writers wait for the single-writer lock instead
         # of immediately raising "database is locked" under contention.
         kwargs.setdefault("connect_args", {"timeout": 30.0})
-    return create_async_engine(database_url, pool_pre_ping=True, **kwargs)
+    engine = create_async_engine(database_url, pool_pre_ping=True, **kwargs)
+    if database_url.startswith("sqlite"):
+        from sqlalchemy import event
+
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_connection, _record):
+            # WAL lets readers proceed while a writer holds the lock: the
+            # runtime's event loop, API reads, and harness queries no longer
+            # spuriously fail with 'database is locked'. busy_timeout adds a
+            # bounded retry for the remaining write-write contention.
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=10000")
+            cursor.close()
+
+    return engine
 
 
 class Database:
