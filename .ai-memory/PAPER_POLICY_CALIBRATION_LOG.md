@@ -10,3 +10,14 @@
 - ACTION: HOLD (baseline window - no changes until funnel metrics exist)
 - Reason: LOW_SAMPLE_SIZE on new policy params; establish baseline first (§29)
 - Expected effect: none; next review computes first real funnel deltas
+
+## 2026-08-29T17:30Z (first real funnel window)
+- Runtime: OK (PID 48151, zero restarts); Coverage: registry 2029 instruments live (SPOT 1383/SWAP 458/FUTURES 187); runtime still on FIXED universe (Phase C/D pending)
+- Funnel: observed ~20 (fixed list) / LLM calls 16 / decisions 145 (4L/1S/140 NT) / fills 7 / orders FILLED 10 / risk+exec no rejects / episodes 53
+- PnL: FUTURES_RPNL 12h cum -0.3939 (12 rows); spot+perp open 19 positions
+- Tool usage: n/a yet (Phase H)
+- ACTION: HOLD
+- Changes: none
+- Reason: first window on new policy params = LOW_SAMPLE_SIZE; 96.6% NO_TRADE is natural (no market edge claim), NOT under-trading bug - fills flowing, round-trips closing
+- Expected effect: baseline established; next windows watch re-entry frequency (DOGE/LINK twice each in-window - monitor, not yet abnormal) and NO_TRADE reason quality
+- Next review: 2026-08-29T18:00Z

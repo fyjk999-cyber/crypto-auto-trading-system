@@ -1,5 +1,6 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T17:30:00+00:00 (cron-7 deep checkpoint: all green - funnel 145 decisions/7 fills, episodes 53, dups 0, Phase G baseline HOLD; registry 2029 instruments; next Phase C/D)
 - Updated: 2026-08-29T17:30:00+00:00 (LONG GOAL Phase A+B complete: capability
   matrix from live OKX audit, dynamic instrument registry live with 2029
   instruments, resolver + batch endpoints, tests 7/7, commit 6b21658 pushed;
