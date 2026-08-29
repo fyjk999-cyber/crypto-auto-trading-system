@@ -16,3 +16,5 @@
 - 2026-08-28 (final smoke baseline 7b746df): uv run pytest 654 passed, 7 skipped,
   0 failed; ruff check . PASS; frontend 21 tests + typecheck + build PASS.
   LLM qualification 6/6 PASS live; paper smoke PASS (docs/PAPER_SMOKE_TEST_REPORT.md).
+
+- 2026-08-29T07:25:18+00:00: 734 passed / 7 skipped / 2 failed (pre-existing live-OKX, unrelated). Added test_exit_lifecycle.py (6): reduce-only time-stop EXIT through Risk+Execution, duplicate-EXIT guard, age hydration, snapshot persistence, settlement robustness.

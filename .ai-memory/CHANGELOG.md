@@ -11,3 +11,10 @@
   (commit 20a4db8): gateway+providers+secretstore+domain models+API+frontend,
   migrations 0016/0017, harness takeover audit docs, harness repair fixes
   (schema-anchored prompts, route readiness gate, decision interval).
+
+## 8d6f505 - 2026-08-29T07:25:18+00:00 - P1 position lifecycle + P2 snapshot durability
+- process_signal refreshes reference book per signal (real-market adapters only)
+- bridge time-stop age hydrates from real position open time; grace-based stale cleanup; EXIT in-flight guard
+- reduce-only settlement survives None avg entry
+- factor snapshots persisted at decision time; EVIDENCE_QUARANTINE enforced for learning
+- SQLite WAL + busy_timeout

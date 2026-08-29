@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-29T06:00:00+00:00 (checkpoint cron-2: still fully position-gated, no fills; BTC perp open, exit window approaching; health OK)
+- Updated: 2026-08-29T07:25:18+00:00 (supervisor P1/P2 RESOLVED 8d6f505: reduce-only time-stop EXITs close positions through Risk+Execution at real prices; positions 19->8, remaining exit 07:31-08:51Z; factor_snapshots persisted; ETH legacy quarantined; WAL enabled; health OK)
 - **PHASE 2  OVERNIGHT LONG-RUN PAPER OBSERVATION MODE**
 - FIRST_AI_PAPER_FILL = YES
 - PAPER_TRADE_E2E_READY = YES (PHASE 1 milestone; see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md)
