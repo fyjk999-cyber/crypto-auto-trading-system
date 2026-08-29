@@ -79,3 +79,13 @@
 - Reason: orderly window; 5 symbols; direction-flip re-entries (XRP) now 2 total but non-consecutive windows -> trigger NOT met (needs 2+ consecutive). LOW_SAMPLE_SIZE persists
 - Expected effect: none; watch XRP/ADA flip pattern next window
 - Next review: 2026-08-29T21:00Z
+
+## 2026-08-29T21:00Z (Phase G window 8)
+- Runtime: OK; Coverage: registry 2029 (runtime fixed-universe; Phase C/D pending)
+- Funnel: LLM 18 / decisions 142 (2L/2S/138NT=97.2%) / fills 4 / rejects 0 / episodes 69 (+4)
+- PnL: RPNL 12h -0.7172 unchanged; open 23
+- ACTION: HOLD (with active CONTRACT trigger pending)
+- Changes: none
+- Reason: direction-flip re-entries now in 3rd window (SOL 20:20 SELL -> 20:32 BUY; TRX 19:45 SELL -> 20:40 BUY = 55min gap, not intra-5min churn). Pattern is cross-window re-entry at market-reasonable prices - characteristic of TIME_STOP 4h cycle recycling. NOT yet abnormal turnover (fills/hour ~8, fees tiny). If window 9 shows intra-5min flip churn -> CONTRACT: cooldown 240->300s (bounded +60s, sec.26)
+- Expected effect: none now; pre-staged CONTRACT decision for next window
+- Next review: 2026-08-29T21:30Z
