@@ -2,7 +2,10 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T15:15Z
+Latest Checkpoint: 2026-08-29T15:31Z (cron-5 deep)
+Open positions: 14 spot + 2 perp (BTC_PERP LONG 0.0005, XLM_PERP LONG 0.0005)
+Since 15:14Z: risk 3 APPROVE / 0 REJECT; 1 live_analysis; FUTURES_REALIZED_PNL cum 10 rows -0.503194 gross
+Episodes 46 (12 WIN / 34 LOSS), all TIME_STOP; zero errors since 15:14Z
 Fills 13:35Z-15:14Z: 15 (9 exits incl 7 TIME_STOP + 6 entries; all REAL OKX prices)
 Risk: 15 APPROVE / 2 REJECT; LLM live_analysis 13; decisions 65 LONG / 44 SHORT / 3069 NO_TRADE
 FUTURES_REALIZED_PNL cumulative: 8 rows, gross sum -0.50328 USDT
