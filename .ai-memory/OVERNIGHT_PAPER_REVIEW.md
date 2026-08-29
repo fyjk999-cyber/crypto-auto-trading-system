@@ -26,4 +26,10 @@ C) Fill lineages:
   - Spot legacy continues: NEARUSDT BUY @1.796 @10:36:28, UNIUSDT BUY @4.374 @11:00:21 (lineage in DB; spot path unchanged).
 N) UNI 11:00 pair: SPOT_OVERSHORT reject then legal LONG approve (protection + retry working as designed). Bridge time-stop exits for the new perp positions will fire at their own 4h anniversaries — next windows to watch.
 
+### 2026-08-29T11:30Z (cron-2) — AI cycle closed on exact 4h anniversary
+A) Runtime HEALTHY/PAPER ACTIVE; all components OK; lease held; kill switch clear; single backend PID.
+C) Fill lineage: LINKUSDT SELL 0.001 @11.326 @11:25Z | bridge time-stop exit (client ai_brain_ai_LINKUSDT_1788002750248) | risk risk_0af8f2ac54134337bd55fd20f1bfb865 APPROVE | closes the 07:25Z AI re-entry @11.32 at its EXACT 4h anniversary (entry->exit loop on schedule; result-aware EXIT path quiet, no retry storm, no duplicates).
+N) Next: 8 new-symbol perp positions (opened 10:13-11:24Z) reach their own 4h anniversaries ~14:13-15:24Z — the next exit-wave windows to observe.
+
+
 
