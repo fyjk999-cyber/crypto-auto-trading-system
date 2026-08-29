@@ -117,3 +117,12 @@
 - Reason (pre-declared trigger met exactly): window 11 is the SECOND consecutive clean window (no intra-5min flips; SUI/AAVE re-entries are 3-3.4h lifecycle cycles); churn resolved organically without parameter change -> tightening would be unjustified. LLM calls stable-low (10). PnL improved and stable
 - Expected effect: none (baseline restored); monitor for churn recurrence - if it returns 2 consecutive windows, re-stage CONTRACT
 - Next review: 2026-08-29T23:00Z
+
+## 2026-08-29T23:00Z (Phase G window 12)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 11 / decisions 143 (3L/2S/138NT=96.5%) / fills 5 / rejects 0 / episodes 81 (+2)
+- PnL: RPNL 12h -0.2613 (stable); open 20
+- ACTION: HOLD (baseline 240 confirmed post-rollback)
+- Changes: none
+- Reason: THIRD consecutive clean window (no intra-5min flips); all re-entries are 3h+ lifecycle cycles or >12min flips = healthy cadence. ROLLBACK decision validated (churn resolved organically, baseline performs). LOW_SAMPLE_SIZE persists for other params
+- Expected effect: none; steady state. Next milestone: window 13+ monitors for churn recurrence only
+- Next review: 2026-08-29T23:30Z
