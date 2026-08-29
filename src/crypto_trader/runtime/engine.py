@@ -8,6 +8,7 @@ Market Event -> StrategyPlugin -> SignalIntent -> PreTrade Risk
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -67,6 +68,8 @@ from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
+
+logger = logging.getLogger("crypto_trader.engine")
 
 
 class TradingEngine:
@@ -225,6 +228,9 @@ class TradingEngine:
                 await self.process_exchange_event(event)
             except Exception:
                 self.health.set("event_processing", False, "unhandled event error")
+                logger.exception(
+                    "EVENT_PROCESSING_FAILED type=%s", type(event.event_type).name
+                )
             finally:
                 self._event_queue.task_done()
 
