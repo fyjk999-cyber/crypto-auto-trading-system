@@ -8,6 +8,7 @@
   ord_6a07813a44df44b3b471ebedea407b16 / fill
   fill_8396534b10d74e25843509a357d6e0ab @ 77753.05 REAL OKX price
   (BTCUSDT_PERP LONG 0.001, fee 0.038876525) / ledger txn_467ed207928443e98aa35a09.
+- NEW_RUNTIME_BASELINE_SHA = 129317ab34617308ba5efe125707c7809bb3df72
 - Runtime live: PAPER_REAL_MARKET, OKX REAL feeds healthy (age 0s), recon ok,
   overall OK, LLM_PROVIDER_RUNTIME_VALIDATED=YES.
 - Anti-pyramiding: symbol-scoped perp gate restored in AI-first path
