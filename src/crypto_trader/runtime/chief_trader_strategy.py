@@ -115,7 +115,10 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # provider is wired in bootstrap after PerpetualPaperEngine exists.
         self.perpetual_position_provider = perpetual_position_provider
         self.evidence_persist_failures = 0
-        self._last_entry_initiated_at: float | None = None
+        # P1 correction (CS-20260829-125002-P1-MULTISYMBOL-AUTHORITY): the
+        # entry cooldown is SYMBOL-SCOPED. A trade in symbol A must never
+        # preempt the Chief Trader decision for symbol B.
+        self._last_entry_initiated_at: dict[str, float] = {}
         # Entry-path invocation bound: market data ticks arrive far more often
         # than a Chief Trader decision is needed. Existing-position safety
         # (reduce/exit/stop) does NOT depend on this interval: it lives in the
@@ -305,18 +308,21 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 )
 
         # §13 HARD GATE: separate entry cooldown (distinct from the ~60s LLM
-        # evaluation cadence) bounds how often NEW entries may be initiated.
+        # evaluation cadence) bounds how often NEW entries may be initiated
+        # PER SYMBOL (P1: symbol-scoped, not global).
         now_monotonic = time.monotonic()
+        last_entry_for_symbol = self._last_entry_initiated_at.get(ctx.symbol)
         if (
-            self._last_entry_initiated_at is not None
-            and now_monotonic - self._last_entry_initiated_at < self.entry_cooldown_seconds
+            last_entry_for_symbol is not None
+            and now_monotonic - last_entry_for_symbol < self.entry_cooldown_seconds
         ):
             decision = self._gate_decision(
                 chief_ctx,
                 reason_code="ENTRY_COOLDOWN_ACTIVE",
                 thesis=(
-                    "Entry skipped: last entry "
-                    f"{now_monotonic - self._last_entry_initiated_at:.0f}s ago, "
+                    "Entry skipped: last "
+                    f"{ctx.symbol} entry "
+                    f"{now_monotonic - last_entry_for_symbol:.0f}s ago, "
                     f"cooldown {self.entry_cooldown_seconds:.0f}s"
                 ),
             )
@@ -376,7 +382,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # (signal_id -> client_order_id join enables outcome attribution).
         signals = self._map_to_signals(decision, ctx, chief_ctx)
         if signals:
-            self._last_entry_initiated_at = now_monotonic
+            self._last_entry_initiated_at[ctx.symbol] = now_monotonic
         await self._persist_evidence(
             decision, ctx, chief_ctx,
             execution_reference=signals[0].signal_id if signals else "",

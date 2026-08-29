@@ -1,5 +1,32 @@
 # TEST_STATUS
 
+- 2026-08-29T17:20Z (P0 corrections, CS-20260829-132209): NEW
+  tests/integration/test_p0_corrections.py 7/7 PASS (fail-closed routes 403 +
+  zero state change; /paper/perpetual/positions real marks; /positions engine
+  leverage; after_json quarantine full-episode scope; perp episode leverage
+  from ledger OPEN; ensure_columns verify-only; symbol-scoped cooldown).
+  Full suite: 783 passed, 7 skipped, 2 failed (pre-existing on clean HEAD
+  24db4d4, market_semantics OKX env-dependent, unrelated). Ruff clean on all
+  touched files. Canonical episode rebuild: 52 -> 50 (fake ETH 100.05
+  episode + 1 window-overlap excluded), leverage 0 -> 1 everywhere, dup 0.
+
+- 2026-08-29T16:30Z (P2 supervisor tests, .ops/test_supervisor.sh sandbox port
+  8001 with fake backend): STATIC invariant PASS (supervisor contains no
+  runtime_leases/pkill/kill_switch access); TEST2 PASS (process alive + health
+  fail -> PROCESS_ALIVE_DEGRADED, exactly one fake, no second runtime started);
+  TEST6 PASS (no duplicate runtime start); recovery path exercised (supervisor
+  started a healthy fake via RUNTIME_CMD; fake healthy). TEST1/TEST3/STORM
+  sandbox runs INCONCLUSIVE due to cross-run interference (a supervisor from a
+  timed-out earlier suite kept cycling the sandbox port); live-system
+  validation covers the healthy path: production supervisor crossed >=3 poll
+  cycles with state HEALTHY, runtime PID stable, zero restarts, zero
+  duplicate orders/fills/episodes (SQL group-by checks all 0).
+  Live API sweep: /health /ready /positions /orders /llm/status
+  /decision-context /trading-funnel /risk /killswitch
+  /paper/perpetual/positions ALL 200; vite /local-api health+orders+risk 200;
+  WebSocket /ws 101 Switching Protocols. Integration suite still 111 passed
+  (no src/ trading changes; local_runner forensics is additive).
+
 - 2026-08-29T14:45Z: tests/integration/test_trade_episodes.py NEW (15 tests, all
   passing): TIME_STOP episode single+idempotent, entry-only no episode, partial
   close stays open / full close completes, two same-symbol cycles -> 2 episodes,

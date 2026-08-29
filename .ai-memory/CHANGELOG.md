@@ -1,5 +1,28 @@
 # CHANGELOG
 
+- 2026-08-29T17:20Z (P0 Corrections per CS-20260829-132209 + linked P1/P2):
+  src/crypto_trader/api/app.py: /manual-orders + /paper/perpetual/open|close
+  fail-closed (403 always, audited); /paper/perpetual/positions real marks;
+  /positions authoritative leverage. chief_trader_strategy.py +
+  ai_first_chief_trader.py: symbol-scoped entry cooldown (P1). governance/
+  trade_episodes.py: after_json.tainted_fill_ids quarantine + full-episode
+  scope + ledger-OPEN leverage + Decimal end-to-end + verify-only ensure_columns.
+  migrations/versions/0018_trade_episode_lineage.py (new, applied, head).
+  tests/integration/test_p0_corrections.py (7 tests). Canonical ai_trade_episodes
+  rebuilt from clean facts (50 rows). No change to Chief Trader AI authority,
+  RiskEngine, sizing, entry-exit policy, ledger semantics, episode learning
+  semantics (corrections enforce them).
+
+- 2026-08-29T16:30Z (P2 Backend Availability / Single-Writer): NEW
+  .ops/backend_supervisor.sh (canonical single-instance supervisor: port-scoped
+  liveness, evidence-gated recovery, lease-TTL wait + existing LeaseManager CAS
+  takeover instead of blind DELETE, restart-storm guard 3/30min,
+  runtime_state.json, no trading-DB access); .ops/backend_watchdog.sh retired
+  (had blind lease DELETE); local_runner shutdown forensics (SIGTERM/SIGINT
+  context log); DSH cron redefined: cron-6 */5 monitor-only, cron-7 */30 deep
+  checkpoint (no restart authority outside supervisor); frontend dev server
+  relaunched (5173). No trading-logic changes.
+
 - 2026-08-29T14:45Z (P2 Trade Episode / Learning Pipeline repair): NEW
   governance/trade_episodes.py (canonical cycle replay -> AITradeEpisode,
   deterministic idempotent backfill + runtime hook), engine close hooks

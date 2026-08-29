@@ -12,12 +12,40 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
+import signal
+import time
 
 import uvicorn
 
 from crypto_trader.api.app import create_app
 from crypto_trader.config import Settings
 from crypto_trader.runtime.bootstrap import build_system
+
+_START_TS = time.time()
+
+
+def _write_shutdown_forensics(reason: str) -> None:
+    """Ops observability only: record who stopped us and in what state.
+
+    No secrets, no trading-state mutation. Best-effort; never raises.
+    """
+    try:
+        ops_dir = os.path.join(os.getcwd(), ".ops")
+        os.makedirs(ops_dir, exist_ok=True)
+        entry = {
+            "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reason": reason,
+            "pid": os.getpid(),
+            "ppid": os.getppid(),
+            "uptime_seconds": round(time.time() - _START_TS, 1),
+            "mode": os.environ.get("TRADING_MODE", "PAPER"),
+        }
+        with open(os.path.join(ops_dir, "shutdown_forensics.log"), "a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +63,11 @@ async def main_async(host: str, port: int) -> None:
     app = create_app(bundle.app_state)
     config = uvicorn.Config(app, host=host, port=port, log_level=settings.log_level.lower())
     server = uvicorn.Server(config)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _write_shutdown_forensics, f"signal:{sig.name}")
+
     await server.serve()
 
 

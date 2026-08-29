@@ -114,17 +114,21 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
                 return []
 
         # Temporal safety remains distinct from quant judgement.
+        # P1 correction: cooldown is SYMBOL-SCOPED (a trade in symbol A must
+        # not preempt the decision for symbol B).
         now_monotonic = time.monotonic()
+        last_entry_for_symbol = self._last_entry_initiated_at.get(ctx.symbol)
         if (
-            self._last_entry_initiated_at is not None
-            and now_monotonic - self._last_entry_initiated_at < self.entry_cooldown_seconds
+            last_entry_for_symbol is not None
+            and now_monotonic - last_entry_for_symbol < self.entry_cooldown_seconds
         ):
             decision = self._gate_decision(
                 chief_ctx,
                 reason_code="ENTRY_COOLDOWN_ACTIVE",
                 thesis=(
-                    "Entry skipped: last entry "
-                    f"{now_monotonic - self._last_entry_initiated_at:.0f}s ago, "
+                    "Entry skipped: last "
+                    f"{ctx.symbol} entry "
+                    f"{now_monotonic - last_entry_for_symbol:.0f}s ago, "
                     f"cooldown {self.entry_cooldown_seconds:.0f}s"
                 ),
             )
@@ -140,7 +144,7 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
 
         signals = self._map_to_signals(decision, ctx, chief_ctx)
         if signals:
-            self._last_entry_initiated_at = now_monotonic
+            self._last_entry_initiated_at[ctx.symbol] = now_monotonic
         await self._persist_evidence(
             decision,
             ctx,

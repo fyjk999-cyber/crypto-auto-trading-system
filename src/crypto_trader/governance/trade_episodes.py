@@ -42,15 +42,103 @@ class Cycle:
 
 
 def _quarantined_fill_ids_sync(conn) -> set[str]:
+    """Collect tainted fill ids from ALL durable quarantine representations.
+
+    P2 correction (CS-20260829-135700-P2-EPISODE-MAPPING): historical
+    quarantine rows may store the tainted fill ids inside
+    ``after_json.tainted_fill_ids`` (a JSON list) instead of the ``target``
+    column. Both representations must be honored, otherwise a synthetic
+    quarantined entry (e.g. the ETH 100.05 sample) leaks into episodes.
+    """
     cur = conn.execute(
-        "SELECT target FROM audit_events WHERE action = 'EVIDENCE_QUARANTINE'"
+        "SELECT target, after_json FROM audit_events WHERE action = 'EVIDENCE_QUARANTINE'"
     )
     out: set[str] = set()
     for r in cur.fetchall():
         target = str(r[0] or "")
         if target.startswith("fill_"):
             out.add(target)
+        raw = r[1] if len(r) > 1 else None
+        if raw:
+            try:
+                after = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(after, dict):
+                continue
+            for fid in after.get("tainted_fill_ids") or []:
+                fid = str(fid or "")
+                if fid.startswith("fill_"):
+                    out.add(fid)
+            # also accept direct references under other common keys
+            for key in ("fill_id", "target_fill_id"):
+                fid = str(after.get(key) or "")
+                if fid.startswith("fill_"):
+                    out.add(fid)
     return out
+
+
+def _ts_in_window(entry_ts: str, exit_ts: str, w_start, w_end) -> bool:
+    """True if the quarantine event time falls within [entry_ts, exit_ts].
+
+    Tolerant of the two canonical timestamp formats (fills/orders/audit
+    events use 'YYYY-MM-DD HH:MM:SS' SPACE format; evidence uses ISO 'T').
+    """
+    try:
+        from datetime import datetime as _dt
+
+        def _p(v):
+            s = str(v or "").replace("T", " ")
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    return _dt.strptime(s.split("+")[0].strip(), fmt)
+                except ValueError:
+                    continue
+            return None
+
+        e, x, a = _p(entry_ts), _p(exit_ts), _p(w_start)
+        if e is None or x is None:
+            return False
+        if a is None:
+            return False
+        return e <= a <= x
+    except Exception:
+        return False
+
+
+    """Derive one learning episode from a completed closed-trade cycle."""
+
+
+def _quarantine_windows_sync(conn) -> list[tuple[str, object, object]]:
+    """Per-symbol time windows that contain a quarantined fill.
+
+    Full-episode quarantine scope: any episode whose entry/exit timestamps
+    span a window containing a tainted fill for that symbol is excluded even
+    if the tainted fill itself is not a member of the cycle (prevents mixed
+    pre/post-quarantine episodes).
+    """
+    cur = conn.execute(
+        "SELECT target, after_json, timestamp FROM audit_events "
+        "WHERE action = 'EVIDENCE_QUARANTINE'"
+    )
+    windows: list[tuple[str, object, object]] = []
+    for r in cur.fetchall():
+        target = str(r[0] or "")
+        ts = r[2]
+        sym: str | None = None
+        if target and not target.startswith("fill_"):
+            sym = target  # direct symbol-targeted quarantine
+        raw = r[1]
+        if raw:
+            try:
+                after = json.loads(raw) if isinstance(raw, str) else (raw or {})
+            except (TypeError, ValueError):
+                after = {}
+            if isinstance(after, dict):
+                sym = sym or after.get("symbol")
+        if sym:
+            windows.append((str(sym), ts, ts))
+    return windows
 
 
 def _parse_ts(value) -> datetime | None:
@@ -242,34 +330,77 @@ def cycle_episode(cycle: Cycle, ledger_realized: dict[str, tuple[str, str]]) -> 
 
 
 def ensure_columns(conn) -> list[str]:
-    """Idempotent minimal schema extension for learning lineage."""
+    """VERIFY ONLY - runtime DDL is prohibited.
+
+    P2 correction (CS-20260829-135700-P2-EPISODE-MAPPING): the episode
+    lineage columns are owned by the versioned migration
+    ``0018_trade_episode_lineage``. The runtime must never ALTER the
+    canonical schema; it verifies presence and fails loudly otherwise so the
+    operator runs ``alembic upgrade head``.
+    Returns [] always; raises RuntimeError if the schema is missing columns.
+    """
     have = {r[1] for r in conn.execute("PRAGMA table_info(ai_trade_episodes)").fetchall()}
-    added: list[str] = []
-    for name, ddl in (
-        (
-            "market_type",
-            "ALTER TABLE ai_trade_episodes ADD COLUMN market_type "
-            "VARCHAR(16) NOT NULL DEFAULT 'SPOT'",
-        ),
-        (
-            "direction",
-            "ALTER TABLE ai_trade_episodes ADD COLUMN direction "
-            "VARCHAR(8) NOT NULL DEFAULT 'LONG'",
-        ),
-        ("exit_reason", "ALTER TABLE ai_trade_episodes ADD COLUMN exit_reason VARCHAR(32)"),
-        ("lineage_json", "ALTER TABLE ai_trade_episodes ADD COLUMN lineage_json JSON"),
-        ("gross_pnl", "ALTER TABLE ai_trade_episodes ADD COLUMN gross_pnl DECIMAL(30,12)"),
-        ("fees", "ALTER TABLE ai_trade_episodes ADD COLUMN fees DECIMAL(30,12)"),
-        ("net_pnl", "ALTER TABLE ai_trade_episodes ADD COLUMN net_pnl DECIMAL(30,12)"),
-    ):
-        if name not in have:
-            conn.execute(ddl)
-            added.append(name)
-    return added
+    required = {
+        "market_type",
+        "direction",
+        "exit_reason",
+        "lineage_json",
+        "gross_pnl",
+        "fees",
+        "net_pnl",
+    }
+    missing = required - have
+    if missing:
+        raise RuntimeError(
+            "ai_trade_episodes missing columns "
+            f"{sorted(missing)}; run `alembic upgrade head` "
+            "(migration 0018_trade_episode_lineage). Runtime DDL is prohibited."
+        )
+    return []
 
 
-def persist_episode_sync(conn, episode: dict, exit_reason: str, lineage: dict) -> str:
-    """Insert one episode row. Returns 'inserted' or 'exists' (idempotent)."""
+def _perp_leverage_by_symbol_sync(conn) -> dict[str, Decimal]:
+    """Authoritative engine leverage per perpetual symbol.
+
+    Reads the FuturesLedger OPEN rows (metadata.action == 'OPEN'), which
+    carry the engine-recorded leverage. Falls back to nothing - callers use
+    Decimal('1') for SPOT and must never persist leverage '0'.
+    """
+    cur = conn.execute(
+        "SELECT metadata_json FROM ledger_transactions WHERE metadata_json "
+        "LIKE '%\"action\"%' ORDER BY transaction_id ASC"
+    )
+    out: dict[str, Decimal] = {}
+    for (meta_raw,) in cur.fetchall():
+        if not meta_raw:
+            continue
+        try:
+            meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(meta, dict) or meta.get("action") != "OPEN":
+            continue
+        sym = meta.get("symbol")
+        lev = meta.get("leverage")
+        if sym and lev is not None:
+            try:
+                lev_d = D(str(lev))
+            except Exception:
+                continue
+            if lev_d > 0:
+                out[str(sym)] = lev_d
+    return out
+
+
+def persist_episode_sync(
+    conn, episode: dict, exit_reason: str, lineage: dict, leverage: Decimal | None = None
+) -> str:
+    """Insert one episode row. Returns 'inserted' or 'exists' (idempotent).
+
+    All numerics are bound as exact Decimal strings; ``leverage`` is the
+    authoritative engine/ledger value (never '0'; SPOT defaults to 1).
+    """
+    lev = str(leverage if leverage is not None and leverage > 0 else D("1"))
     row = conn.execute(
         "SELECT 1 FROM ai_trade_episodes WHERE episode_id = ?",
         (episode["episode_id"],),
@@ -280,12 +411,12 @@ def persist_episode_sync(conn, episode: dict, exit_reason: str, lineage: dict) -
             "UPDATE ai_trade_episodes SET entry_price=?, exit_price=?, "
             "position_size=?, holding_time_seconds=?, pnl=?, gross_pnl=?, "
             "fees=?, net_pnl=?, result=?, market_type=?, direction=?, "
-            "exit_reason=?, lineage_json=? WHERE episode_id=?",
+            "exit_reason=?, lineage_json=?, leverage=? WHERE episode_id=?",
             (
                 str(episode["entry_price"]),
                 str(episode["exit_price"]),
                 str(episode["position_size"]),
-                float(episode["holding_time_seconds"]),
+                str(episode["holding_time_seconds"]),
                 str(episode["net_pnl"]),
                 str(episode["gross_pnl"]),
                 str(episode["fees"]),
@@ -295,6 +426,7 @@ def persist_episode_sync(conn, episode: dict, exit_reason: str, lineage: dict) -
                 episode["direction"],
                 exit_reason,
                 json.dumps(lineage, default=str),
+                lev,
                 episode["episode_id"],
             ),
         )
@@ -315,8 +447,8 @@ def persist_episode_sync(conn, episode: dict, exit_reason: str, lineage: dict) -
             str(episode["entry_price"]),
             str(episode["exit_price"]),
             str(episode["position_size"]),
-            "0",
-            float(episode["holding_time_seconds"]),
+            lev,
+            str(episode["holding_time_seconds"]),
             str(episode["net_pnl"]),
             "0",
             "0",
@@ -361,8 +493,10 @@ def record_all_cycles_sync(db_path: str, symbols: list[str] | None = None) -> di
     try:
         added_cols = ensure_columns(conn)
         quarantined = _quarantined_fill_ids_sync(conn)
+        quarantine_windows = _quarantine_windows_sync(conn)
         ledger_realized = _ledger_realized_by_order(conn)
         ai_exit_intents = _ai_exit_intents_sync(conn)
+        perp_leverage = _perp_leverage_by_symbol_sync(conn)
         if symbols is None:
             symbols = [
                 r[0] for r in conn.execute("SELECT DISTINCT symbol FROM fills").fetchall()
@@ -408,6 +542,24 @@ def record_all_cycles_sync(db_path: str, symbols: list[str] | None = None) -> di
                 ep = cycle_episode(cycle, ledger_realized)
                 if ep is None:
                     continue
+                # Full-episode quarantine scope (P2): exclude the ENTIRE
+                # episode if any tainted fill id intersects it, or if a
+                # symbol-targeted quarantine window overlaps the episode
+                # span (no mixed pre/post-quarantine learning evidence).
+                if (set(ep["entry_fill_ids"]) | set(ep["exit_fill_ids"])) & quarantined:
+                    continue
+                tainted_window = any(
+                    wsym == symbol
+                    and _ts_in_window(str(ep["entry_timestamp"]), str(ep["exit_timestamp"]), w0, w1)
+                    for wsym, w0, w1 in quarantine_windows
+                )
+                if tainted_window:
+                    continue
+                lev = (
+                    perp_leverage.get(symbol)
+                    if ep["market_type"] == "PERPETUAL"
+                    else D("1")
+                )
                 exit_reason = _exit_reason_for(
                     cycle.exit_fills,
                     ai_exit_intents,
@@ -430,7 +582,7 @@ def record_all_cycles_sync(db_path: str, symbols: list[str] | None = None) -> di
                     "mae": "NOT_AVAILABLE",
                     "mfe": "NOT_AVAILABLE",
                 }
-                status = persist_episode_sync(conn, ep, exit_reason, lineage)
+                status = persist_episode_sync(conn, ep, exit_reason, lineage, leverage=lev)
                 if status == "inserted":
                     inserted += 1
                     details.append(

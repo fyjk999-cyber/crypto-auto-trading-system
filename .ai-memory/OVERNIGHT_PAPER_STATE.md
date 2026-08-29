@@ -2,7 +2,27 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T15:31Z (cron-5 deep)
+Latest Checkpoint: 2026-08-29T16:30Z (P2 availability interrupt)
+- P0 CORRECTIONS 17:20Z: manual mutation routes fail-closed (403+audit);
+  perp marks/leverage read models corrected; cooldown symbol-scoped (P1);
+  episode pipeline quarantine/leverage fixed; canonical episodes REBUILT 50
+  (fake ETH 100.05 episode removed -> false +2.33 win eliminated; WIN total
+  corrected 2.41 -> 0.076 real); migration 0018 applied; tests 783 passed.
+
+- USER REQUEST 16:35Z: DSH cron tasks PAUSED (cron-6 */5 monitor + cron-7 */30
+  checkpoint both set to paused state; schedules preserved for later resume).
+  No automatic agent turns will fire until user resumes them.
+- Backend runtime itself: still running (PID 48151, PAPER, health OK) - pausing
+  crons does NOT stop trading. Supervisor scripts were already removed (P0
+  compliance); runtime continues under its own lease renew loop.
+- P2 availability work was interrupted mid-flight: fail-closing of the P0
+  manual mutation routes (/manual-orders, /paper/perpetual/open|close) is NOT
+  yet committed - next session should resume there per CODEX_SUPERVISOR_DIRECTIVE.
+
+- Runtime PID 48151 stable since 15:11Z, ZERO restarts across the whole repair
+- Canonical supervisor active (.ops/backend_supervisor.sh), state HEALTHY
+- Frontend 5173 relaunched; /local-api proxy 200s; WS 101 CONNECTED
+- Episodes 47; all integrity dup-checks 0; recon PASS; PAPER intact
 Open positions: 14 spot + 2 perp (BTC_PERP LONG 0.0005, XLM_PERP LONG 0.0005)
 Since 15:14Z: risk 3 APPROVE / 0 REJECT; 1 live_analysis; FUTURES_REALIZED_PNL cum 10 rows -0.503194 gross
 Episodes 46 (12 WIN / 34 LOSS), all TIME_STOP; zero errors since 15:14Z

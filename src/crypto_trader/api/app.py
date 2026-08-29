@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -19,7 +19,6 @@ from crypto_trader.api.market_analysis import create_market_analysis_router
 from crypto_trader.config import get_settings
 from crypto_trader.credentials import EnvCredentialStore
 from crypto_trader.domain.enums import OrderSide, OrderStatus
-from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.binance_futures_public import (
     BinancePublicDataUnavailable,
     BinanceUSDMFuturesPublicClient,
@@ -30,7 +29,7 @@ from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
 from crypto_trader.llm_runtime.contracts import ModelRoute, ProviderUpsert
-from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
+from crypto_trader.perpetual.domain import PerpetualContract
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.execution_symbols import reference_symbol_for
@@ -140,12 +139,12 @@ async def _positions_view(state: AppState) -> dict[str, dict]:
                         else "NOT_AVAILABLE"
                     ),
                     "leverage": (
-                        str(
-                            abs(position.quantity)
-                            * position.avg_entry_price
-                            / position.initial_margin
-                        )
-                        if position.initial_margin
+                        # P2 correction (CS-20260829 directive item 6): the
+                        # authoritative leverage is the engine/ledger-recorded
+                        # value carried by the position projection - NOT a
+                        # contract-size-dependent notional/margin recomputation.
+                        str(position.leverage)
+                        if position.leverage
                         else "NOT_AVAILABLE"
                     ),
                     "initial_margin": str(position.initial_margin),
@@ -526,32 +525,80 @@ def create_app(state: AppState) -> FastAPI:
         "/paper/perpetual/open", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def paper_perpetual_open(body: dict):
-        engine = _perpetual_engine()
-        side = PositionSide(body["side"])
-        pos = await engine.open_position(
-            side,
-            Decimal(body.get("quantity", "0.1")),
-            Decimal(body.get("price", "100")),
-            Decimal(body.get("leverage", "3")),
+        """FAIL-CLOSED (P0 CS-20260829-132209-P0-MANUAL-BYPASS).
+
+        This route previously created positions directly on the engine with a
+        caller/default fake price (100), bypassing Decision -> Risk ->
+        Execution -> Order -> Fill lineage. Manual position mutation is
+        prohibited; it can never be exercised in this session.
+        """
+        await state.audit.log(
+            "P0_MANUAL_ROUTE_BLOCKED",
+            target="/paper/perpetual/open",
+            actor="api",
+            after={"rejected": True, "directive": "CS-20260829-132209-P0-MANUAL-BYPASS"},
         )
-        return pos.model_dump(mode="json")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Permanently disabled: manual position mutation bypasses the "
+                "Chief Trader -> Risk -> Execution authority chain "
+                "(P0 CS-20260829-132209-P0-MANUAL-BYPASS). Use the AI-first "
+                "signal pipeline only."
+            ),
+        )
 
     @app.post(
         "/paper/perpetual/close", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def paper_perpetual_close(body: dict):
-        engine = _perpetual_engine()
-        side = PositionSide(body["side"])
-        pos = await engine.close_position(
-            side, Decimal(body.get("quantity", "0.1")), Decimal(body.get("price", "100"))
+        """FAIL-CLOSED (P0 CS-20260829-132209-P0-MANUAL-BYPASS)."""
+        await state.audit.log(
+            "P0_MANUAL_ROUTE_BLOCKED",
+            target="/paper/perpetual/close",
+            actor="api",
+            after={"rejected": True, "directive": "CS-20260829-132209-P0-MANUAL-BYPASS"},
         )
-        return pos.model_dump(mode="json") if pos else {"closed": True}
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Permanently disabled: manual position mutation bypasses the "
+                "authority chain (P0 CS-20260829-132209-P0-MANUAL-BYPASS). "
+                "Exits follow the AI/lifecycle policy only."
+            ),
+        )
 
     @app.get("/paper/perpetual/positions")
     async def paper_perpetual_positions():
-        engine = _perpetual_engine()
-        state = await engine.load_state()
-        return {"positions": {k: v.model_dump(mode="json") for k, v in state.positions.items()}}
+        """Read-only perp positions projected with REAL per-symbol marks.
+
+        P0 correction item 4: this endpoint previously returned raw engine
+        state with mark_price=0 / unrealized_pnl=0. It now applies the same
+        mark-to-market the /positions read model uses (real OKX book mid).
+        """
+        engine = state.engine.perpetual_engine if state.engine is not None else None
+        if engine is None:
+            return {"positions": {}}
+        perp_state = await engine.load_state()
+        positions: dict[str, dict] = {}
+        for symbol, position in perp_state.positions.items():
+            if position.is_flat:
+                continue
+            book = state.market_data.books.get(reference_symbol_for(symbol))
+            mark_price = book.mid_price() if book is not None else None
+            if mark_price is not None:
+                position = await engine.mark_to_market(Decimal(str(mark_price)), symbol)
+            position = position or perp_state.positions.get(symbol)
+            if position is None or position.is_flat:
+                continue
+            positions[symbol] = {
+                **position.model_dump(mode="json"),
+                "mark_price": (
+                    str(mark_price) if mark_price is not None else "NOT_AVAILABLE"
+                ),
+                "mark_source": "OKX_REAL_BOOK" if mark_price is not None else "NOT_AVAILABLE",
+            }
+        return {"positions": positions}
 
     @app.get("/market")
     async def market():
@@ -1361,26 +1408,35 @@ def create_app(state: AppState) -> FastAPI:
         return state.risk.kill_switch.snapshot()
 
     @app.post("/manual-orders", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
-    async def manual_order(body: ManualOrderBody):
-        """Manual order entry through the same core path (authority + engine required)."""
-        if state.engine is None:
-            raise HTTPException(status_code=409, detail="engine not running")
-        existing = await state.order_manager.get_by_client(body.client_order_id)
-        if existing is not None:
-            return {"idempotent": True, "order": serialize_order(existing)}
-        # Run the exact same core pipeline as a strategy signal
-        signal = SignalIntent(
-            signal_id=body.client_order_id,
-            strategy_id="manual_api",
-            symbol=body.symbol,
-            side=body.side,
-            quantity=body.quantity,
-            limit_price=body.price,
+    async def manual_order(request: Request):
+        """FAIL-CLOSED (P0 CS-20260829-132209-P0-MANUAL-BYPASS).
+
+        Manual order entry would replace the Chief Trader AI's exclusive
+        LONG/SHORT/NO_TRADE/WAIT authority with a human/API direction, even
+        though it reuses the downstream engine path. The AI-first doctrine
+        makes this a prohibited mutation surface; it can never be exercised.
+        The raw request is accepted (never body-validated) so that ANY call -
+        including malformed ones - is rejected by the fail-closed handler and
+        durably audited.
+        """
+        try:
+            await request.json()
+        except Exception:
+            pass
+        await state.audit.log(
+            "P0_MANUAL_ROUTE_BLOCKED",
+            target="/manual-orders",
+            actor="api",
+            after={"rejected": True, "directive": "CS-20260829-132209-P0-MANUAL-BYPASS"},
         )
-        decision = await state.engine.process_signal(signal)
-        if decision is not None and decision.decision.value != "APPROVE":
-            return {"decision": decision.model_dump(mode="json")}
-        return {"decision": "APPROVE", "client_order_id": body.client_order_id}
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Permanently disabled: manual order entry bypasses the Chief "
+                "Trader AI's exclusive direction authority "
+                "(P0 CS-20260829-132209-P0-MANUAL-BYPASS)."
+            ),
+        )
 
     @app.websocket("/ws")
     async def websocket_events(websocket: WebSocket):
