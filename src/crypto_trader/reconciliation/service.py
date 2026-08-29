@@ -59,7 +59,24 @@ class ReconciliationService:
             )
         exchange_balances = {b.currency: str(b.total) for b in (await adapter.get_balances())}
         local_balances = {c: str(r["total"]) for c, r in local.balances.items()}
+
+        # The ledger records a trade's base asset as a POSITION
+        # (POSITION:<symbol> leg), while the exchange view reports the same
+        # asset as a BALANCE. Where both sides agree on the position (checked
+        # below), that currency is already covered: a bare balance alert
+        # would be a false positive. If the position itself drifts, the
+        # POSITION_MISMATCH alert still fires and still halts.
+        exchange_positions = {p.symbol: p for p in (await adapter.get_positions())}
+        position_covered_currencies: set[str] = set()
+        for symbol, local_pos in local.positions.items():
+            exchange_pos = exchange_positions.get(symbol)
+            if exchange_pos is not None and local_pos.quantity == exchange_pos.quantity:
+                position_covered_currencies.add(local_pos.base_asset)
+                position_covered_currencies.add(exchange_pos.base_asset)
+
         for currency in sorted(set(local_balances) | set(exchange_balances)):
+            if currency in position_covered_currencies:
+                continue
             left = D(local_balances.get(currency, "0"))
             right = D(exchange_balances.get(currency, "0"))
             if left != right:
@@ -68,7 +85,6 @@ class ReconciliationService:
                     f"exchange={format_decimal(right)}"
                 )
 
-        exchange_positions = {p.symbol: p for p in (await adapter.get_positions())}
         positions_diff: dict[str, dict] = {}
         for symbol, pos in local.positions.items():
             ex = exchange_positions.get(symbol)

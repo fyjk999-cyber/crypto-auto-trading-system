@@ -616,3 +616,39 @@ async def test_restart_does_not_collide_with_persisted_exchange_order_ids(databa
     assert order.exchange_order_id != "sim_1000"
     await bundle.engine.stop()
     await bundle.database.close()
+
+
+async def test_spot_fill_base_asset_balance_is_position_covered(database):
+    """After a SPOT fill the ledger holds the base asset as a POSITION while
+    the paper exchange reports it as a BALANCE; reconciliation must not
+    false-positive on that representation difference (a real position
+    drift still halts via POSITION_MISMATCH)."""
+    bundle = await _make_bundle(database)
+    await _seed_book(bundle, symbol="ADAUSDT", price="0.2")
+    await bundle.market_data.ingest_snapshot(
+        "ADAUSDT", 1, [(Decimal("0.2"), Decimal("10"))], [(Decimal("0.21"), Decimal("10"))]
+    )
+    decision = await bundle.engine.process_signal(
+        SignalIntent(
+            signal_id="sig_spot_recon", strategy_id="test", symbol="ADAUSDT",
+            side=OrderSide.BUY, quantity="0.001", order_type=OrderType.MARKET,
+            reason="test",
+        )
+    )
+    assert decision.decision == ExecutionDecision.APPROVE
+    await bundle.engine.wait_for_event_queue()
+    report = await bundle.reconciliation.reconcile(bundle.adapter)
+    assert report.halt is False, report.alerts
+    assert not any("BALANCE_MISMATCH ADA" in a for a in report.alerts), report.alerts
+
+    # A genuine base-asset POSITION drift still halts through
+    # POSITION_MISMATCH (the balance representation difference alone
+    # must not halt, but real quantity drift must).
+    bundle.adapter.positions["ADAUSDT"].quantity = bundle.adapter.positions[
+        "ADAUSDT"
+    ].quantity + Decimal("1")
+    report = await bundle.reconciliation.reconcile(bundle.adapter)
+    assert report.halt is True
+    assert any("POSITION_MISMATCH" in a for a in report.alerts), report.alerts
+    await bundle.engine.stop()
+    await bundle.database.close()
