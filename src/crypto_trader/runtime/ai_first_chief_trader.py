@@ -87,7 +87,7 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
         # position state must never permit pyramiding.
         if self.perpetual_position_provider is not None:
             try:
-                has_perp = self.perpetual_position_provider()
+                has_perp = self.perpetual_position_provider(ctx.symbol)
                 if hasattr(has_perp, "__await__"):
                     has_perp = await has_perp
                 if has_perp:

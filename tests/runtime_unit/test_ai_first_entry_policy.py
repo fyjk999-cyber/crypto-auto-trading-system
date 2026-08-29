@@ -164,7 +164,7 @@ async def test_open_perpetual_position_gates_new_entry_before_ai():
         _chief_context(fit=0.60, regime="BULL"),
         _long_decision(fit=0.60, confidence=0.70),
     )
-    adapter.perpetual_position_provider = lambda: True
+    adapter.perpetual_position_provider = lambda symbol: True
     ctx = SimpleNamespace(symbol="ETHUSDT", positions={})
 
     signals = await adapter._decide(ctx)
@@ -200,7 +200,7 @@ async def test_flat_perpetual_state_does_not_block_entry():
         _chief_context(fit=0.60, regime="BULL"),
         _long_decision(fit=0.60, confidence=0.70),
     )
-    adapter.perpetual_position_provider = lambda: False
+    adapter.perpetual_position_provider = lambda symbol: False
     ctx = SimpleNamespace(symbol="ETHUSDT", positions={})
 
     signals = await adapter._decide(ctx)

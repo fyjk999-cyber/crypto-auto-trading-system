@@ -41,6 +41,7 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
+from crypto_trader.runtime.execution_symbols import execution_symbol_for
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
 from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner
@@ -238,9 +239,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
     # §10: the duplicate-entry gate must see perpetual state. Wired after the
     # engine exists so the adapter can ask "is BTCUSDT_PERP already open?"
-    async def _has_open_perpetual_position() -> bool:
+    async def _has_open_perpetual_position(symbol: str | None = None) -> bool:
+        # Symbol-scoped: only the caller's own perpetual contract blocks its
+        # entry (a BTC position must not prevent ETH from being considered).
+        target = execution_symbol_for(symbol) if symbol else perpetual_contract.symbol
         state = await perpetual_engine.load_state()
-        position = state.positions.get(perpetual_contract.symbol)
+        position = state.positions.get(target)
         return position is not None and not position.is_flat
 
     chief_trader.perpetual_position_provider = _has_open_perpetual_position
