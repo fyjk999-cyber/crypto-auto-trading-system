@@ -8,7 +8,13 @@
   ord_6a07813a44df44b3b471ebedea407b16 / fill
   fill_8396534b10d74e25843509a357d6e0ab @ 77753.05 REAL OKX price
   (BTCUSDT_PERP LONG 0.001, fee 0.038876525) / ledger txn_467ed207928443e98aa35a09.
-- NEW_RUNTIME_BASELINE_SHA = 129317ab34617308ba5efe125707c7809bb3df72
+- NEW_RUNTIME_BASELINE_SHA = ebcff589921d4c03b4c952cb8ffd80bac60a5ab6
+- Post-fix autonomous fills: BNBUSDT 0.001 @ 690.40 (02:00:50), DOGEUSDT
+  0.0005 @ 0.08525 (02:09:19) - both full chain, real OKX prices, zero holds.
+- Fixed after the v1 report: order-id restart collision (f28e2fe, per-process
+  namespace), base-asset balance-vs-position reconciliation scope (7f3fa43),
+  event-failure traceback logging (d3589dd), architecture guardrail recorded
+  (e36d166; EXPLORATION_PROBABILITY=1.0 - AI sees every symbol every cycle).
 - Runtime live: PAPER_REAL_MARKET, OKX REAL feeds healthy (age 0s), recon ok,
   overall OK, LLM_PROVIDER_RUNTIME_VALIDATED=YES.
 - Anti-pyramiding: symbol-scoped perp gate restored in AI-first path
