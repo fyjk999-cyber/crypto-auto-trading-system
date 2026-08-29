@@ -2,7 +2,13 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T11:30Z (cron-2; bridge 4h time-stop exit closed LINK cycle on exact anniversary)
+Latest Checkpoint: 2026-08-29T15:15Z
+Fills 13:35Z-15:14Z: 15 (9 exits incl 7 TIME_STOP + 6 entries; all REAL OKX prices)
+Risk: 15 APPROVE / 2 REJECT; LLM live_analysis 13; decisions 65 LONG / 44 SHORT / 3069 NO_TRADE
+FUTURES_REALIZED_PNL cumulative: 8 rows, gross sum -0.50328 USDT
+TRADE EPISODES: 44 total (11 WIN / 33 LOSS), all TIME_STOP; +5 since 15:00Z
+Orders stuck: 0; errors: 2 RISK_REJECT only; backend ALIVE (cron-4 revive working)
+Lineage NEARUSDT 15:13 entry: dec_18bddec7b8234ad0b41f2a09c0eee5bc LONG -> ord_d3e0754c14084d9590d20ad2f56fe3bd FILLED -> fill_65bd062b6e394e529f103e3b48c78d9b @ 1.84 REAL
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)

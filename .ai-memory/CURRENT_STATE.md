@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-29T14:45:00+00:00 (P2 TRADE EPISODE PIPELINE COMPLETE + runtime
+- Updated: 2026-08-29T15:15:00+00:00 (checkpoint: 15 fills/13 LLM/44 episodes since 13:35Z; backend ALIVE via cron-4 revive; PAPER confirmed; TRADE_EPISODE_PIPELINE operational) (P2 TRADE EPISODE PIPELINE COMPLETE + runtime
   backend killed externally 3rd time; relaunched via direct
   `uv run python -m crypto_trader.runtime.local_runner` nohup, health OK 14:23Z)
 - **TRADE_EPISODE_PIPELINE = OPERATIONAL** (P2 interrupt 3 repair):

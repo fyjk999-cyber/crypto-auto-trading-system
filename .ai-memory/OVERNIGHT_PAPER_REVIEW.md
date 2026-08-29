@@ -40,3 +40,4 @@ N) Next: 8 new-symbol perp positions (opened 10:13-11:24Z) reach their own 4h an
 - A: Backend process vanished ~13:25Z (root cause TBD: no crash trace found; possibly killed by the interrupt-era pkill pattern or OOM). Restarted with safe procedure; recon OK; no duplicates. WATCH: if it recurs, add liveness watchdog to launcher.
 - H: XRPUSDT LONG fit 0.482 and BTCUSDT LONG fit 0.5021 - both below 0.55 tension threshold, risk/entry gates held; recorded as tension samples.
 - N: Quiet NO_TRADE dominance (537/553) consistent with post-wave cooldowns; perp exits on 4h anniversaries continue cleanly.
+- [2026-08-29T15:15Z] Checkpoint: 15 fills since 13:35Z (all real prices), 2 risk rejects held low-fit entries, 0 stuck orders, 13 live LLM calls, FUTURES_REALIZED_PNL cum 8 rows -0.50328, episodes 34->44 all TIME_STOP (learning pipeline live: 5 new episodes since 15:00Z). Backend external-SIGTERM kills mitigated by cron-4 5-min revive + direct launch; PAPER intact.
