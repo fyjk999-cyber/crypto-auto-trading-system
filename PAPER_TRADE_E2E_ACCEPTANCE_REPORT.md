@@ -16,6 +16,8 @@ OKX REAL market data → Market State → FactorSnapshot → Strategy Evidence
 
 ## CLEAN FILL LINEAGE (the §6 proof)
 
+### Proof fill (perpetual)
+
 - Git HEAD of the running system: **53c4f57397d992b57e0e691bbf6049f34a0cef27**
 - Engine run: **run_256d3e15648542ee976cbefa55bb9cd4** (started 2026-08-29 00:13:28 UTC, PAPER)
 - Market data: **source=REAL (OKX public)**, feed age 0s, BTC real ≈ 77.5k USD
@@ -43,9 +45,22 @@ DOTUSDT BUY 0.001 filled @ **0.8483** (real OKX DOT price) through
 signal → risk APPROVE → authority → order → FILLED → ledger. Proves the
 price-integrity fix for the spot leg independently of the AI loop.
 
+### Additional autonomous fills AFTER the last architecture fixes
+
+- **BNBUSDT BUY 0.001 @ 690.40** (REAL OKX BNB price) — 2026-08-29
+  02:00:50 UTC, run after the order-id-namespace fix; order
+  ord_5c8d0d1563f54369b1dd589119426088, exchange_order_id
+  sim_pfba01f5205-1000, ledger TRADE txn committed; the fill survived
+  reconciliation once the base-asset representation scope was fixed.
+- **DOGEUSDT BUY 0.0005 @ 0.08525** (REAL OKX DOGE price) — 2026-08-29
+  02:09:19 UTC, 37 seconds after engine start on HEAD 7f3fa43:
+  risk APPROVE/RISK_PASS 02:09:17 → order FILLED → ledger → position.
+  Full chain, zero holds, zero rewrites.
+
 ## FUNNEL (all recorded decisions, /trading-funnel)
 
-- Decisions: **1084** — LONG 26 / SHORT 21 / NO_TRADE 1029 / WAIT 8
+- Decisions: **1084+** (funnel continuously active; ~4-5 AI calls/min,
+  20-symbol coverage, per-symbol 300s cadence) — LONG 26 / SHORT 21 / NO_TRADE 1029 / WAIT 8
 - Classes: NORMAL_ENTRY 37, EXPLORATION_ENTRY 9, NO_TRADE 1029
 - LLM: 52 calls (42 live_analysis), **0 failed**
 - Risk: APPROVE/RISK_PASS 7, REJECT/SPOT_OVERSHORT 6 (correct spot-short
@@ -75,6 +90,21 @@ price-integrity fix for the spot leg independently of the AI loop.
    state-check failure).
 8. **53d46c4** — the duplicate-entry gate is symbol-scoped (a BTC position
    no longer freezes the other 19 symbols).
+9. **d3589dd** — full traceback logging for exchange-event failures (the
+   event loop previously swallowed the root cause into a bare flag).
+10. **f28e2fe** — per-process exchange-order-id namespace: the simulated
+    exchange restarted its sim_N sequence every run and collided with
+    UNIQUE(exchange_order_id) in the persisted orders table, leaving the
+    first order of every run stuck at SUBMITTED with its fill applied
+    only on the adapter side (the ADA incident, twice).
+11. **7f3fa43** — reconciliation base-asset scope: the ledger books a
+    trade's base asset as a POSITION while the exchange reports it as a
+    BALANCE; matching positions now cover that currency (real position
+    drift still halts via POSITION_MISMATCH — regression-tested both ways).
+12. **Guardrail compliance (e36d166)** — permanent AI-FIRST invariant
+    recorded in HARNESS_GOAL.md + .ai-memory/DECISIONS.md; live-path audit
+    clean; EXPLORATION_PROBABILITY=1.0 (the quant-conditioned AI-invocation
+    sampler is disabled; every symbol reaches the AI every cycle).
 
 ## HONESTY NOTES (samples NOT counted toward the success claim)
 
@@ -97,7 +127,7 @@ price-integrity fix for the spot leg independently of the AI loop.
 
 ## TESTS
 
-- Backend: **725 passed / 7 skipped / 2 failed** — the 2 failures are
+- Backend: **727 passed / 7 skipped / 2 failed** — the 2 failures are
   pre-existing tests that require LIVE OKX fixture values
   (tests/local_stability/test_market_semantics.py); unrelated to all changes.
 - ruff: clean. Frontend: 34 tests passed, tsc clean, build OK.
