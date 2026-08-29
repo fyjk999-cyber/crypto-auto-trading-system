@@ -115,3 +115,6 @@
 - Frontend OrdersPage: MARKET orders show market price + real avg_fill_price (user screenshot orders TAO/HYPE/FIL PERP SHORT + UNIUSDT verified live with real prices/fees/floating PnL); fee, PnL (floating/realized label), sign-based coloring, expanded lineage detail; real zero renders 0.00 dollars.
 - Tests: 9 backend order-read-model cases + 4 frontend cases; suite 761 passed (2 pre-existing live-OKX network failures); frontend 38 passed + tsc clean.
 - Deployed safe restart; integrity: dup IDs 0, orphan fills 0, filled-no-fill 0, recon OK 13:15Z, lease 1.
+
+
+## 2026-08-29T13:35Z - Checkpoint: backend vanished + safe restart, 22 real fills since 11:30Z, recon OK, PAPER intact

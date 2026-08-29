@@ -71,3 +71,12 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 - Fills since 09:30Z: TRXUSDT BUY 0.001 @0.33804 (09:43:08); OPUSDT BUY 0.001 @0.08775 (10:01:41). Both real market prices, full lineage. fills total 55, orders total 60; 0 stuck orders; 0 audit errors since 09:30Z.
 - LLM: 15 live_analysis calls 09:30-09:50Z, all success. Risk: 4 decisions (2 SPOT_OVERSHORT rejects = correct protection; 2 APPROVE). Open positions: 15.
 - Wins/Losses: no exits this window; realized PnL unchanged this window.
+
+## Latest Checkpoint: 2026-08-29T13:35Z (cron-2, delayed from 13:00Z by P3 interrupt)
+- Runtime: healthy overall, PAPER confirmed, kill switch clear, lease=1, recon OK 13:28Z.
+- INCIDENT this window: backend process fully disappeared ~13:25Z (no local_runner/uvicorn on :8000, no crash log found) mid-checkpoint. Restarted via safe single-writer procedure (leases cleared after confirmed full stop, launcher relaunch). Runtime healthy again; no duplicate IDs; positions intact (22 = 12 spot + 10 perp); 18/22 with real floating PnL (4 pending book re-ingest after restart).
+- Trades since 11:30Z doc-checkpoint: 22 fills, ALL real market prices (XRP 1.3835, BTC_PERP 77629.75/77611.05, ETH 2434, SOL 103.4, BNB 688, LTC 48.68, BCH 243.6, DOT 0.8336, LINK 11.317, DOGE 0.08467...). Mixed reduce-only exits (4h anniversary closes: AVAX/SUI/ETH/SOL/BNB/APT/ARB/LTC/BCH/DOT) + fresh entries (XRP/ETH/SOL/BNB/APT/LINK/DOGE re-entries, BTC_PERP/XLM_PERP perp entries). No synthetic ~100 prices.
+- Decisions since 11:30Z: 553 total (NO_TRADE 537, LONG 9, SHORT 7). 7 RISK_REJECTs (AVAX x3, ARB, BCH x2, SUI entry signals) - gates working, no forced trades.
+- LLM: 58 live_analysis invocations since 11:30Z, 100% success.
+- Stuck orders: 0. Fill lineage intact (client_order_id llm_chief_trader_*); note: spot bridge-exit fill payloads lack decision_id (only perp entry fills carry it) - acceptable, lineage via client_order_id remains.
+- H sample (AI/Quant tension): XRPUSDT LONG decision with strategy_fit 0.482 < 0.55 threshold; BTCUSDT LONG fit 0.5021 - entry gates correctly held these back on rejections.
