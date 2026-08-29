@@ -67,6 +67,11 @@ Layer counts (all-time decision_evidence, /trading-funnel):
     fill_f707210b36bf4a3c8cae5c5b2352276e / ord_bcfdc3736b8248c8953ad552281163c9.
     Thesis: oversold z -2.29, RSI 26.9, negative funding noted. OPEN.
 
+6.7 ARBUSDT LONG 0.0005 @ 0.08759 - 03:31:35Z. OPEN. Real price.
+6.8 LTCUSDT LONG 0.001 @ 48.91 - 03:36:46Z. OPEN. Real price. (LTC data
+    health recovered after the 03:05Z transient - gate worked, then healed.)
+6.9 NEARUSDT LONG 0.001 @ 1.802 - 03:54:55Z. OPEN. Real price.
+
 ## D. Best Trades
 
 TBD — positions still open. Early observation: BTC entry thesis was
@@ -96,6 +101,10 @@ not an AI judgment error — AI reasoning itself was consistent.
 
 ## H. AI vs Quant
 
+- 03:31Z ARBUSDT: AI LONG with strategy_fit 0.4637 (below the 0.55 normal
+  band) - the AI overrode weak quant fit on its own reading (prior-high
+  retest, positive momentum). Exactly the AI-FIRST sample class; outcome
+  to be checked at exit.
 - Clean example: BTC decision had strategy_fit 1.0 (quant aligned) — need
   disagreement samples from overnight data: query decision_evidence for
   fit < 0.55 with action LONG/SHORT (AI overrode weak quant fit) and fit
@@ -141,6 +150,9 @@ not an AI judgment error — AI reasoning itself was consistent.
   0.5359 - all real prices), 0 stuck orders, 0 errors, overall OK.
 - Checkpoint 03:30Z: 1 new clean fill (SUI 0.7387), 42 decisions (40
   NO_TRADE / 1 LONG / 1 SHORT), 5 live_analysis all success, 0 errors.
+- Checkpoint 04:00Z: 3 new clean fills (ARB 0.08759, LTC 48.91, NEAR 1.802),
+  105 decisions (101 NO_TRADE / 3 LONG / 1 SHORT), 18 live_analysis all
+  success, 0 stuck orders, 0 errors, overall OK. LTC fully recovered.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

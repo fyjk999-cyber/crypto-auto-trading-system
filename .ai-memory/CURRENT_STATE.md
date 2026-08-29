@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-- Updated: 2026-08-29T03:30:00+00:00 (checkpoint cron-2: SUI fill @0.7387; 10 clean AI fills total; health OK, 0 errors)
+- Updated: 2026-08-29T04:00:00+00:00 (checkpoint cron-2: 3 new fills ARB/LTC/NEAR; 13 clean AI fills; AI-vs-quant override sample ARB fit 0.46->LONG; health OK)
 - **PHASE 2  OVERNIGHT LONG-RUN PAPER OBSERVATION MODE**
 - FIRST_AI_PAPER_FILL = YES
 - PAPER_TRADE_E2E_READY = YES (PHASE 1 milestone; see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md)
