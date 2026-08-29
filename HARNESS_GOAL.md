@@ -13,6 +13,39 @@ Layers stay separate forever: factors never execute, strategies never execute, t
 LLM only PROPOSES, RiskEngine/ExecutionAuthority always decide. Regression tests:
 tests/runtime/test_chief_trader_entry.py (doctrine A/D/E/F + exploration contract).
 
+## ARCHITECTURE INVARIANT (2026-08-29, permanent, above all optimization goals)
+
+AI-FIRST / QUANT-AS-EVIDENCE is a permanent architecture invariant.
+
+No quantitative score, ranking, technical indicator, strategy-fit metric,
+confidence threshold, regime classifier, or opportunity score may acquire
+trade-decision authority.
+
+Only the Chief Trader AI may choose LONG / SHORT / NO_TRADE / WAIT.
+RiskEngine and ExecutionAuthority may block execution only for safety,
+validity, account, market-data, or execution constraints.
+
+Fixed authority structure:
+Quant / Factors / Technical Indicators / Strategy Evidence / Memory /
+Research = EVIDENCE ONLY. Market Observer = ATTENTION / CONTEXT ONLY.
+Chief Trader AI = TRADING DECISION AUTHORITY.
+RiskEngine = SAFETY AUTHORITY. ExecutionAuthority = EXECUTION SAFETY
+AUTHORITY.
+
+Explicitly forbidden forever (ARCHITECTURE REGRESSION if reintroduced):
+composite/total opportunity score gates, Top-K execution eligibility,
+strategy-fit veto, confidence veto, regime veto, forced/fallback
+LONG/SHORT, NO_TRADE→LONG rewrites, WAIT→LONG rewrites, trade quotas or
+mandatory trade frequency, prompt coercion ("you must choose LONG or
+SHORT"), removing NO_TRADE/WAIT from the action space, and exploration
+modes that open positions without an AI decision.
+
+NO_TRADE and WAIT are first-class decisions. Low fill rate is NEVER a
+reason to violate this invariant (priority: PAPER safety > AI-FIRST
+integrity > Risk/Execution safety > data integrity > Long Goal completion
+> trading frequency > fill count). Any new score/threshold/ranking/filter/
+scanner in the live path must pass the Authority Review (Q1–Q4) first.
+
 ## Current capability
 
 Canonical three-brain autonomous trading system.
