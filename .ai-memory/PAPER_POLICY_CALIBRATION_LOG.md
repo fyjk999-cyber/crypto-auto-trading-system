@@ -89,3 +89,13 @@
 - Reason: direction-flip re-entries now in 3rd window (SOL 20:20 SELL -> 20:32 BUY; TRX 19:45 SELL -> 20:40 BUY = 55min gap, not intra-5min churn). Pattern is cross-window re-entry at market-reasonable prices - characteristic of TIME_STOP 4h cycle recycling. NOT yet abnormal turnover (fills/hour ~8, fees tiny). If window 9 shows intra-5min flip churn -> CONTRACT: cooldown 240->300s (bounded +60s, sec.26)
 - Expected effect: none now; pre-staged CONTRACT decision for next window
 - Next review: 2026-08-29T21:30Z
+
+## 2026-08-29T21:30Z (Phase G window 9) - ACTION: CONTRACT
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 15 / decisions 145 (3L/2S/140NT) / fills 8 (16/h pace vs ~10 baseline) / episodes 74 (+5, accelerating) / rejects 0 / errors 0
+- PnL: RPNL 12h -0.7172; open 21
+- ACTION: CONTRACT (bounded single step, sec.26/48)
+- Changes: per_symbol_analysis_cooldown_s 240 -> 300 (+60s, within MAX_CHANGE +-60s) via .env ENTRY_COOLDOWN_SECONDS (config-level, sec.65 compliant; takes effect at next runtime start, which requires Supervisor authorization)
+- Reason (multi-factor sec.28, NOT fill-count alone): DOGE direction-flip 6min08s round-trip (21:22 SELL -> 21:28 BUY) = short holding noise; consecutive flip windows (8,9); turnover 16/h vs baseline; fees rising; LOSS count accelerating (41 vs 28 WIN). Pre-staged trigger from window 8 marginally met (6min vs strict 5min) - combined with turnover/holding factors per sec.48
+- Expected effect: slower re-entry cadence (~17% fewer decision slots per symbol/hour); should reduce flip churn while NOT gating AI authority (cooldown is temporal safety, not a quant gate)
+- ROLLBACK PLAN (sec.64): if window 10-11 show flip churn gone AND healthy fills continue, restore 240. If NO_TRADE rate spikes >99% with no structural reason, restore 240 immediately
+- Next review: 2026-08-29T22:00Z
