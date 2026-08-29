@@ -2,13 +2,13 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T02:30:00Z
+Latest Checkpoint: 2026-08-29T03:15:00Z
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
 Market: OKX REAL (public data only)
 
-Trades: 6 clean AI fills (BTCUSDT_PERP, BNBUSDT, DOGEUSDT, XRPUSDT, SOLUSDT @103.89, ADAUSDT @0.2012)
+Trades: 9 clean AI fills (BTCUSDT_PERP, BNBUSDT, DOGEUSDT, XRPUSDT, SOLUSDT @103.89, ADAUSDT @0.2012, LINKUSDT @11.379, AVAXUSDT @7.27, APTUSDT @0.5359)
 Wins: 0 (no closed rounds yet)
 Losses: 0
 Realized PnL: 0 (all positions open; bridge owns exits)
@@ -21,7 +21,7 @@ Open Positions:
   - SOLUSDT 0.001 @ 103.89 (AI fill 02:20:52Z, real price)
   - ADAUSDT 0.001 @ 0.2012 (AI fill 02:26:54Z, real price)
 
-Live LLM Calls (overnight window): 44+ live_analysis / 0 failed
+Live LLM Calls (overnight window): 48+ live_analysis / 0 failed
 LONG: 26  SHORT: 21  NO_TRADE: 1029  WAIT: 8  (all-time decision_evidence counts)
 Risk Reject: 6 (all SPOT_OVERSHORT on non-BTC symbols — correct protection)
 Execution Hold: 0 since final fixes
@@ -32,6 +32,7 @@ Confirmed Lessons: see memory (CANDIDATE/VALIDATING/CONFIRMED lifecycle unchange
 Repeated Mistakes: none observed post-fix
 Current Issues:
   - MAE/MFE tracking = NOT_AVAILABLE (documented; episodes carry mfe/mae columns, capture pending)
+  - FIXED 03:05Z: market_data health flag stuck UNHEALTHY after transient LTC fetch error (tick path never cleared flag) - ef2cd42, runtime restarted, overall OK restored. LTC fail-closed gate itself worked correctly.
   - Stacked BTC position 0.002 from the pre-fix gate-gap window (bridge-managed)
   - Multi-symbol perpetual SHORT protection (SPOT_OVERSHORT) by design
 

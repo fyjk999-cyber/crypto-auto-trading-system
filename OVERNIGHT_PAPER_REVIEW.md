@@ -58,6 +58,10 @@ Layer counts (all-time decision_evidence, /trading-funnel):
    stacked during the gate-gap window (fixed in af426a1/53d46c4).
 6. (excluded) ETHUSDT 0.001 @ 100.05 — pre-fix corrupted price.
 
+6.3 LINKUSDT LONG 0.0005 @ 11.379 - 02:49:21Z. OPEN. Real price.
+6.4 AVAXUSDT LONG 0.0005 @ 7.27 - 03:06:04Z. OPEN. Real price.
+6.5 APTUSDT LONG 0.001 @ 0.5359 - 03:13:06Z. OPEN. Real price.
+
 ## D. Best Trades
 
 TBD — positions still open. Early observation: BTC entry thesis was
@@ -124,6 +128,12 @@ not an AI judgment error — AI reasoning itself was consistent.
 
 - Checkpoint 02:30Z: 0 errors, 0 stuck orders, 0 execution holds, recon OK,
   overall OK. 2 new clean AI fills at real prices since last checkpoint.
+- 03:05Z: LTCUSDT transient fetch failure left the market_data health flag
+  stuck UNHEALTHY (tick path never cleared it). Data gate itself worked
+  (LTC fail-closed); flag recovery fixed in ef2cd42 + regression test.
+  Runtime restarted healthy; no trades affected.
+- Checkpoint 03:15Z: 3 more clean AI fills (LINK 11.379, AVAX 7.27, APT
+  0.5359 - all real prices), 0 stuck orders, 0 errors, overall OK.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id
