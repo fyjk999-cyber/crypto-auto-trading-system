@@ -1,7 +1,13 @@
 # CURRENT_STATE
 
 - Updated: 2026-08-29T01:40:00+00:00
-- **PAPER_TRADE_E2E_READY = YES** (see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md).
+- **PHASE 2  OVERNIGHT LONG-RUN PAPER OBSERVATION MODE**
+- FIRST_AI_PAPER_FILL = YES
+- PAPER_TRADE_E2E_READY = YES (PHASE 1 milestone; see PAPER_TRADE_E2E_ACCEPTANCE_REPORT.md)
+- OVERNIGHT_PAPER_TRADING = ACTIVE
+- REVIEW_DATA_READY = CONTINUOUSLY_UPDATING (OVERNIGHT_PAPER_REVIEW.md)
+- PROJECT_COMPLETE =  do not stop the runtime until the user's manual review
+- Session index: .ai-memory/OVERNIGHT_PAPER_STATE.md (30-min checkpoints)
 - Clean E2E proof: run_256d3e15648542ee976cbefa55bb9cd4 / decision
   dec_a6d0a388dbc34ab082fd / LLM llm_d30a4f2b3429456ca423be4bec8ce7f4
   (LIVE, live_analysis, deepseek-chat) / risk APPROVE RISK_PASS / order
