@@ -49,3 +49,13 @@
 - Reason: ADA round-trip within 5min (SELL 0.2007 -> BUY 0.2009) is a direction flip not re-entry churn; episode attribution clean (TIME_STOP). 4 windows cumulative still LOW_SAMPLE_SIZE; no repeated-mistake pattern
 - Expected effect: none; watch ADA flip frequency - if it recurs 2+ consecutive windows, consider CONTRACT via cooldown +60s (bounded)
 - Next review: 2026-08-29T19:30Z
+
+## 2026-08-29T19:30Z (Phase G window 5)
+- Runtime: OK; Coverage: registry 2029 (runtime fixed-universe; Phase C/D pending)
+- Funnel: LLM 11 / decisions 138 (3L/2S/133NT=96.4%) / fills 7 across 7 symbols / FILLED 7 / rejects 0 / episodes 58 (+3)
+- PnL: RPNL 12h -0.3939 unchanged; open 25
+- ACTION: HOLD
+- Changes: none
+- Reason: highest-quality window so far - 7-symbol diversity, mixed spot/perp, mixed directions, no re-entry churn (ADA flip did NOT recur -> no CONTRACT trigger), episode attribution flowing. NO_TRADE 96.4% natural
+- Expected effect: none; window-4 ADA trigger cleared; continue baseline
+- Next review: 2026-08-29T20:00Z
