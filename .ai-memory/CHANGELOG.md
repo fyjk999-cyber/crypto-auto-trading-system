@@ -22,3 +22,7 @@
 
 ## bb4fa37 - 20->30 universe + generic paper-perpetual registry (2026-08-29T09:43Z)
 - 10 new OKX-verified symbols under a generic registry; 11 paper-perp contracts on one engine; fail-closed unregistered perp; SPOT_OVERSHORT intact; final-outcome process_signal return; snapshot persistence telemetry; full ETH episode quarantine; lease-loss invariants in DECISIONS.md.
+
+
+## c1f31b6 - Position read-model repair (2026-08-29T12:15Z)
+- Per-symbol real marks, backend SPOT PnL, PERPETUAL engine accounting per contract, NOT_AVAILABLE/NOT_APPLICABLE semantics, zero-position filter; cross-symbol fallback removed from frontend and backend.
