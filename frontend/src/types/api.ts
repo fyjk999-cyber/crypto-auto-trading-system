@@ -15,6 +15,7 @@ export type Account = {
 
 export type Position = {
   symbol: string;
+  base_asset?: string;
   quantity: string;
   avg_entry_price?: string | null;
   cost_basis: string;

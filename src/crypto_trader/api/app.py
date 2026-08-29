@@ -1059,8 +1059,46 @@ def create_app(state: AppState) -> FastAPI:
         # §20: one read-only position truth. Spot positions + PAPER PERPETUAL
         # state are merged so the frontend can never show "空仓" while
         # BTCUSDT_PERP LONG/SHORT is actually open.
+        #
+        # POSITION READ-MODEL CONTRACT (2026-08-29 repair):
+        # - Every mark price comes from THAT symbol's own real OKX reference
+        #   market (canonical symbol book / <REF>_PERP -> REF book). Cross-
+        #   symbol fallback (e.g. ETH inheriting the global BTC mark) is
+        #   forbidden: a missing price is surfaced as "NOT_AVAILABLE" and
+        #   fails visibly.
+        # - PnL accounting lives HERE (backend), never in the frontend.
+        #   SPOT: unrealized = (real mark - avg_entry) * quantity.
+        #   PERPETUAL: the perpetual engine's own accounting via
+        #   mark_to_market(mark, symbol) per registered contract.
+        # - NOT_AVAILABLE = data should exist but its real source is
+        #   currently unavailable. NOT_APPLICABLE = the field does not apply
+        #   to this product type (SPOT leverage / liquidation price).
+        # - Zero-quantity positions are history, not current positions.
         positions = await state.portfolio.get_positions()
-        payload = {symbol: pos.model_dump(mode="json") for symbol, pos in positions.items()}
+        payload: dict[str, dict] = {}
+        for symbol, pos in positions.items():
+            if Decimal(str(pos.quantity)) == 0:
+                continue
+            book = state.market_data.books.get(symbol)
+            mark_price = book.mid_price() if book is not None else None
+            entry = pos.avg_entry_price
+            unrealized = None
+            if mark_price is not None and entry is not None:
+                unrealized = (Decimal(str(mark_price)) - Decimal(str(entry))) * Decimal(
+                    str(pos.quantity)
+                )
+            payload[symbol] = {
+                **pos.model_dump(mode="json"),
+                "market_type": "SPOT",
+                "mark_price": (
+                    str(mark_price) if mark_price is not None else "NOT_AVAILABLE"
+                ),
+                "unrealized_pnl": (
+                    str(unrealized) if unrealized is not None else "NOT_AVAILABLE"
+                ),
+                "leverage": "NOT_APPLICABLE",
+                "liquidation_price": "NOT_APPLICABLE",
+            }
         try:
             if state.engine is not None and state.engine.perpetual_engine is not None:
                 engine = state.engine.perpetual_engine
@@ -1068,16 +1106,27 @@ def create_app(state: AppState) -> FastAPI:
                 for symbol, position in perp_state.positions.items():
                     if position.is_flat:
                         continue
-                    book = state.market_data.books.get(
-                        reference_symbol_for(symbol)
-                    )
-                    mark_price = (
-                        book.mid_price() if book is not None else None
-                    )
+                    contract = engine.contract_for(symbol)
+                    book = state.market_data.books.get(reference_symbol_for(symbol))
+                    mark_price = book.mid_price() if book is not None else None
+                    if mark_price is not None:
+                        # Reuse the perpetual engine's own accounting for the
+                        # per-symbol mark (LONG/SHORT aware, contract_size
+                        # aware). Never recomputed in the frontend.
+                        position = await engine.mark_to_market(
+                            Decimal(str(mark_price)), symbol
+                        )
+                    position = position or perp_state.positions.get(symbol)
+                    if position is None or position.is_flat:
+                        continue
                     payload[symbol] = {
                         "symbol": symbol,
-                        "base_asset": engine.contract.base,
-                        "quote_asset": engine.contract.quote,
+                        "base_asset": (
+                            contract.base if contract is not None else "NOT_AVAILABLE"
+                        ),
+                        "quote_asset": (
+                            contract.quote if contract is not None else "NOT_AVAILABLE"
+                        ),
                         "quantity": str(position.quantity),
                         "avg_entry_price": str(position.avg_entry_price),
                         "cost_basis": str(position.initial_margin),
@@ -1085,7 +1134,11 @@ def create_app(state: AppState) -> FastAPI:
                         "updated_at": position.ts.isoformat(),
                         "market_type": "PERPETUAL",
                         "side": position.side.value,
-                        "unrealized_pnl": str(position.unrealized_pnl),
+                        "unrealized_pnl": (
+                            str(position.unrealized_pnl)
+                            if mark_price is not None
+                            else "NOT_AVAILABLE"
+                        ),
                         "leverage": (
                             str(
                                 abs(position.quantity)
