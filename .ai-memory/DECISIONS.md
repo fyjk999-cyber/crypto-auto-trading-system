@@ -32,3 +32,15 @@
   0.5s market tick; position safety paths unaffected. Domain-model prompts now
   carry explicit output schema examples + DecisionId correlation; strategy gate
   requires route readiness (routes+provider+key) not just provider health.
+
+## 2026-08-29T07:55Z - Diagnosis time-base rule (incident lesson)
+
+- An apparent 07:26-07:37Z engine hang during checkpoint diagnosis was a
+  TIME-BASE ERROR: the operator internal clock drifted ~40min from real UTC,
+  so queries used future boundaries and health samples were compared against
+  a wrong now. The engine was healthy throughout.
+- RULE: always run date -u and anchor all since/until queries and freeze
+  checks on it before diagnosing. Verify process identity with ps before
+  pkill; kill by PID when the pattern is uncertain.
+- Supervisor loop restarts now log RUNTIME_LOOP_CRASHED (silent crash-loop
+  observability gap closed).
