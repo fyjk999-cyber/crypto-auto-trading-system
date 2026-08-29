@@ -26,3 +26,7 @@
 
 ## c1f31b6 - Position read-model repair (2026-08-29T12:15Z)
 - Per-symbol real marks, backend SPOT PnL, PERPETUAL engine accounting per contract, NOT_AVAILABLE/NOT_APPLICABLE semantics, zero-position filter; cross-symbol fallback removed from frontend and backend.
+
+
+## fe82ae1 - Order/Fill/PnL observability repair (2026-08-29T13:20Z)
+- /orders read model + OrdersPage: real fees/avg fill price/canonical PnL attribution (POSITION_LEVEL vs TRADE_LEVEL), MARKET=market order display, episode guard, NOT_AVAILABLE semantics; 9+4 tests.

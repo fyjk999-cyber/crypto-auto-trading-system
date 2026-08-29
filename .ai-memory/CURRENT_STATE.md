@@ -108,3 +108,10 @@
 
 ## 2026-08-29T12:15Z - Position read-model repair deployed (c1f31b6)
 - HIGH PRIORITY ADDENDUM complete: cross-symbol mark fallback REMOVED (frontend + backend); /positions now returns per-symbol real OKX marks (missing = NOT_AVAILABLE, fail visibly), backend-computed SPOT unrealized PnL, PERPETUAL engine accounting per registered contract (base/quote/leverage/margin/liquidation), NOT_AVAILABLE vs NOT_APPLICABLE semantics, zero-quantity positions filtered. 5 read-model tests + frontend suite 34 passed + tsc clean; suite 752 passed. Deployed with safe restart; live acceptance: ETH mark=2435.345 (ETH book), SOL mark=103.465 (SOL book), perp rows engine-computed, 24 positions shown / 0 zero-qty rows.
+
+
+## 2026-08-29T13:20Z - Order/Fill/PnL observability repair deployed (fe82ae1)
+- /orders read model: real fee_total from canonical fills, fill_count, fill-payload lineage, PnL attribution POSITION_LEVEL (latest entry per symbol+market, same /positions source, perp ROI basis unrealized/initial_margin) vs TRADE_LEVEL (realized from FUTURES_REALIZED_PNL ledger row of exact closing order); order.price semantics preserved (MARKET=null); episode guard prevents current-position PnL overlay on old entries; spot closed realized stays honestly NOT_AVAILABLE.
+- Frontend OrdersPage: MARKET orders show market price + real avg_fill_price (user screenshot orders TAO/HYPE/FIL PERP SHORT + UNIUSDT verified live with real prices/fees/floating PnL); fee, PnL (floating/realized label), sign-based coloring, expanded lineage detail; real zero renders 0.00 dollars.
+- Tests: 9 backend order-read-model cases + 4 frontend cases; suite 761 passed (2 pre-existing live-OKX network failures); frontend 38 passed + tsc clean.
+- Deployed safe restart; integrity: dup IDs 0, orphan fills 0, filled-no-fill 0, recon OK 13:15Z, lease 1.
