@@ -2,7 +2,7 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T05:00:00Z
+Latest Checkpoint: 2026-08-29T10:10Z (cron-2; quick re-fire after 10:05Z checkpoint, no delta)
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
@@ -42,6 +42,9 @@ Truth sources (never duplicate): data/crypto_trader.db tables
 (decision_evidence, llm_usage, risk_decisions, audit_events, orders, fills,
 ledger_transactions, positions_projection, ai_trade_episodes,
 trade_memory_records, daily reviews). This file is an INDEX ONLY.
+
+## 2026-08-29T10:10Z quick re-fire (cron-2)
+- 3-minute window after the 10:05Z checkpoint: 0 new fills (total 55), 0 stuck orders, 0 risk decisions, 0 LLM rows, 0 audit errors. Health ALL OK, lease held, kill switch clear, TRADING_MODE=PAPER, single backend PID. Gate decisions continuing across the 30-symbol universe. No other section changes warranted.
 
 
 ## Latest Checkpoint: 2026-08-29T10:05Z (cron-2)
