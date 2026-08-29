@@ -162,6 +162,23 @@ class ProjectionBuilder:
         return self.snapshot
 
 
+# Entry types that live only inside the perpetual engine and never appear
+# in the paper SPOT exchange view. Both the reconciliation replay and the
+# paper-exchange ledger hydration use this scope so the two views stay
+# comparable.
+FUTURES_EXCLUDED_ENTRY_TYPES: tuple[str, ...] = tuple(
+    str(value)
+    for value in (
+        "FUTURES_MARGIN_POST",
+        "FUTURES_MARGIN_RELEASE",
+        "FUTURES_REALIZED_PNL",
+        "FUTURES_TRADING_FEE",
+        "FUNDING_PAYMENT",
+        "FUNDING_RECEIPT",
+    )
+)
+
+
 async def replay_projections(
     session: AsyncSession,
     initial_balances: dict[str, Decimal] | None = None,

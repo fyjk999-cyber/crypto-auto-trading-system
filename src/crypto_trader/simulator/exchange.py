@@ -463,10 +463,17 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         service (correctly) halts all execution. The ledger is the source of
         truth, so the paper exchange adopts it on startup.
         """
-        from crypto_trader.ledger.projections import replay_projections
+        from crypto_trader.ledger.projections import (
+            FUTURES_EXCLUDED_ENTRY_TYPES,
+            replay_projections,
+        )
 
+        # Same spot scope as ReconciliationService so the hydrated exchange
+        # view stays comparable with the reconciliation replay.
         async with session_factory() as session:
-            snapshot = await replay_projections(session)
+            snapshot = await replay_projections(
+                session, exclude_entry_types=FUTURES_EXCLUDED_ENTRY_TYPES
+            )
         if snapshot.balances:
             self.balances = {
                 currency: D(row["total"])
