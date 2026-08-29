@@ -95,6 +95,7 @@
   RiskEngine/ExecutionAuthority/Ledger unchanged.
 
 
+## 2026-08-29T11:00Z - cron-2 checkpoint: 3 more new-symbol perp fills incl FIRST perp SHORT (WLDUSDT_PERP SELL); bidirectionality proven; all healthy
 ## 2026-08-29T10:30Z - cron-2 checkpoint: FIRST new-symbol paper-perp fill (ENAUSDT_PERP, exploration size, real price, full lineage); expansion chain proven
 ## 2026-08-29T10:12Z - cron-2 checkpoint: ADA fill lineage logged (fit 1.0 watch item); all healthy
 ## 2026-08-29T09:43Z - P2 closure + 30-symbol expansion deployed (bb4fa37)

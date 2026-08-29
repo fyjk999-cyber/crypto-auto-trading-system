@@ -17,3 +17,13 @@ A) Runtime HEALTHY/PAPER ACTIVE; all components OK; lease held; kill switch clea
 C) Fill lineage (FIRST new-symbol paper-perp): ENAUSDT_PERP BUY 0.0005 @0.155425 @10:13:48Z | decision dec_806afd2cc65148fba5e66c606949c297 @10:13:48 (EXPLORATION, fit 0.811) | llm_invocation llm_ca75c0ab805748f08bdc5... | risk risk_e85e5e6bcef14812871db0afc01868a4 APPROVE (RISK_PASS) | order ord_2328cdb9dfee467ebf9c422ddf4eeb17 FILLED (PERPETUAL, LONG) | fill_f099c35a082144a1936fe133872375e9 | client llm_chief_trader_llm_4944e36340b... | ledger FUTURES_TRADING_FEE x2 | real price (ENA ~0.1557 band). Exploration size 0.0005 = the exact size that failed precision before 1da8fee — fix verified in production.
 N) 2x NEARUSDT SPOT_OVERSHORT rejects (correct quant protection, not disagreements). fit=1.0 saturation watch continues (no new instance this window).
 
+### 2026-08-29T11:00Z (cron-2) — 3 new-symbol perp fills; FIRST perp SHORT
+A) Runtime HEALTHY/PAPER ACTIVE; all components OK; lease held; kill switch clear. New-symbol perp path now organically active on 4 of 10 new symbols (ENA/ZEC/ONDO/WLD) within ~2h of deployment.
+C) Fill lineages:
+  - ZECUSDT_PERP BUY 0.0005 @804.855 @10:31:08Z | decision dec_bf0a54c73aab451dbdfd6ea6dbb2d152 (EXPLORATION, fit 0.5x) | llm_invocation llm_c22f95ec744a4dcaa47... | risk risk_df328dcdec8f4573917ac4921d513c56 APPROVE | order ord_194d28526e484775a71aaa96e30c6943 FILLED | fill_4e08db609ffe46418cfc40aa5bb76d68 | real price (ZEC intraday ~792-805 band).
+  - ONDOUSDT_PERP BUY 0.001 @0.34955 @10:43:08Z | decision dec_2fcef6620c2e4356934b1208d33abd2b (NORMAL_ENTRY, fit 1.0) | llm_invocation llm_cb4a87403e85474abb6... | risk risk_8f8332fdf8614d95b91b0874ad171b22 APPROVE | order ord_859715cbc87c4ad789c101dd90715e73 FILLED | fill_4ecdaf838a264a1e993557fa5c878caf | real price (ONDO ~0.348-0.35 band).
+  - WLDUSDT_PERP SELL 0.001 @0.37705 @10:48:56Z (**FIRST new-symbol perp SHORT**) | decision dec_e80393769e27424e8940db313872dc23 (NORMAL_ENTRY, fit 0.8x) | llm_invocation llm_781847d6f6154797b30... | risk risk_948fb8082ce9476dba4477dd2043332f APPROVE | order ord_36df2245306b4f61ba1dd5b635bfe170 FILLED | fill_369db1b600af4ab39e5fbcb57bce652e | real price (WLD ~0.374-0.377 band).
+  - Spot legacy continues: NEARUSDT BUY @1.796 @10:36:28, UNIUSDT BUY @4.374 @11:00:21 (lineage in DB; spot path unchanged).
+N) UNI 11:00 pair: SPOT_OVERSHORT reject then legal LONG approve (protection + retry working as designed). Bridge time-stop exits for the new perp positions will fire at their own 4h anniversaries — next windows to watch.
+
+
