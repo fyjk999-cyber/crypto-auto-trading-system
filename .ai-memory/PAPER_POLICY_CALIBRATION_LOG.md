@@ -69,3 +69,13 @@
 - Reason: activity elevated but orderly - 6 distinct symbols, mixed directions, 3 clean TIME_STOP episodes; BTC_PERP entry+exit within 5min at real prices = natural short cycle, watch but not yet churn (1 occurrence). LOW_SAMPLE_SIZE for params persists
 - Expected effect: none; if 5-min perp cycles recur 2+ windows -> CONTRACT analysis cooldown +60s
 - Next review: 2026-08-29T20:30Z
+
+## 2026-08-29T20:30Z (Phase G window 7)
+- Runtime: OK; Coverage: registry 2029 (runtime fixed-universe; Phase C/D pending)
+- Funnel: LLM 13 / decisions 145 (3L/2S/140NT=96.6%) / fills 5 / FILLED n-a / rejects 0 / episodes 65 (+2)
+- PnL: RPNL 12h -0.7172 unchanged; open 23
+- ACTION: HOLD
+- Changes: none
+- Reason: orderly window; 5 symbols; direction-flip re-entries (XRP) now 2 total but non-consecutive windows -> trigger NOT met (needs 2+ consecutive). LOW_SAMPLE_SIZE persists
+- Expected effect: none; watch XRP/ADA flip pattern next window
+- Next review: 2026-08-29T21:00Z
