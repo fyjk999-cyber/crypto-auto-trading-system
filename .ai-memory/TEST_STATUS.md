@@ -1,5 +1,15 @@
 # TEST_STATUS
 
+- 2026-08-29T14:45Z: tests/integration/test_trade_episodes.py NEW (15 tests, all
+  passing): TIME_STOP episode single+idempotent, entry-only no episode, partial
+  close stays open / full close completes, two same-symbol cycles -> 2 episodes,
+  multiple entries weighted avg (106.666...), LONG+SHORT pnl signs (perp SHORT
+  via canonical engine path), fees=SUM(fill.fee) relational, runtime hook creates
+  episode on close fill, quarantined fills excluded, perp gross from
+  FUTURES_REALIZED_PNL ledger, AI_EXIT payload passthrough, UNKNOWN honest for
+  foreign strategy, lineage_json auditability, daily-review load_episodes,
+  episode key stable across unrelated cycles. Full integration suite: 111
+  passed / 4 skipped. ruff clean on all touched files.
 - 2026-08-29: backend 725 passed / 7 skipped / 2 failed (pre-existing
   live-OKX fixture tests, unrelated); ruff clean; frontend 34 tests + tsc +
   build OK. New regression tests: futures-aware reconciliation, perp

@@ -357,6 +357,15 @@ class AIPositionRuntimeBridge:
             else PositionSide.FLAT
         )
         signal_id = f"ai_{symbol}_{int(datetime.now(UTC).timestamp() * 1000)}"
+        # Exit-reason correlation label (observability only; the decision and
+        # its conditions are unchanged). TIME_STOP must never later be
+        # mis-attributed as an AI exit in the learning pipeline.
+        if evaluation.reason.startswith("EXPLORATION_TIME_STOP"):
+            exit_reason = "TIME_STOP"
+        elif evaluation.hard_risk_exit:
+            exit_reason = "RISK_EXIT"
+        else:
+            exit_reason = "AI_EXIT"
         signal = SignalIntent(
             signal_id=signal_id,
             strategy_id="ai_brain",
@@ -368,6 +377,7 @@ class AIPositionRuntimeBridge:
             market_type=market_type,
             position_side=position_side,
             reduce_only=evaluation.reduce_only,
+            metadata={"exit_reason": exit_reason, "signal_id": signal_id},
         )
         try:
             decision = await engine.process_signal(signal)

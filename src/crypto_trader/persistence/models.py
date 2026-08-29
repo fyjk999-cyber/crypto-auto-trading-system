@@ -385,6 +385,15 @@ class AITradeEpisodeORM(Base):
     mae: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     result: Mapped[str] = mapped_column(String(16), default="")
     review_status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    # Learning-pipeline lineage columns (P2 repair, trade_episodes.py).
+    # Added idempotently at runtime too; nullable here so legacy rows read fine.
+    market_type: Mapped[str] = mapped_column(String(16), default="SPOT")
+    direction: Mapped[str] = mapped_column(String(8), default="LONG")
+    exit_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gross_pnl: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    fees: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    net_pnl: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    lineage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

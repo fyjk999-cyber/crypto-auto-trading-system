@@ -50,6 +50,7 @@ from crypto_trader.exchange.base import ExchangeAdapter
 from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
 from crypto_trader.governance.memory import TradeMemoryRecord
 from crypto_trader.governance.memory_persistence import MemoryPersistence
+from crypto_trader.governance.trade_episodes import record_cycle_for_fill_sync
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
 from crypto_trader.market_data.service import MarketDataService
@@ -497,10 +498,13 @@ class TradingEngine:
                 "reference_market_symbol": (
                     intent.metadata or {}
                 ).get("reference_market_symbol", reference_symbol_for(intent.symbol)),
+                "exit_reason": (intent.metadata or {}).get("exit_reason", ""),
                 "paper_execution": True,
             },
         )
         await self.order_manager.apply_fill(fill)
+        if intent.reduce_only:
+            await self._record_trade_episode(fill.fill_id, intent.symbol)
         await self.audit.log(
             "PERPETUAL_ORDER_FILLED",
             target=client_order_id,
@@ -808,6 +812,34 @@ class TradingEngine:
         )
         await self.order_manager.apply_fill(fill)
 
+    def _sqlite_file(self) -> str | None:
+        url = str(getattr(self.database, "url", "") or "")
+        if "sqlite" not in url:
+            return None
+        path = url.split("sqlite+aiosqlite:///")[-1].split("sqlite:///")[-1]
+        return path or None
+
+    async def _record_trade_episode(self, fill_id: str, symbol: str) -> None:
+        """Closed-cycle episode persistence (learning input, read-model side).
+
+        Never raises into the trading path; idempotent by episode key.
+        """
+        try:
+            db_file = self._sqlite_file()
+            if db_file:
+                record_cycle_for_fill_sync(
+                    db_file,
+                    fill_id,
+                    symbol,
+                    time_stop_seconds=self.settings.exploration_max_holding_seconds
+                    if self.settings.exploration_mode_active
+                    else None,
+                )
+        except Exception:
+            await self.audit.log(
+                "TRADE_EPISODE_RECORD_FAILED", target=fill_id
+            )
+
     async def _persist_risk(self, decision: RiskDecision) -> None:
         async with self.database.session_factory() as session:
             session.add(
@@ -977,6 +1009,9 @@ class TradingEngine:
             metadata=metadata,
         )
         await self.portfolio.refresh(initial_balances=self._initial_balances)
+        position_after = await self.portfolio.get_position(fill.symbol)
+        if position_after is None or position_after.quantity == 0:
+            await self._record_trade_episode(fill.fill_id, fill.symbol)
         await self.audit.log(
             "FILL_SETTLED",
             target=fill.fill_id,

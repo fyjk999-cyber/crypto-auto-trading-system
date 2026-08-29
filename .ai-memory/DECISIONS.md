@@ -1,5 +1,15 @@
 # DECISIONS
 
+- 2026-08-29T14:45Z (Episode pipeline): (1) Episode persistence at trade close
+  confirmation (engine close hook), not at Daily Review. (2) episode_id =
+  eps-{sha1-24(symbol|market|entry fills|exit fills)} - stable dedupe-safe key.
+  (3) Perp gross from FUTURES_REALIZED_PNL ledger metadata (canonical), spot
+  deterministic rebuild; fees = SUM(fill.fee); net = gross - fees. (4) TIME_STOP
+  attribution = SYSTEM/LIFECYCLE, never AI; legacy ai_brain reduce-only exits
+  >= 4h -> TIME_STOP else UNKNOWN. (5) Quarantined fills excluded. (6) Partial
+  close never an episode. (7) Runtime hook exception-safe. (8) Backend kill =
+  external session SIGTERM; direct nohup launch for recovery.
+
 - 2026-08-29 (ARCHITECTURE GUARDRAIL, user interrupt): AI-FIRST /
   QUANT-AS-EVIDENCE recorded as a permanent Architecture Invariant in
   HARNESS_GOAL.md (and here). Live-path audit results: (1) no forced/

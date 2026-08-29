@@ -1,5 +1,40 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T14:45:00+00:00 (P2 TRADE EPISODE PIPELINE COMPLETE + runtime
+  backend killed externally 3rd time; relaunched via direct
+  `uv run python -m crypto_trader.runtime.local_runner` nohup, health OK 14:23Z)
+- **TRADE_EPISODE_PIPELINE = OPERATIONAL** (P2 interrupt 3 repair):
+  - ROOT CAUSE of ai_trade_episodes=0: `LLMMemoryStore.save_episode` was NEVER
+    called by any runtime path; trade_memory_records are per-fill entry
+    captures, not completed trades.
+  - NEW `src/crypto_trader/governance/trade_episodes.py`: canonical fills x orders
+    replay -> flat-to-flat trade cycles -> AITradeEpisode rows. Deterministic,
+    idempotent (episode_id = eps-{sha1(symbol|market|entry_fills|exit_fills)}),
+    quarantined fills (EVIDENCE_QUARANTINE) excluded, weighted avg entry/exit,
+    fees = SUM(fill.fee) (no double count), perp gross from FUTURES_REALIZED_PNL
+    ledger metadata (canonical), spot gross = deterministic rebuild,
+    net = gross - fees, result WIN/LOSS/BREAKEVEN, exit_reason classification
+    (payload exit_reason -> AI_EXIT_INTENT audit -> legacy ai_brain+4h -> TIME_STOP;
+    else UNKNOWN; TIME_STOP NEVER labelled AI_EXIT).
+  - SCHEMA: ai_trade_episodes + market_type/direction/exit_reason/gross_pnl/fees/
+    net_pnl/lineage_json (idempotent ALTER TABLE + ORM mapping).
+  - WIRING: engine `_settle_fill` spot flat check + perp reduce-only fill ->
+    `_record_trade_episode` (exception-safe, never blocks trading); bridge
+    `_submit_exit` now writes metadata {exit_reason} (TIME_STOP/RISK_EXIT/AI_EXIT)
+    on the exit SignalIntent; engine perp fill payload passes exit_reason through.
+  - PROOF (live DB): 34 backfilled + 3 hook-created = 37 episodes, incl.
+    LINKUSDT 07:25->11:25 cycle exit_reason=TIME_STOP holding 14405s (NOT
+    AI_EXIT), BTCUSDT_PERP 2 cycles (24210s/14401s, net -0.611312/-0.124806
+    from ledger), ENAUSDT_PERP natural 14:17Z 4h exit carried
+    exit_reason=TIME_STOP through bridge->engine->fill payload->episode.
+  - Daily Review input: LLMMemoryStore.load_episodes reads completed episodes
+    (tested); scheduler continues reading trade_memory entries + episodes now
+    available as outcome unit.
+- Runtime backend killed externally again (3rd time, graceful SIGTERM, ~14:15Z);
+  launchd watchdog unusable (macOS TCC blocks ~/Documents). Recovery: direct
+  nohup `uv run alembic upgrade head && uv run python -m crypto_trader.runtime.local_runner`
+  (bypasses start-local-system.sh trap). Health 200, lease held, 19 open
+  positions (10 spot + 9 perp), PAPER_EXPLORATION_MODE=true.
 - Updated: 2026-08-29T08:30:00+00:00 (checkpoint cron-2: continuous cycling - 3 exits + 4 AI re-entries since 08:00; 12 positions; 16 LLM calls; 0 errors; health OK)
 - **PHASE 2  OVERNIGHT LONG-RUN PAPER OBSERVATION MODE**
 - FIRST_AI_PAPER_FILL = YES

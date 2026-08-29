@@ -1,5 +1,14 @@
 # CHANGELOG
 
+- 2026-08-29T14:45Z (P2 Trade Episode / Learning Pipeline repair): NEW
+  governance/trade_episodes.py (canonical cycle replay -> AITradeEpisode,
+  deterministic idempotent backfill + runtime hook), engine close hooks
+  (spot flat + perp reduce-only), bridge exit metadata exit_reason
+  (TIME_STOP/RISK_EXIT/AI_EXIT) + engine payload passthrough, ai_trade_episodes
+  schema extension, 15 targeted integration tests, live-DB backfill 37 episodes.
+  No trading-architecture changes; exits are the same natural 4h time-stops,
+  now durably labelled.
+
 - 2026-08-29: PAPER E2E loop: fixed restart reconciliation halt (ledger
   hydration, 2f1c527), reference-symbol refresh (11a93bf), fake-price match
   clobber (53c4f57), futures-aware reconciliation (1b83f05, c432a06),
