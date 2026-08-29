@@ -281,14 +281,17 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             base="BTC",
             quote="USDT",
             settlement_asset="USDT",
+            quantity_step=Decimal("0.00001"),
             max_leverage=Decimal("6"),
             taker_fee_rate=Decimal("0.0005"),
         )
     ]
     # (base, contract_size=OKX ctVal, tick_size=OKX spot tickSz,
     #  quantity_step=PAPER sizing step). quantity_step is a PAPER-internal
-    # sizing step (uniform 0.001 base units for exploration sizing); notional
-    # realism comes from contract_size x real OKX reference price.
+    # sizing granularity (1e-5 base units) so every documented exploration
+    # size (25-50% of normal 0.001 -> 0.00025/0.0005) passes the authority
+    # precision gate exactly; notional realism comes from contract_size x
+    # real OKX reference price. Fail-closed authority checks stay intact.
     _PAPER_PERP_SPECS = {
         "HYPEUSDT": ("HYPE", Decimal("0.1"), Decimal("0.001")),
         "ZECUSDT": ("ZEC", Decimal("0.01"), Decimal("0.01")),
@@ -313,7 +316,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 settlement_asset="USDT",
                 contract_size=_ctval,
                 tick_size=_tick,
-                quantity_step=Decimal("0.001"),
+                quantity_step=Decimal("0.00001"),
                 max_leverage=Decimal("6"),
                 taker_fee_rate=Decimal("0.0005"),
             )

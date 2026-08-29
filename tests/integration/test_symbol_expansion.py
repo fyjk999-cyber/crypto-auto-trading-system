@@ -235,3 +235,30 @@ async def test_multi_perp_reconciliation_excludes_futures_entries(database):
         assert halted is False
     finally:
         await bundle.engine.stop()
+
+async def test_exploration_sized_perp_entry_passes_precision(database):
+    """EXPLORATION_ENTRY sizing (0.5 x normal 0.001 = 0.0005) must pass the
+    authority precision gate on a paper-perp contract (PAPER sizing step
+    1e-5); the legal signal executes instead of failing closed."""
+    bundle = await _make_bundle(database)
+    try:
+        await _seed_book(bundle, "ONDOUSDT", "0.3483")
+        decision = await bundle.engine.process_signal(
+            SignalIntent(
+                signal_id="sig_ondo_exploration",
+                strategy_id="test",
+                symbol="ONDOUSDT_PERP",
+                side=OrderSide.BUY,
+                quantity="0.0005",
+                order_type=OrderType.MARKET,
+                reason="exploration sized perp entry",
+                market_type=MarketType.PERPETUAL,
+                position_side=PositionSide.LONG,
+            )
+        )
+        assert decision.decision == ExecutionDecision.APPROVE, decision.reason
+        state = await bundle.engine.perpetual_engine.load_state()
+        pos = state.positions.get("ONDOUSDT_PERP")
+        assert pos is not None and not pos.is_flat
+    finally:
+        await bundle.engine.stop()
