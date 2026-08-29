@@ -216,6 +216,10 @@ not an AI judgment error — AI reasoning itself was consistent.
 - Checkpoint 08:00Z: ETH AI re-entry @2435 (clean cycle on formerly tainted
   symbol). 19 decisions (18 NT / 1 L), 1 live_analysis success, fsnap 152
   rows, 0 errors, 0 stuck, overall OK.
+- Checkpoint 08:30Z: continuous cycling confirmed - exits DOT 0.8382,
+  BCH 243.7, OP 0.08897 (true anniversaries); AI re-entries SOL 103.55,
+  BNB 686.7, APT 0.5354, ARB 0.08713. 114 decisions (108 NT / 4 L / 2 S),
+  16 live_analysis all success, fsnap 266 rows, 0 errors, 0 stuck.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id
