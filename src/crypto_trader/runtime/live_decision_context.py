@@ -25,6 +25,7 @@ class LiveDecisionBundle:
     factor_snapshot: dict
     evidence: dict  # StrategyEvidencePackage.to_dict()
     technical_indicators: dict = field(default_factory=dict)
+    snapshot_persist_ok: bool = True
 
 
 class LiveDecisionContextProvider:
@@ -112,16 +113,20 @@ class LiveDecisionContextProvider:
             candles=candles,
             market_data=market_data,
         )
+        persist_ok = True
         if self.snapshot_persister is not None:
             try:
                 await self.snapshot_persister(snapshot)
             except Exception:
                 # Evidence durability is important but must not gate the
                 # decision itself; the AI decision path continues either way.
-                pass
+                # The failure IS surfaced: bundle flag -> decision evidence
+                # marker -> (wrapper) audit/health.
+                persist_ok = False
         technical = calculate_technical_indicators(candles)
         factor_snapshot = snapshot.to_dict()
         factor_snapshot["technical_indicators"] = technical
+        factor_snapshot["snapshot_persist_ok"] = persist_ok
         factor_snapshot["technical_indicator_authority"] = "ADVISORY"
         evidence = self._builder_for(current_symbol).build(
             candles, market_data, timestamp=datetime.now(UTC).isoformat()
@@ -132,4 +137,5 @@ class LiveDecisionContextProvider:
             factor_snapshot=factor_snapshot,
             evidence=evidence.model_dump(mode="json"),
             technical_indicators=technical,
+            snapshot_persist_ok=persist_ok,
         )

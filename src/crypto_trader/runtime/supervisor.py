@@ -7,6 +7,7 @@ Each loop owns its own heartbeat and can be supervised/restarted independently.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -33,6 +34,8 @@ class RuntimeStatus:
     open_orders: int = 0
     git_sha: str = "unknown"
 
+
+logger = logging.getLogger(__name__)
 
 class TradingRuntimeSupervisor:
     """Supervises independent loops. No loop is coupled to a frontend client."""
@@ -114,8 +117,13 @@ class TradingRuntimeSupervisor:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # keep runtime alive: independent loop restart
+            # keep runtime alive: independent loop restart. The exception is
+            # logged before restart: a silently crash-looping loop is
+            # indistinguishable from a healthy-but-idle one.
             if not self._stopping:
+                logger.exception(
+                    "RUNTIME_LOOP_CRASHED name=%s restarting=True", name
+                )
                 self._tasks[name] = asyncio.create_task(
                     self._supervised(name, coro), name=f"runtime-{name}-restart"
                 )

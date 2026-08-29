@@ -180,6 +180,42 @@ class AIPositionRuntimeBridge:
             except Exception:
                 pass
 
+        # Result-aware retry: an EXIT marked in-flight whose order is NOT
+        # outstanding anymore while the position is still open must be
+        # retried (Risk REJECT / Execution HOLD / submission crash /
+        # settled-without-closing all look like this).
+        if self._exit_in_flight and candidates:
+            open_symbols: set[str] = set()
+            list_open = getattr(engine, "order_manager", None)
+            list_open = getattr(list_open, "list_open", None) if list_open else None
+            if list_open is not None:
+                try:
+                    open_symbols = {
+                        o.symbol for o in (await list_open()) if o.reduce_only
+                    }
+                except Exception:
+                    open_symbols = set()
+            for symbol in set(self._exit_in_flight):
+                if symbol in open_symbols:
+                    continue  # genuinely outstanding: keep suppression
+                still_open = any(c[0] == symbol for c in candidates)
+                if not still_open:
+                    self._exit_in_flight.discard(symbol)  # done
+                else:
+                    # position open, no outstanding exit order -> retry
+                    self._exit_in_flight.discard(symbol)
+                    self.decision_history.append(
+                        {
+                            "symbol": symbol,
+                            "action": "EXIT_RETRY_ARMED",
+                            "reason": (
+                                "previous EXIT did not produce an outstanding "
+                                "order; retrying reduce-only exit"
+                            ),
+                            "at": datetime.now(UTC).isoformat(),
+                        }
+                    )
+
         evaluations: list[AIPositionEvaluation] = []
         seen_symbols: set[str] = set()
         for symbol, market_type, side, abs_quantity, entry_price, realized_pnl in candidates:
@@ -333,4 +369,26 @@ class AIPositionRuntimeBridge:
             position_side=position_side,
             reduce_only=evaluation.reduce_only,
         )
-        await engine.process_signal(signal)
+        try:
+            decision = await engine.process_signal(signal)
+        except Exception:
+            # The EXIT never reached a durable outcome; allow a later round
+            # to retry instead of suppressing it forever.
+            self._exit_in_flight.discard(symbol)
+            raise
+        outcome = getattr(decision, "decision", None)
+        status = str(getattr(outcome, "value", outcome) or "").upper()
+        if status != "APPROVE":
+            # Risk REJECT / Execution HOLD / any non-approval: the exit was
+            # not submitted; clear suppression so a later round can retry.
+            self._exit_in_flight.discard(symbol)
+            self.last_decision[symbol] = f"EXIT_{status or 'REJECTED'}"
+            self.decision_history.append(
+                {
+                    "symbol": symbol,
+                    "action": f"EXIT_{status or 'REJECTED'}",
+                    "reason": str(getattr(decision, "reason", ""))[:160],
+                    "retry": True,
+                    "at": datetime.now(UTC).isoformat(),
+                }
+            )

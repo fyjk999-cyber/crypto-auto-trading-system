@@ -142,12 +142,22 @@ class TradingEngine:
                 )
                 rows = result.all()
         except Exception:
+            logger.warning(
+                'QUARANTINE_LOAD_FAILED quarantined fills not loaded this start'
+            )
             return set()
         quarantined: set[str] = set()
         for row in rows:
+            payload = row[0]
             try:
-                payload = json.loads(row[0] or '{}')
-                quarantined.update(payload.get('tainted_fill_ids') or [])
+                # SQLite stores JSON as TEXT; PostgreSQL native JSON arrives
+                # already decoded as dict/list. Handle both.
+                if isinstance(payload, (dict, list)):
+                    decoded = payload
+                else:
+                    decoded = json.loads(payload or '{}')
+                if isinstance(decoded, dict):
+                    quarantined.update(decoded.get('tainted_fill_ids') or [])
             except Exception:
                 continue
         return quarantined
@@ -670,7 +680,19 @@ class TradingEngine:
                 client_order_id=client_order_id,
                 after={"notes": notes},
             )
-            return risk_decision
+            # Return the FINAL outcome truthfully: callers (bridge result
+            # tracking, tests) must see HOLD/REJECT, not the intermediate
+            # risk approval. Audit facts keep both stages.
+            return risk_decision.model_copy(
+                update={
+                    "decision": decision,
+                    "reason": f"AUTHORITY_{decision.value}: {notes}",
+                    "checks": {
+                        **risk_decision.checks,
+                        "authority_notes": list(notes or []),
+                    },
+                }
+            )
 
         # Route PERPETUAL orders to the paper perpetual engine; SPOT orders
         # continue through the spot order lifecycle below.

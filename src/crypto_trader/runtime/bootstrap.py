@@ -196,13 +196,43 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             await client.disconnect()
 
     factor_service = FactorService(database.session_factory)
+    snapshot_health_holder: dict = {}
+
+    async def _persist_factor_snapshot(snapshot) -> None:
+        """Persist a decision-time snapshot with DURABLE failure telemetry.
+
+        Success: row in factor_snapshots (fsnap_* ids replayable).
+        Failure: SNAPSHOT_PERSIST_FAILED audit event + health flag; the
+        failure never gates the decision but is always observable.
+        """
+        try:
+            await factor_service.save_snapshot(snapshot)
+            health = snapshot_health_holder.get("health")
+            if health is not None:
+                health.set("factor_snapshots", True)
+        except Exception as exc:
+            health = snapshot_health_holder.get("health")
+            if health is not None:
+                health.set(
+                    "factor_snapshots", False, f"{type(exc).__name__} persist failed"
+                )
+            try:
+                await audit.log(
+                    "SNAPSHOT_PERSIST_FAILED",
+                    target=getattr(snapshot, "snapshot_id", "unknown"),
+                    after={"error": type(exc).__name__},
+                )
+            except Exception:
+                pass
+            raise
+
     decision_context_provider = LiveDecisionContextProvider(
         candle_provider=_live_candle_provider,
         symbol=symbols[0],
         candle_cache_seconds=settings.opportunity_candle_cache_seconds,
         # Directive P2: persist every decision-time factor snapshot so the
         # fsnap_* ids referenced by decision evidence resolve after restart.
-        snapshot_persister=factor_service.save_snapshot,
+        snapshot_persister=_persist_factor_snapshot,
     )
     opportunity_scanner = CheapOpportunityScanner(
         min_score=settings.opportunity_min_score,
@@ -332,6 +362,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         perpetual_engine=perpetual_engine,
         require_lease=True,
     )
+    snapshot_health_holder["health"] = engine.health
 
     app_state = AppState(
         settings=settings,

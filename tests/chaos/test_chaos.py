@@ -410,7 +410,9 @@ async def test_stale_market_data_execution_block_test(database):
     decision = await engine.process_signal(_signal())
     order = await engine.order_manager.get_by_client("sig_chaos")
     assert order is None
-    assert decision.decision.value == "APPROVE"  # risk passed, authority HOLD blocked creation
+    # process_signal returns the FINAL outcome truthfully: the authority
+    # HOLD is surfaced (risk stage approved; both stages are in the audit).
+    assert decision.decision.value == "HOLD"
     await engine.stop()
 
 

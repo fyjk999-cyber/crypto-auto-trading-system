@@ -608,6 +608,13 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             "factor_profile": "FULL",
             "market_data_reference": f"tick:{ctx.symbol}@{ctx.clock_time.isoformat()}",
             "analysis_evidence": {
+                # Directive P2: snapshot durability is part of lineage. A
+                # decision whose factor snapshot failed to persist, or whose
+                # snapshot id cannot be resolved durably, is marked here so
+                # it can never silently qualify as valid AI fill lineage.
+                "factor_snapshot_persist_ok": bool(
+                    chief_ctx.factor_snapshot.get("snapshot_persist_ok", True)
+                ),
                 "llm_invocation_id": decision.llm_invocation_id,
                 "provider": getattr(self.provider, "name", ""),
                 "domain_model_version": getattr(self.provider, "domain_model_version", ""),
