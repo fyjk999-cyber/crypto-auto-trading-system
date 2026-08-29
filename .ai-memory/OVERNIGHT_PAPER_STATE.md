@@ -2,7 +2,7 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T10:12Z (cron-2; covers the missed 10:06:50Z ADA fill)
+Latest Checkpoint: 2026-08-29T10:30Z (cron-2; FIRST new-symbol paper-perp fill)
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
@@ -49,6 +49,10 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 ## 2026-08-29T10:12Z checkpoint (cron-2)
 - New fill caught between re-fires: ADAUSDT BUY 0.001 @0.1994 @10:06:50Z (real price, full lineage in REVIEW C). fills total 56; 0 stuck orders; 0 errors; health ALL OK; lease held; kill switch clear; TRADING_MODE=PAPER.
 - Watch: second consecutive strategy_fit_score=1.0 entry (OP 10:01, ADA 10:06) — evidence-adjusted fit appears to saturate at the ceiling when strategies align; does not gate trading legality (Risk/Authority unchanged) but flag for Daily Learning review.
+
+## 2026-08-29T10:30Z checkpoint (cron-2) — FIRST NEW-SYMBOL PAPER-PERP FILL
+- ENAUSDT_PERP BUY 0.0005 @0.155425 @10:13:48Z: the exact exploration size that failed precision before 1da8fee now executes end-to-end (AI -> <REF>_PERP routing -> real OKX reference price -> Risk APPROVE -> Authority APPROVE -> paper perp fill -> FUTURES_TRADING_FEE x2 ledger). Expansion chain proven organically, no forced trades.
+- Window: 1 fill (total 57), 0 stuck orders, 3 risk decisions (1 ENAUSDT_PERP APPROVE; 2 NEARUSDT SPOT_OVERSHORT rejects = correct protection), 7 LLM rows, 0 errors, 90 new-symbol gate decisions. Health ALL OK, lease held, kill switch clear, TRADING_MODE=PAPER, single backend PID.
 
 
 ## Latest Checkpoint: 2026-08-29T10:05Z (cron-2)

@@ -95,6 +95,7 @@
   RiskEngine/ExecutionAuthority/Ledger unchanged.
 
 
+## 2026-08-29T10:30Z - cron-2 checkpoint: FIRST new-symbol paper-perp fill (ENAUSDT_PERP, exploration size, real price, full lineage); expansion chain proven
 ## 2026-08-29T10:12Z - cron-2 checkpoint: ADA fill lineage logged (fit 1.0 watch item); all healthy
 ## 2026-08-29T09:43Z - P2 closure + 30-symbol expansion deployed (bb4fa37)
 - P2 CS-20260829-064844-P2-EXIT pass conditions implemented+tested (d26e4e8): result-aware EXIT retry (Risk REJECT / authority HOLD-REJECT / exception / stale in-flight clear suppression; process_signal returns the FINAL authority outcome), snapshot durability telemetry (SNAPSHOT_PERSIST_FAILED audit + health flag + evidence marker factor_snapshot_persist_ok), whole tainted ETH episode quarantined (derived exit fill + memory rows; loader handles SQLite TEXT JSON + PG native JSON). 10 exit-lifecycle tests; suite 746 passed (2 documented live-OKX network failures only).

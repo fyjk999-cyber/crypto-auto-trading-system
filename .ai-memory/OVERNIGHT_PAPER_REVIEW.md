@@ -11,3 +11,9 @@ N) Watch: fit=1.0 on OP entry (evidence adjustment ceiling; price+lineage real, 
 A) Runtime HEALTHY/PAPER ACTIVE; all components OK; lease held; kill switch clear; single backend PID. 30-symbol universe cycling.
 C) Fill lineage: ADAUSDT BUY 0.001 @0.1994 @10:06:50Z | decision dec_50e0ff7dbc0c44a7a25f3ce23181b286 @10:06:47 (fit 1.0) | llm_invocation llm_0634c5731c0d410da0ea5... | risk risk_403392e82eaa4430ac2c17caeeb59c13 APPROVE | order ord_b7017a9a320944e1b8a2698f6ae901a7 FILLED | fill_f52229c3743f4234908a398dd534ebd8 | real price (ADA ~0.20 band, consistent with earlier session fills).
 N) Watch: SECOND consecutive fit=1.0 entry (OP 10:01, ADA 10:06) — evidence-adjusted fit appears to saturate at the ceiling; add to Daily Learning review agenda. No AI-vs-Quant disagreement sample this window.
+
+### 2026-08-29T10:30Z (cron-2) — first new-symbol paper-perp fill
+A) Runtime HEALTHY/PAPER ACTIVE; all components OK; lease held; kill switch clear; 30-symbol universe cycling; expansion chain proven organically.
+C) Fill lineage (FIRST new-symbol paper-perp): ENAUSDT_PERP BUY 0.0005 @0.155425 @10:13:48Z | decision dec_806afd2cc65148fba5e66c606949c297 @10:13:48 (EXPLORATION, fit 0.811) | llm_invocation llm_ca75c0ab805748f08bdc5... | risk risk_e85e5e6bcef14812871db0afc01868a4 APPROVE (RISK_PASS) | order ord_2328cdb9dfee467ebf9c422ddf4eeb17 FILLED (PERPETUAL, LONG) | fill_f099c35a082144a1936fe133872375e9 | client llm_chief_trader_llm_4944e36340b... | ledger FUTURES_TRADING_FEE x2 | real price (ENA ~0.1557 band). Exploration size 0.0005 = the exact size that failed precision before 1da8fee — fix verified in production.
+N) 2x NEARUSDT SPOT_OVERSHORT rejects (correct quant protection, not disagreements). fit=1.0 saturation watch continues (no new instance this window).
+
