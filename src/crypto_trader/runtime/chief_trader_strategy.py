@@ -35,8 +35,8 @@ from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.provider import LLMProvider
 from crypto_trader.runtime.execution_symbols import (
-    PAPER_PERPETUAL_EXECUTION_SYMBOL,
     execution_symbol_for,
+    is_paper_perpetual_symbol,
 )
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 
@@ -532,7 +532,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         quantity = self._entry_quantity(decision)
         reference_symbol = ctx.symbol
         execution_symbol = execution_symbol_for(reference_symbol)
-        is_perpetual = execution_symbol == PAPER_PERPETUAL_EXECUTION_SYMBOL
+        is_perpetual = is_paper_perpetual_symbol(execution_symbol)
         market_type = MarketType.PERPETUAL if is_perpetual else MarketType.SPOT
         position_side = (
             PositionSide.LONG if direction == "LONG" else PositionSide.SHORT
@@ -633,7 +633,8 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 # §22 execution lineage recorded with the decision evidence.
                 "market_type": (
                     "PERPETUAL"
-                    if execution_symbol_for(ctx.symbol) == PAPER_PERPETUAL_EXECUTION_SYMBOL
+                    "PERPETUAL"
+                    if is_paper_perpetual_symbol(execution_symbol_for(ctx.symbol))
                     else "SPOT"
                 ),
                 "execution_symbol": execution_symbol_for(ctx.symbol),
@@ -641,7 +642,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "position_side": (
                     ("LONG" if decision.action.upper() == "LONG" else "SHORT")
                     if decision.action.upper() in ("LONG", "SHORT")
-                    and execution_symbol_for(ctx.symbol) == PAPER_PERPETUAL_EXECUTION_SYMBOL
+                    and is_paper_perpetual_symbol(execution_symbol_for(ctx.symbol))
                     else "FLAT"
                 ),
                 "requested_quantity": (

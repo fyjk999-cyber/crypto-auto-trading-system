@@ -456,16 +456,25 @@ class TradingEngine:
         leverage = D(str(self.settings.paper_exploration_leverage))
         if intent.reduce_only:
             await engine.close_position(
-                position_side, qty, price, order_id=order.internal_order_id
+                position_side,
+                qty,
+                price,
+                order_id=order.internal_order_id,
+                symbol=intent.symbol,
             )
         else:
             await engine.open_position(
-                position_side, qty, price, leverage, order_id=order.internal_order_id
+                position_side,
+                qty,
+                price,
+                leverage,
+                order_id=order.internal_order_id,
+                symbol=intent.symbol,
             )
         # §15/§17: persist a canonical FillORM for every PAPER perpetual open
         # and close so orders UI / fills / exploration attribution / Daily
         # Learning all see the same auditable fill record.
-        contract = engine.contract
+        contract = engine.contract_for(intent.symbol) or engine.contract
         fee = qty * price * contract.contract_size * contract.taker_fee_rate
         fill = Fill(
             fill_id=new_id("fill"),
@@ -616,16 +625,21 @@ class TradingEngine:
             and market_type == MarketType.PERPETUAL
             and self.perpetual_engine is not None
         ):
-            contract = self.perpetual_engine.contract
-            instrument = Instrument(
-                symbol=symbol,
-                base_asset=contract.base,
-                quote_asset=contract.quote,
-                status="TRADING",
-                tick_size=contract.tick_size,
-                step_size=contract.quantity_step,
-                exchange="PAPER_PERPETUAL",
-            )
+            contract = self.perpetual_engine.contract_for(symbol)
+            if contract is None:
+                # Not a registered paper-perpetual contract: fail closed via
+                # the authority tradeable gate (instrument stays None).
+                instrument = None
+            else:
+                    instrument = Instrument(
+                        symbol=symbol,
+                        base_asset=contract.base,
+                        quote_asset=contract.quote,
+                        status="TRADING",
+                        tick_size=contract.tick_size,
+                        step_size=contract.quantity_step,
+                        exchange="PAPER_PERPETUAL",
+                    )
         lease_held = (
             self.require_lease
             and self.lease is not None

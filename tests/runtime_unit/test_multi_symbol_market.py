@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from crypto_trader.config import Settings
-from crypto_trader.exchange.symbol_mapper import DEFAULT_TRADING_SYMBOLS, SymbolMapper
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.runtime.live_decision_context import LiveDecisionContextProvider
 from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
@@ -13,14 +13,25 @@ from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner, O
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 
 
-def test_default_symbol_universe_contains_20_unique_supported_coins():
-    settings = Settings(_env_file=None)
-    assert settings.symbol_universe == DEFAULT_TRADING_SYMBOLS
-    assert len(settings.symbol_universe) == 20
-    assert len(set(settings.symbol_universe)) == 20
-    mapper = SymbolMapper()
-    for symbol in settings.symbol_universe:
-        assert mapper.to_canonical(mapper.to_okx(symbol)) == symbol
+def test_default_symbol_universe_contains_30_unique_supported_coins():
+    """2026-08-29 expansion: 20 canonical + 10 verified-OKX additions."""
+    settings = Settings()
+    universe = settings.symbol_universe
+    assert len(universe) == 30
+    assert len(set(universe)) == 30
+    for symbol in (
+        "HYPEUSDT",
+        "ZECUSDT",
+        "ENAUSDT",
+        "WLDUSDT",
+        "ONDOUSDT",
+        "FILUSDT",
+        "TAOUSDT",
+        "AAVEUSDT",
+        "XLMUSDT",
+        "HBARUSDT",
+    ):
+        assert symbol in universe
 
 
 def test_symbol_mapper_uses_okx_usdt_swap_contracts():

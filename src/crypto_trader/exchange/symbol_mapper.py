@@ -23,6 +23,16 @@ DEFAULT_TRADING_SYMBOLS: tuple[str, ...] = (
     "TONUSDT",
     "TRXUSDT",
     "UNIUSDT",
+    "HYPEUSDT",
+    "ZECUSDT",
+    "ENAUSDT",
+    "WLDUSDT",
+    "ONDOUSDT",
+    "FILUSDT",
+    "TAOUSDT",
+    "AAVEUSDT",
+    "XLMUSDT",
+    "HBARUSDT",
 )
 
 

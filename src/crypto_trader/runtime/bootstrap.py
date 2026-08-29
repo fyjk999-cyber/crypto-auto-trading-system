@@ -43,7 +43,10 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
-from crypto_trader.runtime.execution_symbols import execution_symbol_for
+from crypto_trader.runtime.execution_symbols import (
+    PAPER_PERPETUAL_REFERENCE_SYMBOLS,
+    execution_symbol_for,
+)
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
 from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner
@@ -267,18 +270,58 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
-    # The legacy perpetual paper-position engine remains BTC-only. The new
-    # 20-symbol universe expands real market observation + SPOT paper entry;
-    # it does not silently broaden perpetual execution authority.
-    perpetual_contract = PerpetualContract(
-        symbol="BTCUSDT_PERP",
-        base="BTC",
-        quote="USDT",
-        settlement_asset="USDT",
-        max_leverage=Decimal("6"),
-        taker_fee_rate=Decimal("0.0005"),
+    # Generic paper-perpetual registry: one engine instance serves every
+    # registered bidirectional contract (BTC + the 2026-08-29 expansion
+    # batch). Contract specs come from verified OKX public instruments
+    # (SPOT+SWAP live checks, 2026-08-29); PAPER execution only, real OKX
+    # reference prices via the canonical reference book. No new engines.
+    perpetual_contracts = [
+        PerpetualContract(
+            symbol="BTCUSDT_PERP",
+            base="BTC",
+            quote="USDT",
+            settlement_asset="USDT",
+            max_leverage=Decimal("6"),
+            taker_fee_rate=Decimal("0.0005"),
+        )
+    ]
+    # (base, contract_size=OKX ctVal, tick_size=OKX spot tickSz,
+    #  quantity_step=PAPER sizing step). quantity_step is a PAPER-internal
+    # sizing step (uniform 0.001 base units for exploration sizing); notional
+    # realism comes from contract_size x real OKX reference price.
+    _PAPER_PERP_SPECS = {
+        "HYPEUSDT": ("HYPE", Decimal("0.1"), Decimal("0.001")),
+        "ZECUSDT": ("ZEC", Decimal("0.01"), Decimal("0.01")),
+        "ENAUSDT": ("ENA", Decimal("10"), Decimal("0.00001")),
+        "WLDUSDT": ("WLD", Decimal("1"), Decimal("0.0001")),
+        "ONDOUSDT": ("ONDO", Decimal("10"), Decimal("0.0001")),
+        "FILUSDT": ("FIL", Decimal("0.1"), Decimal("0.0001")),
+        "TAOUSDT": ("TAO", Decimal("0.01"), Decimal("0.1")),
+        "AAVEUSDT": ("AAVE", Decimal("0.1"), Decimal("0.01")),
+        "XLMUSDT": ("XLM", Decimal("100"), Decimal("0.00001")),
+        "HBARUSDT": ("HBAR", Decimal("100"), Decimal("0.00001")),
+    }
+    for _ref in PAPER_PERPETUAL_REFERENCE_SYMBOLS:
+        if _ref == "BTCUSDT":
+            continue
+        _base, _ctval, _tick = _PAPER_PERP_SPECS[_ref]
+        perpetual_contracts.append(
+            PerpetualContract(
+                symbol=f"{_ref}_PERP",
+                base=_base,
+                quote="USDT",
+                settlement_asset="USDT",
+                contract_size=_ctval,
+                tick_size=_tick,
+                quantity_step=Decimal("0.001"),
+                max_leverage=Decimal("6"),
+                taker_fee_rate=Decimal("0.0005"),
+            )
+        )
+    perpetual_contract = perpetual_contracts[0]
+    perpetual_engine = PerpetualPaperEngine(
+        database.session_factory, perpetual_contract, contracts=perpetual_contracts
     )
-    perpetual_engine = PerpetualPaperEngine(database.session_factory, perpetual_contract)
 
     # §10: the duplicate-entry gate must see perpetual state. Wired after the
     # engine exists so the adapter can ask "is BTCUSDT_PERP already open?"

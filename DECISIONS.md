@@ -1,0 +1,7 @@
+
+## 2026-08-29T09: Lease-loss incident root cause + operational invariants (commit refs: this commit)
+- ROOT CAUSE (confirmed): Harness executed `DELETE FROM runtime_leases` against the ACTIVE canonical DB while the canonical Runtime was running (test-copy preparation), then did not restart immediately. The lease holder's renewal check found the row missing -> kill switch engaged fail-closed ("execution lease lost") at 09:18-09:24Z. Safety enforcement behaved CORRECTLY; the operational step was wrong.
+- INVARIANT 1: never mutate the active canonical DB's lease table (or any table) while the Runtime is running. Test copies: `cp` to an isolated file first, mutate only the copy. Tests use isolated tmp_path DBs only.
+- INVARIANT 2: "clear runtime_leases" is exclusively a step INSIDE the restart procedure, AFTER all backend processes are verified dead and BEFORE relaunch (single-writer startup).
+- INVARIANT 3: never `git stash push -u` / `pop` / `apply` across ownership boundaries. Supervisor-owned `.ai-memory/CODEX_SUPERVISOR_{DIRECTIVE,LOG,STATUS}.md` must never be captured or overwritten by harness stash operations; restore only explicit harness source/test/doc paths.
+- RECOVERY EVIDENCE: normal launcher single-writer restart 09:2xZ -> ONE backend PID, valid renewing lease, kill switch clear, all health components OK, reconciliation 9/9 OK post-restart, duplicate fill/order/client_order/decision/trade IDs all 0, fills/orders unchanged through the kill window (0 new), positions intact (18 projection rows), equity 100001.67 USDT.
