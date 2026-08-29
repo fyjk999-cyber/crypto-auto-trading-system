@@ -1,5 +1,11 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T17:30:00+00:00 (LONG GOAL Phase A+B complete: capability
+  matrix from live OKX audit, dynamic instrument registry live with 2029
+  instruments, resolver + batch endpoints, tests 7/7, commit 6b21658 pushed;
+  Phase G baseline HOLD logged; runtime PID 48151 stable, PAPER, zero
+  restarts; NEXT = Phase C/D: websocket expansion + Market Observer scaling
+  onto the dynamic universe)
 - Updated: 2026-08-29T17:35:00+00:00 (P0 corrections committed 28c5d1a and
   pushed to origin/main; episodes re-derived 52 clean rows; NOTE: the RUNNING
   runtime PID 48151 still executes pre-correction code until the
