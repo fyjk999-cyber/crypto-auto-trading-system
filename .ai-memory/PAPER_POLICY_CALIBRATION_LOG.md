@@ -108,3 +108,12 @@
 - Reason: churn pattern CLEARED organically (no intra-5min flips; HYPE/ZEC/FIL re-entries are 2-4h TIME_STOP cycles = healthy lifecycle); PnL improved; LLM calls down (10 vs 15). Per sec.64 do not one-way push: keep 300 staged one more window; if window 11 also clean -> rollback to 240 (cancel staged) to avoid unnecessary tightening
 - Expected effect: none now; decision on staged-300 rollback at window 11
 - Next review: 2026-08-29T22:30Z
+
+## 2026-08-29T22:30Z (Phase G window 11) - ACTION: ROLLBACK (cancel staged CONTRACT)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 10 / decisions 144 (1L/4S/139NT=96.5%) / fills 2 / rejects 0 / episodes 79 (+1)
+- PnL: RPNL 12h -0.2613; open 19
+- ACTION: ROLLBACK of staged CONTRACT (per sec.64 rollback plan)
+- Changes: .env ENTRY_COOLDOWN_SECONDS 300 -> 240 (restore baseline; the staged 300 NEVER took effect - runtime unchanged). Current runtime continues on 240 as before
+- Reason (pre-declared trigger met exactly): window 11 is the SECOND consecutive clean window (no intra-5min flips; SUI/AAVE re-entries are 3-3.4h lifecycle cycles); churn resolved organically without parameter change -> tightening would be unjustified. LLM calls stable-low (10). PnL improved and stable
+- Expected effect: none (baseline restored); monitor for churn recurrence - if it returns 2 consecutive windows, re-stage CONTRACT
+- Next review: 2026-08-29T23:00Z

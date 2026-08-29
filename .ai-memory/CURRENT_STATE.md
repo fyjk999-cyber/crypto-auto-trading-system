@@ -1,5 +1,6 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T22:30:00+00:00 (cron-7: window 11 clean, staged-CONTRACT rolled back per sec.64, episodes 79, zero restarts)
 - Updated: 2026-08-29T22:00:00+00:00 (cron-7: window 10 churn cleared, RPNL improved -0.2611, episodes 78, staged-300 rollback decision due; zero restarts)
 - Updated: 2026-08-29T21:30:00+00:00 (cron-7: window 9 first CONTRACT - cooldown 240->300 staged in .env, episodes 74, zero restarts)
 - Updated: 2026-08-29T21:00:00+00:00 (cron-7: window 8 - episodes 69, flip-pattern watch active, Phase G HOLD; zero restarts)

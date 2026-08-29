@@ -13,5 +13,5 @@
 | paper_exploration_size | 0.0005 | 0.0001 | 0.0005 | 0.001 | ±0.0001 |
 | max_paper_concurrent_positions | 8 | 4 | 8 | 16 | ±2 |
 
-Last action: CONTRACT @ 2026-08-29T21:30Z (cooldown 240->300 via .env; rollback=240).
+Last action: ROLLBACK @ 2026-08-29T22:30Z (staged 300 cancelled; baseline 240 restored before effect).
 Rollback = restore prior row values (§64). Small steps only (§83).
