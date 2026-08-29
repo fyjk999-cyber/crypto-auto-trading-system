@@ -203,6 +203,9 @@ not an AI judgment error — AI reasoning itself was consistent.
   hang was a DIAGNOSIS TIME-BASE ERROR (internal clock drift vs date -u);
   the engine never hung. Supervisor silent-loop-restart logging added
   regardless (observability).
+- Checkpoint 07:56Z (queued 07:30 firing): delta only - NEARUSDT time-stop
+  exit @1.789 (real price, true 4h anniversary), positions 11 -> 10. Health
+  OK, 0 errors, LLM flow active.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id
