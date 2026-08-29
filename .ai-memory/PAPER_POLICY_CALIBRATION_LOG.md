@@ -59,3 +59,13 @@
 - Reason: highest-quality window so far - 7-symbol diversity, mixed spot/perp, mixed directions, no re-entry churn (ADA flip did NOT recur -> no CONTRACT trigger), episode attribution flowing. NO_TRADE 96.4% natural
 - Expected effect: none; window-4 ADA trigger cleared; continue baseline
 - Next review: 2026-08-29T20:00Z
+
+## 2026-08-29T20:00Z (Phase G window 6)
+- Runtime: OK; Coverage: registry 2029 (runtime fixed-universe; Phase C/D pending)
+- Funnel: LLM 13 / decisions 145 (1L/3S/141NT=97.2%) / fills 7 / FILLED 7 / rejects 0 / episodes 63 (+5, biggest window)
+- PnL: RPNL 12h 13 rows cum -0.7172 (BTC_PERP cycle settled -0.0936); open 22
+- ACTION: HOLD
+- Changes: none
+- Reason: activity elevated but orderly - 6 distinct symbols, mixed directions, 3 clean TIME_STOP episodes; BTC_PERP entry+exit within 5min at real prices = natural short cycle, watch but not yet churn (1 occurrence). LOW_SAMPLE_SIZE for params persists
+- Expected effect: none; if 5-min perp cycles recur 2+ windows -> CONTRACT analysis cooldown +60s
+- Next review: 2026-08-29T20:30Z

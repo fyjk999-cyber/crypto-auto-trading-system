@@ -1,5 +1,6 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-29T20:00:00+00:00 (cron-7: window 6 active - 7 fills/6 symbols incl BTC_PERP 5-min cycle, episodes 63, Phase G HOLD; zero restarts)
 - Updated: 2026-08-29T19:30:00+00:00 (cron-7: window 5 best diversity - 7 fills/7 symbols, episodes 58, Phase G HOLD; zero restarts)
 - Updated: 2026-08-29T19:00:00+00:00 (cron-7: window 4 - ADA round-trip + ONDO perp entry, episodes 55, Phase G HOLD; zero restarts)
 - Updated: 2026-08-29T18:30:00+00:00 (cron-7: window 3 quiet - 1 real fill, episodes 55, Phase G HOLD; zero restarts)
