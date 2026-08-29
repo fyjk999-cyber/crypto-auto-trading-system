@@ -62,6 +62,11 @@ Layer counts (all-time decision_evidence, /trading-funnel):
 6.4 AVAXUSDT LONG 0.0005 @ 7.27 - 03:06:04Z. OPEN. Real price.
 6.5 APTUSDT LONG 0.001 @ 0.5359 - 03:13:06Z. OPEN. Real price.
 
+6.6 SUIUSDT LONG 0.001 @ 0.7387 - 03:19:14Z - dec_4a4956f6308247279d,
+    mean_reversion, fit 1.0/conf 0.8, eir llm_61b791bf4f2843498051, fill
+    fill_f707210b36bf4a3c8cae5c5b2352276e / ord_bcfdc3736b8248c8953ad552281163c9.
+    Thesis: oversold z -2.29, RSI 26.9, negative funding noted. OPEN.
+
 ## D. Best Trades
 
 TBD — positions still open. Early observation: BTC entry thesis was
@@ -134,6 +139,8 @@ not an AI judgment error — AI reasoning itself was consistent.
   Runtime restarted healthy; no trades affected.
 - Checkpoint 03:15Z: 3 more clean AI fills (LINK 11.379, AVAX 7.27, APT
   0.5359 - all real prices), 0 stuck orders, 0 errors, overall OK.
+- Checkpoint 03:30Z: 1 new clean fill (SUI 0.7387), 42 decisions (40
+  NO_TRADE / 1 LONG / 1 SHORT), 5 live_analysis all success, 0 errors.
 - Fixed during the session: gateway health misfire, live prompt read-only
   bias, quant hard gates, fake fill price, restart reconciliation halt,
   stale refresh symbol, match-book clobber, perp gate loss, order-id

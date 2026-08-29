@@ -2,13 +2,13 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T03:15:00Z
+Latest Checkpoint: 2026-08-29T03:30:00Z
 
 Runtime: ACTIVE
 PAPER Mode: CONFIRMED (TRADING_MODE=PAPER, LIVE_TRADING_ENABLED=false, PAPER_MODE=PAPER_REAL_MARKET)
 Market: OKX REAL (public data only)
 
-Trades: 9 clean AI fills (BTCUSDT_PERP, BNBUSDT, DOGEUSDT, XRPUSDT, SOLUSDT @103.89, ADAUSDT @0.2012, LINKUSDT @11.379, AVAXUSDT @7.27, APTUSDT @0.5359)
+Trades: 10 clean AI fills (BTCUSDT_PERP, BNBUSDT, DOGEUSDT, XRPUSDT, SOLUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, APTUSDT, SUIUSDT @0.7387)
 Wins: 0 (no closed rounds yet)
 Losses: 0
 Realized PnL: 0 (all positions open; bridge owns exits)
