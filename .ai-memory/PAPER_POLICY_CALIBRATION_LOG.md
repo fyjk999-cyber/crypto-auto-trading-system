@@ -153,3 +153,14 @@
 - Reason: SIXTH consecutive clean window; BCH 25min within-cycle behavior above churn threshold; all re-entries lifecycle-consistent. Baseline steady state holds across 6 windows (3h observation span)
 - Expected effect: none; steady state
 - Next review: 2026-08-30T01:00Z
+
+## 2026-08-30T01:00Z (Phase G window 16) - ACTION: CONTRACT (re-staged)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 9 / decisions 144 (3L/2S/139NT) / fills 6 / episodes 93 (+3, incl UNKNOWN-exit TRX LOSS)
+- PnL: RPNL 12h -0.3236; open ~23
+- ACTION: CONTRACT (bounded single step, sec.26/48; same as window-9 action)
+- Changes: .env ENTRY_COOLDOWN_SECONDS 240 -> 300 (+60s, within MAX_CHANGE +-60s); effective at next Supervisor-authorized restart
+- Reason (multi-factor sec.48, churn recurrence CONFIRMED): TRX 3 flips in 45s-6min at near-identical prices (0.34067->0.34056->0.34055) = textbook intra-5min flip churn, EXACTLY the pre-staged trigger from windows 8-9; + LTC 14min flip; episode attribution shows first UNKNOWN exit_reason (churn episode not cleanly attributed) - attribution quality issue to track
+- Expected effect: 25% fewer entry slots per symbol/hour; should break the 45s re-fire loop at next restart; AI authority untouched (temporal safety only)
+- ROLLBACK PLAN (sec.64): 2 consecutive clean windows after change takes effect -> restore 240; NO_TRADE >99% with no structural reason -> immediate restore
+- Note: exit_reason=UNKNOWN is new - flag for restart-time episode re-derivation (delete + record_all_cycles_sync already planned)
+- Next review: 2026-08-30T01:30Z

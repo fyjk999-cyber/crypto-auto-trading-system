@@ -2,7 +2,11 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-30T00:30Z (cron-7 deep, Phase G window 15)
+Latest Checkpoint: 2026-08-30T01:00Z (cron-7 deep, Phase G window 16)
+- Runtime: PID 48151 stable (zero restarts), health OK, recon PASS, one lease, frontend 200
+- Window 00:30-01:00Z: 6 fills; TRX CHURN ANOMALY (3 flips in 45s-6min @ near-identical prices 0.3406x); LTC 14min flip; SOL 4h cycle
+- Episodes 93 (34W/59L, +3 incl first UNKNOWN-exit TRX LOSS); RPNL 12h -0.3236; 0 errors
+- CALIBRATION: CONTRACT re-staged (240->300 via .env, effective next restart; rollback=240 after 2 clean windows)
 - Runtime: PID 48151 stable (zero restarts), health OK, recon PASS, one lease, frontend 200
 - Window 00:00-00:30Z: 6 fills (NEAR 1.865, ENA_PERP 0.159695, FIL_PERP 0.68125, XRP 1.3931, BCH 246.8, LTC 48.84 - all REAL), decisions 141, LLM 14/78.3k
 - Episodes 90 (33W/57L, +3); RPNL 12h -0.3236 stable; dups 0; 23 open; 0 errors

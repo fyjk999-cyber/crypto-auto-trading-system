@@ -1,5 +1,6 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T01:00:00+00:00 (cron-7: window 16 TRX 45s-flip churn -> CONTRACT re-staged 300; UNKNOWN exit_reason flagged; zero restarts)
 - Updated: 2026-08-30T00:30:00+00:00 (cron-7: window 15 clean, episodes 90, steady state, zero restarts)
 - Updated: 2026-08-30T00:00:00+00:00 (cron-7: window 14 clean, episodes 87, steady state, zero restarts)
 - Updated: 2026-08-29T23:30:00+00:00 (cron-7: window 13 clean, 4h lifecycle verified, episodes 85, zero restarts)
