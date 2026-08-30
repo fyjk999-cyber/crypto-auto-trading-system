@@ -1,5 +1,17 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T03:00Z (P2-1 Phase 3 LIVE): dynamic all-market observer
+  live on the running runtime — /runtime.market_observer: available=True,
+  source=WS (bounded OKX public WS candidate stream), Layer-1 breadth 1383
+  SPOT + 458 SWAP instruments LIVE (one batch REST scan per class, 60s
+  throttle), 5 factual candidates (held/core pinned + top 24h notional
+  volume; no score, no gate), dynamic rotation = core symbols first +
+  bounded candidates (<=40 total). Engine tick polls the observer; multi
+  adapter injects advisory evidence into decision context. STARTUP LESSON
+  recorded: OKXPublicDataClient requires OKXAdapter; the swallowed
+  construction exception made the observer silently absent for two boots —
+  now logger.exception + audit MARKET_OBSERVER_START_FAILED (failures never
+  silent). Runtime PID rotates; health OK, lease held, recon clean.
 - Updated: 2026-08-30T02:40Z (P2-1 Phase 2 LIVE): runtime hot-reloadable
   bounded policy layer deployed and validated on the live runtime (same
   process, zero restarts after activation): /policy/runtime serves v1

@@ -57,12 +57,22 @@ Codex 修复 (branch `codex/non-strategy-infra-repair`, working tree, bridge +32
 - 并发编辑冲突: 本方 bridge constructor 编辑已完整撤出 (git diff 现仅含 Codex 修复); 遵守单写者
 - 本文档为新增独立文件,不触碰 Codex 工作区文件
 
-## 五、第二表现 (01:28Z, 同缺陷类 — exit order lifecycle 未终结)
+## 五、第二表现 (01:28Z, 同缺陷类 — exit order lifecycle 未终结)【已纠正: 事后恢复】
 
 **DOGEUSDT recon 失败** (health overall=UNHEALTHY, recon BALANCE_MISMATCH + POSITION_MISMATCH, 01:49:01):
 - 21:28:37 BUY FILLED (ENTRY, 0.08511) → 持仓 LONG 0.001
-- **01:28:41 SELL (ai_brain, reduce_only=1, 合法 4h TIME_STOP 时机) status=ACKNOWLEDGED — 从未终态化 (无 FILLED/REJECTED, 无 fill 行)**
+- 01:28:41 SELL (ai_brain, reduce_only=1, 合法 4h TIME_STOP 时机) status=**ACKNOWLEDGED** — 长期未终态化 (无 fill 行)
 - Sim exchange 侧已扣减: exchange DOGE=-0.001 / position=0;local 仍 LONG 0.001 → 本地/交易所分歧
-- 与 TRX 的区别: TRX = spurious exit (stale epoch 立即平仓); DOGE = **真实 exit 卡在 ACKNOWLEDGED 未终结** → `_exit_in_flight` 抑制 (order outstanding) → 无重试 → 分歧固化直至 recon gate 亮红
-- **意义**: 指令修复项 #3 (exit-completion state fence) 的直接实证 — 订单状态机存在 ACKNOWLEDGED→终态 的缺口; 修复须覆盖"submitted-but-never-finalized"路径的检测与重试
+- **事后恢复 (CODEX 纠正补充, 2026-08-30 02:09)**: ord_71ffb76b 于 **02:09:35.837 转为 REJECTED (终态)**; 随后新 SELL ord_0e9773ef FILLED 02:09:47.036 @0.08489 + TIME_STOP episode → 本地/交易所重新一致
+- **定性 (按指令第 4 项区分)**: 这是**已恢复的历史事件** (recovery 路径最终有效), 但 ACKNOWLEDGED→终态 停留 41 分钟的缺口本身是**尚未由 runtime 测试验证解决的真实缺陷** — fence/recovery 测试仍为 PHASE 1 必需项
 - 本方未做任何干预 (不重启/不触 DB/runtime_leases); recon fail-closed gate 按设计工作
+
+## 六、TRX 6.5s episode 标注事实修正 (按指令第 3 项, 不静默改写历史)
+
+同一 episode 的两个时点事实, 均为真:
+| 时点 | exit_reason | 证据 |
+|---|---|---|
+| 00:40:52.518 (首次落库) | **UNKNOWN** | 本方 01:0xZ 直接查询 (含 holding_time_seconds=6.5, review_status 初始态) |
+| 复核时点 (episode 重推导后) | **TIME_STOP** | 当前 DB: eps-7899c4b6, result=LOSS, holding=6.46792s, review_status=**PENDING** |
+
+**语义矛盾标注**: holding_time=6.47s 与 TIME_STOP (4h 系统止损) 语义不相容; 当前 TIME_STOP 标注**缺乏 lineage 证明** (6.5s 持仓不可能触发 14400s time stop)。按指令第 5 项: 语义归因必须从不可变 lineage (bridge decision_history / fill payload exit_reason / AI_EXIT_INTENT audit) 证明后方可定标; 在证明前该行应保持诚实 UNKNOWN 或 PENDING 复核态。**不得静默改写历史事实** — 本文档保留两个时点的原始记录。

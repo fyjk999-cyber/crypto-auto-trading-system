@@ -282,7 +282,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
             db_path = settings.database_url.split("///")[-1]
             universe = DynamicMarketUniverse(
-                db_path, data_client=OKXPublicDataClient()
+                db_path, data_client=OKXPublicDataClient(OKXAdapter())
             )
             ws_manager = OKXTickerWsManager()
             market_observer = HierarchicalMarketObserver(
@@ -294,9 +294,17 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         except Exception as exc:
             # The observer is advisory: a startup failure must never block
             # the runtime. Trading continues with the configured core list.
-            logger.warning(
-                "MARKET_OBSERVER_START_FAILED error=%s", type(exc).__name__
-            )
+            # The failure itself must never be silent (audit trail duty).
+            logger.exception("MARKET_OBSERVER_START_FAILED error=%s", exc)
+            try:
+                await audit.log(
+                    "MARKET_OBSERVER_START_FAILED",
+                    target="market_observer",
+                    before={},
+                    after={"error": f"{type(exc).__name__}: {exc}"[:200]},
+                )
+            except Exception:
+                pass
             market_observer = None
 
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(

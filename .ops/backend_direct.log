@@ -3660,3 +3660,91 @@ LIVE_MEMORY_RETRIEVAL_FAILED symbol=XLMUSDT error=DecimalError
 LIVE_MEMORY_RETRIEVAL_FAILED symbol=HBARUSDT error=DecimalError
 INFO:     127.0.0.1:61896 - "GET /health HTTP/1.1" 200 OK
 INFO:     127.0.0.1:61924 - "GET /health HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [70894]
+MARKET_OBSERVER_START_FAILED error=TypeError
+INFO:     Started server process [72421]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ETHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SOLUSDT error=DecimalError
+INFO:     127.0.0.1:61962 - "GET /health HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XRPUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BNBUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOGEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ADAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AVAXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LINKUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SUIUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BCHUSDT error=DecimalError
+INFO:     127.0.0.1:62003 - "GET /runtime HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOTUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=NEARUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=APTUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ARBUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=OPUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=TRXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=UNIUSDT error=DecimalError
+INFO:     127.0.0.1:62044 - "GET /runtime HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=HYPEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ZECUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ENAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=WLDUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ONDOUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=FILUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=TAOUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AAVEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XLMUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=HBARUSDT error=DecimalError
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [72421]
+MARKET_OBSERVER_START_FAILED error=TypeError
+INFO:     Started server process [74415]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ETHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SOLUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XRPUSDT error=DecimalError
+INFO:     127.0.0.1:62093 - "GET /runtime HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BNBUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOGEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ADAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AVAXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LINKUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SUIUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BCHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOTUSDT error=DecimalError
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [74415]
+INFO:     Started server process [76525]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ETHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SOLUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XRPUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BNBUSDT error=DecimalError
+INFO:     127.0.0.1:62146 - "GET /health HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOGEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ADAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AVAXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LINKUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SUIUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LTCUSDT error=DecimalError
+INFO:     127.0.0.1:62174 - "GET /runtime HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BCHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOTUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=NEARUSDT error=DecimalError
