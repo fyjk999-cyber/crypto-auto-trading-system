@@ -128,7 +128,7 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                                              "last_cache_hit", False) else "MISS"
                         ),
                         evidence_added=(
-                            "OBSERVABILITY_ONLY" if score.eligible else "EMPTY"
+                            "OBSERV_ONLY" if score.eligible else "EMPTY"
                         ),
                     )
                 except Exception:

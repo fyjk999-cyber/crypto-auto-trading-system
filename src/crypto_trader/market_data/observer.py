@@ -162,6 +162,8 @@ class OKXTickerWsManager:
 class HierarchicalMarketObserver:
     """All-market Layer-1 scan + bounded candidate stream, advisory only."""
 
+    version = "1.2.0"
+
     def __init__(
         self,
         universe: DynamicMarketUniverse,
@@ -283,15 +285,18 @@ class HierarchicalMarketObserver:
             if inst not in pinned:
                 pinned.append(inst)
 
-        slots = max(0, target - len(pinned))
+        slots = max(0, min(target, MAX_CANDIDATE_INSTRUMENTS - len(pinned)))
         attention = await self._refresh_attention(
             slots=slots, pinned=tuple(pinned)
         )
         dynamic = [i for i in attention.selected_inst_ids if i not in pinned]
 
+        # Bound contract (unchanged by the P3 correction): pinned held/core
+        # are ALWAYS retained, then up to ``target`` AI-attended dynamic
+        # slots, overall bounded by MAX_CANDIDATE_INSTRUMENTS.
         candidates = list(pinned)
         for inst_id in dynamic:
-            if len(candidates) >= target:
+            if len(candidates) >= target + len(pinned):
                 break
             candidates.append(inst_id)
         basis = {

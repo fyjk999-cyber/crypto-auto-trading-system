@@ -415,3 +415,22 @@ def test_digest_is_bounded_and_covers_whole_universe():
     assert total_count == 500, "compression covers the WHOLE universe"
     assert len(digest["roster"]) <= 60, "roster is bounded"
     assert len(digest["input_digest"]) == 32
+
+
+async def test_bound_contract_is_pinned_plus_target_dynamic_slots():
+    """The P3 correction must NOT shrink the candidate bound: pinned held/
+    core are always retained and the AI still receives ``target`` dynamic
+    slots on top of them (pre-P3 contract)."""
+    facts = [_fact("BTC-USDT", "SPOT", last="100", low="90", high="110")]
+    obs = _observer({"SPOT": facts})
+    await obs.poll(force=True)
+    obs.attention_selector = LLMMarketAttentionSelector(
+        _ScriptedLLM({"selected": ["BTC-USDT"], "rationale": "r"})
+    )
+    cand = await obs.select_candidates(
+        target=5, held_canonical_symbols=("BTCUSDT",)
+    )
+    assert cand.attention.mode == "AI_SELECTED"
+    assert cand.basis["target"] == 5
+    assert "BTC-USDT" in cand.inst_ids
+    assert cand.basis["roster_size"] > 0, "AI received a non-empty roster"
