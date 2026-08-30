@@ -1,5 +1,23 @@
 # TEST_STATUS
 
+- 2026-08-30T01:55Z (P2-1 TRX churn root-cause repair): NEW
+  tests/integration/test_trx_churn_lifecycle.py 12/12 PASS — directive §16
+  acceptance: TEST1 LONG→EXIT no accidental SHORT; TEST2 SHORT→EXIT no
+  accidental LONG (perp BUY reduce-only); TEST3 exit→stale entry REJECTED
+  (STALE_POSITION_STATE) + current-version entry APPROVED; TEST4 risk-reject
+  zero lifecycle corruption; TEST5 exit HOLD → no order + suppression released;
+  TEST6 same-symbol concurrent decisions → stale rejected / current executes;
+  TEST7 cross-symbol/market no blocking; TEST8 legitimate reversal allowed
+  after fence; TEST9 full TRX incident reproduction (4h hold → TIME_STOP →
+  37s AI re-entry → bridge MUST NOT instant-exit fresh position; age cache
+  revalidated from real per-episode open time) — plus §17 exit_reason
+  attribution (bridge SPOT exit → episode TIME_STOP, hold honestly ~6s, fill
+  payload lineage) and reversal-gate helper scope test. Related suites:
+  test_exit_lifecycle.py + test_perpetual_runtime_routing.py + tests/runtime/
+  = 74 passed. Full suite: 804 passed / 7 skipped / 2 failed = the SAME 2
+  pre-existing live-OKX market_semantics failures verified on clean HEAD
+  (git stash A/B). Ruff clean on touched files.
+
 - 2026-08-29T17:20Z (P0 corrections, CS-20260829-132209): NEW
   tests/integration/test_p0_corrections.py 7/7 PASS (fail-closed routes 403 +
   zero state change; /paper/perpetual/positions real marks; /positions engine

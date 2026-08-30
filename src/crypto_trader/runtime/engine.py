@@ -67,6 +67,7 @@ from crypto_trader.runtime.event_bus import EventBus
 from crypto_trader.runtime.execution_symbols import reference_symbol_for
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
+from crypto_trader.runtime.position_lifecycle import PositionLifecycleTracker
 from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
@@ -96,6 +97,7 @@ class TradingEngine:
         perpetual_engine: PerpetualPaperEngine | None = None,
         lease_key: str = "crypto_engine_execution",
         require_lease: bool = True,
+        position_lifecycle: PositionLifecycleTracker | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -129,6 +131,19 @@ class TradingEngine:
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
         self.quarantined_fill_ids: set[str] = set()
+        # P2-1 lifecycle consistency: canonical record of position episode
+        # transitions (version + completed-exit timestamps). Powers the
+        # stale-signal guard (§11/§12) and the reversal fence (§9/§10).
+        # Exits are NEVER gated by this tracker.
+        self.position_lifecycle = position_lifecycle or PositionLifecycleTracker()
+        # signal metadata lineage (bounded): client_order_id -> intent
+        # metadata, so a settled SPOT fill can be enriched with the exit
+        # reason / decision id its SignalIntent carried (the paper spot
+        # adapter builds fills asynchronously without intent context; the
+        # perp path already propagates exit_reason in the fill payload).
+        self._signal_metadata_by_client: dict[str, dict] = {}
+        self._signal_metadata_order: list[str] = []
+        self._signal_metadata_capacity = 4096
 
     # ------------------------------------------------------------------ state
     async def _load_quarantined_fill_ids(self) -> set[str]:
@@ -463,6 +478,12 @@ class TradingEngine:
                 order_id=order.internal_order_id,
                 symbol=intent.symbol,
             )
+            # P2-1: completed perp exit -> episode closed (starts the
+            # reversal fence for new entries; exits themselves are never
+            # fenced).
+            self.position_lifecycle.on_position_closed(
+                intent.symbol, intent.market_type
+            )
         else:
             await engine.open_position(
                 position_side,
@@ -471,6 +492,9 @@ class TradingEngine:
                 leverage,
                 order_id=order.internal_order_id,
                 symbol=intent.symbol,
+            )
+            self.position_lifecycle.on_position_opened(
+                intent.symbol, intent.market_type
             )
         # §15/§17: persist a canonical FillORM for every PAPER perpetual open
         # and close so orders UI / fills / exploration attribution / Daily
@@ -544,6 +568,58 @@ class TradingEngine:
         market_type = signal.market_type
         position_side = signal.position_side
         reduce_only = bool(signal.reduce_only or signal.metadata.get("reduce_only", False))
+
+        # §11/§12 stale-signal guard (lifecycle consistency, NOT a quant
+        # gate): an entry intent carries the position version it was decided
+        # against. If the position state has changed between decision and
+        # execution (an exit settled, an episode transition), the old decision
+        # must NOT blindly execute -- reject it as STALE_POSITION_STATE.
+        # reduce-only / closing intents are exempt: exits must never be
+        # blocked by lifecycle state.
+        expected_version_raw = (signal.metadata or {}).get("expected_position_version")
+        if (
+            not reduce_only
+            and expected_version_raw is not None
+            and str(expected_version_raw).strip() != ""
+        ):
+            try:
+                expected_version = int(str(expected_version_raw))
+            except (TypeError, ValueError):
+                expected_version = None
+            if expected_version is not None:
+                current_version = self.position_lifecycle.position_version(
+                    symbol, market_type
+                )
+                if current_version != expected_version:
+                    risk_decision = RiskDecision(
+                        risk_decision_id=new_id("risk"),
+                        client_order_id=client_order_id,
+                        symbol=symbol,
+                        side=signal.side,
+                        decision=ExecutionDecision.REJECT,
+                        reason="STALE_POSITION_STATE",
+                        checks={
+                            "expected_position_version": expected_version,
+                            "current_position_version": current_version,
+                            "signal_created_metadata": True,
+                        },
+                        timestamp=datetime.now(UTC),
+                        run_id=run_id,
+                    )
+                    await self._persist_risk(risk_decision)
+                    await self.audit.log(
+                        "STALE_SIGNAL_REJECT",
+                        target=client_order_id,
+                        run_id=run_id,
+                        client_order_id=client_order_id,
+                        before={"signal_id": signal.signal_id},
+                        after={
+                            "reason": risk_decision.reason,
+                            "expected_position_version": expected_version,
+                            "current_position_version": current_version,
+                        },
+                    )
+                    return risk_decision
         # §5/§13: perpetual orders are marked against the REAL reference
         # market book (BTCUSDT), never against a non-existent BTCUSDT_PERP
         # book, and never against a fallback price.
@@ -665,6 +741,17 @@ class TradingEngine:
             reduce_only=reduce_only,
             metadata={**signal.metadata, "signal_id": signal.signal_id},
         )
+        # Retain intent metadata for fill enrichment at settlement (bounded).
+        self._signal_metadata_by_client[client_order_id] = dict(signal.metadata or {})
+        self._signal_metadata_order.append(client_order_id)
+        if len(self._signal_metadata_order) > self._signal_metadata_capacity:
+            for stale_client in self._signal_metadata_order[
+                : len(self._signal_metadata_order) - self._signal_metadata_capacity
+            ]:
+                self._signal_metadata_by_client.pop(stale_client, None)
+            del self._signal_metadata_order[
+                : len(self._signal_metadata_order) - self._signal_metadata_capacity
+            ]
         auth_ctx = AuthorizationContext(
             now=self.clock.now(),
             trading_mode=self.settings.effective_mode(),
@@ -818,6 +905,69 @@ class TradingEngine:
             return None
         path = url.split("sqlite+aiosqlite:///")[-1].split("sqlite:///")[-1]
         return path or None
+
+    _FILL_LINEAGE_KEYS = (
+        "exit_reason",
+        "decision_id",
+        "signal_id",
+        "llm_invocation_id",
+        "market_type",
+        "execution_symbol",
+        "reference_market_symbol",
+        "position_side",
+        "decision_class",
+    )
+
+    async def _enrich_fill_payload(self, fill: Fill, intent_metadata: dict) -> None:
+        """Merge SignalIntent lineage into the persisted fill payload.
+
+        Additive and idempotent: only fills missing the lineage keys are
+        updated, and failures never block trading (episodes then fall back to
+        the legacy classification heuristics)."""
+        from sqlalchemy import text
+
+        wanted = {
+            key: str(intent_metadata.get(key))
+            for key in self._FILL_LINEAGE_KEYS
+            if intent_metadata.get(key) not in (None, "")
+        }
+        if not wanted:
+            return
+        try:
+            async with self.database.session_factory() as session:
+                row = (
+                    await session.execute(
+                        text("SELECT payload_json FROM fills WHERE fill_id = :fid"),
+                        {"fid": fill.fill_id},
+                    )
+                ).first()
+                if row is None:
+                    return
+                payload_raw = row[0]
+                if isinstance(payload_raw, (dict, list)):
+                    payload = dict(payload_raw)
+                else:
+                    payload = json.loads(payload_raw or "{}")
+                if not isinstance(payload, dict):
+                    payload = {}
+                changed = False
+                for key, value in wanted.items():
+                    if not payload.get(key):
+                        payload[key] = value
+                        changed = True
+                if changed:
+                    await session.execute(
+                        text(
+                            "UPDATE fills SET payload_json = :payload "
+                            "WHERE fill_id = :fid"
+                        ),
+                        {"payload": json.dumps(payload), "fid": fill.fill_id},
+                    )
+                    await session.commit()
+        except Exception:
+            logger.debug(
+                "FILL_PAYLOAD_ENRICH_FAILED fill_id=%s", fill.fill_id, exc_info=True
+            )
 
     async def _record_trade_episode(self, fill_id: str, symbol: str) -> None:
         """Closed-cycle episode persistence (learning input, read-model side).
@@ -1010,6 +1160,31 @@ class TradingEngine:
         )
         await self.portfolio.refresh(initial_balances=self._initial_balances)
         position_after = await self.portfolio.get_position(fill.symbol)
+        # P2-1: record the SPOT position transition in the canonical
+        # lifecycle tracker (version bump; completed closes start the
+        # reversal fence for new entries -- never for exits).
+        was_open_before = position is not None and float(position.quantity or 0) != 0
+        is_flat_after = position_after is None or float(position_after.quantity or 0) == 0
+        spot_market = MarketType.SPOT
+        if order.side == OrderSide.SELL:
+            if is_flat_after:
+                self.position_lifecycle.on_position_closed(fill.symbol, spot_market)
+            else:
+                self.position_lifecycle.on_position_changed(fill.symbol, spot_market)
+        else:
+            if was_open_before:
+                self.position_lifecycle.on_position_changed(fill.symbol, spot_market)
+            else:
+                self.position_lifecycle.on_position_opened(fill.symbol, spot_market)
+        # P2-1 exit-reason attribution: enrich the settled fill payload with
+        # the SignalIntent metadata lineage (exit_reason / decision_id /
+        # signal_id / llm_invocation_id). The paper spot adapter builds fills
+        # asynchronously without intent context, which used to leave
+        # exit_reason empty -> episode attribution fell back to heuristics
+        # and labelled non-4h bridge exits UNKNOWN. Best-effort by design.
+        intent_metadata = self._signal_metadata_by_client.get(order.client_order_id)
+        if intent_metadata:
+            await self._enrich_fill_payload(fill, intent_metadata)
         if position_after is None or position_after.quantity == 0:
             await self._record_trade_episode(fill.fill_id, fill.symbol)
         await self.audit.log(
@@ -1068,6 +1243,9 @@ class TradingEngine:
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
             "kill_switch": self.kill_switch_snapshot(),
+            # P2-1 lifecycle observability (directive §74): per-instrument
+            # position version / seconds-since-exit / reversal-fence state.
+            "position_lifecycle": self.position_lifecycle.snapshot(),
         }
 
     async def wait_for_event_queue(self) -> None:

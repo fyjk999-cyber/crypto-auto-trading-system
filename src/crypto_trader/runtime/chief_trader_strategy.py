@@ -78,6 +78,8 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         exploration_sampler=None,
         memory_provider=None,
         perpetual_position_provider=None,
+        position_lifecycle=None,
+        reversal_cooldown_seconds: float = 240.0,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -119,6 +121,12 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # entry cooldown is SYMBOL-SCOPED. A trade in symbol A must never
         # preempt the Chief Trader decision for symbol B.
         self._last_entry_initiated_at: dict[str, float] = {}
+        # P2-1 reversal fence (directive §9/§10): after a COMPLETED exit for
+        # this instrument, a new ENTRY waits for the lifecycle to finalize.
+        # Lifecycle consistency / duplicate-noise protection only -- NOT a
+        # Quant Gate. Exits are never gated by this tracker.
+        self.position_lifecycle = position_lifecycle
+        self.reversal_cooldown_seconds = max(0.0, float(reversal_cooldown_seconds))
         # Entry-path invocation bound: market data ticks arrive far more often
         # than a Chief Trader decision is needed. Existing-position safety
         # (reduce/exit/stop) does NOT depend on this interval: it lives in the
@@ -329,6 +337,14 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             await self._persist_evidence(decision, ctx, chief_ctx)
             return []
 
+        # P2-1 REVERSAL fence (§9/§10): an entry for an instrument whose
+        # position episode JUST completed waits for lifecycle finalization.
+        # Duplicate-noise protection, not a quant gate; exits are never gated.
+        reversal_decision = self._reversal_gate_decision(ctx, chief_ctx)
+        if reversal_decision is not None:
+            await self._persist_evidence(reversal_decision, ctx, chief_ctx)
+            return []
+
         # CORE_TRADING_DOCTRINE_V1: strategy fit is EVIDENCE for the AI, never
         # a hard gate. Every real evidence package reaches the Live LLM; the
         # fits/edge travel inside the StrategyEvidencePackage in the prompt.
@@ -507,6 +523,37 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             )
         return self.normal_quantity
 
+    def _reversal_gate_decision(self, ctx, chief_ctx):
+        """P2-1 reversal fence gate (directive §9/§10).
+
+        Returns a gate decision when the EXECUTION instrument of this entry
+        just completed a position episode inside the reversal cooldown
+        window; None otherwise. Scope resolves exactly like _map_to_signals
+        (reference symbol -> execution symbol -> market type). Exits are
+        NEVER gated by this tracker; different symbols never block each
+        other (per-instrument keys)."""
+        if self.position_lifecycle is None or self.reversal_cooldown_seconds <= 0:
+            return None
+        execution_symbol = execution_symbol_for(ctx.symbol)
+        market_type = (
+            MarketType.PERPETUAL
+            if is_paper_perpetual_symbol(execution_symbol)
+            else MarketType.SPOT
+        )
+        if not self.position_lifecycle.reversal_blocked(ctx.symbol, market_type):
+            return None
+        since = self.position_lifecycle.seconds_since_exit(ctx.symbol, market_type)
+        return self._gate_decision(
+            chief_ctx,
+            reason_code="REVERSAL_COOLDOWN_ACTIVE",
+            thesis=(
+                f"Entry skipped: {ctx.symbol} position exit settled "
+                f"{since:.0f}s ago; reversal cooldown "
+                f"{self.reversal_cooldown_seconds:.0f}s lets the exit "
+                "lifecycle finalize first (timing safety, not a quant gate)"
+            ),
+        )
+
     def _map_to_signals(
         self, decision, ctx: StrategyContext, chief_ctx: ChiefTraderContext
     ) -> list[SignalIntent]:
@@ -567,6 +614,15 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             "position_side": position_side.value,
             "requested_quantity": quantity,
         }
+        if self.position_lifecycle is not None:
+            # §12 signal precondition: the position state this entry decision
+            # was made against (captured at intent creation). The engine
+            # re-validates before execution and rejects stale signals.
+            metadata["expected_position_version"] = str(
+                self.position_lifecycle.position_version(
+                    execution_symbol, market_type
+                )
+            )
         return [
             SignalIntent(
                 signal_id=new_id("llm"),

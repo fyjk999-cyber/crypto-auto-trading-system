@@ -1,5 +1,18 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T01:55Z (P2-1 Phase 1 CODE COMPLETE + TESTED, pending
+  controlled restart): TRX churn ROOT CAUSE IDENTIFIED + FIXED in code —
+  stale `_first_seen_open` epoch inheritance (60s grace) caused spurious
+  instant TIME_STOP on a 4.5s-old re-entry; NOT cooldown insufficiency. New
+  PositionLifecycleTracker + provider-authoritative bridge age + engine
+  STALE_POSITION_STATE guard + REVERSAL_COOLDOWN_ACTIVE fence + SPOT fill
+  lineage enrichment (exit_reason). tests/integration/test_trx_churn_lifecycle.py
+  12/12 PASS (§16 TEST1-9 + §17 attribution); full suite 804 passed / 2
+  pre-existing live-OKX failures (verified unrelated via clean-HEAD A/B).
+  Entry cooldown UNCHANGED (240) — no churn masking. Runtime PID 48151 still
+  on OLD code until supervisor-controlled restart; PAPER ACTIVE throughout.
+  NEXT: controlled restart to apply Phase 1 → live verification → Phase 2
+  (RuntimePolicy hot-reload layer). Calibration stays OBSERVE ONLY per §72.
 - Updated: 2026-08-30T01:00:00+00:00 (cron-7: window 16 TRX 45s-flip churn -> CONTRACT re-staged 300; UNKNOWN exit_reason flagged; zero restarts)
 - Updated: 2026-08-30T00:30:00+00:00 (cron-7: window 15 clean, episodes 90, steady state, zero restarts)
 - Updated: 2026-08-30T00:00:00+00:00 (cron-7: window 14 clean, episodes 87, steady state, zero restarts)

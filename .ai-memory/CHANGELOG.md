@@ -1,5 +1,32 @@
 # CHANGELOG
 
+- 2026-08-30T01:55Z (P2-1 TRX direction-flip churn root-cause repair, directive
+  Phase 1): ROOT CAUSE (00:40Z incident, 7s flip) = bridge `_first_seen_open`
+  symbol-keyed age cache inherited the DEAD episode's open time when a position
+  closed and re-opened inside the 60s forget-grace window → instant spurious
+  TIME_STOP on a 4.5s-old position; plus no exit→re-entry fence and SPOT fill
+  payload missing exit_reason (→ episode UNKNOWN). FIXES: (1) NEW
+  runtime/position_lifecycle.py — canonical PositionLifecycleTracker
+  (per-instrument version + completed-exit timestamps; EXIT_UNBLOCKED doctrine).
+  (2) ai_position_bridge.py — provider (real per-episode open time) is now
+  AUTHORITATIVE and re-validated every evaluation; cache only a fallback.
+  (3) engine.py — stale-signal guard: entry intents carrying
+  expected_position_version are REJECTED (STALE_POSITION_STATE, audited
+  STALE_SIGNAL_REJECT) when position state changed since decision (§11/§12);
+  lifecycle OPENED/CLOSED/CHANGED recorded on perp open/close + spot
+  settlement; settled SPOT fills enriched with SignalIntent lineage
+  (exit_reason/decision_id/signal_id/llm_invocation_id) so episodes attribute
+  TIME_STOP/AI_EXIT correctly (§17); runtime_snapshot exposes
+  position_lifecycle observability (§74). (4) chief_trader_strategy.py +
+  ai_first_chief_trader.py — REVERSAL_COOLDOWN_ACTIVE entry gate after a
+  completed exit for the SAME instrument (settings.reversal_cooldown_seconds,
+  default 240s, env REVERSAL_COOLDOWN_SECONDS; timing safety, NOT a quant
+  gate; exits never gated; other symbols never blocked) +
+  expected_position_version captured into entry intents. (5) bootstrap.py
+  wiring (one shared tracker into engine + chief trader). NO change to AI
+  decision authority, RiskEngine, ExecutionAuthority, sizing, ledger
+  semantics. Entry cooldown value unchanged (240).
+
 - 2026-08-29T17:20Z (P0 Corrections per CS-20260829-132209 + linked P1/P2):
   src/crypto_trader/api/app.py: /manual-orders + /paper/perpetual/open|close
   fail-closed (403 always, audited); /paper/perpetual/positions real marks;

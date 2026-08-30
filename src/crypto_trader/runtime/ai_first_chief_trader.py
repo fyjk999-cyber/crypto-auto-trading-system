@@ -135,6 +135,16 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
             await self._persist_evidence(decision, ctx, chief_ctx)
             return []
 
+        # P2-1 REVERSAL fence (directive §9/§10): a new entry for an
+        # instrument whose position episode just completed waits for the
+        # exit lifecycle to finalize. This is duplicate-noise / lifecycle
+        # consistency protection after the TRX 7s churn root cause -- NOT a
+        # quant gate, and exits are never gated by it.
+        reversal_decision = self._reversal_gate_decision(ctx, chief_ctx)
+        if reversal_decision is not None:
+            await self._persist_evidence(reversal_decision, ctx, chief_ctx)
+            return []
+
         # No pre-LLM min-fit gate and no quant-based exploration sampling.
         decision = await self.engine.decide(chief_ctx)
         decision = self._enrich_from_evidence(decision, chief_ctx)

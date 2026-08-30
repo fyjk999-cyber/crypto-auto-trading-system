@@ -1,5 +1,28 @@
 # DECISIONS
 
+- 2026-08-30T01:55Z (P2-1 TRX churn repair — LIFECYCLE DOCTRINE, directive
+  Phase 1): (K) EXIT_UNBLOCKED: exits (reduce-only / closing orders) are NEVER
+  gated by entry cooldown, reversal cooldown, or lifecycle version — verified
+  by test. (L) REVERSAL_COOLDOWN (new, default 240s = entry cooldown value,
+  NOT longer): after a COMPLETED exit for an instrument, a NEW entry for the
+  SAME instrument waits for lifecycle finalization. It is duplicate-noise /
+  lifecycle-consistency protection (§10), NOT a Quant Gate: it never judges
+  direction/fit/confidence/thesis and never blocks other symbols. (M)
+  STALE_SIGNAL_GUARD: entry SignalIntents carry expected_position_version
+  captured at intent creation; the engine re-validates before execution and
+  rejects STALE_POSITION_STATE (audited) when position state changed — an old
+  decision can never blindly execute across a lifecycle boundary (§11/§12).
+  (N) Bridge position age: provider-derived REAL per-episode open time is
+  authoritative and re-validated every 5s evaluation; in-memory cache is
+  fallback only (root cause of the 7s flip). (O) Exit-reason attribution:
+  SignalIntent lineage persisted onto settled SPOT fill payloads; episode
+  classification reads payload first (TIME_STOP stays TIME_STOP at any hold
+  duration; UNKNOWN remains honest only when truly unattributable). (P)
+  Cooldown key audit (§7/§8): internal canonical symbols (TRXUSDT /
+  TRXUSDT_PERP) are distinct instruments by design; spot/perp scopes are
+  separated in the lifecycle keys; no TRX-USDT-style variants exist in DB
+  lineage (all rows TRXUSDT).
+
 - 2026-08-29T17:20Z (P0 CORRECTIONS for CS-20260829-132209-P0-MANUAL-BYPASS):
   (G) SIGTERM root cause CONFIRMED = Codex Supervisor containment stops (8x),
   triggered by unauthorized restarts while P0 mutation routes were live and by

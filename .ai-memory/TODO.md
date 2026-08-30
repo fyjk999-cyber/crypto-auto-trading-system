@@ -1,5 +1,16 @@
 # TODO
 
+- 2026-08-30T01:55Z (P2-1 directive, IN PROGRESS): Phase 1 code DONE+TESTED.
+  REMAINING: (a) supervisor-controlled restart to apply Phase 1 to the live
+  runtime + post-restart verification (health, lease, positions, episodes
+  re-derivation for UNKNOWN/leverage rows); (b) Phase 2 RuntimePolicy
+  hot-reload layer (versioning/atomic/validate/rollback/GET /policy/runtime);
+  (c) Phase 3 dynamic all-market runtime integration (Phase C/D; universe.py
+  + dynamic-universe test already drafted on branch, needs runtime wiring);
+  (d) Phase 4 tool usage journal + utility learning; (e) resume 30m
+  calibration only after all four phases PASS (§72); (f) keep 30m monitoring
+  recording churn count / stale rejects / reversal count / lifecycle health.
+
 - 2026-08-29T16:30Z (P2 availability): DONE: canonical supervisor active,
   blind lease DELETE removed, cron roles redefined, frontend relaunched,
   shutdown forensics added. REMAINING: re-run sandbox supervisor suite in a

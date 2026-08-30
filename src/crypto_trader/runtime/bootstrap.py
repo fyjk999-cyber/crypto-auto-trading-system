@@ -50,6 +50,7 @@ from crypto_trader.runtime.execution_symbols import (
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
 from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner
+from crypto_trader.runtime.position_lifecycle import PositionLifecycleTracker
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
@@ -242,6 +243,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_spread_bps=settings.opportunity_max_spread_bps,
     )
 
+    # P2-1 canonical position lifecycle tracker shared by the engine
+    # (writes on fill settlement) and the Chief Trader entry gates (reads).
+    # Exits are NEVER gated; the tracker only fences new entries right after
+    # a completed exit and versions position state for stale-signal rejects.
+    position_lifecycle = PositionLifecycleTracker(
+        reversal_cooldown_seconds=settings.reversal_cooldown_seconds
+    )
+
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
         symbols=symbols,
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
@@ -267,6 +276,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         entry_cooldown_seconds=settings.entry_cooldown_seconds,
         exploration_sampler=random.random,
         memory_provider=LiveMemoryProvider(database.session_factory),
+        position_lifecycle=position_lifecycle,
+        reversal_cooldown_seconds=settings.reversal_cooldown_seconds,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
@@ -407,6 +418,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         authority=ExecutionAuthority(),
         perpetual_engine=perpetual_engine,
         require_lease=True,
+        position_lifecycle=position_lifecycle,
     )
     snapshot_health_holder["health"] = engine.health
 

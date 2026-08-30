@@ -296,16 +296,38 @@ class AIPositionRuntimeBridge:
         # §17 PAPER exploration time stop (checked before the AI brain so a
         # stale position exits even if the brain is unavailable).
         if self.time_stop_seconds is not None:
-            first_seen = self._first_seen_open.get(symbol)
-            if first_seen is None:
-                first_seen = None
-                if self.position_opened_at_provider is not None:
-                    try:
-                        first_seen = await self.position_opened_at_provider(symbol, side)
-                    except Exception:
-                        first_seen = None
-                first_seen = first_seen or datetime.now(UTC)
-                self._first_seen_open[symbol] = first_seen
+            # ROOT-CAUSE FIX (TRX 2026-08-30 00:40 7s churn): the in-memory
+            # first-seen cache is keyed by symbol only and used to be taken
+            # as-is whenever present. A position that closed and re-opened
+            # inside the grace window inherited the PREVIOUS episode's open
+            # time and was instant-TIME_STOPPED seconds after entry. The
+            # provider (real open time of the CURRENT episode) is therefore
+            # authoritative: it is re-validated on EVERY evaluation and a
+            # differing value means a new episode. The cache is only a
+            # fallback for when the provider is unavailable.
+            cached_first_seen = self._first_seen_open.get(symbol)
+            provided = None
+            if self.position_opened_at_provider is not None:
+                try:
+                    provided = await self.position_opened_at_provider(symbol, side)
+                except Exception:
+                    provided = None
+            if provided is not None:
+                if (
+                    cached_first_seen is None
+                    or abs((provided - cached_first_seen).total_seconds()) > 1.0
+                ):
+                    # New position episode (or first sight): adopt the REAL
+                    # open time of the current episode.
+                    self._first_seen_open[symbol] = provided
+                    first_seen = provided
+                else:
+                    first_seen = cached_first_seen
+            else:
+                if cached_first_seen is None:
+                    cached_first_seen = datetime.now(UTC)
+                    self._first_seen_open[symbol] = cached_first_seen
+                first_seen = cached_first_seen
             age_seconds = (datetime.now(UTC) - first_seen).total_seconds()
             if age_seconds >= self.time_stop_seconds:
                 close_side = "SELL" if side == "LONG" else "BUY"

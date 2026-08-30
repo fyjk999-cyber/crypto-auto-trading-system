@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     normal_fit_threshold: float = 0.55         # >= -> NORMAL (high-confidence)
     normal_confidence_threshold: float = 0.55
     entry_cooldown_seconds: float = 240.0      # min interval between NEW entries
+    # P2-1 reversal fence (directive §9): min interval between a COMPLETED
+    # exit for an instrument and the next NEW entry for the SAME instrument.
+    # Lifecycle-finalization timing only; never gates exits, never blocks
+    # other symbols, never judges direction (not a quant gate).
+    reversal_cooldown_seconds: float = 240.0
     exploration_sample_target: int = 200       # completed-trade guideline
     exploration_max_holding_seconds: float = 4 * 3600  # PAPER time stop
     paper_exploration_leverage: Decimal = Decimal("1")  # desired 1x leverage
