@@ -1,0 +1,136 @@
+# Canonical Diaries — window 2026-08-29 23:56Z → now (UTC)
+
+Generated directly from canonical DB facts. Invariants checked below.
+
+## Decision accounting (Strategy Diary, §7/§9)
+
+evidence rows: 7749 | distinct decisions: 7749
+  LONG: 153
+  NO_TRADE: 7470
+  SHORT: 126
+INVARIANT DECISION_COUNTS_RECONCILE: PASS (rows=7749, sum(actions)=7749, distinct_decisions=7749)
+
+## Episode accounting (Trading Diary, §8)
+
+episodes: 132 (completed with exit_price: 132)
+  LONG: 113
+  SHORT: 19
+INVARIANT EPISODE_DIRECTION_RECONCILE: PASS (episodes=132, classified=132)
+  SPOT/PERP × direction:
+    PERPETUAL LONG: 18
+    PERPETUAL SHORT: 19
+    SPOT LONG: 95
+
+INVARIANT NO_DOUBLE_COUNT: PASS (one evidence row per decision)
+
+## LLM reasoning truthfulness (§10)
+
+episodes with non-empty llm_reasoning column: 0/132
+  → AITradeEpisode.llm_reasoning = NOT_AVAILABLE. Canonical reasoning lives in decision_evidence.decision_json (`thesis`, `supporting_evidence`, `contradicting_evidence`, `invalidation_conditions`, `exit_conditions`, `llm_invocation_id`). This diary does NOT reconstruct reasoning from strategy+fit; it links via entry_decision_id lineage.
+INVARIANT LLM_REASONING_TRUTHFUL: PASS (no fabricated reasoning emitted)
+
+## Fit → Outcome buckets (per DECISION, §47/§48)
+
+| bucket | decisions | trades(LONG/SHORT) | episodes | wins | net_pnl_sum | avg_net |
+|---|---|---|---|---|---|---|
+| 0.00-0.40 | 7470 | 0 | 0 | 0 | 0 | 0 |
+| 0.40-0.50 | 47 | 47 | 8 | 4 | 8.913e-05 | 1.114e-05 |
+| 0.50-0.60 | 48 | 48 | 12 | 4 | 0.06978575 | 0.00581548 |
+| 0.60-0.70 | 12 | 12 | 3 | 0 | -0.00024592 | -8.197e-05 |
+| 0.70-0.80 | 52 | 52 | 7 | 2 | -0.01316551 | -0.00188079 |
+| 0.80-0.90 | 42 | 42 | 9 | 2 | -0.54158379 | -0.06017598 |
+| 0.90-1.00 | 78 | 78 | 9 | 5 | -0.73606937 | -0.08178549 |
+
+NOTE: outcome columns join episodes via entry_decision_id → decision fit; decisions without a linked episode count only in the decisions column.
+
+## Recent episodes (newest first)
+
+| created | symbol | type | dir | entry | exit | exit_reason | result | net_pnl | hold_s |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-08-29T17:05 | ETHUSDT | SPOT | LONG | 2434.46 | 2442.96 | TIME_STOP | WIN | 0.00362258 | 14405 |
+| 2026-08-29T17:05 | BTCUSDT_PERP | PERPETUAL | LONG | 77720.20 | 77492.15 | TIME_STOP | LOSS | -0.611312350 | 24210 |
+| 2026-08-29T17:05 | BTCUSDT_PERP | PERPETUAL | SHORT | 77582.55 | 77629.75 | TIME_STOP | LOSS | -0.124806150 | 14401 |
+| 2026-08-29T17:05 | BTCUSDT_PERP | PERPETUAL | LONG | 77611.05 | 77829.45 | TIME_STOP | WIN | 0.0703398750 | 14402 |
+| 2026-08-29T17:05 | BNBUSDT | SPOT | LONG | 690.4 | 686.8 | TIME_STOP | LOSS | -0.0049772 | 19085 |
+| 2026-08-29T17:05 | BNBUSDT | SPOT | LONG | 686.7 | 688.9 | TIME_STOP | WIN | 0.0008244 | 14407 |
+| 2026-08-29T17:05 | BNBUSDT | SPOT | LONG | 688.6 | 690.4 | TIME_STOP | WIN | 0.0002105 | 14405 |
+| 2026-08-29T17:05 | DOGEUSDT | SPOT | LONG | 0.08525 | 0.0844 | TIME_STOP | LOSS | -5.05E-7 | 18579 |
+| 2026-08-29T17:05 | DOGEUSDT | SPOT | LONG | 0.08428 | 0.08477 | TIME_STOP | WIN | 3.3E-7 | 14411 |
+| 2026-08-29T17:05 | XRPUSDT | SPOT | LONG | 1.3833 | 1.3818 | TIME_STOP | LOSS | -0.00000426 | 18245 |
+| 2026-08-29T17:05 | XRPUSDT | SPOT | LONG | 1.3809 | 1.3835 | TIME_STOP | LOSS | -1.6E-7 | 14403 |
+| 2026-08-29T17:05 | XRPUSDT | SPOT | LONG | 1.3836 | 1.3928 | TIME_STOP | WIN | 0.00000321 | 14407 |
+| 2026-08-29T17:05 | SOLUSDT | SPOT | LONG | 103.89 | 103.77 | TIME_STOP | LOSS | -0.00032766 | 17891 |
+| 2026-08-29T17:05 | SOLUSDT | SPOT | LONG | 103.55 | 103.41 | TIME_STOP | LOSS | -0.00034696 | 14404 |
+| 2026-08-29T17:05 | SOLUSDT | SPOT | LONG | 103.44 | 105.02 | TIME_STOP | WIN | 0.00068577 | 14406 |
+| 2026-08-29T17:05 | ADAUSDT | SPOT | LONG | 0.2012 | 0.2 | TIME_STOP | LOSS | -0.0000016 | 17532 |
+| 2026-08-29T17:05 | ADAUSDT | SPOT | LONG | 0.1994 | 0.2004 | TIME_STOP | WIN | 6E-7 | 15017 |
+| 2026-08-29T17:05 | LINKUSDT | SPOT | LONG | 11.379 | 11.329 | TIME_STOP | LOSS | -0.00003635 | 16187 |
+| 2026-08-29T17:05 | LINKUSDT | SPOT | LONG | 11.32 | 11.326 | TIME_STOP | LOSS | -0.00001665 | 14405 |
+| 2026-08-29T17:05 | LINKUSDT | SPOT | LONG | 11.317 | 11.415 | TIME_STOP | WIN | 0.00003763 | 14405 |
+| 2026-08-29T17:05 | AVAXUSDT | SPOT | LONG | 7.27 | 7.272 | TIME_STOP | LOSS | -0.00000628 | 15187 |
+| 2026-08-29T17:05 | AVAXUSDT | SPOT | LONG | 7.27 | 7.245 | TIME_STOP | LOSS | -0.00003951 | 14405 |
+| 2026-08-29T17:05 | APTUSDT | SPOT | LONG | 0.5359 | 0.5371 | TIME_STOP | WIN | 1.2E-7 | 14768 |
+| 2026-08-29T17:05 | APTUSDT | SPOT | LONG | 0.5354 | 0.5331 | TIME_STOP | LOSS | -0.00000337 | 14404 |
+| 2026-08-29T17:05 | APTUSDT | SPOT | LONG | 0.5352 | 0.5447 | TIME_STOP | WIN | 0.00000421 | 14405 |
+| 2026-08-29T17:05 | SUIUSDT | SPOT | LONG | 0.7387 | 0.7382 | TIME_STOP | LOSS | -0.00000198 | 14411 |
+| 2026-08-29T17:05 | SUIUSDT | SPOT | LONG | 0.7361 | 0.7346 | TIME_STOP | LOSS | -0.00000297 | 14403 |
+| 2026-08-29T17:05 | ARBUSDT | SPOT | LONG | 0.08759 | 0.08753 | TIME_STOP | LOSS | -1.10E-7 | 14409 |
+| 2026-08-29T17:05 | ARBUSDT | SPOT | LONG | 0.08713 | 0.08726 | TIME_STOP | LOSS | -5E-8 | 14412 |
+| 2026-08-29T17:05 | LTCUSDT | SPOT | LONG | 48.91 | 49.19 | TIME_STOP | WIN | 0.00018190 | 14403 |
+| 2026-08-29T17:05 | LTCUSDT | SPOT | LONG | 49.09 | 48.68 | TIME_STOP | LOSS | -0.00050777 | 14405 |
+| 2026-08-29T17:05 | NEARUSDT | SPOT | LONG | 1.802 | 1.789 | TIME_STOP | LOSS | -0.00001659 | 14403 |
+| 2026-08-29T17:05 | NEARUSDT | SPOT | LONG | 1.796 | 1.82 | TIME_STOP | WIN | 0.00002038 | 14417 |
+| 2026-08-29T17:05 | DOTUSDT | SPOT | LONG | 0.8398 | 0.8382 | TIME_STOP | LOSS | -0.00000328 | 14404 |
+| 2026-08-29T17:05 | DOTUSDT | SPOT | LONG | 0.837 | 0.8336 | TIME_STOP | LOSS | -0.00000254 | 14406 |
+| 2026-08-29T17:05 | BCHUSDT | SPOT | LONG | 246.6 | 243.7 | TIME_STOP | LOSS | -0.0033903 | 14407 |
+| 2026-08-29T17:05 | BCHUSDT | SPOT | LONG | 243.6 | 243.6 | TIME_STOP | LOSS | -0.0002436 | 14405 |
+| 2026-08-29T17:05 | OPUSDT | SPOT | LONG | 0.08947 | 0.08897 | TIME_STOP | LOSS | -0.00000068 | 14403 |
+| 2026-08-29T17:05 | OPUSDT | SPOT | LONG | 0.08775 | 0.08819 | TIME_STOP | WIN | 0.00000026 | 15329 |
+| 2026-08-29T17:05 | UNIUSDT | SPOT | LONG | 4.384 | 4.361 | TIME_STOP | LOSS | -0.00003174 | 14403 |
+
+## Recent fills (newest first)
+
+| ts | symbol | side | price | qty | reduce_only |
+|---|---|---|---|---|---|
+| 2026-08-30 07:48 | DOTUSDT | BUY | 0.8417 | 0.0005 | 0 |
+| 2026-08-30 07:47 | AAVEUSDT_PERP | BUY | 124.095 | 0.0005 | 0 |
+| 2026-08-30 07:40 | AAVEUSDT_PERP | BUY | 124.325 | 0.001 | 1 |
+| 2026-08-30 07:39 | APTUSDT | SELL | 0.5409 | 0.001 | 1 |
+| 2026-08-30 07:38 | HYPEUSDT_PERP | SELL | 83.0605 | 0.001 | 0 |
+| 2026-08-30 07:33 | ONDOUSDT_PERP | BUY | 0.35495 | 0.001 | 1 |
+| 2026-08-30 07:32 | HYPEUSDT_PERP | BUY | 83.1485 | 0.001 | 1 |
+| 2026-08-30 07:32 | DOTUSDT | SELL | 0.8433 | 0.0005 | 1 |
+| 2026-08-30 07:20 | ADAUSDT | BUY | 0.2015 | 0.0005 | 0 |
+| 2026-08-30 07:20 | DOGEUSDT | BUY | 0.08482 | 0.001 | 0 |
+| 2026-08-30 07:19 | XRPUSDT | BUY | 1.3979 | 0.001 | 0 |
+| 2026-08-30 07:17 | ARBUSDT | BUY | 0.08662 | 0.001 | 0 |
+| 2026-08-30 07:17 | NEARUSDT | BUY | 1.889 | 0.001 | 0 |
+| 2026-08-30 07:16 | AVAXUSDT | BUY | 7.33 | 0.001 | 0 |
+| 2026-08-30 07:12 | UNIUSDT | BUY | 4.952 | 0.001 | 0 |
+| 2026-08-30 07:11 | NEARUSDT | SELL | 1.89 | 0.001 | 1 |
+| 2026-08-30 07:11 | LINKUSDT | BUY | 11.428 | 0.0005 | 0 |
+| 2026-08-30 07:06 | ARBUSDT | SELL | 0.08672 | 0.001 | 1 |
+| 2026-08-30 07:01 | UNIUSDT | SELL | 4.935 | 0.001 | 1 |
+| 2026-08-30 07:00 | ADAUSDT | SELL | 0.2021 | 0.001 | 1 |
+| 2026-08-30 06:52 | DOGEUSDT | SELL | 0.08503 | 0.001 | 1 |
+| 2026-08-30 06:45 | BNBUSDT | BUY | 693.7 | 0.001 | 0 |
+| 2026-08-30 06:35 | AVAXUSDT | SELL | 7.322 | 0.001 | 1 |
+| 2026-08-30 06:23 | BNBUSDT | SELL | 693.7 | 0.001 | 1 |
+| 2026-08-30 06:23 | XRPUSDT | SELL | 1.3962 | 0.0005 | 1 |
+| 2026-08-30 06:17 | LINKUSDT | SELL | 11.386 | 0.0005 | 1 |
+| 2026-08-30 06:14 | SOLUSDT | BUY | 104.91 | 0.001 | 0 |
+| 2026-08-30 06:13 | ZECUSDT_PERP | SELL | 832.275 | 0.001 | 0 |
+| 2026-08-30 06:12 | ZECUSDT_PERP | SELL | 831.955 | 0.001 | 1 |
+| 2026-08-30 05:38 | ETHUSDT | BUY | 2454.36 | 0.001 | 0 |
+| 2026-08-30 05:38 | BTCUSDT_PERP | BUY | 78096.15 | 0.001 | 0 |
+| 2026-08-30 05:35 | TRXUSDT | BUY | 0.3407 | 0.001 | 0 |
+| 2026-08-30 05:18 | SOLUSDT | SELL | 104.99 | 0.001 | 1 |
+| 2026-08-30 05:15 | ETHUSDT | SELL | 2456.1 | 0.0005 | 1 |
+| 2026-08-30 05:08 | BTCUSDT_PERP | SELL | 78141.65 | 0.001 | 1 |
+| 2026-08-30 04:47 | TRXUSDT | SELL | 0.3403 | 0.001 | 1 |
+| 2026-08-30 04:45 | OPUSDT | BUY | 0.08859 | 0.001 | 0 |
+| 2026-08-30 04:39 | FILUSDT_PERP | BUY | 0.67695 | 0.001 | 0 |
+| 2026-08-30 04:38 | BCHUSDT | BUY | 244.6 | 0.001 | 0 |
+| 2026-08-30 04:38 | LTCUSDT | BUY | 48.82 | 0.001 | 0 |
+
+## DIARY_TOTALS_RECONCILE = PASS

@@ -464,7 +464,7 @@ Required Runtime Validation: PAPER-only, live OKX data; show dynamic Market Obse
 
 Pass Conditions: All required tests and factual runtime proof pass; no rank/threshold/Top-K has attention-eligibility authority; running SHA is exposed and verified.
 
-Status: ACTIVE
+Status: RESOLVED — 2026-08-30T07:33:05Z independent recheck: targeted P3/P4 suite 39 passed; full suite 859 passed/7 skipped; ruff clean. Deployed build SHA c66ab7f is exposed by /version and /health. Runtime records AI_SELECTED attention decisions and uses the Market Observer AI selection rather than a volume/Top-K fallback.
 
 ---
 
@@ -518,8 +518,22 @@ Pass Conditions: Required fields, decision and episode lineage, utility factors,
 
 Status: ACTIVE
 
+### Supervisor Recheck — 2026-08-30T07:33:05Z
+
+- Independent code/runtime/DB verification confirms the full ToolInvocation field contract is deployed and newly produced runtime rows include tool version, source, cache state, timestamps, status, and evidence-added state.
+- The required natural three-stage lineage does **not** yet exist: canonical `tool_invocations JOIN ai_trade_episodes ON entry_decision_id = decision_id` now returns 41 rows, but 0 rows have every required audit field. Historic/partial rows remain honest historical evidence and must not be rewritten or promoted.
+- The runtime is healthy PAPER and the build SHA is now verifiable (`c66ab7fbe578dafb5e85101afe41098d3603e229`). Its difference from HEAD `5f22669` is checkpoint/diary/verification/test work, not an unproven runtime identity.
+- Required next evidence remains a naturally created PAPER entry followed by its eligible natural episode closure. Do not force, seed, or manually create a trade/episode to satisfy this condition. Calibration remains OBSERVE/HOLD.
+
+### Supervisor Recheck — 2026-08-30T07:54:32Z
+
+- Independent isolated P4 suite: `17 passed`; targeted ruff: clean.
+- Canonical read-only audit finds 6 naturally completed `WIN`/`LOSS` episodes with entry decisions, yielding 80 entry-decision ToolInvocation rows. Every one remains incomplete for the P4 contract (0 complete rows).
+- Their linked tool rows range from 03:10Z to 03:40Z, before the verified deployed build `c66ab7f`; newer complete journal rows exist but have not yet become a naturally closed episode lineage.
+- Status remains **ACTIVE/PENDING**. No runtime or database mutation was made in this review.
+
 ---
 
 ## Immediate Governance Order
 
-Calibration/policy mutation returns to **OBSERVE/HOLD**. The “all phases complete” declaration and calibration-resume runbook at `c63c7e8` are not approved. Harness must address the ACTIVE directives in order (P3 then P4), make no Strategy/Risk/Execution tuning, and return its report directly to this Codex task UI with commit, tests, DB evidence, runtime evidence, and running SHA.
+Calibration/policy mutation remains **OBSERVE/HOLD**. Phase 3 is independently approved; the “all phases complete” declaration and calibration-resume runbook remain unapproved because Phase 4 is active. Harness must address P4 only, make no Strategy/Risk/Execution tuning, and return its report directly to this Codex task UI with commit, tests, DB evidence, runtime evidence, and running SHA.
