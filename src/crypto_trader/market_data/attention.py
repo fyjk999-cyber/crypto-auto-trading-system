@@ -175,6 +175,14 @@ class AttentionDecision:
         }
 
 
+def _in_observable_universe(inst_id: str) -> bool:
+    """Registry observable-universe contract (DynamicMarketUniverse):
+    live instruments quoted in USDT (spot ``*-USDT`` / swap ``*-USDT-SWAP``).
+    Other quote currencies are OUT OF UNIVERSE by definition -- a registry
+    fact, never a rank/quant eligibility veto."""
+    return inst_id.endswith("-USDT") or inst_id.endswith("-USDT-SWAP")
+
+
 def build_market_digest(
     batches: dict[str, MarketSnapshotBatch],
     *,
@@ -205,6 +213,7 @@ def build_market_digest(
     universe_by_type: dict[str, int] = {}
     quoted = 0
     unavailable = 0
+    out_of_universe = 0
     for inst_type in ("SPOT", "SWAP"):
         batch = batches.get(inst_type)
         if batch is None:
@@ -213,6 +222,9 @@ def build_market_digest(
         universe_by_type[inst_type] = len(batch.facts)
         fresh = freshness_by_type.get(inst_type, "NOT_AVAILABLE") == "LIVE"
         for fact in batch.facts:
+            if not _in_observable_universe(fact.inst_id):
+                out_of_universe += 1
+                continue
             bucket = _bucket_for(fact)
             if bucket == "NO_QUOTE":
                 unavailable += 1
@@ -271,6 +283,7 @@ def build_market_digest(
             "total": total,
             "quoted": quoted,
             "unavailable_no_quote": unavailable,
+            "out_of_universe_quote": out_of_universe,
         },
         "freshness": dict(freshness_by_type),
         "buckets": buckets,
@@ -404,7 +417,8 @@ class LLMMarketAttentionSelector:
             "rank or liquidity rule may decide eligibility.\n\n"
             f"Universe: SPOT={universe.get('SPOT', 0)} SWAP={universe.get('SWAP', 0)} "
             f"total={universe.get('total', 0)} quoted={universe.get('quoted', 0)} "
-            f"unavailable={universe.get('unavailable_no_quote', 0)}\n"
+            f"unavailable={universe.get('unavailable_no_quote', 0)} "
+            f"out_of_universe={universe.get('out_of_universe_quote', 0)}\n"
             f"Freshness: {json.dumps(digest.get('freshness') or {})}\n"
             "Fixed factual buckets over the WHOLE universe "
             "(count=total instruments, sampled=identities in roster):\n"

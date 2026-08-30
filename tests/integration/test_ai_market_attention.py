@@ -434,3 +434,28 @@ async def test_bound_contract_is_pinned_plus_target_dynamic_slots():
     assert cand.basis["target"] == 5
     assert "BTC-USDT" in cand.inst_ids
     assert cand.basis["roster_size"] > 0, "AI received a non-empty roster"
+
+
+async def test_digest_universe_is_registry_usdt_contract():
+    """Non-USDT quotes are OUT OF UNIVERSE by the registry definition (never
+    selectable, honestly counted); USDT instruments are unaffected."""
+    facts = [
+        _fact("BTC-USDT", "SPOT", last="100", low="90", high="110"),
+        _fact("1INCH-EUR", "SPOT", last="3", low="2", high="4"),
+        _fact("2Z-USDT-SWAP", "SWAP", last="0.5", low="0.4", high="0.6"),
+    ]
+    digest = build_market_digest(
+        {
+            "SPOT": MarketSnapshotBatch(
+                batch_id="b", inst_type="SPOT",
+                captured_at=datetime.now(UTC).isoformat(), facts=facts[:2]),
+            "SWAP": MarketSnapshotBatch(
+                batch_id="b2", inst_type="SWAP",
+                captured_at=datetime.now(UTC).isoformat(), facts=facts[2:]),
+        },
+        freshness_by_type={"SPOT": "LIVE", "SWAP": "LIVE"},
+    )
+    assert digest["universe"]["out_of_universe_quote"] == 1
+    roster_ids = {r["inst_id"] for r in digest["roster"]}
+    assert "1INCH-EUR" not in roster_ids
+    assert "BTC-USDT" in roster_ids and "2Z-USDT-SWAP" in roster_ids
