@@ -278,3 +278,14 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
   actively iterating fixes.
 - CALIBRATION: OBSERVE-ONLY (6th window) — ownership still unconfirmed;
   system self-improving; no failure mode warrants my param change.
+
+## INCIDENT: recon halt @ 06:33-06:35Z (cron-8, monitoring only)
+- /health overall=UNHEALTHY, reconciliation halted. Engine/lease/WS/loop all OK.
+- Reconciliation detail: POSITION_MISMATCH AVAXUSDT local=0.001 vs exchange=0;
+  BALANCE_MISMATCH AVAX local=0 vs exchange=-0.001; USDT delta only +0.0073.
+- Interpretation: an AVAX close (external build's fill path) did not
+  propagate to the local positions state -> recon correctly halted new
+  entries as designed (fail-safe working). USDT delta is negligible.
+- External operator's process (98135) — their fill->positions sync path
+  needs their fix. This session makes NO code changes (cron authority).
+- Watching next rounds for auto-recovery or external redeploy.
