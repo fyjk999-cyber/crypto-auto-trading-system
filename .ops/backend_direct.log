@@ -3824,3 +3824,56 @@ LIVE_MEMORY_RETRIEVAL_FAILED symbol=ONDOUSDT error=DecimalError
 LIVE_MEMORY_RETRIEVAL_FAILED symbol=FILUSDT error=DecimalError
 LIVE_MEMORY_RETRIEVAL_FAILED symbol=AAVEUSDT error=DecimalError
 LIVE_MEMORY_RETRIEVAL_FAILED symbol=HBARUSDT error=DecimalError
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [76525]
+INFO:     Started server process [80886]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ETHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SOLUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XRPUSDT error=DecimalError
+INFO:     127.0.0.1:63123 - "GET /health HTTP/1.1" 200 OK
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BNBUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOGEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ADAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AVAXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LINKUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SUIUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BCHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOTUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=NEARUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=APTUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ARBUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=OPUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=TRXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=UNIUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=HYPEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ZECUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ENAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=WLDUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ONDOUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=FILUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=TAOUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AAVEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XLMUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=HBARUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ETHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SOLUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=XRPUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BNBUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOGEUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=ADAUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=AVAXUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LINKUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=SUIUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=LTCUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=BCHUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=DOTUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=NEARUSDT error=DecimalError
+LIVE_MEMORY_RETRIEVAL_FAILED symbol=APTUSDT error=DecimalError

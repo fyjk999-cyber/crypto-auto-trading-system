@@ -6,3 +6,5 @@
 {"timestamp_utc": "2026-08-30T02:49:53Z", "reason": "signal:SIGTERM", "pid": 72421, "ppid": 1, "uptime_seconds": 174.5, "mode": "PAPER"}
 {"timestamp_utc": "2026-08-30T02:51:29Z", "reason": "signal:SIGTERM", "pid": 74415, "ppid": 1, "uptime_seconds": 85.9, "mode": "PAPER"}
 {"timestamp_utc": "2026-08-30T02:51:29Z", "reason": "signal:SIGTERM", "pid": 74415, "ppid": 1, "uptime_seconds": 86.0, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T03:09:16Z", "reason": "signal:SIGTERM", "pid": 76525, "ppid": 1, "uptime_seconds": 1057.9, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T03:09:16Z", "reason": "signal:SIGTERM", "pid": 76525, "ppid": 1, "uptime_seconds": 1058.0, "mode": "PAPER"}

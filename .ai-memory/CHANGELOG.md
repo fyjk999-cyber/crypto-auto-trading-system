@@ -151,3 +151,20 @@
   e2e pipeline lineage, episode pairing + lesson text, budget param). Full
   suite 831 passed / 2 pre-existing network (one SQLite-lock flake confirmed
   by rerun). Journal failures counted, never silent, never block trading.
+
+- 2026-08-30T03:30Z (P2-1 Phase 4 LIVE + ROOT-CAUSE REPAIR via journal):
+  Tool journal live on the running runtime: 153 rows / 31 decision lineages
+  within minutes. The utility report IMMEDIATELY surfaced a real
+  infrastructure bug: memory_retrieval 32/32 ERROR (DecimalError on every
+  decision — the pre-existing LIVE_MEMORY_RETRIEVAL_FAILED noise quantified
+  for the first time). ROOT CAUSE (fixed, not masked): ai_trade_episodes was
+  created with NUMERIC/DECIMAL column affinity while the ExactDecimal ORM
+  contract is canonical-string storage; SQLite silently coerced every exact
+  decimal string into binary REAL on write, and reads then hit
+  Decimal(binary_float) rejections. Migration 0022
+  (episodes_decimal_contract): table rebuilt with String(80) affinity,
+  all numerics canonicalized via Decimal(repr(x)) (exact round-trip), 102
+  rows preserved (pre-migration backup data/backup_pre_0022.db). ORM read
+  path verified: LiveMemoryProvider.retrieve returns knowledge/episodes
+  without error. The tool journal caught in minutes what had been silently
+  degrading every decision's memory context — exactly the Phase H purpose.
