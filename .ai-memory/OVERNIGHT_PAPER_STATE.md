@@ -183,3 +183,17 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 - OBSERVATION (non-blocking, no code change from cron): persist_episode_sync
   binds str(Decimal) which can emit E-notation text ("7.88000E-7"); exact
   round-trip preserved and D() parses it — cosmetic only.
+
+## Latest Checkpoint: 2026-08-30T04:30Z (cron-9)
+- Health OK / PAPER / lease held / no recon halt / 0 stuck orders. Policy v3.
+- Journal 2051 rows / 367 decisions; since 04:00 all four tools healthy
+  (memory_retrieval 142/142 OK, decision_context 142/142, observer 142/142).
+- LLM: 31/31 live_analysis success, avg 4.1s.
+- Fills since 04:00: 7 (3 reduce-only exits + 4 entries). PRICE VERIFICATION:
+  BCHUSDT SELL 245.0 flagged as round number -> verified REAL against live
+  OKX ticker (last 245.3, bid 245.3/ask 245.4; historical BCH fills 246.8->
+  247->245 track the market). No ARCHITECTURE REGRESSION.
+- New episodes: TIME_STOP cadence working (BCH LOSS -0.0023, ENA WIN,
+  FIL LOSS, HBAR WIN...) — exploration-size magnitudes.
+- CALIBRATION DECISION: OBSERVE-ONLY (no evidence requiring a bounded tempo
+  change; all tools 0-error; decision cadence steady at 240s baseline).

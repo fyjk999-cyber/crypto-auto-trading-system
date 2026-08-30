@@ -1,5 +1,8 @@
 # CURRENT_STATE
 
+- Checkpoint 2026-08-30T04:30Z (cron-9): all green; calibration OBSERVE-ONLY;
+  BCH 245.0 fill verified real vs live OKX (245.3 band); journal 2051/367.
+
 - Checkpoint 2026-08-30T04:00Z (cron-9): all green; calibration OBSERVE-ONLY;
   journal 1295/226 growing; memory_retrieval confirmed healed (67/67 OK);
   10 real fills, 6 TIME_STOP episodes, 0 stuck orders. See
