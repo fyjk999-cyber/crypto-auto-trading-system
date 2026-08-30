@@ -2,7 +2,11 @@
 
 Session Start: 2026-08-29T00:35:45Z (first clean AI fill)
 First AI Fill: fill_8396534b10d74e25843509a357d6e0ab — BTCUSDT_PERP LONG 0.001 @ 77753.05
-Latest Checkpoint: 2026-08-29T23:30Z (cron-7 deep, Phase G window 13)
+Latest Checkpoint: 2026-08-30T00:00Z (cron-7 deep, Phase G window 14)
+- Runtime: PID 48151 stable (zero restarts), health OK, recon PASS, one lease, frontend 200
+- Window 23:30-00:00Z: 7 fills (AAVE_PERP 125.815, XLM_PERP 0.179245, TAO_PERP 235.25, BCH 246.9, HBAR_PERP 0.075485, BTC_PERP 78202.15, WLD_PERP 0.38075 - all REAL), decisions 146, LLM 17/95.4k
+- Episodes 87 (33W/54L, +2); RPNL 12h -0.3236; dups 0; 23 open; 0 errors
+- 5th consecutive clean window; steady state
 - Runtime: PID 48151 stable (zero restarts), health OK, recon PASS, one lease, frontend 200
 - Window 23:00-23:30Z: 8 fills (APT 0.5418, TAO_PERP 236.35, AVAX 7.322, OP 0.08885, XLM_PERP 0.179215, HYPE_PERP 83.2845, ONDO_PERP 0.35215, HBAR_PERP 0.075365 - all REAL), decisions 141, LLM 11/61.5k
 - Episodes 85 (33W/52L, +4); RPNL 12h -0.2614 stable; dups 0; 20 open; 0 errors

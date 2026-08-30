@@ -135,3 +135,12 @@
 - Reason: FOURTH consecutive clean window; churn gone; 4h TIME_STOP lifecycle functioning exactly as designed (TAO/AVAX/XLM/HBAR cycles closed at ~4h). Baseline steady state validated over 4 windows
 - Expected effect: none; steady state. Phase G parameter baseline confirmed; next-change triggers unchanged (churn recurrence or LOW_SAMPLE_SIZE clear)
 - Next review: 2026-08-30T00:00Z
+
+## 2026-08-30T00:00Z (Phase G window 14)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 17 / decisions 146 (2L/3S/141NT=96.6%) / fills 7 / rejects 0 / episodes 87 (+2)
+- PnL: RPNL 12h 22 rows cum -0.3236 (slight drift from -0.2614); open 23
+- ACTION: HOLD
+- Changes: none
+- Reason: FIFTH consecutive clean window; churn absent; lifecycle cycles healthy (BCH/BTC 4h TIME_STOP re-entries at real levels). RPNL drift -0.06 over 30min within noise band (perp marks, not fees). LOW_SAMPLE_SIZE persists
+- Expected effect: none; steady state continues
+- Next review: 2026-08-30T00:30Z
