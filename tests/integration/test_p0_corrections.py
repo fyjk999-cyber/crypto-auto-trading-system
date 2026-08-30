@@ -76,7 +76,9 @@ async def env(database):
 async def test_manual_mutation_routes_fail_closed(env):
     bundle, client = env
     orders_body = client.get("/orders").json()
-    n_orders_before = len(orders_body if isinstance(orders_body, list) else orders_body.get("orders", []))
+    n_orders_before = len(
+        orders_body if isinstance(orders_body, list) else orders_body.get("orders", [])
+    )
 
     r1 = client.post("/manual-orders", json={
         "symbol": "BTCUSDT", "side": "BUY", "quantity": "0.001",
@@ -93,7 +95,9 @@ async def test_manual_mutation_routes_fail_closed(env):
 
     # No state change: no order, no perp position, no fake price anywhere
     orders_after = client.get("/orders").json()
-    n_orders_after = len(orders_after if isinstance(orders_after, list) else orders_after.get("orders", []))
+    n_orders_after = len(
+        orders_after if isinstance(orders_after, list) else orders_after.get("orders", [])
+    )
     assert n_orders_after == n_orders_before
     perp = client.get("/paper/perpetual/positions").json()
     assert perp.get("positions", {}) == {}

@@ -74,10 +74,14 @@ async def test_real_market_adapter_does_not_silent_fallback():
         async def get_orderbook(self, symbol, limit=100):
             raise RuntimeError("OKX unavailable")
 
+    class FailingFeed:
+        symbol = "BTCUSDT"
+        client = FailingPublicClient()
+
     adapter = PaperRealMarketAdapter(
         initial_balances={"USDT": Decimal("100000")},
+        feed=FailingFeed(),
     )
-    adapter.public_client = FailingPublicClient()
     await adapter.connect()
     with pytest.raises(MarketDataUnhealthy):
         await adapter.get_orderbook("BTCUSDT")
@@ -102,8 +106,14 @@ async def test_okx_orderbook_is_normalized_to_canonical_symbol():
                 ]
             }
 
-    adapter = PaperRealMarketAdapter(initial_balances={"USDT": Decimal("100000")})
-    adapter.public_client = PublicClient()
+    class MockFeed:
+        symbol = "BTCUSDT"
+        client = PublicClient()
+
+    adapter = PaperRealMarketAdapter(
+        initial_balances={"USDT": Decimal("100000")},
+        feed=MockFeed(),
+    )
     book = await adapter.get_orderbook("BTCUSDT")
     assert book.symbol == "BTCUSDT"
     assert book.exchange == "OKX"
