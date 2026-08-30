@@ -42,6 +42,21 @@ class OKXPublicDataClient:
             "timestamp": raw.get("ts", "0"),
         }
 
+    async def get_tickers(self, inst_type: str, uly: str | None = None) -> list[dict]:
+        """Batch tickers for one product class (all-market Layer-1 scan)."""
+        params: dict[str, object] = {"instType": inst_type}
+        if uly:
+            params["uly"] = uly
+        data = await self.adapter._public_request(  # noqa: SLF001
+            "GET", "/api/v5/market/tickers", params=params
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX tickers response is incomplete"
+            )
+        return [row for row in rows if isinstance(row, dict)]
+
     async def get_recent_candles(
         self,
         inst_id: str,
