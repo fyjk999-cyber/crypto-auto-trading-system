@@ -6,6 +6,7 @@ Test/API/CLI must not each assemble a different core. They should call
 
 from __future__ import annotations
 
+import logging
 import random
 import uuid
 from dataclasses import dataclass
@@ -82,6 +83,9 @@ class RuntimeBundle:
     daily_review_scheduler: DailyReviewScheduler
     research_gateway: ResearchGateway
     app_state: AppState
+
+
+logger = logging.getLogger("crypto_trader.bootstrap")
 
 
 async def build_system(settings: Settings) -> RuntimeBundle:
@@ -262,6 +266,39 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     await policy_manager.initialize()
 
+    # Phase C/D: dynamic all-market observer over the persisted instrument
+    # registry. Layer-1 = one REST batch per product class (throttled);
+    # Layer-2 = bounded WS candidate stream with REST fallback + stale
+    # marking. ADVISORY evidence only - it never gates trading.
+    market_observer = None
+    if settings.scanner_enabled:
+        try:
+            from crypto_trader.market_data.observer import (
+                HierarchicalMarketObserver,
+                OKXTickerWsManager,
+            )
+            from crypto_trader.market_data.okx_public_data import OKXPublicDataClient
+            from crypto_trader.market_data.universe import DynamicMarketUniverse
+
+            db_path = settings.database_url.split("///")[-1]
+            universe = DynamicMarketUniverse(
+                db_path, data_client=OKXPublicDataClient()
+            )
+            ws_manager = OKXTickerWsManager()
+            market_observer = HierarchicalMarketObserver(
+                universe,
+                ws_manager=ws_manager,
+                scan_interval_seconds=60.0,
+            )
+            await ws_manager.start()
+        except Exception as exc:
+            # The observer is advisory: a startup failure must never block
+            # the runtime. Trading continues with the configured core list.
+            logger.warning(
+                "MARKET_OBSERVER_START_FAILED error=%s", type(exc).__name__
+            )
+            market_observer = None
+
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
         symbols=symbols,
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
@@ -290,6 +327,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         position_lifecycle=position_lifecycle,
         reversal_cooldown_seconds=settings.reversal_cooldown_seconds,
         policy_manager=policy_manager,
+        market_observer=market_observer,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
@@ -432,6 +470,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         require_lease=True,
         position_lifecycle=position_lifecycle,
         policy_manager=policy_manager,
+        market_observer=market_observer,
     )
     snapshot_health_holder["health"] = engine.health
 

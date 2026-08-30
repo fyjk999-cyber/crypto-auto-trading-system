@@ -34,6 +34,7 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
         opportunity_scanner: CheapOpportunityScanner | None = None,
         opportunity_scanner_enabled: bool = True,
         opportunity_top_k: int = 5,
+        market_observer=None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -55,12 +56,33 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
         self._seen_in_round: set[str] = set()
         self._opportunity_ranking: list[OpportunityScore] = []
         self._ranking_generation = 0
+        # Phase C/D: hierarchical all-market observer (ADVISORY evidence
+        # only). Candidates never gate entries; they only widen the rotation
+        # and enrich the decision context with factual Layer-1 summaries.
+        self.market_observer = market_observer
+        self._dynamic_symbols: tuple[str, ...] = ()
+        self._last_observer_refresh_mono: float = 0.0
+        self._observer_failures = 0
+
+    @property
+    def rotation_symbols(self) -> tuple[str, ...]:
+        """Core symbols ALWAYS retained + bounded dynamic observer candidates."""
+        merged = list(self.symbols)
+        for symbol in self._dynamic_symbols:
+            if symbol not in merged:
+                merged.append(symbol)
+        return tuple(merged[:40])
+
+    @property
+    def dynamic_symbols(self) -> tuple[str, ...]:
+        return self._dynamic_symbols
 
     @property
     def symbol(self) -> str:
         """Return the next symbol for TradingEngine._strategy_context()."""
-        current = self.symbols[self._symbol_cursor]
-        self._symbol_cursor = (self._symbol_cursor + 1) % len(self.symbols)
+        rotation = self.rotation_symbols
+        current = rotation[self._symbol_cursor % len(rotation)]
+        self._symbol_cursor = (self._symbol_cursor + 1) % len(rotation)
         self.last_scan_symbol = current
         return current
 
@@ -167,4 +189,50 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
             set_symbol = getattr(self.decision_context_provider, "set_symbol", None)
             if set_symbol is not None:
                 set_symbol(ctx.symbol)
-        return await super()._build_context(ctx)
+        chief_ctx = await super()._build_context(ctx)
+        self._refresh_market_observer(chief_ctx)
+        return chief_ctx
+
+    def _refresh_market_observer(self, chief_ctx) -> None:
+        """Phase C/D advisory injection. NEVER raises, NEVER gates: observer
+        failure simply leaves the evidence key absent (fail-open, logged)."""
+        if self.market_observer is None:
+            return
+        try:
+            held: list[str] = []
+            portfolio_positions = (chief_ctx.portfolio_state or {}).get("positions") or {}
+            for symbol, position in portfolio_positions.items():
+                try:
+                    if isinstance(position, dict):
+                        quantity = position.get("quantity")
+                    else:
+                        quantity = getattr(position, "quantity", 0)
+                    if float(quantity or 0) != 0:
+                        held.append(symbol)
+                except (TypeError, ValueError):
+                    continue
+            target = 5
+            if self.policy_manager is not None:
+                snap = self._policy_snapshot()
+                if snap is not None:
+                    try:
+                        target = int(snap.get("deep_analysis_candidate_limit"))
+                    except (TypeError, ValueError):
+                        target = 5
+            candidate = self.market_observer.select_candidates(
+                target=target,
+                held_canonical_symbols=tuple(held),
+                core_canonical_symbols=self.symbols,
+            )
+            self.market_observer.update_ws_candidates(candidate)
+            self._dynamic_symbols = self.market_observer.canonical_symbols_for(candidate)
+            summary = self.market_observer.observe(candidate)
+            if summary.get("available"):
+                chief_ctx.strategy_evidence["market_observer"] = summary
+        except Exception as exc:
+            self._observer_failures += 1
+            logger.warning(
+                "MARKET_OBSERVER_EVIDENCE_UNAVAILABLE failures=%d error=%s",
+                self._observer_failures,
+                type(exc).__name__,
+            )

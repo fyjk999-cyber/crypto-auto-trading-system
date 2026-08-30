@@ -99,6 +99,7 @@ class TradingEngine:
         require_lease: bool = True,
         position_lifecycle: PositionLifecycleTracker | None = None,
         policy_manager=None,
+        market_observer=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -141,6 +142,10 @@ class TradingEngine:
         # tempo/budget ONLY; safety parameters never live here). None keeps
         # Settings values unchanged (tests / legacy bootstrap).
         self.policy_manager = policy_manager
+        # Phase C/D: hierarchical all-market observer (advisory evidence
+        # only; never gates). The tick loop refreshes its Layer-1 scan on the
+        # observer's own throttled interval.
+        self.market_observer = market_observer
         # signal metadata lineage (bounded): client_order_id -> intent
         # metadata, so a settled SPOT fill can be enriched with the exit
         # reason / decision id its SignalIntent carried (the paper spot
@@ -321,6 +326,11 @@ class TradingEngine:
         if self.policy_manager is not None:
             try:
                 await self.policy_manager.maybe_check()
+            except Exception:
+                pass
+        if self.market_observer is not None:
+            try:
+                await self.market_observer.poll()
             except Exception:
                 pass
         positions = await self.portfolio.get_positions()
@@ -1247,7 +1257,7 @@ class TradingEngine:
         return self.risk_engine.kill_switch.snapshot()
 
     def runtime_snapshot(self) -> dict:
-        return {
+        snapshot = {
             "run_id": self.run_id,
             "state": self.state_machine.state.value,
             "mode": self.settings.effective_mode().value,
@@ -1259,6 +1269,12 @@ class TradingEngine:
             # position version / seconds-since-exit / reversal-fence state.
             "position_lifecycle": self.position_lifecycle.snapshot(),
         }
+        if self.market_observer is not None:
+            try:
+                snapshot["market_observer"] = self.market_observer.observe()
+            except Exception:
+                snapshot["market_observer"] = {"available": False}
+        return snapshot
 
     async def wait_for_event_queue(self) -> None:
         await self._event_queue.join()

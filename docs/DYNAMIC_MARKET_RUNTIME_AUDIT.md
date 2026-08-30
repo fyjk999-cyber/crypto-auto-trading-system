@@ -24,3 +24,25 @@
 
 ## Gap
 - DYNAMIC_MARKET_UNIVERSE = PARTIAL
+
+## Update 2026-08-30T03:05Z (P2-1 Phase 3 wiring)
+- Runtime now imports the registry: YES — bootstrap builds
+  DynamicMarketUniverse(okx_public_data client) + HierarchicalMarketObserver
+  + OKXTickerWsManager when scanner_enabled; wired into TradingEngine (tick
+  poll) and MultiSymbolChiefTraderStrategyAdapter (advisory evidence +
+  dynamic rotation).
+- Layer-1: one batch tickers call per product class (SPOT+SWAP), throttled
+  60s, stale-marked on failure (STALE freshness, last_error recorded, never
+  fabricated).
+- Layer-2: bounded WS candidate stream (<=50 instruments) with REST-batch
+  fallback (observer.source WS/FALLBACK).
+- Candidate selection: FACTUAL ONLY (pinned held+core instruments, then top
+  24h notional volume). No composite score, no opportunity gate — advisory
+  evidence for the Chief Trader LLM (deep_analysis_candidate_limit from the
+  hot policy).
+- Dynamic rotation: core configured symbols ALWAYS retained first; dynamic
+  candidates appended, rotation bounded at 40 symbols; per-symbol decision
+  cooldown (hot policy) bounds LLM burn.
+- Observability: GET /runtime now exposes market_observer summary
+  (breadth/candidates/freshness/source).
+- DYNAMIC_MARKET_UNIVERSE = WIRED (live verification follows restart).
