@@ -213,3 +213,22 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 - ACTION REQUESTED FROM USER: confirm whether you are manually restarting /
   running a 5-min kill-restart loop from another terminal or AI session.
   If NOT you, we need to find the signal sender together.
+
+## Latest Checkpoint: 2026-08-30T05:00Z (cron-9) — DUAL-OPERATOR ALERT
+- Health OK / PAPER / lease held / 0 stuck orders / policy v3 / observer WS.
+- Journal STALLED at 2817 rows / 508 decisions: no new rows since 04:56:30
+  (34+ min). The 04:53Z process (95818, started by the EXTERNAL relauncher,
+  logging to data/paper-runtime.log) shows ZERO decision activity: startup
+  lines only + 2x POST /manual-orders and /paper/perpetual/open -> 403
+  Forbidden (auth correctly rejected manual orders), CPU idle.
+- NEW CODE DETECTED in the external session's builds: tool_invocations now
+  contains "market_observer_ai" (98 OK / 17 ERROR since 04:30) — a tool my
+  session never wrote. One live_analysis failure (91s timeout) logged.
+- CONCLUSION: a SECOND operator (another AI session / terminal loop) is
+  actively redeploying the runtime every ~5min with evolving code AND
+  probing manual-order endpoints. Recovery each cycle is clean, but its
+  current build has a stalled decision loop.
+- ACTION REQUESTED FROM USER (blocking): designate the single operator for
+  this runtime. If the external session is yours, let it finish; if not,
+  stop it. This cron stands down from any intervention meanwhile.
+- CALIBRATION: OBSERVE-ONLY (no changes while operator conflict unresolved).
