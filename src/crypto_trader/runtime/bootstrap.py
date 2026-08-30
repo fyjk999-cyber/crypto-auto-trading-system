@@ -46,6 +46,7 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
+from crypto_trader.runtime.position_manager import ShadowPositionManager
 from crypto_trader.runtime.execution_symbols import (
     PAPER_PERPETUAL_REFERENCE_SYMBOLS,
     execution_symbol_for,
@@ -346,6 +347,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
     tool_journal = ToolInvocationJournal(database.session_factory)
 
+    # Strategy directive Phase 2 (§76): SHADOW position manager. Records
+    # bounded HOLD/EXIT/REDUCE reviews for open positions; never executes.
+    shadow_position_manager = ShadowPositionManager(
+        llm_provider,
+        review_interval_seconds=600.0,
+        journal=tool_journal,
+    )
+
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
         symbols=symbols,
         provider=llm_provider,
@@ -519,6 +528,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         position_lifecycle=position_lifecycle,
         policy_manager=policy_manager,
         market_observer=market_observer,
+        position_manager=shadow_position_manager,
     )
     snapshot_health_holder["health"] = engine.health
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.config import Settings
@@ -100,6 +100,7 @@ class TradingEngine:
         position_lifecycle: PositionLifecycleTracker | None = None,
         policy_manager=None,
         market_observer=None,
+        position_manager=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -146,6 +147,11 @@ class TradingEngine:
         # only; never gates). The tick loop refreshes its Layer-1 scan on the
         # observer's own throttled interval.
         self.market_observer = market_observer
+        # Strategy directive Phase 2: SHADOW position manager — records
+        # bounded HOLD/EXIT/REDUCE reviews for open positions. It NEVER
+        # executes (no order path exists); see position_manager.py (§76).
+        self.position_manager = position_manager
+        self._shadow_review_task: asyncio.Task | None = None
         # signal metadata lineage (bounded): client_order_id -> intent
         # metadata, so a settled SPOT fill can be enriched with the exit
         # reason / decision id its SignalIntent carried (the paper spot
@@ -334,6 +340,7 @@ class TradingEngine:
             except Exception:
                 pass
         positions = await self.portfolio.get_positions()
+        self._maybe_shadow_position_review(positions)
         active_symbols = {
             symbol for symbol, position in positions.items() if float(position.quantity or 0) != 0
         }
@@ -1106,6 +1113,131 @@ class TradingEngine:
             fee_currency=payload.get("fee_currency"),
             timestamp=datetime.now(UTC),
         )
+
+
+    # ------------------------------------------------ shadow position reviews
+    def _maybe_shadow_position_review(self, positions: dict) -> None:
+        """Interval-gated shadow review trigger (§18): bounded, task-offloaded,
+        never blocks the tick hot path, never raises."""
+        pm = self.position_manager
+        if pm is None:
+            return
+        if self._shadow_review_task is not None and not self._shadow_review_task.done():
+            return
+        try:
+            open_positions = {
+                symbol: pos
+                for symbol, pos in (positions or {}).items()
+                if float((getattr(pos, "quantity", 0) or 0)) != 0
+            }
+        except Exception:
+            return
+        if not open_positions:
+            return
+        due = pm.due_symbols(open_positions)
+        if not due:
+            return
+        self._shadow_review_task = asyncio.create_task(
+            self._run_shadow_reviews(due, open_positions),
+            name="shadow-position-reviews",
+        )
+
+    async def _run_shadow_reviews(self, symbols: list[str], positions: dict) -> None:
+        for symbol in symbols:
+            try:
+                pos = positions.get(symbol)
+                pos_payload = {
+                    "entry_price": str(getattr(pos, "avg_price", "") or getattr(pos, "entry_price", "") or ""),
+                    "quantity": str(getattr(pos, "quantity", "") or "0"),
+                    "direction": str(getattr(pos, "side", "") or getattr(pos, "direction", "") or "").upper(),
+                    "opened_at": getattr(pos, "opened_at", None),
+                }
+                book = self.market_data.books.get(symbol)
+                mid = book.mid_price() if book is not None else None
+                thesis = await self._load_recent_entry_thesis(symbol)
+                review = await self.position_manager.review_symbol(
+                    symbol,
+                    position=pos_payload,
+                    thesis=thesis,
+                    current_price=mid,
+                )
+                await self._persist_position_review(review, symbol)
+            except Exception:
+                try:
+                    await self.audit.log("POSITION_REVIEW_FAILED", target=symbol)
+                except Exception:
+                    pass
+
+    async def _load_recent_entry_thesis(self, symbol: str):
+        """Best-effort canonical thesis: newest entry decision for this symbol
+        within 24h. Shadow-honest: when nothing canonical exists the review
+        runs with thesis=None (prompt shows NOT_AVAILABLE)."""
+        from crypto_trader.runtime.trade_thesis import thesis_from_decision_payload
+
+        try:
+            async with self.database.session_factory() as session:
+                from sqlalchemy import select, text as _text
+
+                row = (
+                    await session.execute(
+                        _text(
+                            "SELECT decision_json FROM decision_evidence "
+                            "WHERE symbol = :s AND created_at_utc >= :since "
+                            "ORDER BY created_at_utc DESC LIMIT 1"
+                        ),
+                        {
+                            "s": symbol,
+                            "since": (
+                                datetime.now(UTC) - timedelta(hours=24)
+                            ).isoformat(),
+                        },
+                    )
+                ).first()
+            if row is None:
+                return None
+            payload = json.loads(row[0] or "{}")
+            return thesis_from_decision_payload(payload)
+        except Exception:
+            return None
+
+    async def _persist_position_review(self, review, symbol: str) -> None:
+        try:
+            from crypto_trader.persistence.models import PositionReviewORM
+
+            market_type = (
+                "PERPETUAL" if is_paper_perpetual_symbol(symbol) else "SPOT"
+            )
+            async with self.database.session_factory() as session:
+                session.add(
+                    PositionReviewORM(
+                        review_id=new_id("prev"),
+                        symbol=symbol,
+                        market_type=market_type,
+                        direction=review.direction,
+                        episode_key=review.episode_key or None,
+                        thesis_decision_id=review.thesis_decision_id,
+                        review_timestamp=review.review_timestamp,
+                        holding_seconds=review.holding_seconds,
+                        entry_price=review.entry_price,
+                        current_price=review.current_price,
+                        unrealized_pnl=(
+                            str(review.unrealized_pnl)
+                            if review.unrealized_pnl is not None
+                            else None
+                        ),
+                        recommended_action=review.recommended_action,
+                        reason_summary=review.reason_summary,
+                        llm_invocation_id=review.llm_invocation_id,
+                        executed=0,
+                        manager_mode="SHADOW",
+                    )
+                )
+                await session.commit()
+        except Exception:
+            try:
+                await self.audit.log("POSITION_REVIEW_PERSIST_FAILED", target=symbol)
+            except Exception:
+                pass
 
     # ----------------------------------------------------------------- ledger
     async def _settle_fill(self, fill: Fill) -> None:

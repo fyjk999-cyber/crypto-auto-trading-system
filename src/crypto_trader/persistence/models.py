@@ -1222,3 +1222,32 @@ class MarketAttentionDecisionORM(Base):
     error: Mapped[str] = mapped_column(String(255), default="")
     layer1_batch_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     selector_version: Mapped[str] = mapped_column(String(32), default="")
+
+
+class PositionReviewORM(Base):
+    """Shadow Position Manager review journal (STRATEGY DIRECTIVE §15/§23).
+
+    One row per bounded position review. In SHADOW mode `executed` is always
+    0 — the honest counterfactual record for AI-exit vs TIME_STOP comparison
+    (§77/§78). No raw prompts; every text field is bounded.
+    """
+
+    __tablename__ = "position_reviews"
+
+    review_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(40), index=True)
+    market_type: Mapped[str] = mapped_column(String(20), default="SPOT")
+    direction: Mapped[str] = mapped_column(String(10))
+    episode_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    thesis_decision_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_timestamp: Mapped[str] = mapped_column(String(40))
+    holding_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_price: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    current_price: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    unrealized_pnl: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    recommended_action: Mapped[str] = mapped_column(String(10))
+    reason_summary: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    llm_invocation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    executed: Mapped[int] = mapped_column(Integer, default=0)
+    manager_mode: Mapped[str] = mapped_column(String(10), default="SHADOW")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
