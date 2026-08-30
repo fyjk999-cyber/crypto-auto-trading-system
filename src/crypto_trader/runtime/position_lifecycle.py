@@ -105,13 +105,19 @@ class PositionLifecycleTracker:
             return None
         return max(0.0, time.monotonic() - settled)
 
-    def reversal_blocked(self, symbol: str, market_type) -> bool:
+    def reversal_blocked(
+        self, symbol: str, market_type, cooldown_seconds: float | None = None
+    ) -> bool:
         """True only inside the reversal cooldown window after a completed
-        close of the SAME instrument. Exits are never blocked by this call."""
+        close of the SAME instrument. Exits are never blocked by this call.
+        ``cooldown_seconds`` overrides the tracker default (Phase 2 hot
+        policy override)."""
         since = self.seconds_since_exit(symbol, market_type)
         if since is None:
             return False
-        return since < max(0.0, float(self.reversal_cooldown_seconds))
+        if cooldown_seconds is None:
+            cooldown_seconds = self.reversal_cooldown_seconds
+        return since < max(0.0, float(cooldown_seconds))
 
     # ---------------------------------------------------------- snapshot
     def snapshot(self, symbols: list[tuple[str, object]] | None = None) -> dict:

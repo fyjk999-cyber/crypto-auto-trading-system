@@ -1125,3 +1125,23 @@ class OkxInstrumentORM(Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class RuntimePolicyORM(Base):
+    """Phase 2 canonical hot-reloadable runtime policy (§21-§28).
+
+    One row per applied version; active row = max(version). Holds ONLY the
+    bounded AI-adjustable decision tempo/budget parameters. Safety parameters
+    are forbidden here by contract (see governance.runtime_policy).
+    """
+
+    __tablename__ = "runtime_policy"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    params_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    changed_by: Mapped[str] = mapped_column(String(64), default="")
+    calibration_window: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rollback_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

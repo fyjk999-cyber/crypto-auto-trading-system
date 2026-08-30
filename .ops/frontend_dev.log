@@ -1,0 +1,11 @@
+
+> crypto-trading-control-center@0.1.0 dev
+> vite
+
+Default inspector port 9229 not available, using 9235 instead
+
+
+  VITE v6.4.3  ready in 1669 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: use --host to expose

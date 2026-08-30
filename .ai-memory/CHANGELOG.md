@@ -108,3 +108,27 @@
   (BNB/DOGE/LINK/SUI, all ~4h+, reduce-only, real prices, TIME_STOP
   attributed, ZERO re-entries — reversal fence live). Integrity: dup fills 0,
   dup orders 0, lease 1, PAPER confirmed. /runtime exposes position_lifecycle.
+
+- 2026-08-30T02:45Z (P2-1 Phase 2 CODE COMPLETE, pending restart activation):
+  Runtime hot-reloadable bounded policy layer. NEW
+  governance/runtime_policy.py: POLICY_PARAM_BOUNDS allowlist (11 params,
+  MIN/MAX/MAX_CHANGE_PER_WINDOW; reversal_cooldown_s added to the family),
+  RuntimePolicySnapshot (immutable, atomic swap §25), RuntimePolicyManager
+  (throttled cheap version check at engine tick safe checkpoint §26,
+  POLICY_HOT_APPLIED audit, apply_update with fail-closed validation §27,
+  rollback preserving exact historical set §28), naive-UTC timestamp fix for
+  the 30m window. runtime_policy table via migration 0020 (+ RuntimePolicyORM
+  so test init_schema creates it; prod DB stamped 0019 then upgraded).
+  Engine.tick hot-applies; chief trader gates read per_symbol_analysis_
+  cooldown_s / reversal_cooldown_s from the snapshot (Settings fallback),
+  _entry_quantity reads bounded paper_exploration_size (default identical to
+  legacy 0.0005), DecisionEvidence.analysis_evidence.policy_version records
+  lineage (§24). GET /policy/runtime READ-ONLY (§29; NO public mutation
+  route). Internal governance CLI scripts/policy_apply.py
+  (status/apply/rollback/verify §31 CALIBRATION_APPLY). Constructor lesson:
+  accessor block split __init__ tail (missing _last_decision_completed_at)
+  -> fixed. Tests tests/integration/test_runtime_policy.py 12/12 (hot apply
+  no-restart, rollback, bounds, max-change step + cumulative window,
+  forbidden safety params, atomic monotonic versions, evidence lineage,
+  adapter gate hot-read, engine tick pickup). Full suite 816 passed / 2
+  pre-existing network failures. PAPER_POLICY_STATE.md is a REPORT only (§23).

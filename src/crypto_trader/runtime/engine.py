@@ -98,6 +98,7 @@ class TradingEngine:
         lease_key: str = "crypto_engine_execution",
         require_lease: bool = True,
         position_lifecycle: PositionLifecycleTracker | None = None,
+        policy_manager=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -136,6 +137,10 @@ class TradingEngine:
         # stale-signal guard (§11/§12) and the reversal fence (§9/§10).
         # Exits are NEVER gated by this tracker.
         self.position_lifecycle = position_lifecycle or PositionLifecycleTracker()
+        # Phase 2: hot-reloadable bounded policy (AI-adjustable decision
+        # tempo/budget ONLY; safety parameters never live here). None keeps
+        # Settings values unchanged (tests / legacy bootstrap).
+        self.policy_manager = policy_manager
         # signal metadata lineage (bounded): client_order_id -> intent
         # metadata, so a settled SPOT fill can be enriched with the exit
         # reason / decision id its SignalIntent carried (the paper spot
@@ -311,6 +316,13 @@ class TradingEngine:
     # ------------------------------------------------------------------ tick
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
+        # Phase 2 (§26): safe-checkpoint policy version check — throttled,
+        # one-row read, atomic snapshot swap on change; never raises.
+        if self.policy_manager is not None:
+            try:
+                await self.policy_manager.maybe_check()
+            except Exception:
+                pass
         positions = await self.portfolio.get_positions()
         active_symbols = {
             symbol for symbol, position in positions.items() if float(position.quantity or 0) != 0

@@ -80,6 +80,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         perpetual_position_provider=None,
         position_lifecycle=None,
         reversal_cooldown_seconds: float = 240.0,
+        policy_manager=None,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -127,12 +128,45 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # Quant Gate. Exits are never gated by this tracker.
         self.position_lifecycle = position_lifecycle
         self.reversal_cooldown_seconds = max(0.0, float(reversal_cooldown_seconds))
+        # Phase 2 hot policy (§26): optional RuntimePolicyManager. When set,
+        # its snapshot OVERRIDES constructor values for the BOUNDED decision
+        # tempo/budget params only. Safety parameters never come from here.
+        self.policy_manager = policy_manager
         # Entry-path invocation bound: market data ticks arrive far more often
         # than a Chief Trader decision is needed. Existing-position safety
         # (reduce/exit/stop) does NOT depend on this interval: it lives in the
         # independent runtime bridge.
         self.min_decision_interval_seconds = max(min_decision_interval_seconds, 0.0)
         self._last_decision_completed_at: float | None = None
+
+    # -- Phase 2 hot policy accessors (Settings values stay the fallback) --
+    def _policy_snapshot(self):
+        try:
+            return self.policy_manager.snapshot if self.policy_manager else None
+        except Exception:
+            return None
+
+    def _entry_cooldown_now(self) -> float:
+        snap = self._policy_snapshot()
+        if snap is not None:
+            try:
+                return float(snap.get("per_symbol_analysis_cooldown_s"))
+            except (TypeError, ValueError):
+                pass
+        return self.entry_cooldown_seconds
+
+    def _reversal_cooldown_now(self) -> float:
+        snap = self._policy_snapshot()
+        if snap is not None:
+            try:
+                return float(snap.get("reversal_cooldown_s"))
+            except (TypeError, ValueError):
+                pass
+        return self.reversal_cooldown_seconds
+
+    def _policy_version(self) -> str:
+        snap = self._policy_snapshot()
+        return str(snap.version) if snap is not None else ""
 
     async def on_market_data(self, ctx: StrategyContext) -> list[SignalIntent]:
         # An unconfigured/degraded shared gateway must not create repeated
@@ -322,7 +356,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         last_entry_for_symbol = self._last_entry_initiated_at.get(ctx.symbol)
         if (
             last_entry_for_symbol is not None
-            and now_monotonic - last_entry_for_symbol < self.entry_cooldown_seconds
+            and now_monotonic - last_entry_for_symbol < self._entry_cooldown_now()
         ):
             decision = self._gate_decision(
                 chief_ctx,
@@ -331,7 +365,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                     "Entry skipped: last "
                     f"{ctx.symbol} entry "
                     f"{now_monotonic - last_entry_for_symbol:.0f}s ago, "
-                    f"cooldown {self.entry_cooldown_seconds:.0f}s"
+                    f"cooldown {self._entry_cooldown_now():.0f}s"
                 ),
             )
             await self._persist_evidence(decision, ctx, chief_ctx)
@@ -518,6 +552,15 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
     def _entry_quantity(self, decision) -> str:
         """§5 PAPER sizing: exploration entries use a bounded fraction."""
         if str(getattr(decision, "decision_class", "")).startswith("EXPLORATION"):
+            # Phase 2 hot policy: bounded paper_exploration_size (default
+            # identical to legacy 0.001 x 0.5 = 0.0005) overrides the
+            # fraction arithmetic when a policy is wired.
+            snap = self._policy_snapshot()
+            if snap is not None:
+                try:
+                    return str(Decimal(str(snap.get("paper_exploration_size"))))
+                except Exception:
+                    pass
             return str(
                 Decimal(self.normal_quantity) * Decimal(str(self.exploration_size_fraction))
             )
@@ -532,7 +575,8 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         (reference symbol -> execution symbol -> market type). Exits are
         NEVER gated by this tracker; different symbols never block each
         other (per-instrument keys)."""
-        if self.position_lifecycle is None or self.reversal_cooldown_seconds <= 0:
+        reversal_cooldown = self._reversal_cooldown_now()
+        if self.position_lifecycle is None or reversal_cooldown <= 0:
             return None
         execution_symbol = execution_symbol_for(ctx.symbol)
         market_type = (
@@ -540,7 +584,9 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             if is_paper_perpetual_symbol(execution_symbol)
             else MarketType.SPOT
         )
-        if not self.position_lifecycle.reversal_blocked(ctx.symbol, market_type):
+        if not self.position_lifecycle.reversal_blocked(
+            ctx.symbol, market_type, cooldown_seconds=reversal_cooldown
+        ):
             return None
         since = self.position_lifecycle.seconds_since_exit(ctx.symbol, market_type)
         return self._gate_decision(
@@ -549,7 +595,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             thesis=(
                 f"Entry skipped: {ctx.symbol} position exit settled "
                 f"{since:.0f}s ago; reversal cooldown "
-                f"{self.reversal_cooldown_seconds:.0f}s lets the exit "
+                f"{reversal_cooldown:.0f}s lets the exit "
                 "lifecycle finalize first (timing safety, not a quant gate)"
             ),
         )
@@ -741,6 +787,9 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                     chief_ctx.strategy_evidence or {}
                 ).get("strategy_candidates", []),
                 "risk_flags": (chief_ctx.strategy_evidence or {}).get("risk_flags", []),
+                # Phase 2 (§24): which bounded policy version this decision
+                # used, so calibration effect and trade lineage are auditable.
+                "policy_version": self._policy_version(),
             },
             "decision": decision.model_dump(mode="json"),
             "risk_decision": {

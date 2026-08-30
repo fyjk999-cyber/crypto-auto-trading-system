@@ -1182,6 +1182,27 @@ def create_app(state: AppState) -> FastAPI:
             return {"engine": "not attached"}
         return state.engine.runtime_snapshot()
 
+    @app.get("/policy/runtime")
+    async def policy_runtime():
+        """Phase 2 (§29) READ-ONLY active policy view: version, since,
+        parameters, source. Mutations are never exposed over public HTTP;
+        harness calibration uses the internal governance service
+        (scripts/policy_apply.py -> RuntimePolicyManager.apply_update)."""
+        if state.engine is None or getattr(state.engine, "policy_manager", None) is None:
+            raise HTTPException(status_code=503, detail="runtime policy manager not attached")
+        snap = state.engine.policy_manager.snapshot
+        if snap is None:
+            raise HTTPException(status_code=503, detail="runtime policy not initialized")
+        return {
+            "active_version": snap.version,
+            "active_since": snap.active_since,
+            "parameters": snap.params,
+            "source": snap.source,
+            "reason": snap.reason,
+            "bounds_doc": "see governance.runtime_policy.POLICY_PARAM_BOUNDS "
+            "(MIN/MAX/MAX_CHANGE_PER_WINDOW per param)",
+        }
+
     @app.get("/orders")
     async def orders(limit: int = 200):
         # ORDER/FILL/PnL read model (observability only; no trading change).

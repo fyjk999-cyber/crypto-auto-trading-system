@@ -1,0 +1,5 @@
+/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-local-current/.ops/backend_supervisor.sh: line 133: flock: command not found
+supervisor already running
+2026-08-29T15:41:05Z SUPERVISOR_START pid=50682 repo=/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-local-current port=8000 poll=30s
+2026-08-29T16:26:52Z SUPERVISOR_START pid=95430 repo=/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-local-current port=8000 poll=30s
+2026-08-29T16:26:52Z HEALTH_OK at_start

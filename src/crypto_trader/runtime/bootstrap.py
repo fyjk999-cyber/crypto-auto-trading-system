@@ -23,6 +23,7 @@ from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.factors.service import FactorService
 from crypto_trader.factors.tool_gateway import FactorToolGateway
+from crypto_trader.governance.runtime_policy import RuntimePolicyManager
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm_chief.memory_retrieval import LiveMemoryProvider
@@ -251,6 +252,16 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         reversal_cooldown_seconds=settings.reversal_cooldown_seconds
     )
 
+    # Phase 2: canonical hot-reloadable runtime policy (bounded, AI-adjustable
+    # decision tempo/budget only; safety params forbidden). Single DB truth
+    # source; the engine hot-applies new versions at safe checkpoints.
+    policy_manager = RuntimePolicyManager(
+        database.session_factory,
+        audit=audit,
+        check_interval_seconds=5.0,
+    )
+    await policy_manager.initialize()
+
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
         symbols=symbols,
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
@@ -278,6 +289,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         memory_provider=LiveMemoryProvider(database.session_factory),
         position_lifecycle=position_lifecycle,
         reversal_cooldown_seconds=settings.reversal_cooldown_seconds,
+        policy_manager=policy_manager,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
@@ -419,6 +431,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         perpetual_engine=perpetual_engine,
         require_lease=True,
         position_lifecycle=position_lifecycle,
+        policy_manager=policy_manager,
     )
     snapshot_health_holder["health"] = engine.health
 

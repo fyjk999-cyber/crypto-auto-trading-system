@@ -1,0 +1,6 @@
+{
+ "state": "HEALTHY",
+ "detail": "supervisor start, runtime already healthy",
+ "updated_at": "2026-08-29T16:26:52Z",
+ "last_health_check": "2026-08-29T16:26:52Z"
+}
