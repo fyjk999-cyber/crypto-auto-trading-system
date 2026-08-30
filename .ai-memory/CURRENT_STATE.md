@@ -1,5 +1,15 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T02:40Z (P2-1 Phase 2 LIVE): runtime hot-reloadable
+  bounded policy layer deployed and validated on the live runtime (same
+  process, zero restarts after activation): /policy/runtime serves v1
+  baseline; governance CLI applied v2 (240->300s cooldown) and the RUNNING
+  engine hot-applied it (audit POLICY_HOT_APPLIED v2@02:34:42Z), rolled back
+  to v3 (=v1 params, pickup v3@02:35:10Z); kill_switch attempt rejected
+  fail-closed at the CLI allowlist AND would be rejected again in
+  apply_update (§22 double fence). Active policy back at 240s baseline.
+  Engine tick safe-checkpoint + 5s throttle; DecisionEvidence carries
+  policy_version. Tests 12/12; suite 816 passed / 2 pre-existing network.
 - Updated: 2026-08-30T02:20Z (P2-1 Phase 1 COMPLETE: code + tests + CONTROLLED
   RESTART done). New runtime PID 68587 (old 48151/48144 gracefully SIGTERMed
   02:03Z, lease expired naturally 0 rows, no manual lease mutation). Episode
