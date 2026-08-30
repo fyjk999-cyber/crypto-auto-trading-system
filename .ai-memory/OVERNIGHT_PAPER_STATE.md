@@ -261,3 +261,20 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
   live_analysis avg 17.5s (4x baseline) + 2x ~91s timeout failures.
 - CALIBRATION: OBSERVE-ONLY (5th window) — external operator still owns the
   process; my param change would confound their iteration attribution.
+
+## Latest Checkpoint: 2026-08-30T06:30Z (cron-9)
+- Health OK / PAPER / lease held / 0 stuck orders / policy v3 / observer WS.
+- Stability: 75min without any restart (external kill-loop confirmed
+  stopped since 05:15Z). Dual-operator conflict still formally unresolved
+  but the situation has normalized.
+- Journal 5305 rows / 904 decisions, growing (latest 06:28:25).
+- Fills since 06:00: healthy two-way flow — 4 reduce-only TIME_STOP exits
+  (BNB 693.7, XRP 1.3962, LINK 11.386, ZEC 831.955 incl. a fast WIN
+  round-trip 832.275->831.955) + 2 entries (SOL 104.91, ZEC 832.275). All
+  real prices.
+- EXTERNAL BUILD TRENDING BETTER: market_observer_ai errors 51% -> 39%
+  (87 OK / 55 ERROR); live_analysis 8/8 success, zero timeouts, avg 11.6s
+  (still 3x baseline but improving). External operator appears to be
+  actively iterating fixes.
+- CALIBRATION: OBSERVE-ONLY (6th window) — ownership still unconfirmed;
+  system self-improving; no failure mode warrants my param change.
