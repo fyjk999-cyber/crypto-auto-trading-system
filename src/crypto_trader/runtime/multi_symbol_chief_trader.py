@@ -108,8 +108,20 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
         # Quant/opportunity analysis is evidence and observability only. A low
         # score, non-Top-K rank, or incomplete ranking must never veto AI.
         if self.opportunity_scanner_enabled:
+            _s0 = time.monotonic()
             score = await self._score_opportunity(ctx)
             self._record_opportunity(score)
+            if self.tool_journal is not None:
+                try:
+                    self.tool_journal.defer(
+                        "opportunity_scan",
+                        symbol=ctx.symbol,
+                        latency_ms=int((time.monotonic() - _s0) * 1000),
+                        status="OK" if score.eligible else "NOT_AVAILABLE",
+                        detail=f"score={score.score:.3f}",
+                    )
+                except Exception:
+                    pass
 
         now = time.monotonic()
         last = self._last_decision_completed_by_symbol.get(ctx.symbol)
@@ -224,11 +236,24 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                 held_canonical_symbols=tuple(held),
                 core_canonical_symbols=self.symbols,
             )
+            _o0 = time.monotonic()
             self.market_observer.update_ws_candidates(candidate)
             self._dynamic_symbols = self.market_observer.canonical_symbols_for(candidate)
             summary = self.market_observer.observe(candidate)
             if summary.get("available"):
                 chief_ctx.strategy_evidence["market_observer"] = summary
+                if self.tool_journal is not None:
+                    self.tool_journal.defer(
+                        "market_observer_evidence",
+                        symbol=chief_ctx.symbol,
+                        latency_ms=int((time.monotonic() - _o0) * 1000),
+                        status="OK",
+                        detail=(
+                            "candidates="
+                            f"{len((summary.get('candidates') or {}).get('facts') or {})}"
+                            f" source={summary.get('source')}"
+                        ),
+                    )
         except Exception as exc:
             self._observer_failures += 1
             logger.warning(

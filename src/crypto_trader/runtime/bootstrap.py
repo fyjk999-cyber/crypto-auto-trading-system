@@ -26,6 +26,7 @@ from crypto_trader.factors.service import FactorService
 from crypto_trader.factors.tool_gateway import FactorToolGateway
 from crypto_trader.governance.runtime_policy import RuntimePolicyManager
 from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.governance.tool_journal import ToolInvocationJournal
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm_chief.memory_retrieval import LiveMemoryProvider
 from crypto_trader.llm_runtime.domain_models import DomainModelRuntime
@@ -307,6 +308,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 pass
             market_observer = None
 
+    tool_journal = ToolInvocationJournal(database.session_factory)
+
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
         symbols=symbols,
         provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
@@ -336,6 +339,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         reversal_cooldown_seconds=settings.reversal_cooldown_seconds,
         policy_manager=policy_manager,
         market_observer=market_observer,
+        tool_journal=tool_journal,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 

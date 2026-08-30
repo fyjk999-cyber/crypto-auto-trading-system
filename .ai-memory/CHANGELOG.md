@@ -132,3 +132,22 @@
   forbidden safety params, atomic monotonic versions, evidence lineage,
   adapter gate hot-read, engine tick pickup). Full suite 816 passed / 2
   pre-existing network failures. PAPER_POLICY_STATE.md is a REPORT only (§23).
+
+- 2026-08-30T03:20Z (P2-1 Phase 4 CODE COMPLETE, pending restart activation):
+  Phase H tool usage journal + advisory utility learning. NEW
+  governance/tool_journal.py: ToolInvocationJournal (fail-safe writes,
+  bounded detail, RAW ARGS NEVER PERSISTED), per-decision buffer + flush
+  with decision_id/llm_invocation_id lineage (§54), utility_report (per-tool
+  volume/error/latency + decision-outcome pairing via decision_evidence ->
+  ai_trade_episodes.lineage_json; CORRELATION_NOT_CAUSATION disclaimer;
+  never a win/loss-only simplification), emit_lesson (ONE advisory
+  TOOL_UTILITY_ADVISORY lesson per report, non-authority framing verbatim).
+  tool_invocations table via migration 0021 + ToolInvocationORM. Wired into
+  the chief trader pipeline: decision_context + memory_retrieval timed rows,
+  market_observer_evidence + opportunity_scan rows (multi adapter), flush at
+  _persist_evidence. Budget param tool_call_budget_per_decision hot-policy
+  readable. scripts/tool_utility_report.py CLI for the calibration agent.
+  Tests 7/7 (record/report, lineage flush, buffer bound, fail-safe counted,
+  e2e pipeline lineage, episode pairing + lesson text, budget param). Full
+  suite 831 passed / 2 pre-existing network (one SQLite-lock flake confirmed
+  by rerun). Journal failures counted, never silent, never block trading.

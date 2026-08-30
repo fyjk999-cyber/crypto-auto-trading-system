@@ -81,6 +81,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         position_lifecycle=None,
         reversal_cooldown_seconds: float = 240.0,
         policy_manager=None,
+        tool_journal=None,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -132,6 +133,10 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # its snapshot OVERRIDES constructor values for the BOUNDED decision
         # tempo/budget params only. Safety parameters never come from here.
         self.policy_manager = policy_manager
+        # Phase H: advisory tool usage journal (fail-safe; raw args never
+        # persisted). Buffered rows are flushed with decision lineage at
+        # evidence-persist time.
+        self.tool_journal = tool_journal
         # Entry-path invocation bound: market data ticks arrive far more often
         # than a Chief Trader decision is needed. Existing-position safety
         # (reduce/exit/stop) does NOT depend on this interval: it lives in the
@@ -168,6 +173,29 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         snap = self._policy_snapshot()
         return str(snap.version) if snap is not None else ""
 
+    def _defer_tool_call(
+        self,
+        tool_name: str,
+        symbol: str,
+        started_mono: float,
+        status: str,
+        detail: str = "",
+    ) -> None:
+        """Phase H journal (fail-safe): buffer a tool invocation row for
+        later flush with decision lineage."""
+        if self.tool_journal is None:
+            return
+        try:
+            self.tool_journal.defer(
+                tool_name,
+                symbol=symbol,
+                latency_ms=int((time.monotonic() - started_mono) * 1000),
+                status=status,
+                detail=detail,
+            )
+        except Exception:
+            pass
+
     async def on_market_data(self, ctx: StrategyContext) -> list[SignalIntent]:
         # An unconfigured/degraded shared gateway must not create repeated
         # provider invocations. Existing-position safety remains owned by the
@@ -200,22 +228,35 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "funding_rate": str(ctx.funding) if ctx.funding is not None else None,
                 "open_interest": str(ctx.oi) if ctx.oi is not None else None,
             }
+            _t0 = time.monotonic()
             try:
                 bundle = await self.decision_context_provider.build(market_data)
+                self._defer_tool_call(
+                    "decision_context", ctx.symbol, _t0, "OK"
+                )
             except Exception as exc:
                 logger.warning(
                     "LIVE_DECISION_CONTEXT_UNAVAILABLE symbol=%s error=%s",
                     ctx.symbol,
                     type(exc).__name__,
                 )
+                self._defer_tool_call(
+                    "decision_context", ctx.symbol, _t0, "ERROR",
+                    detail=type(exc).__name__,
+                )
                 bundle = None
         evidence = bundle.evidence if bundle is not None else {}
         regime = str(evidence.get("market_regime") or "UNKNOWN")
         memory: dict = {}
         if self.memory_provider is not None:
+            _m0 = time.monotonic()
             try:
                 memory = await self.memory_provider.retrieve(
                     regime=regime, symbol=ctx.symbol
+                )
+                self._defer_tool_call(
+                    "memory_retrieval", ctx.symbol, _m0, "OK",
+                    detail=f"knowledge={len(memory.get('knowledge', []))}",
                 )
             except Exception as exc:
                 # Memory is soft evidence: retrieval failure must never block
@@ -224,6 +265,10 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                     "LIVE_MEMORY_RETRIEVAL_FAILED symbol=%s error=%s",
                     ctx.symbol,
                     type(exc).__name__,
+                )
+                self._defer_tool_call(
+                    "memory_retrieval", ctx.symbol, _m0, "ERROR",
+                    detail=type(exc).__name__,
                 )
                 memory = {}
         self._last_memory = memory
@@ -799,6 +844,16 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             "execution_intent_reference": execution_reference,
             "created_at_utc": now,
         }
+        # Phase H (§54): flush buffered tool invocations WITH the decision
+        # lineage so tool-utility pairing stays factual and auditable.
+        if self.tool_journal is not None:
+            try:
+                await self.tool_journal.flush(
+                    decision_id=decision.decision_id,
+                    llm_invocation_id=decision.llm_invocation_id,
+                )
+            except Exception:
+                pass
         try:
             await self.evidence_backend.store_decision(evidence)
         except Exception as exc:

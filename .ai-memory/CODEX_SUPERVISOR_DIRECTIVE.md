@@ -342,3 +342,39 @@ Harness may continue PAPER Runtime observation and the corrective work. Do not d
 - Runtime remains PAPER/OKX real, reconciliation clean, and duplicate IDs zero
 - Project state files record the new commit and validation evidence
 - Supervisor independently closes this Directive
+
+
+---
+
+# P2 GATE — TERRA/CODEX PHASE ORDER CORRECTION (2026-08-30 ~02:15Z)
+
+Directive: CODEX INDEPENDENT CORRECTION — "P2 ACTIVE, DO NOT CLAIM PHASE 1 PASS YET"
+
+## Scope Lock
+PHASE 1 -> 2 -> 3 -> 4 only. No phase promotion until Codex independently marks PASS.
+
+## Freeze Orders (compliance status: HARNESS = COMPLIANT)
+1. ALL calibration/policy mutation FROZEN (OBSERVE/HOLD; staged ENTRY_COOLDOWN_SECONDS=300 reverted to 240 at 01:20Z; zero parameter changes since).
+2. ALL PHASE 2/3/4 implementation FROZEN — harness starts/extends nothing.
+3. PAPER trading is NOT started/restarted by the harness (Supervisor/Codex is the sole restart authority).
+4. No reset/rebase/deletion of any Codex-owned commit or dirty work.
+
+## Phase-Order Violation Record (recorded only; harness does NOT touch)
+- At directive receipt: HEAD `1e0efa7` contained P2 runtime-policy commits (`af34e12` P2 hot-reload policy layer; `d0b244c` P1 restart record + live validation + episode canonicalization); history contained `dfb7274` dynamic observable market universe (Phase 3 scope).
+- Codex has since committed further Phase 3 work: `e7557a9` (dynamic all-market observer wired into runtime), `dcffe75` (observer startup fix + live WS verification) — recorded here as out-of-order promotion evidence; harness took no part and touched nothing.
+- Parked Phase 3 dirty files listed at directive receipt (observer.py, test_dynamic_market_observer.py, bootstrap/engine/multi_symbol dirty) are now inside the above Codex commits; working tree clean except .ops/backend_direct.log (runtime log, operational fact).
+
+## Runtime Facts (harness verification 02:1x-02:2xZ)
+- Current PID 70894 (single local_runner process; prior 48144/48151 exited), lease `engine_run_1321c11b7c84438b930a8f95dbc5bc60`, HEAD at check `1e0efa7`.
+- Health 200/overall OK, recon OK at harness check — the DOWN (connection refused) Codex observed matches the restart window recorded in `d0b244c`.
+- Per directive: SHA/PID reported as **DOWN until independently deployed** — harness makes no running-runtime validation claims.
+
+## PHASE 1 Open Items (PASS blockers)
+1. TRX 6.5s episode semantic attribution: first persisted UNKNOWN (00:40:52.518, harness direct query evidence) -> currently stored TIME_STOP (eps-7899c4b6, holding 6.46792s, review_status=PENDING). 6.47s holding is semantically incompatible with a 4h time stop; label lacks lineage proof and must NOT be silently accepted (see PHASE1_TRX_ROOT_CAUSE_LINEAGE.md section 6 for both time-point facts).
+2. ACKNOWLEDGED->terminal fence/recovery test required. DOGE incident RECOVERED historically (ord_71ffb76b REJECTED 02:09:35.837 terminal -> ord_0e9773ef SELL FILLED 02:09:47.036 @0.08489 -> TIME_STOP episode -> recon OK). Historical recovery != verified fix; the 41-minute ACKNOWLEDGED gap remains an unresolved-defect class until a fence/recovery runtime test exists.
+3. PHASE 1 runtime test must be ready + Codex-authorized BEFORE PAPER trading (re)starts.
+4. Required test set: stale-signal, legitimate-exit-unblocked, cross-symbol, no-accidental-reversal, exit-attribution + exact DB/runtime evidence.
+
+## Evidence Documents
+- `.ai-memory/PHASE1_TRX_ROOT_CAUSE_LINEAGE.md` — root cause, full DB lineage, DOGE recovery correction (section 5), TRX dual-time-point label facts (section 6).
+- This file — gate and status authority record.

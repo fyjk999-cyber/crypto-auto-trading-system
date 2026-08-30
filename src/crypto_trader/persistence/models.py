@@ -1145,3 +1145,25 @@ class RuntimePolicyORM(Base):
     calibration_window: Mapped[str | None] = mapped_column(String(64), nullable=True)
     rollback_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ToolInvocationORM(Base):
+    """Phase H journal of decision-pipeline tool invocations (§54-§62).
+
+    Raw tool arguments are never persisted (secrets/PII/prompt-replay
+    hazards); only bounded factual detail. Utility learning consuming this
+    table is advisory only and never a trading authority.
+    """
+
+    __tablename__ = "tool_invocations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invocation_uid: Mapped[str] = mapped_column(String(64), unique=True)
+    tool_name: Mapped[str] = mapped_column(String(64), index=True)
+    decision_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    llm_invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="OK")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    detail: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
