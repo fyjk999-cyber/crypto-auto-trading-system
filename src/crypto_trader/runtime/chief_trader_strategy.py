@@ -835,6 +835,13 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 # Phase 2 (§24): which bounded policy version this decision
                 # used, so calibration effect and trade lineage are auditable.
                 "policy_version": self._policy_version(),
+                # P3 CS-20260830-034530-P3-AI-ATTENTION: the Market Observer
+                # AI attention decision this decision was made under (bounded
+                # lineage: uid, mode, selected instruments, digest id). Empty
+                # when no observer is wired; never fabricated.
+                "market_observer_attention": (
+                    (chief_ctx.strategy_evidence or {}).get("market_observer") or {}
+                ).get("attention", {}),
             },
             "decision": decision.model_dump(mode="json"),
             "risk_decision": {

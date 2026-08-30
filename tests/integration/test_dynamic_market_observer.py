@@ -2,8 +2,9 @@
 
 Directive coverage:
 LAYER1_BATCH_SCAN     : one batch request per product class (no per-symbol REST)
-FACTUAL_CANDIDATES    : top-volume factual selection, pinned held/core kept,
-                        no score, no quant gate
+AI_ATTENTION          : non-core rotation owned by the Market Observer AI over
+                        a compressed all-market digest; NO volume Top-K, NO
+                        rank fallback (P1 CS-20260830-034530-P3-AI-ATTENTION)
 STALE_MARKING         : failed refresh degrades freshness to STALE, never
                         fabricates, never blocks
 WS_BOUND_AND_FALLBACK : ws candidate set bounded <=50, mode FALLBACK when WS
@@ -11,7 +12,7 @@ WS_BOUND_AND_FALLBACK : ws candidate set bounded <=50, mode FALLBACK when WS
 ADVISORY_ONLY         : observer failure leaves decision context absent,
                         trading continues (fail-open)
 DYNAMIC_ROTATION      : multi adapter rotation = core (always retained) +
-                        bounded dynamic candidates
+                        bounded AI-attended dynamic candidates
 SNAPSHOT_VISIBLE      : engine runtime_snapshot exposes market_observer
 """
 
@@ -107,20 +108,62 @@ async def test_layer1_batch_scan_one_call_per_class():
     assert summary["source"] == "REST"
 
 
-async def test_factual_candidate_selection_with_pins():
+async def test_pinned_candidates_kept_without_ai_configuration():
+    """P1 CS-20260830-034530-P3-AI-ATTENTION: with no attention selector the
+    dynamic slots stay EMPTY (honest AI_NOT_CONFIGURED) -- the volume Top-K
+    must never silently return. Held/core pins are still protected."""
     client = FakeDataClient()
     obs = _observer(client)
     await obs.poll(force=True)
-    cand = obs.select_candidates(
+    cand = await obs.select_candidates(
         target=2,
         held_canonical_symbols=("TRXUSDT",),
         core_canonical_symbols=("BTCUSDT",),
     )
-    # pinned first (held + core), then top factual volume (DOGE swap 2M)
+    # pinned first (held + core); NO volume-ranked dynamic fills
     assert cand.inst_ids[0] == "TRX-USDT"
     assert "BTC-USDT" in cand.inst_ids or "BTC-USDT-SWAP" in cand.inst_ids
-    assert "DOGE-USDT-SWAP" in cand.inst_ids
+    assert "DOGE-USDT-SWAP" not in cand.inst_ids, "no volume-rank fallback"
+    assert cand.attention is not None
+    assert cand.attention.mode == "AI_NOT_CONFIGURED"
     assert cand.basis["rule"].startswith("held+core pinned")
+    assert "attention_uid" in cand.basis
+
+
+class _StubAttentionSelector:
+    """Deterministic AI attention stub (test-only; production uses the LLM)."""
+
+    version = "stub-1.0.0"
+
+    def __init__(self, picks):
+        self.picks = list(picks)
+
+    async def select(self, digest, *, slots, pinned_inst_ids=()):
+        roster = [row["inst_id"] for row in digest.get("roster") or []]
+        selected = [i for i in self.picks if i in set(roster) | set(pinned_inst_ids)]
+        return tuple(selected[: max(0, slots)]), {
+            "mode": "AI_SELECTED",
+            "rationale": "stub deterministic attention",
+            "llm_invocation_id": "llm-stub-1",
+            "error": "",
+            "roster_size": len(roster),
+        }
+
+
+async def test_ai_attention_selection_replaces_volume_rank():
+    client = FakeDataClient()
+    obs = _observer(client)
+    obs.attention_selector = _StubAttentionSelector(["TRX-USDT"])
+    await obs.poll(force=True)
+    cand = await obs.select_candidates(
+        target=3,
+        held_canonical_symbols=(),
+        core_canonical_symbols=("BTCUSDT",),
+    )
+    assert "TRX-USDT" in cand.inst_ids
+    assert "DOGE-USDT-SWAP" not in cand.inst_ids, "AI output, not volume rank"
+    assert cand.attention.mode == "AI_SELECTED"
+    assert cand.attention.llm_invocation_id == "llm-stub-1"
 
 
 async def test_stale_marking_and_no_fabrication():
@@ -151,9 +194,12 @@ async def test_ws_candidate_set_bounded_and_fallback_mode():
     assert ws.mode == "FALLBACK"
     client = FakeDataClient()
     obs = _observer(client)
+    obs.attention_selector = _StubAttentionSelector(
+        [f"INST-{i}" for i in range(80)]  # over-selecting AI is still bounded
+    )
     obs.ws_manager = ws
     await obs.poll(force=True)
-    cand = obs.select_candidates(target=60)  # over target cap
+    cand = await obs.select_candidates(target=60)  # over target cap
     assert len(cand.inst_ids) <= 50, "WS subscription bounded"
     summary = obs.observe(cand)
     assert summary["source"] == "FALLBACK"
@@ -184,7 +230,7 @@ async def test_observer_failure_is_fail_open(database):
     """ADVISORY_ONLY: an observer that raises must not break the decision
     context build and must not inject the key."""
     class ExplodingObserver:
-        def select_candidates(self, *a, **k):
+        async def select_candidates(self, *a, **k):
             raise RuntimeError("boom")
 
         def update_ws_candidates(self, cand):
@@ -197,13 +243,12 @@ async def test_observer_failure_is_fail_open(database):
             return {}
 
     adapter = _adapter(ExplodingObserver())
-    ctx = type("Ctx", (), {"symbol": "BTCUSDT"})()
 
     class ChiefCtx:
         strategy_evidence: dict = {}
         portfolio_state: dict = {}
 
-    adapter._refresh_market_observer(ChiefCtx())
+    await adapter._refresh_market_observer(ChiefCtx())
     assert "market_observer" not in ChiefCtx.strategy_evidence
     assert adapter._observer_failures == 1
 
@@ -218,11 +263,12 @@ async def test_observer_evidence_injected_and_rotation_updated():
         strategy_evidence: dict = {}
         portfolio_state: dict = {"positions": {"TRXUSDT": {"quantity": "0.001"}}}
 
-    adapter._refresh_market_observer(ChiefCtx())
+    await adapter._refresh_market_observer(ChiefCtx())
     summary = ChiefCtx.strategy_evidence.get("market_observer")
     assert summary is not None and summary["available"] is True
     assert "TRX-USDT" in summary["candidates"]["facts"]
     assert "TRXUSDT" in adapter.dynamic_symbols, "held position pinned into rotation"
+    assert summary.get("attention", {}).get("mode") == "AI_NOT_CONFIGURED"
 
 
 async def test_engine_snapshot_exposes_observer(database):

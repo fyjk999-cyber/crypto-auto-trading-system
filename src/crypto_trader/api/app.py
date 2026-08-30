@@ -327,6 +327,8 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/health")
     async def health():
+        from crypto_trader.runtime.build_info import build_info
+
         snapshot = (
             state.engine.health.snapshot()
             if state.engine
@@ -337,6 +339,8 @@ def create_app(state: AppState) -> FastAPI:
                 },
             }
         )
+        # Additive immutable build identity (verified running SHA contract).
+        snapshot["build"] = build_info()
         return snapshot
 
     @app.get("/ready")
@@ -1150,8 +1154,14 @@ def create_app(state: AppState) -> FastAPI:
     async def version():
         import os
 
+        from crypto_trader.runtime.build_info import build_info
+
         return {
-            "git_sha": os.environ.get("GIT_SHA", "0dc4884ae3e416dc1df22f96620f55e8e4f41734"),
+            # Immutable running-build identity (P3 directive: the running
+            # SHA must be exposed AND verifiable). Resolved once per process
+            # from RUNTIME_BUILD_SHA env or the actual git HEAD -- never a
+            # hardcoded placeholder.
+            **build_info(),
             "api_version": "v1",
             "schema_version": "1",
             "deployment_id": os.environ.get("DEPLOYMENT_ID", "local"),
@@ -1178,9 +1188,13 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/runtime")
     async def runtime():
+        from crypto_trader.runtime.build_info import build_info
+
         if state.engine is None:
             return {"engine": "not attached"}
-        return state.engine.runtime_snapshot()
+        payload = state.engine.runtime_snapshot()
+        payload["build"] = build_info()
+        return payload
 
     @app.get("/policy/runtime")
     async def policy_runtime():

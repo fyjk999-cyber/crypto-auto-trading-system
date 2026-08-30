@@ -56,9 +56,11 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
         self._seen_in_round: set[str] = set()
         self._opportunity_ranking: list[OpportunityScore] = []
         self._ranking_generation = 0
-        # Phase C/D: hierarchical all-market observer (ADVISORY evidence
-        # only). Candidates never gate entries; they only widen the rotation
-        # and enrich the decision context with factual Layer-1 summaries.
+        # Phase C/D + P3 correction: hierarchical all-market observer whose
+        # non-core attention is owned by the Market Observer AI (ADVISORY
+        # evidence only; no volume/Top-K authority). Candidates never gate
+        # entries; they only widen the rotation and enrich the decision
+        # context with factual Layer-1 summaries.
         self.market_observer = market_observer
         self._dynamic_symbols: tuple[str, ...] = ()
         self._last_observer_refresh_mono: float = 0.0
@@ -202,12 +204,16 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
             if set_symbol is not None:
                 set_symbol(ctx.symbol)
         chief_ctx = await super()._build_context(ctx)
-        self._refresh_market_observer(chief_ctx)
+        await self._refresh_market_observer(chief_ctx)
         return chief_ctx
 
-    def _refresh_market_observer(self, chief_ctx) -> None:
+    async def _refresh_market_observer(self, chief_ctx) -> None:
         """Phase C/D advisory injection. NEVER raises, NEVER gates: observer
-        failure simply leaves the evidence key absent (fail-open, logged)."""
+        failure simply leaves the evidence key absent (fail-open, logged).
+
+        P1 CS-20260830-034530-P3-AI-ATTENTION: dynamic rotation slots are
+        chosen by the Market Observer AI (attention), not by volume rank.
+        """
         if self.market_observer is None:
             return
         try:
@@ -231,14 +237,19 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                         target = int(snap.get("deep_analysis_candidate_limit"))
                     except (TypeError, ValueError):
                         target = 5
-            candidate = self.market_observer.select_candidates(
+            _o0 = time.monotonic()
+            candidate = await self.market_observer.select_candidates(
                 target=target,
                 held_canonical_symbols=tuple(held),
                 core_canonical_symbols=self.symbols,
             )
-            _o0 = time.monotonic()
             self.market_observer.update_ws_candidates(candidate)
             self._dynamic_symbols = self.market_observer.canonical_symbols_for(candidate)
+            attention = getattr(candidate, "attention", None)
+            if attention is not None:
+                self._defer_attention_row(
+                    str(getattr(chief_ctx, "symbol", "") or ""), attention
+                )
             summary = self.market_observer.observe(candidate)
             if summary.get("available"):
                 chief_ctx.strategy_evidence["market_observer"] = summary
@@ -261,3 +272,34 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                 self._observer_failures,
                 type(exc).__name__,
             )
+
+    def _defer_attention_row(self, symbol: str, attention) -> None:
+        """Journal the Market Observer AI attention invocation (fail-safe).
+
+        The attention decision itself is durably persisted by the observer's
+        lineage sink (market_attention_decisions); this row ties it into the
+        decision-pipeline tool trace.
+        """
+        if self.tool_journal is None:
+            return
+        mode = str(getattr(attention, "mode", "") or "")
+        if mode == "AI_SELECTED":
+            status = "OK"
+        elif mode in ("AI_UNAVAILABLE",):
+            status = "ERROR"
+        else:
+            status = "NOT_AVAILABLE"
+        try:
+            self.tool_journal.defer(
+                "market_observer_ai",
+                symbol=symbol,
+                latency_ms=int(getattr(attention, "latency_ms", 0) or 0),
+                status=status,
+                detail=(
+                    f"mode={mode} selected={len(getattr(attention, 'selected_inst_ids', ()) or ())}"
+                    f" roster={getattr(attention, 'roster_size', 0)}"
+                    f" uid={getattr(attention, 'attention_uid', '')}"
+                ),
+            )
+        except Exception:
+            pass

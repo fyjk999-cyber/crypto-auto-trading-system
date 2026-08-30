@@ -271,25 +271,45 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     # registry. Layer-1 = one REST batch per product class (throttled);
     # Layer-2 = bounded WS candidate stream with REST fallback + stale
     # marking. ADVISORY evidence only - it never gates trading.
+    #
+    # P3 CS-20260830-034530-P3-AI-ATTENTION: non-core attention is owned by
+    # the Market Observer AI over a bounded compressed all-market digest.
+    # There is NO 24h-volume Top-K and NO rank fallback: when the AI is
+    # unavailable the dynamic slots stay empty (honest absence, recorded in
+    # the market_attention_decisions lineage table).
     market_observer = None
+    llm_provider = GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime)
     if settings.scanner_enabled:
         try:
+            from crypto_trader.market_data.attention import LLMMarketAttentionSelector
             from crypto_trader.market_data.observer import (
                 HierarchicalMarketObserver,
                 OKXTickerWsManager,
             )
             from crypto_trader.market_data.okx_public_data import OKXPublicDataClient
             from crypto_trader.market_data.universe import DynamicMarketUniverse
+            from crypto_trader.persistence.models import MarketAttentionDecisionORM
 
             db_path = settings.database_url.split("///")[-1]
             universe = DynamicMarketUniverse(
                 db_path, data_client=OKXPublicDataClient(OKXAdapter())
             )
             ws_manager = OKXTickerWsManager()
+
+            async def _persist_attention_lineage(row: dict) -> None:
+                """Fail-safe durable attention lineage sink. Never raises."""
+                async with database.session_factory() as session:
+                    session.add(MarketAttentionDecisionORM(**row))
+                    await session.commit()
+
             market_observer = HierarchicalMarketObserver(
                 universe,
                 ws_manager=ws_manager,
                 scan_interval_seconds=60.0,
+                attention_selector=LLMMarketAttentionSelector(
+                    llm_provider.complete_json
+                ),
+                attention_lineage_sink=_persist_attention_lineage,
             )
             await ws_manager.start()
         except Exception as exc:
@@ -308,11 +328,27 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 pass
             market_observer = None
 
+    # P3: durable running-build identity (verified running SHA contract).
+    try:
+        from crypto_trader.runtime.build_info import build_info
+
+        _build = build_info()
+        await audit.log(
+            "RUNTIME_BUILD_SHA",
+            target=str(_build.get("git_sha") or "UNKNOWN")[:64],
+            after={
+                "git_sha": str(_build.get("git_sha") or "UNKNOWN"),
+                "sha_source": str(_build.get("sha_source") or "unresolved"),
+            },
+        )
+    except Exception:
+        logger.warning("RUNTIME_BUILD_SHA_AUDIT_FAILED", exc_info=True)
+
     tool_journal = ToolInvocationJournal(database.session_factory)
 
     chief_trader = MultiSymbolChiefTraderStrategyAdapter(
         symbols=symbols,
-        provider=GatewayProviderAdapter(llm_gateway, domain_runtime=domain_model_runtime),
+        provider=llm_provider,
         evidence_backend=SqlEvidenceBackend(database.session_factory),
         decision_context_provider=decision_context_provider,
         opportunity_scanner=opportunity_scanner,

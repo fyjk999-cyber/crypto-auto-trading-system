@@ -1124,7 +1124,9 @@ class OkxInstrumentORM(Base):
     list_time: Mapped[str | None] = mapped_column(String(32))
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    refreshed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
 
 
 class RuntimePolicyORM(Base):
@@ -1167,3 +1169,34 @@ class ToolInvocationORM(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     detail: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class MarketAttentionDecisionORM(Base):
+    """Durable Market Observer AI attention lineage (P3 directive).
+
+    One row per AI attention refresh: which instruments the AI granted the
+    bounded non-core rotation slots, over which compressed all-market digest,
+    with source evidence (Layer-1 batch ids, bucket counts) and the LLM
+    invocation id. Chief Trader decision evidence references attention_uid;
+    no order/fill data is fabricated here.
+    """
+
+    __tablename__ = "market_attention_decisions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attention_uid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    mode: Mapped[str] = mapped_column(String(16), default="")
+    selected_inst_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    pinned_inst_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    roster_size: Mapped[int] = mapped_column(Integer, default=0)
+    universe_size: Mapped[int] = mapped_column(Integer, default=0)
+    buckets_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    rationale: Mapped[str] = mapped_column(String(255), default="")
+    llm_invocation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    input_digest: Mapped[str] = mapped_column(String(64), default="")
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cache_state: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    error: Mapped[str] = mapped_column(String(255), default="")
+    layer1_batch_ids: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    selector_version: Mapped[str] = mapped_column(String(32), default="")

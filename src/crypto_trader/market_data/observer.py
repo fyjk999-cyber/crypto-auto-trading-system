@@ -9,10 +9,14 @@ Directive §34-§50 (dynamic all-market runtime), mapped:
   v5) for the ACTIVE candidate set only, with automatic REST-batch fallback
   and STALE marking. A missing feed degrades evidence freshness; it NEVER
   fabricates data and NEVER blocks trading (advisory evidence only).
-* Candidate selection is FACTUAL ONLY (24h notional volume rank over live
-  registry instruments + pinned held/core symbols). There is deliberately NO
-  composite score, NO opportunity ranking and NO quant hard gate: the
-  observer is evidence for the Chief Trader LLM, never a decision authority.
+* Non-core attention selection (P1 CS-20260830-034530-P3-AI-ATTENTION) is
+  owned by the MARKET OBSERVER AI over a bounded, compressed all-market
+  digest. Factual volume/liquidity are evidence inside that context and
+  carry NO eligibility authority: there is NO 24h-volume Top-K, NO
+  composite score, NO quant gate, and NO rank fallback when the AI is
+  unavailable. Deterministic exclusions are limited to genuine
+  availability/safety facts (no quote, stale batch) and pinned held/core
+  protection; execution capability is granted nowhere in this module.
 """
 
 from __future__ import annotations
@@ -25,6 +29,11 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
+from crypto_trader.market_data.attention import (
+    AttentionDecision,
+    build_market_digest,
+    new_attention_uid,
+)
 from crypto_trader.market_data.universe import (
     DynamicMarketUniverse,
     Layer1Fact,
@@ -36,6 +45,12 @@ logger = logging.getLogger("crypto_trader.market_observer")
 OKX_WS_PUBLIC_URL = "wss://ws.okx.com:8443/ws/v5/public"
 DEFAULT_STALE_AFTER_SECONDS = 90.0
 MAX_CANDIDATE_INSTRUMENTS = 50
+DEFAULT_ATTENTION_REFRESH_SECONDS = 300.0
+
+ATTENTION_RULE = (
+    "held+core pinned, then Market Observer AI attention over a bounded "
+    "compressed all-market roster (no volume/Top-K authority)"
+)
 
 
 def _volume(value: str) -> Decimal:
@@ -49,6 +64,7 @@ def _volume(value: str) -> Decimal:
 class CandidateSet:
     inst_ids: tuple[str, ...]
     basis: dict = field(default_factory=dict)
+    attention: AttentionDecision | None = None
 
 
 class OKXTickerWsManager:
@@ -155,6 +171,9 @@ class HierarchicalMarketObserver:
         stale_after_seconds: float = DEFAULT_STALE_AFTER_SECONDS,
         quote_ccy: str = "USDT",
         pinned_inst_ids: tuple[str, ...] = (),
+        attention_selector=None,
+        attention_refresh_seconds: float = DEFAULT_ATTENTION_REFRESH_SECONDS,
+        attention_lineage_sink=None,
         clock=None,
     ) -> None:
         self.universe = universe
@@ -163,12 +182,24 @@ class HierarchicalMarketObserver:
         self.stale_after_seconds = float(stale_after_seconds)
         self.quote_ccy = quote_ccy
         self.pinned_inst_ids = tuple(pinned_inst_ids)
+        # Market Observer AI (P3 correction): owns non-core attention. When
+        # absent, dynamic slots stay EMPTY (AI_NOT_CONFIGURED) -- never a
+        # volume-rank fallback.
+        self.attention_selector = attention_selector
+        self.attention_refresh_seconds = max(30.0, float(attention_refresh_seconds))
+        self.attention_lineage_sink = attention_lineage_sink
         self.clock = clock or time.monotonic
         self._batches: dict[str, MarketSnapshotBatch] = {}
         self._last_scan_mono: dict[str, float] = {}
         self._scan_failures = 0
         self._last_error: str = ""
         self._last_scan_at: str = ""
+        # Attention state (AI-owned selection + lineage).
+        self._last_attention: AttentionDecision | None = None
+        self._last_attention_refresh_mono: float = 0.0
+        self._attention_refreshes = 0
+        self._attention_failures = 0
+        self._attention_sink_failures = 0
 
     # ------------------------------------------------------------- Layer 1
     async def _scan_layer1(self, inst_type: str) -> None:
@@ -208,16 +239,23 @@ class HierarchicalMarketObserver:
             return "NOT_AVAILABLE"
         return "LIVE" if (self.clock() - last) <= self.stale_after_seconds else "STALE"
 
-    def select_candidates(
+    # ----------------------------------------------------------- attention
+    async def select_candidates(
         self,
         target: int = 5,
         *,
         held_canonical_symbols: tuple[str, ...] = (),
         core_canonical_symbols: tuple[str, ...] = (),
     ) -> CandidateSet:
-        """FACTUAL candidate selection: pinned (held + core) always kept;
-        remaining slots = top 24h notional volume among live USDT instruments.
-        No scores, no ranking model, no gate."""
+        """Pinned (held + core) always kept; remaining slots are filled by
+        MARKET OBSERVER AI attention over the compressed all-market digest.
+
+        P1 CS-20260830-034530-P3-AI-ATTENTION correction: the former 24h
+        notional volume Top-K is REMOVED. Factual volume is evidence inside
+        the digest, never an eligibility decision. When the AI is
+        unavailable or not configured the dynamic slots stay empty (honest
+        absence, recorded in lineage) -- no rank fallback exists.
+        """
         target = max(1, min(int(target), 20))
         mapper = SymbolMapper()
         pinned: list[str] = []
@@ -245,27 +283,187 @@ class HierarchicalMarketObserver:
             if inst not in pinned:
                 pinned.append(inst)
 
-        ranked: list[tuple[Decimal, str, str]] = []  # (volume, inst_id, inst_type)
-        for inst_type in ("SPOT", "SWAP"):
-            for fact in self._facts(inst_type):
-                vol = _volume(fact.volume_ccy_24h) or _volume(fact.volume_24h)
-                if vol > 0:
-                    ranked.append((vol, fact.inst_id, inst_type))
-        ranked.sort(key=lambda item: item[0], reverse=True)
+        slots = max(0, target - len(pinned))
+        attention = await self._refresh_attention(
+            slots=slots, pinned=tuple(pinned)
+        )
+        dynamic = [i for i in attention.selected_inst_ids if i not in pinned]
 
         candidates = list(pinned)
-        for _vol, inst_id, _t in ranked:
-            if len(candidates) >= target + len(pinned):
+        for inst_id in dynamic:
+            if len(candidates) >= target:
                 break
-            if inst_id not in candidates:
-                candidates.append(inst_id)
+            candidates.append(inst_id)
         basis = {
             "pinned": pinned,
             "target": target,
-            "ranked_pool": len(ranked),
-            "rule": "held+core pinned, then top 24h notional volume (factual only)",
+            "universe_size": attention.universe_size,
+            "roster_size": attention.roster_size,
+            "attention_uid": attention.attention_uid,
+            "attention_mode": attention.mode,
+            "rule": ATTENTION_RULE,
         }
-        return CandidateSet(inst_ids=tuple(candidates[:MAX_CANDIDATE_INSTRUMENTS]), basis=basis)
+        return CandidateSet(
+            inst_ids=tuple(candidates[:MAX_CANDIDATE_INSTRUMENTS]),
+            basis=basis,
+            attention=attention,
+        )
+
+    def select_pinned_only(self) -> tuple[str, ...]:
+        """Sync pinned-only projection (held/core/observer pins).
+
+        Used by the sync snapshot path only; it grants no dynamic attention
+        and never applies a rank rule.
+        """
+        known: set[str] = set()
+        for inst_type in ("SPOT", "SWAP"):
+            batch = self._batches.get(inst_type)
+            if batch is not None:
+                known |= {f.inst_id for f in batch.facts}
+        out: list[str] = []
+        for inst in self.pinned_inst_ids:
+            if inst in known and inst not in out:
+                out.append(inst)
+        return tuple(out[:MAX_CANDIDATE_INSTRUMENTS])
+
+    async def _refresh_attention(
+        self, *, slots: int, pinned: tuple[str, ...]
+    ) -> AttentionDecision:
+        """AI attention with bounded refresh throttling; never raises.
+
+        Between refreshes the previous AI selection is carried forward
+        (explicitly labelled carried_forward) -- a missing/failing LLM call
+        degrades to honest absence, never to volume rank.
+        """
+        now = self.clock()
+        due = (
+            now - self._last_attention_refresh_mono
+        ) >= self.attention_refresh_seconds
+        if not due and self._last_attention is not None:
+            return self._last_attention
+
+        if self.attention_selector is None:
+            decision = AttentionDecision(
+                attention_uid=new_attention_uid(),
+                created_at=self._utc_now(),
+                mode="AI_NOT_CONFIGURED",
+                cache_state="NOT_APPLICABLE",
+                universe_size=self._universe_size(),
+            )
+            self._last_attention = decision
+            self._last_attention_refresh_mono = now
+            return decision
+
+        freshness = {t: self._fact_freshness(t) for t in ("SPOT", "SWAP")}
+        try:
+            digest = build_market_digest(
+                {
+                    t: b
+                    for t, b in self._batches.items()
+                    if isinstance(b, MarketSnapshotBatch)
+                },
+                freshness_by_type=freshness,
+                pinned_inst_ids=pinned,
+                rotation_offset=self._attention_refreshes,
+            )
+        except Exception as exc:
+            self._attention_failures += 1
+            decision = AttentionDecision(
+                attention_uid=new_attention_uid(),
+                created_at=self._utc_now(),
+                mode="AI_UNAVAILABLE",
+                cache_state="REFRESH",
+                error=f"DIGEST_FAILED:{type(exc).__name__}"[:200],
+                universe_size=self._universe_size(),
+                carried_forward=self._last_attention is not None,
+            )
+            self._last_attention = decision
+            self._last_attention_refresh_mono = now
+            return decision
+
+        started = time.monotonic()
+        try:
+            selected, meta = await self.attention_selector.select(
+                digest, slots=slots, pinned_inst_ids=pinned
+            )
+        except Exception as exc:  # selector contract: never raises, but stay safe
+            selected, meta = (), {
+                "mode": "AI_UNAVAILABLE",
+                "rationale": "",
+                "llm_invocation_id": "",
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+                "roster_size": len(digest.get("roster") or []),
+            }
+        latency_ms = int((time.monotonic() - started) * 1000)
+        mode = str(meta.get("mode") or "AI_UNAVAILABLE")
+        carried = bool(self._last_attention is not None) and mode != "AI_SELECTED"
+        decision = AttentionDecision(
+            attention_uid=new_attention_uid(),
+            created_at=self._utc_now(),
+            mode=mode,
+            selected_inst_ids=tuple(selected),
+            rationale=str(meta.get("rationale") or "")[:255],
+            llm_invocation_id=str(meta.get("llm_invocation_id") or "")[:64],
+            latency_ms=latency_ms,
+            cache_state="REFRESH",
+            error=str(meta.get("error") or "")[:255],
+            roster_size=int(meta.get("roster_size") or 0),
+            universe_size=int((digest.get("universe") or {}).get("total") or 0),
+            quoted_size=int((digest.get("universe") or {}).get("quoted") or 0),
+            excluded_unavailable=int(
+                (digest.get("universe") or {}).get("unavailable_no_quote") or 0
+            ),
+            buckets=dict(digest.get("buckets") or {}),
+            input_digest=str(digest.get("input_digest") or "")[:64],
+            layer1_batch_ids={
+                t: b.batch_id
+                for t, b in self._batches.items()
+                if isinstance(b, MarketSnapshotBatch)
+            },
+            carried_forward=carried,
+            version=getattr(self.attention_selector, "version", ""),
+        )
+        self._last_attention = decision
+        self._last_attention_refresh_mono = now
+        if mode == "AI_SELECTED":
+            self._attention_refreshes += 1
+        else:
+            self._attention_failures += 1
+        await self._persist_attention_lineage(decision, pinned)
+        return decision
+
+    async def _persist_attention_lineage(
+        self, decision: AttentionDecision, pinned: tuple[str, ...]
+    ) -> None:
+        """Fail-safe durable attention lineage (DB validation contract)."""
+        if self.attention_lineage_sink is None:
+            return
+        try:
+            row = decision.to_row()
+            row["pinned_inst_ids"] = list(pinned)
+            result = self.attention_lineage_sink(row)
+            if hasattr(result, "__await__"):
+                await result
+        except Exception as exc:
+            self._attention_sink_failures += 1
+            logger.warning(
+                "ATTENTION_LINEAGE_PERSIST_FAILED failures=%d error=%s",
+                self._attention_sink_failures,
+                type(exc).__name__,
+            )
+
+    def _universe_size(self) -> int:
+        return sum(
+            len(b.facts)
+            for b in self._batches.values()
+            if isinstance(b, MarketSnapshotBatch)
+        )
+
+    @staticmethod
+    def _utc_now() -> str:
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).isoformat()
 
     def update_ws_candidates(self, candidate: CandidateSet) -> None:
         """Keep the bounded WS subscription aligned with the candidate set."""
@@ -319,7 +517,24 @@ class HierarchicalMarketObserver:
         if self._last_error:
             summary["last_error"] = self._last_error
 
-        cand = candidate or self.select_candidates()
+        if candidate is not None:
+            cand = candidate
+        else:
+            # Sync snapshot path: reuse the LAST AI attention outcome instead
+            # of re-selecting (selection is async + AI-owned). Empty when no
+            # attention has been produced yet; never a rank fallback.
+            pinned_only = self.select_pinned_only()
+            cand = CandidateSet(
+                inst_ids=pinned_only,
+                basis={
+                    "pinned": list(pinned_only),
+                    "rule": ATTENTION_RULE,
+                    "attention_mode": (
+                        self._last_attention.mode if self._last_attention else "NONE_YET"
+                    ),
+                },
+                attention=self._last_attention,
+            )
         facts: dict[str, dict] = {}
         ws_snap = (
             self.ws_manager.snapshot(cand.inst_ids)
@@ -351,5 +566,8 @@ class HierarchicalMarketObserver:
                     "source": "REST_BATCH",
                 }
         summary["candidates"] = {"basis": cand.basis, "facts": facts}
+        attention = getattr(cand, "attention", None) or self._last_attention
+        if attention is not None:
+            summary["attention"] = attention.to_bounded_dict()
         summary["available"] = True
         return summary
