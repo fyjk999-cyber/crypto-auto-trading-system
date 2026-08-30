@@ -27,3 +27,14 @@
   monitor for a post-fix clean SHORT/LONG cycle.
 - Await external staging; then Chapter 10.1 -> Chapter 10 -> 11 -> 12 -> 13.
 - User must configure a real LLM provider from `#/llm`, test it, then run the six-route qualification before any 24H PAPER soak.
+
+## 2026-08-30T03:45Z — P2-1 all phases complete; resume calibration
+- [ ] Resume 30m Calibration (§72) via scripts/policy_apply.py ONLY
+      (apply -> §31 verify --timeout 90 -> CALIBRATION_APPLY PASS; else
+      rollback to prior version and record POLICY_UPDATE_REJECTED detail).
+      Bounds: POLICY_PARAM_BOUNDS; MAX_CHANGE per 30m window enforced.
+- [ ] Cron supervisor review (§79) over commits 4310dc1..de2782d.
+- [ ] Push codex/non-strategy-infra-repair to origin when appropriate.
+- [ ] opportunity_scan 0.85 NOT_AVAILABLE + ~700ms latency: informational;
+      let calibration decide whether research_budget/window needs tuning.
+- [ ] Keep PAPER_POLICY_STATE.md strictly report-only.

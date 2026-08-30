@@ -133,3 +133,21 @@
   pkill; kill by PID when the pattern is uncertain.
 - Supervisor loop restarts now log RUNTIME_LOOP_CRASHED (silent crash-loop
   observability gap closed).
+
+- (Q) 2026-08-30T02:35Z — Runtime policy truth source = runtime_policy DB
+  table (single canonical source, versioned, atomic apply); PAPER_POLICY_
+  STATE.md demoted to report-only. Mutation ONLY via internal governance
+  CLI (scripts/policy_apply.py); NO public HTTP mutation route (§29).
+  Safety params permanently outside the policy allowlist (§22).
+- (R) 2026-08-30T03:00Z — Phase C/D candidate selection is FACTUAL ONLY
+  (held/core pinned + top-24h-notional-volume). No composite score, no
+  quant gate; observer is advisory evidence for the Chief Trader LLM.
+  Core configured symbols are ALWAYS retained in the rotation (bounded 40).
+- (S) 2026-08-30T03:20Z — Tool journal stores NO raw tool arguments
+  (secrets/PII/prompt-replay hazard); bounded factual detail only. Utility
+  lessons carry verbatim non-authority framing (CORRELATION_NOT_CAUSATION,
+  no gate, no risk bypass).
+- (T) 2026-08-30T03:30Z — Exact-decimal storage contract enforced on
+  ai_trade_episodes via table rebuild (0022): NUMERIC affinity silently
+  coerced exact strings to binary REAL (root cause of 100% memory
+  retrieval failure). Reader stays strict; data + schema repaired.

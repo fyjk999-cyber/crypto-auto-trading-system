@@ -1,5 +1,24 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T03:45Z (P2-1 ALL FOUR PHASES COMPLETE + LIVE):
+  Phase 4 tool journal LIVE: 200+ invocations / 50+ decision lineages; the
+  journal immediately quantified the 100% memory_retrieval DecimalError and
+  ROOT-CAUSE-repaired it via migration 0022 (NUMERIC affinity -> String(80)
+  canonical-text rebuild; 102 episode rows preserved; backup
+  data/backup_pre_0022.db; ORM read verified OK). Post-fix journal shows
+  memory_retrieval healing to 0 error_rate on new rows; decision_context +
+  market_observer_evidence 0 errors; opportunity_scan NOT_AVAILABLE is
+  advisory-normal. PHASE STATUS: P2-1 lifecycle repair PASS (live-validated
+  TIME_STOP exits, zero churn) / Phase 2 hot policy PASS (v2 hot-apply +
+  v3 rollback live, safety params rejected fail-closed) / Phase 3 dynamic
+  observer PASS (WS mode, 1383 SPOT + 458 SWAP Layer-1 LIVE, factual
+  candidates, dynamic rotation) / Phase 4 journal PASS (lineage + advisory
+  utility learning). Full suite 831 passed / 2 pre-existing network.
+  Commits 4310dc1..de2782d on codex/non-strategy-infra-repair (push pending).
+  Calibration (§72) may now resume — the ONLY sanctioned mutation path is
+  scripts/policy_apply.py (APPLIED/STAGED/REJECTED + §31 verify); keep
+  PAPER_POLICY_STATE.md report-only. Observation-only doctrine unchanged;
+  no risk bypass anywhere.
 - Updated: 2026-08-30T03:00Z (P2-1 Phase 3 LIVE): dynamic all-market observer
   live on the running runtime — /runtime.market_observer: available=True,
   source=WS (bounded OKX public WS candidate stream), Layer-1 breadth 1383
@@ -235,3 +254,11 @@
 
 
 ## 2026-08-29T13:35Z - Checkpoint: backend vanished + safe restart, 22 real fills since 11:30Z, recon OK, PAPER intact
+
+## 2026-08-30T02:5xZ - PHASE 1 harness status under CODEX P2 gate
+- Gate: P2 phase-order violation ACTIVE; HEAD dcffe75; PHASE 1 ACTIVE; PHASE 2/3/4 BLOCKED; calibration FROZEN (OBSERVE/HOLD, cooldown 240 unchanged).
+- Harness PHASE 1 contribution: tests/integration/test_phase1_acknowledged_recovery.py (deterministic ACKNOWLEDGED->terminal recovery/fence + evidence-bound exit-attribution). 24 passed x2 runs with Codex acceptance set; ruff clean.
+- Parked out-of-scope (Codex-owned, untouched): PHASE 3 commits e7557a9/dcffe75 on branch; PHASE 4 dirty files 0021_tool_invocations.py, tool_utility_report.py, tool_journal.py, test_tool_journal.py + models/runtime dirty.
+- Fact: canonical alembic_version already 0021_tool_invocations (applied on Codex side); harness ran no migrations.
+- Runtime: PAPER health OK (PID 70894 observed) but SHA UNVERIFIED until Codex independent deployment; harness did not start/stop trading.
+- TRX 6.47s episode attribution remains PENDING/semantically inconsistent until lineage proof (rule now encoded in test).

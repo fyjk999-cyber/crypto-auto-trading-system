@@ -378,3 +378,39 @@ PHASE 1 -> 2 -> 3 -> 4 only. No phase promotion until Codex independently marks 
 ## Evidence Documents
 - `.ai-memory/PHASE1_TRX_ROOT_CAUSE_LINEAGE.md` — root cause, full DB lineage, DOGE recovery correction (section 5), TRX dual-time-point label facts (section 6).
 - This file — gate and status authority record.
+
+---
+
+# P2 GATE UPDATE 2 — CROSS-PHASE DIRTY WORK (2026-08-30 ~02:5xZ, CODEX)
+
+## Status fields (as required)
+- P2 phase-order violation: **ACTIVE**
+- Current HEAD: **dcffe75** (codex/non-strategy-infra-repair)
+- Runtime: PAPER health OK (harness check 200/OK, recon OK) but **running SHA UNVERIFIED until Codex independent deployment**
+- PHASE 1: **ACTIVE** (open)
+- PHASE 2/3/4: **BLOCKED** — no promotion, no calibration mutation
+
+## Parked PHASE 4 dirty files (out-of-scope pending; harness touched nothing, ran no migrations)
+- `migrations/versions/0021_tool_invocations.py` (untracked)
+- `scripts/tool_utility_report.py` (untracked)
+- `src/crypto_trader/governance/tool_journal.py` (untracked)
+- `tests/integration/test_tool_journal.py` (untracked)
+- dirty: models.py, bootstrap.py, chief_trader_strategy.py, multi_symbol_chief_trader.py (Codex-owned)
+
+## Recorded facts
+- Canonical `data/crypto_trader.db` `alembic_version` = **0021_tool_invocations** — the PHASE 4 migration is ALREADY APPLIED to the canonical DB (executed on the Codex side). Harness ran NO migration commands and will not; recorded here as repository state evidence.
+- Test fixtures use isolated `init_schema()` on tmp sqlite — running the test suite does not apply alembic migrations.
+
+## PHASE 1 harness contribution (tests/evidence only, no phase promotion)
+- NEW `tests/integration/test_phase1_acknowledged_recovery.py` (harness-owned, additive):
+  1. `test_acknowledged_exit_suppresses_duplicates_then_recovers` — deterministic DOGE-class scenario: exit order acked-but-never-filled through the engine-owned lifecycle (create/validate/submitting/submitted/ack real; only the exchange fill leg stubbed) -> bridge suppresses duplicate EXIT while outstanding (`_exit_in_flight`, no EXIT_RETRY_ARMED) -> deterministic terminal transition (OrderManager.reject, mirroring ord_71ffb76b evidence) -> result-aware retry arms (EXIT_RETRY_ARMED in decision_history) -> retry closes the position through REAL RiskEngine + ExecutionAuthority -> exactly ONE FILLED reduce-only exit with the REJECTED attempt preserved as evidence -> in-flight marker converges.
+  2. `test_exit_attribution_is_evidence_bound_and_honest` — immutable attribution matrix: durable fill-payload lineage wins; durable AI_EXIT_INTENT mapping wins; NO evidence + 7s holding -> honest UNKNOWN (never invented); legacy TIME_STOP fallback requires >=95% of the configured window + pure-bridge strategy set. This is the rule the 6.47s TRX episode label must satisfy before TIME_STOP can be accepted (episode remains review_status=PENDING).
+- Results: 2/2 passed; combined with Codex `test_trx_churn_lifecycle.py` (12) + `test_exit_lifecycle.py`: **24 passed**, repeated twice consecutively; ruff clean on the new file. One transient timing flake in a shared run did not reproduce across three subsequent full runs.
+- Harness took NO other code actions; no Codex-owned file modified; no migration/deploy run; PAPER trading not started/stopped by harness.
+
+## Final state at report time (2026-08-30 ~03:0xZ)
+- HEAD advanced to **de2782d**: Codex committed the parked PHASE 4 work (`2ad47d3` tool invocation journal + advisory utility learning) AND a NEW migration `0022_episodes_decimal_contract.py` (exact-decimal storage contract on ai_trade_episodes, canonical rebuild). The PHASE-4 promotion therefore continues on the Codex side; recorded as phase-order evidence only.
+- The harness's PHASE 1 test file was committed BY CODEX inside de2782d with content intact (206 lines) — `git show --stat de2782d` lists `tests/integration/test_phase1_acknowledged_recovery.py`.
+- Tests re-verified at de2782d: `test_phase1_acknowledged_recovery.py` (2) + `test_trx_churn_lifecycle.py` (12) = **14 passed**.
+- Canonical alembic_version presumed advanced to 0022 by the Codex side (not verified by harness; harness ran no migration).
+- Standing status: P2 phase-order violation ACTIVE; PHASE 1 ACTIVE (attribution proof pending lineage evidence); PHASE 2/3/4 BLOCKED from harness side; runtime SHA UNVERIFIED until Codex independent deployment; no PASS claimed.
