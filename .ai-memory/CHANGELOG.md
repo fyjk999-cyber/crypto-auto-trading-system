@@ -89,3 +89,22 @@
 
 ## fe82ae1 - Order/Fill/PnL observability repair (2026-08-29T13:20Z)
 - /orders read model + OrdersPage: real fees/avg fill price/canonical PnL attribution (POSITION_LEVEL vs TRADE_LEVEL), MARKET=market order display, episode guard, NOT_AVAILABLE semantics; 9+4 tests.
+
+- 2026-08-30T02:20Z (P2-1 Phase 1 CONTROLLED RESTART + live validation):
+  Old runtime 48151/48144 gracefully SIGTERMed 02:03Z (no orders in flight;
+  exits were AUTHORITY_HOLD-blocked, not in-flight), lease expired naturally
+  (0 rows; no manual mutation). Episode canonicalization in the window:
+  evidence-based AI_EXIT_INTENT backfill for the spurious 7s exit ord_faa443
+  (reconstructed, documented) + record_all_cycles_sync + deletion of 2 stale
+  pre-P0 rows (STALE_EPISODE_CLEANUP audit) -> 93 episodes, 0 leverage=0,
+  0 UNKNOWN exit_reason. New runtime PID 68587 via
+  .venv/bin/python -m crypto_trader.runtime.local_runner (supervisor scripts
+  were found removed from .ops; DECISIONS (C) manual safe procedure applied).
+  RESTART FINDING: reconciliation_halted=TRUE was live since the DOGE
+  divergence (local 0.001 vs exchange -0.001) — it blocked ALL orders
+  including bridge TIME_STOP exits (AUTHORITY_HOLD loop). Ledger-first
+  hydration on start resolved the divergence: recon ALERT -> OK. Within 10s
+  of start the bridge correctly closed the 4 halt-blocked aged positions
+  (BNB/DOGE/LINK/SUI, all ~4h+, reduce-only, real prices, TIME_STOP
+  attributed, ZERO re-entries — reversal fence live). Integrity: dup fills 0,
+  dup orders 0, lease 1, PAPER confirmed. /runtime exposes position_lifecycle.

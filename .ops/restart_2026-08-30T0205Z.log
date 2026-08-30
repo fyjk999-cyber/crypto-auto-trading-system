@@ -1,0 +1,4 @@
+=== RESTART RECORD 2026-08-30T02:03:29Z ===
+old_pids: uv=48144 python=48151 (up since 15:26Z)
+reason: (1) Phase1 lifecycle fix deployment (2) reconciliation_halted=true blocking ALL orders incl bridge TIME_STOP exits since DOGE divergence (3) ledger-first hydration resolves DOGE local=0.001 vs exchange=-0.001
+positions_before: 24 | fills: 215 | episodes: 95

@@ -13,5 +13,5 @@
 | paper_exploration_size | 0.0005 | 0.0001 | 0.0005 | 0.001 | ±0.0001 |
 | max_paper_concurrent_positions | 8 | 4 | 8 | 16 | ±2 |
 
-Last action: CONTRACT @ 2026-08-30T01:00Z (re-staged 240->300; TRX 45s-flip churn recurrence; rollback=240 after 2 clean windows).
+Last action: OBSERVE/HOLD GATE @ 2026-08-30T01:20Z (TERRA/CODEX directive: calibration FROZEN, staged 300 reverted to 240; PHASE 1 root-cause repair governs).
 Rollback = restore prior row values (§64). Small steps only (§83).

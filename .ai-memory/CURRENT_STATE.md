@@ -1,5 +1,22 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T02:20Z (P2-1 Phase 1 COMPLETE: code + tests + CONTROLLED
+  RESTART done). New runtime PID 68587 (old 48151/48144 gracefully SIGTERMed
+  02:03Z, lease expired naturally 0 rows, no manual lease mutation). Episode
+  canonicalization: AI_EXIT_INTENT evidence backfill (ord_faa443) + idempotent
+  rebuild + 2 stale pre-P0 rows deleted (audited STALE_EPISODE_CLEANUP) -> 93
+  episodes, 0 leverage=0, 0 UNKNOWN. Restart found + cleared a LIVE
+  reconciliation halt (DOGE local=0.001 vs exchange=-0.001 divergence from
+  recon-halt era; ledger-first hydration resolved; recon ALERT->OK). LIVE
+  VALIDATION within 10s of start: bridge correctly TIME_STOP-closed the 4
+  aged positions the halt had been blocking (BNB 4.4h / DOGE 4.7h / LINK 4.3h
+  / SUI 4.1h) as reduce-only at real prices, episodes TIME_STOP-attributed,
+  ZERO re-entries (reversal fence live), no churn. /runtime now exposes
+  position_lifecycle (new-code marker). Phase 1 acceptance (§18):
+  TRX_CHURN_ROOT_CAUSE=IDENTIFIED, STALE_SIGNAL_GUARD=PASS,
+  REVERSAL_LIFECYCLE=PASS, POSITION_STATE_FENCE=PASS,
+  EXIT_REASON_ATTRIBUTION=PASS, NO_CROSS_SYMBOL_BLOCKING=PASS.
+  NEXT: Phase 2 RuntimePolicy hot-reload layer. Calibration stays OBSERVE ONLY.
 - Updated: 2026-08-30T01:55Z (P2-1 Phase 1 CODE COMPLETE + TESTED, pending
   controlled restart): TRX churn ROOT CAUSE IDENTIFIED + FIXED in code —
   stale `_first_seen_open` epoch inheritance (60s grace) caused spurious
