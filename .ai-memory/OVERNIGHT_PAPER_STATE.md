@@ -304,3 +304,19 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
   request timeout + retry to their new tool path.
 - CALIBRATION: OBSERVE-ONLY (7th window) — ownership still unconfirmed by
   user; system stable and self-improving; no change warranted.
+
+## Latest Checkpoint: 2026-08-30T07:30Z (cron-9)
+- Health OK / PAPER / lease held / 0 stuck orders / policy v3 / observer WS.
+- Stability: 135min no restart. Journal 6936 rows / 1155 decisions, growing.
+- Fills since 07:00: 7 entries (ADA/DOGE/XRP/ARB/NEAR/AVAX/UNI) + NEAR
+  TIME_STOP WIN exit. All real prices. Episodes 3 WIN / 2 LOSS this batch.
+- EXTERNAL BUILD CONTINUES IMPROVING: market_observer_ai errors
+  51->39->34->24% (101 OK / 32 ERROR this window). LLM: 21/23 success,
+  2x 91s timeouts persist, avg 11.5s.
+- Also produced user-requested diaries: TRADING_DIARY_2026-08-30.md
+  (42 episodes 00:00-07:12Z, 11W/31L, all TIME_STOP) and
+  STRATEGY_DIARY_2026-08-30.md (95% NO_TRADE rate, fit ~0.55 boundary,
+  BTC high-fit refusals logged). llm_reasoning column empty in episodes —
+  bug hint for external operator.
+- CALIBRATION: OBSERVE-ONLY (8th window) — no failure mode warrants a
+  change; ownership still unconfirmed; system self-improving.
