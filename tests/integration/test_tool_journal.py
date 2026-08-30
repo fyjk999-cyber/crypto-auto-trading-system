@@ -87,9 +87,10 @@ async def test_fail_safe_write(database):
 async def test_chief_trader_defers_and_flushes_lineage(database):
     """End-to-end in the decision pipeline: context build defers tool rows;
     evidence persist flushes them with the decision id."""
-    from crypto_trader.runtime.chief_trader_strategy import ChiefTraderStrategyAdapter
-    from types import SimpleNamespace
     from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from crypto_trader.runtime.chief_trader_strategy import ChiefTraderStrategyAdapter
 
     journal = ToolInvocationJournal(database.session_factory)
     adapter = ChiefTraderStrategyAdapter(provider=None, tool_journal=journal)
@@ -195,7 +196,8 @@ async def test_utility_report_pairs_episodes(database, journal):
         await session.execute(_t(
             "INSERT INTO tool_invocations (invocation_uid, tool_name, decision_id, "
             "symbol, status, latency_ms, detail, created_at) VALUES "
-            "('tool-uid-pair1', 'opportunity_scan', 'dec-pair-1', 'TRXUSDT', 'OK', 9, '', datetime('now'))"
+            "('tool-uid-pair1', 'opportunity_scan', 'dec-pair-1', 'TRXUSDT', "
+            "'OK', 9, '', datetime('now'))"
         ))
         await session.execute(_t(
             "INSERT INTO ai_trade_episodes (episode_id, symbol, market_regime, "
