@@ -144,3 +144,12 @@
 - Reason: FIFTH consecutive clean window; churn absent; lifecycle cycles healthy (BCH/BTC 4h TIME_STOP re-entries at real levels). RPNL drift -0.06 over 30min within noise band (perp marks, not fees). LOW_SAMPLE_SIZE persists
 - Expected effect: none; steady state continues
 - Next review: 2026-08-30T00:30Z
+
+## 2026-08-30T00:30Z (Phase G window 15)
+- Runtime: OK; Coverage: registry 2029; Funnel: LLM 14 / decisions 141 (2L/2S/137NT=97.2%) / fills 6 / rejects 0 / episodes 90 (+3)
+- PnL: RPNL 12h -0.3236 stable (22 rows); open 23
+- ACTION: HOLD
+- Changes: none
+- Reason: SIXTH consecutive clean window; BCH 25min within-cycle behavior above churn threshold; all re-entries lifecycle-consistent. Baseline steady state holds across 6 windows (3h observation span)
+- Expected effect: none; steady state
+- Next review: 2026-08-30T01:00Z

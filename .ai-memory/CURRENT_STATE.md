@@ -1,5 +1,6 @@
 # CURRENT_STATE
 
+- Updated: 2026-08-30T00:30:00+00:00 (cron-7: window 15 clean, episodes 90, steady state, zero restarts)
 - Updated: 2026-08-30T00:00:00+00:00 (cron-7: window 14 clean, episodes 87, steady state, zero restarts)
 - Updated: 2026-08-29T23:30:00+00:00 (cron-7: window 13 clean, 4h lifecycle verified, episodes 85, zero restarts)
 - Updated: 2026-08-29T23:00:00+00:00 (cron-7: window 12 clean, rollback validated, episodes 81, zero restarts)
