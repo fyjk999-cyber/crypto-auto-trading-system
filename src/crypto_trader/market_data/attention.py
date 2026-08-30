@@ -356,22 +356,35 @@ class LLMMarketAttentionSelector:
         try:
             # The selector enforces its OWN bound so a hung attention call
             # can never stall the decision path (gateway retries can stack
-            # far beyond one call's timeout).
-            response = await asyncio.wait_for(
-                self._complete_json(prompt=prompt), timeout=self.timeout_seconds
+            # far beyond one call's timeout). The call runs in a SEPARATE
+            # task: after a timeout we cancel it and wait a short GRACE for
+            # the cancellation to land, then CONTINUE regardless -- the
+            # engine task must never keep awaiting a task that is stuck
+            # mid-cancellation (observed live: a cancelled httpx handshake
+            # through a black-holed VPN DNS left the awaiting engine tick
+            # frozen even though wait_for had fired).
+            task = asyncio.get_running_loop().create_task(
+                self._complete_json(prompt=prompt)
             )
+            done, _pending = await asyncio.wait({task}, timeout=self.timeout_seconds)
+            if not done:
+                task.cancel()
+                try:
+                    await asyncio.wait({task}, timeout=2.0)
+                except Exception:
+                    pass
+                return (), {
+                    "mode": "AI_UNAVAILABLE",
+                    "rationale": "",
+                    "llm_invocation_id": "",
+                    "error": f"ATTENTION_TIMEOUT_{int(self.timeout_seconds)}S",
+                    "roster_size": len(roster_ids),
+                }
+            response = task.result()
             parsed = getattr(response, "parsed_json", None) or {}
             invocation_id = str(getattr(response, "invocation_id", "") or "")
             if not getattr(response, "ok", False):
                 error = str(getattr(response, "error", "") or "LLM_ERROR")[:200]
-        except TimeoutError:
-            return (), {
-                "mode": "AI_UNAVAILABLE",
-                "rationale": "",
-                "llm_invocation_id": "",
-                "error": f"ATTENTION_TIMEOUT_{int(self.timeout_seconds)}S",
-                "roster_size": len(roster_ids),
-            }
         except Exception as exc:  # never propagates into the decision path
             error = f"{type(exc).__name__}: {exc}"[:200]
         if error or not isinstance(parsed, dict) or not parsed:

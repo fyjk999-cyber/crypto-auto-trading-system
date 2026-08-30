@@ -446,9 +446,20 @@ class HierarchicalMarketObserver:
         try:
             row = decision.to_row()
             row["pinned_inst_ids"] = list(pinned)
-            result = self.attention_lineage_sink(row)
-            if hasattr(result, "__await__"):
-                await result
+
+            async def _sink_once() -> None:
+                result = self.attention_lineage_sink(row)
+                if hasattr(result, "__await__"):
+                    await result
+
+            # Bounded + isolated: the decision path must never wait on a
+            # stuck DB write (or on a task frozen mid-cancellation).
+            sink_task = asyncio.get_running_loop().create_task(_sink_once())
+            done, _ = await asyncio.wait({sink_task}, timeout=10.0)
+            if not done:
+                sink_task.cancel()
+                await asyncio.wait({sink_task}, timeout=2.0)
+                raise TimeoutError("ATTENTION_LINEAGE_SINK_TIMEOUT")
         except Exception as exc:
             self._attention_sink_failures += 1
             logger.warning(
