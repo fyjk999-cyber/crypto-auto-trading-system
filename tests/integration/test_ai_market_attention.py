@@ -459,3 +459,31 @@ async def test_digest_universe_is_registry_usdt_contract():
     roster_ids = {r["inst_id"] for r in digest["roster"]}
     assert "1INCH-EUR" not in roster_ids
     assert "BTC-USDT" in roster_ids and "2Z-USDT-SWAP" in roster_ids
+
+
+async def test_attention_timeout_is_bounded_and_honest():
+    """A hung LLM call is cut at the selector's own timeout and recorded as
+    AI_UNAVAILABLE -- it can never stall the decision path."""
+    import asyncio as _asyncio
+
+    class _HangingLLM:
+        version = "hanging-1.0.0"
+
+        async def __call__(self, *, prompt: str):
+            await _asyncio.sleep(30)
+
+    facts = [_fact("BTC-USDT", "SPOT", last="100", low="90", high="110")]
+    obs = _observer({"SPOT": facts})
+    await obs.poll(force=True)
+    obs.attention_selector = LLMMarketAttentionSelector(
+        _HangingLLM(), timeout_seconds=0.2
+    )
+    import time as _time
+
+    t0 = _time.monotonic()
+    cand = await obs.select_candidates(target=2)
+    elapsed = _time.monotonic() - t0
+    assert elapsed < 5, "timeout enforced locally"
+    assert cand.attention.mode == "AI_UNAVAILABLE"
+    assert "ATTENTION_TIMEOUT" in cand.attention.error
+    assert list(cand.inst_ids) == []

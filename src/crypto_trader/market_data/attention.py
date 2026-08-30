@@ -26,6 +26,7 @@ Design (AI-FIRST / QUANT-AS-EVIDENCE):
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import uuid
@@ -353,11 +354,24 @@ class LLMMarketAttentionSelector:
         parsed: dict = {}
         invocation_id = ""
         try:
-            response = await self._complete_json(prompt=prompt)
+            # The selector enforces its OWN bound so a hung attention call
+            # can never stall the decision path (gateway retries can stack
+            # far beyond one call's timeout).
+            response = await asyncio.wait_for(
+                self._complete_json(prompt=prompt), timeout=self.timeout_seconds
+            )
             parsed = getattr(response, "parsed_json", None) or {}
             invocation_id = str(getattr(response, "invocation_id", "") or "")
             if not getattr(response, "ok", False):
                 error = str(getattr(response, "error", "") or "LLM_ERROR")[:200]
+        except TimeoutError:
+            return (), {
+                "mode": "AI_UNAVAILABLE",
+                "rationale": "",
+                "llm_invocation_id": "",
+                "error": f"ATTENTION_TIMEOUT_{int(self.timeout_seconds)}S",
+                "roster_size": len(roster_ids),
+            }
         except Exception as exc:  # never propagates into the decision path
             error = f"{type(exc).__name__}: {exc}"[:200]
         if error or not isinstance(parsed, dict) or not parsed:
