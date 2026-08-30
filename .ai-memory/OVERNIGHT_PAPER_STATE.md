@@ -164,3 +164,22 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 - LLM: 58 live_analysis invocations since 11:30Z, 100% success.
 - Stuck orders: 0. Fill lineage intact (client_order_id llm_chief_trader_*); note: spot bridge-exit fill payloads lack decision_id (only perp entry fills carry it) - acceptable, lineage via client_order_id remains.
 - H sample (AI/Quant tension): XRPUSDT LONG decision with strategy_fit 0.482 < 0.55 threshold; BTCUSDT LONG fit 0.5021 - entry gates correctly held these back on rejections.
+
+## Latest Checkpoint: 2026-08-30T04:00Z (cron-9, post-P2-1 first deep review)
+- Health OK / PAPER confirmed / lease held / no recon halt / 0 stuck orders.
+- Policy v3 (240s baseline) — CALIBRATION DECISION: OBSERVE-ONLY (all four
+  journaled tools 0-error post-0022; 21/21 LLM live_analysis success avg
+  4.4s; no failure pattern a bounded tempo change would address).
+- Journal (Phase 4): 1295 rows / 226 decisions; memory_retrieval 67/67 OK
+  post-0022 (was 100% ERROR before the fix — confirmed healed).
+- Fills since 03:30: 10 (6 reduce-only TIME_STOP exits + 4 entries) — ALL
+  real OKX prices (WLD 0.37745, TAO 235.05, AAVE 125.835, APT 0.5371…).
+  No ARCHITECTURE REGRESSION (~100 synthetic) signatures.
+- New episodes: 6 TIME_STOP (2 WIN / 4 LOSS, tiny exploration sizes) — 4h
+  cadence working; exit attribution correct.
+- AI-vs-Quant (Section H): high-fit NO_TRADE samples on BTCUSDT
+  (fit 1.0/0.72/0.6759 with NO_TRADE) — AI conservatively declined entries
+  despite strong strategy fit; evidence-conservative, logged for review.
+- OBSERVATION (non-blocking, no code change from cron): persist_episode_sync
+  binds str(Decimal) which can emit E-notation text ("7.88000E-7"); exact
+  round-trip preserved and D() parses it — cosmetic only.

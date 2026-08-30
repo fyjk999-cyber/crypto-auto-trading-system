@@ -414,3 +414,112 @@ PHASE 1 -> 2 -> 3 -> 4 only. No phase promotion until Codex independently marks 
 - Tests re-verified at de2782d: `test_phase1_acknowledged_recovery.py` (2) + `test_trx_churn_lifecycle.py` (12) = **14 passed**.
 - Canonical alembic_version presumed advanced to 0022 by the Codex side (not verified by harness; harness ran no migration).
 - Standing status: P2 phase-order violation ACTIVE; PHASE 1 ACTIVE (attribution proof pending lineage evidence); PHASE 2/3/4 BLOCKED from harness side; runtime SHA UNVERIFIED until Codex independent deployment; no PASS claimed.
+
+---
+
+# DIRECTIVE ID: CS-20260830-034530-P3-AI-ATTENTION
+
+Timestamp: 2026-08-30T03:45:30Z
+
+Severity: P1
+
+Phase: Phase 3 Dynamic OKX All-Market Runtime
+
+HEAD: c63c7e84c7a645ea7668afb0c95817e36c787898
+
+Running SHA: UNVERIFIED
+
+Detected Problem: Non-core markets are not granted AI-owned attention. `HierarchicalMarketObserver.select_candidates()` sorts every LIVE USDT instrument by 24h notional volume, then `MultiSymbolChiefTrader._refresh_market_observer()` places only that Top-K into `_dynamic_symbols`; `rotation_symbols` is the Chief Trader's actual symbol input. This is a quantitative eligibility gate before AI attention, irrespective of comments labelling it advisory.
+
+Evidence:
+- `/runtime` at 2026-08-30T03:45Z: 1,383 SPOT + 458 SWAP are LIVE, while `candidates.target=5` and rule is `held+core pinned, then top 24h notional volume`.
+- `src/crypto_trader/market_data/observer.py:211-267` implements the descending-volume selection.
+- `src/crypto_trader/runtime/multi_symbol_chief_trader.py:68-85, 229-242` makes that selection the bounded non-core rotation used by Chief Trader.
+
+Root Risk: Violates AI-FIRST / Quant-as-Evidence: factual volume becomes a hard gate for which dynamic markets reach AI consideration. Phase 3 cannot be called all-market AI-runtime-ready.
+
+Affected Files: `market_data/observer.py`, `runtime/multi_symbol_chief_trader.py`, policy contract/tests, and any Market Observer AI adapter added for the correction.
+
+Affected Runtime Component: Dynamic observation -> Chief Trader attention ingress.
+
+Architecture Violation: Quant Top-K / rank must not pre-close the dynamic market universe to AI attention. The system needs bounded hierarchical compression, not rank-derived trading attention authority.
+
+Required Fix:
+1. Keep Layer-1 batch facts, WS bounds, stale behavior, held-position protection, and execution capability boundaries.
+2. Feed a bounded, compressed all-market representation to a Market Observer AI that owns non-core attention selection; factual volume/liquidity may be evidence inside that context, not a deterministic eligibility decision.
+3. Preserve a deterministic safety/availability exclusion only where an instrument is unavailable, stale, unsupported for execution, or otherwise under Risk/Execution authority. Observable markets must not be rejected solely for rank.
+4. Carry the AI attention decision and its evidence into the Chief Trader context and decision lineage.
+
+Forbidden Fix: Renaming Top-K, increasing K, changing the volume threshold, adding a random fallback, treating the fixed core as proof of all-market attention, or granting Execution capability to every observable symbol.
+
+Required Tests:
+- A non-legacy, low-volume but LIVE/observable instrument reaches Market Observer AI consideration without a quantitative eligibility veto.
+- Five random non-legacy live instruments prove registry -> Layer-1 -> observer input lineage.
+- AI attention output, not volume rank, changes the bounded dynamic Chief Trader rotation; stale/unsupported instruments remain safely excluded.
+- Existing WS/reconnect/REST-fallback/no-cross-symbol tests remain green.
+
+Required DB Validation: Persist/inspect attention-decision lineage with source evidence and decision IDs; no fabricated order/fill data.
+
+Required Runtime Validation: PAPER-only, live OKX data; show dynamic Market Observer AI input/output and a post-deploy decision using the recorded attention lineage. Do not force a trade.
+
+Pass Conditions: All required tests and factual runtime proof pass; no rank/threshold/Top-K has attention-eligibility authority; running SHA is exposed and verified.
+
+Status: ACTIVE
+
+---
+
+# DIRECTIVE ID: CS-20260830-034530-P4-TOOL-LINEAGE
+
+Timestamp: 2026-08-30T03:45:30Z
+
+Severity: P2
+
+Phase: Phase 4 Tool Usage + Utility Learning
+
+HEAD: c63c7e84c7a645ea7668afb0c95817e36c787898
+
+Running SHA: UNVERIFIED
+
+Detected Problem: The implemented journal provides a partial decision trace only. Canonical `tool_invocations` has `tool_name`, `decision_id`, `llm_invocation_id`, `symbol`, `status`, one latency, detail and created_at, but no tool version, source, cache indication, start/end times, or bounded error field. At audit time it has 860 rows/157 decisions and zero joins to `ai_trade_episodes`; current episodes have no populated entry decision IDs. The utility report aggregates count/error/latency and outcome/PnL only, without the required regime, strategy, symbol, cost, decision-change, or information-value analysis.
+
+Evidence:
+- Canonical schema inspected at migration head `0022_episodes_decimal_contract`.
+- `SELECT ... JOIN tool_invocations -> decision_evidence -> ai_trade_episodes` returned 0 linked decisions and 0 linked episodes.
+- `governance/tool_journal.py` documents and implements only aggregate metrics plus a JSON-lineage join; current runtime has no populated proof of that linkage.
+- Historic `memory_retrieval` errors stopped at 03:18Z after the decimal repair (44 old ERROR rows, 113 later OK), but recovery does not satisfy the missing lineage contract.
+
+Root Risk: Tool utility learning cannot be independently audited from an episode back to the exact entry/exit tool trace, and its evidence is too thin to support even advisory lessons safely.
+
+Affected Files: migration/model for `tool_invocations`, `governance/tool_journal.py`, episode/evidence persistence, report script, tests.
+
+Affected Runtime Component: Tool journal, decision/episode lineage, and advisory learning report.
+
+Architecture Violation: Phase 4 requires durable decision and episode tool lineage and multi-factor advisory utility analysis; a count/latency/outcome report is not enough.
+
+Required Fix:
+1. Record the required bounded audit fields: invocation ID, LLM/decision ID, symbol, tool/version, start/end/latency, status, source, cache state, bounded summary and bounded error. Do not persist raw prompts, order books, secrets, or full historical payloads.
+2. Establish a durable, tested `Episode -> entry decision -> tool invocations` relationship (normalized link or immutable episode entry-decision field). Do not fabricate historical links; retain historical unknowns honestly.
+3. Extend advisory utility output with sample size, regime, strategy, symbol, latency, cost, whether the tool changed/added decision evidence, and information value; preserve explicit `CORRELATION_NOT_CAUSATION` and CANDIDATE-only lesson governance.
+4. Keep journal failure isolated and tool results non-authoritative.
+
+Forbidden Fix: Backfilling guessed episode decision IDs, converting lessons into gates, recording raw tool payloads, or forcing PAPER trades to manufacture proof.
+
+Required Tests:
+- Full schema/validation test for every required audit field and bounded redaction.
+- Isolated real pipeline test proving Decision -> Tool trace and Episode -> entry Decision -> Tool trace.
+- Tool failure produces `TOOL_UNAVAILABLE` / recorded bounded error without crashing runtime.
+- Utility report groups the required factors, labels correlation, and cannot alter Chief Trader/Risk/Execution decisions.
+
+Required DB Validation: Query a naturally created post-deploy episode after a valid PAPER lifecycle; until one exists, report `PENDING` rather than `PASS`.
+
+Required Runtime Validation: PAPER-only runtime remains healthy; no forced/random trade; validate the first natural eligible episode's immutable lineage.
+
+Pass Conditions: Required fields, decision and episode lineage, utility factors, failure isolation, candidate-only governance, and runtime/DB proof are independently verified.
+
+Status: ACTIVE
+
+---
+
+## Immediate Governance Order
+
+Calibration/policy mutation returns to **OBSERVE/HOLD**. The “all phases complete” declaration and calibration-resume runbook at `c63c7e8` are not approved. Harness must address the ACTIVE directives in order (P3 then P4), make no Strategy/Risk/Execution tuning, and return its report directly to this Codex task UI with commit, tests, DB evidence, runtime evidence, and running SHA.

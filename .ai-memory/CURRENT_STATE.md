@@ -1,5 +1,10 @@
 # CURRENT_STATE
 
+- Checkpoint 2026-08-30T04:00Z (cron-9): all green; calibration OBSERVE-ONLY;
+  journal 1295/226 growing; memory_retrieval confirmed healed (67/67 OK);
+  10 real fills, 6 TIME_STOP episodes, 0 stuck orders. See
+  OVERNIGHT_PAPER_STATE.md Latest Checkpoint.
+
 - Updated: 2026-08-30T03:45Z (P2-1 ALL FOUR PHASES COMPLETE + LIVE):
   Phase 4 tool journal LIVE: 200+ invocations / 50+ decision lineages; the
   journal immediately quantified the 100% memory_retrieval DecimalError and
