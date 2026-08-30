@@ -197,3 +197,19 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
   FIL LOSS, HBAR WIN...) — exploration-size magnitudes.
 - CALIBRATION DECISION: OBSERVE-ONLY (no evidence requiring a bounded tempo
   change; all tools 0-error; decision cadence steady at 240s baseline).
+
+## UNACCOUNTED RESTART INVESTIGATION (cron-8 04:45-04:55Z)
+- Runtime killed by external SIGTERM every ~5min since 04:36:37Z: 80886
+  (uptime 5229s) -> 94142 -> 94692 -> 95326 -> 95818 (current, 04:53:51Z).
+  Evidence: .ops/shutdown_forensics.log (built-in signal auditor; it also
+  proves MY earlier 02:34-03:09 restarts were the only prior ones).
+- The relauncher writes data/paper-runtime.log (NOT .ops/backend_direct.log)
+  and orphans to PPID=1 — i.e. NOT this session's cron (all my rounds are
+  read-only; my restarts always used >> .ops/backend_direct.log).
+- No user crontab / launchd agent / live supervisor found.
+- Impact: each cycle is graceful + data-intact (lease CAS, recovery, PAPER
+  continues, journal 2747/494 growing), BUT decision continuity degrades
+  (cooldowns reset per boot) and WS flap FALLBACK briefly.
+- ACTION REQUESTED FROM USER: confirm whether you are manually restarting /
+  running a 5-min kill-restart loop from another terminal or AI session.
+  If NOT you, we need to find the signal sender together.
