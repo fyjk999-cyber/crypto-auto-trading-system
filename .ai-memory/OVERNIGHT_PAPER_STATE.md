@@ -247,3 +247,17 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 - CALIBRATION: OBSERVE-ONLY — dual-operator situation persists; no param
   change while another operator actively redeploy (attribution would be
   impossible). Standing down on changes until user resolves ownership.
+
+## Latest Checkpoint: 2026-08-30T06:00Z (cron-9)
+- Health OK / PAPER / lease held / 0 stuck orders / policy v3 / observer WS.
+- DUAL-OPERATOR DE-ESCALATION: process 98135 (external build) stable 45min,
+  no new external SIGTERM since 05:15:00Z — the 5-min kill-restart loop has
+  stopped. Ownership conflict cooling but still unresolved by user.
+- Journal 4449 rows / 768 decisions, growing (latest 06:00:23).
+- Fills since 05:30: 3 NEW ENTRIES (ETH 2454.36, BTC_PERP 78096.15, TRX
+  0.3407 — all real prices). Entry flow resumed after the 05:00-05:30 gap.
+- EXTERNAL BUILD STILL DEGRADING (monitoring only, not my code):
+  market_observer_ai now 64 OK / 67 ERROR (51% err, up from 43%);
+  live_analysis avg 17.5s (4x baseline) + 2x ~91s timeout failures.
+- CALIBRATION: OBSERVE-ONLY (5th window) — external operator still owns the
+  process; my param change would confound their iteration attribution.
