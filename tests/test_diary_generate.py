@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Phase 1 diary invariant tests (STRATEGY DIRECTIVE §7-§10)."""
 from __future__ import annotations
 
@@ -28,7 +29,8 @@ def _make_db(tmp_path: Path, dup_decisions: bool = False, bad_direction: bool = 
         CREATE TABLE orders (internal_order_id TEXT PRIMARY KEY, reduce_only INTEGER);
         """
     )
-    decision_json = lambda a, f: json.dumps({"action": a, "strategy_fit_score": f})
+    def decision_json(a, f):
+        return json.dumps({"action": a, "strategy_fit_score": f})
     rows = []
     for i, (act, fit) in enumerate([("LONG", 0.55), ("SHORT", 0.62), ("NO_TRADE", 0.2)]):
         did = f"d{i}"
@@ -76,7 +78,7 @@ def test_duplicate_decision_fails_no_double_count(tmp_path, capsys):
 
 def test_unclassified_direction_reported_not_silently_dropped(tmp_path, capsys):
     db = _make_db(tmp_path, bad_direction=True)
-    rc = dg.main(["--hours", "999999", "--db", db])
+    dg.main(["--hours", "999999", "--db", db])
     out = capsys.readouterr().out
     assert "UNCLASSIFIED: 1" in out  # §7: never silently drop
 

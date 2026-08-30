@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from crypto_trader.runtime.trade_thesis import TradeThesis
 
@@ -103,7 +103,7 @@ class ShadowPositionManager:
         current_price,
         episode_key: str = "",
     ) -> ShadowReview:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         entry_price = position.get("entry_price") or position.get("avg_price")
         quantity = position.get("quantity") or 0
         direction = str(
@@ -157,7 +157,10 @@ class ShadowPositionManager:
         )
         self._last_review_mono[symbol] = time.monotonic()
         self.stats["reviews"] += 1
-        self.stats[{"HOLD": "hold", "EXIT": "exit", "REDUCE": "reduce"}.get(recommended, "skips")] += 1
+        bucket = {"HOLD": "hold", "EXIT": "exit", "REDUCE": "reduce"}.get(
+            recommended, "skips"
+        )
+        self.stats[bucket] += 1
         if self.journal is not None:
             try:
                 self.journal.defer(
@@ -186,7 +189,11 @@ class ShadowPositionManager:
         holding_seconds: float,
         unrealized,
     ) -> str:
-        thesis_json = json.dumps(thesis.as_dict(), ensure_ascii=False) if thesis else "NOT_AVAILABLE"
+        thesis_json = (
+            json.dumps(thesis.as_dict(), ensure_ascii=False)
+            if thesis
+            else "NOT_AVAILABLE"
+        )
         return (
             "You are the Position Manager reviewing ONE open PAPER position.\n"
             "Decide only: HOLD, EXIT, or REDUCE. HOLD is normal and expected; "

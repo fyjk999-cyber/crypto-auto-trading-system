@@ -64,7 +64,10 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.event_bus import EventBus
-from crypto_trader.runtime.execution_symbols import reference_symbol_for
+from crypto_trader.runtime.execution_symbols import (
+    is_paper_perpetual_symbol,
+    reference_symbol_for,
+)
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.position_lifecycle import PositionLifecycleTracker
@@ -938,6 +941,7 @@ class TradingEngine:
     _FILL_LINEAGE_KEYS = (
         "exit_reason",
         "decision_id",
+        "trade_plan_id",
         "signal_id",
         "llm_invocation_id",
         "market_type",
@@ -1128,7 +1132,7 @@ class TradingEngine:
             open_positions = {
                 symbol: pos
                 for symbol, pos in (positions or {}).items()
-                if float((getattr(pos, "quantity", 0) or 0)) != 0
+                if float(getattr(pos, "quantity", 0) or 0) != 0
             }
         except Exception:
             return
@@ -1147,9 +1151,17 @@ class TradingEngine:
             try:
                 pos = positions.get(symbol)
                 pos_payload = {
-                    "entry_price": str(getattr(pos, "avg_price", "") or getattr(pos, "entry_price", "") or ""),
+                    "entry_price": str(
+                        getattr(pos, "avg_price", "")
+                        or getattr(pos, "entry_price", "")
+                        or ""
+                    ),
                     "quantity": str(getattr(pos, "quantity", "") or "0"),
-                    "direction": str(getattr(pos, "side", "") or getattr(pos, "direction", "") or "").upper(),
+                    "direction": str(
+                        getattr(pos, "side", "")
+                        or getattr(pos, "direction", "")
+                        or ""
+                    ).upper(),
                     "opened_at": getattr(pos, "opened_at", None),
                 }
                 book = self.market_data.books.get(symbol)
@@ -1176,7 +1188,7 @@ class TradingEngine:
 
         try:
             async with self.database.session_factory() as session:
-                from sqlalchemy import select, text as _text
+                from sqlalchemy import text as _text
 
                 row = (
                     await session.execute(

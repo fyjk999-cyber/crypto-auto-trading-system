@@ -11,7 +11,7 @@ turned into a hard auto-exit rule by itself.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def _first(*values):
@@ -86,7 +86,7 @@ def thesis_from_decision_payload(
     if action not in ("LONG", "SHORT"):
         return None
 
-    entry_time = entry_time or datetime.now(timezone.utc)
+    entry_time = entry_time or datetime.now(UTC)
     supporting = payload.get("supporting_evidence") or payload.get("supporting_factors") or []
     contradicting = (
         payload.get("contradicting_evidence") or payload.get("contradicting_factors") or []
@@ -101,15 +101,23 @@ def thesis_from_decision_payload(
         direction=action,
         strategy=_first(payload.get("strategy_selected"), payload.get("selected_strategy")),
         entry_reason=_first(payload.get("thesis"), payload.get("dominant_factor")),
-        supporting_evidence=list(supporting) if isinstance(supporting, (list, tuple)) else [str(supporting)],
+        supporting_evidence=(
+            list(supporting)
+            if isinstance(supporting, (list, tuple))
+            else [str(supporting)]
+        ),
         contradicting_evidence=(
-            list(contradicting) if isinstance(contradicting, (list, tuple)) else [str(contradicting)]
+            list(contradicting)
+            if isinstance(contradicting, (list, tuple))
+            else [str(contradicting)]
         ),
         expected_market_behavior=_first(
             payload.get("expected_return"), payload.get("expected_market_behavior")
         ),
         invalidation_conditions=(
-            list(invalidations) if isinstance(invalidations, (list, tuple)) else [str(invalidations)]
+            list(invalidations)
+            if isinstance(invalidations, (list, tuple))
+            else [str(invalidations)]
         ),
         target_conditions=list(exits) if exits else [],
         entry_time=entry_time,
@@ -124,7 +132,10 @@ def thesis_from_decision_payload(
         strategy_version=_first(payload.get("strategy_version")),
         policy_version=policy_version,
         memory_refs=list(payload.get("memory_refs") or []),
-        tool_refs=list(payload.get("knowledge_refs") or []) + list(payload.get("pattern_refs") or []),
+        tool_refs=(
+            list(payload.get("knowledge_refs") or [])
+            + list(payload.get("pattern_refs") or [])
+        ),
         stop_loss=_first(payload.get("stop_loss")),
         take_profit=_first(payload.get("take_profit")),
     )

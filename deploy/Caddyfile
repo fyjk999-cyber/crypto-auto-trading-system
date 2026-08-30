@@ -1,0 +1,26 @@
+# Caddy reverse proxy — the ONLY publicly exposed service (80/443).
+# Automatic HTTPS via Let's Encrypt for $DOMAIN.
+# Same-origin: / (frontend static), /api/* (backend, prefix stripped), /ws (backend WS).
+{
+	email {$ACME_EMAIL:noreply@example.com}
+}
+
+{$DOMAIN:localhost} {
+	encode zstd gzip
+
+	# API: strip the /api prefix before proxying (browser calls /api/health
+	# -> backend receives /health, matching frontend requestUrl()).
+	handle_path /api/* {
+		reverse_proxy crypto-backend:8000
+	}
+
+	# WebSocket: /ws -> backend /ws (Caddy proxies upgrades transparently).
+	handle /ws* {
+		reverse_proxy crypto-backend:8000
+	}
+
+	# SPA static build from the crypto-frontend service.
+	handle {
+		reverse_proxy crypto-frontend:80
+	}
+}

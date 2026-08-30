@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from crypto_trader.runtime.position_manager import ShadowPositionManager, ShadowReview
 from crypto_trader.runtime.trade_thesis import thesis_from_decision_payload
@@ -86,7 +84,7 @@ def _position(direction="LONG", entry="100", qty="1", opened=None):
         "direction": direction,
         "entry_price": entry,
         "quantity": qty,
-        "opened_at": opened if opened is not None else datetime.now(timezone.utc).timestamp(),
+        "opened_at": opened if opened is not None else datetime.now(UTC).timestamp(),
     }
 
 
@@ -133,8 +131,12 @@ def test_exit_recommendation_recorded_not_executed():
 
 def test_symbols_reviewed_independently():
     pm = ShadowPositionManager(FakeProvider())
-    r1 = asyncio.run(pm.review_symbol("AUSDT", position=_position(), thesis=None, current_price="1"))
-    r2 = asyncio.run(pm.review_symbol("BUSDT", position=_position(), thesis=None, current_price="2"))
+    r1 = asyncio.run(
+        pm.review_symbol("AUSDT", position=_position(), thesis=None, current_price="1")
+    )
+    r2 = asyncio.run(
+        pm.review_symbol("BUSDT", position=_position(), thesis=None, current_price="2")
+    )
     assert r1.symbol == "AUSDT" and r2.symbol == "BUSDT"
     assert r1.review_timestamp != r2.review_timestamp or True  # independent records
 

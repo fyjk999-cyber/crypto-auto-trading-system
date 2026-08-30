@@ -46,7 +46,6 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
-from crypto_trader.runtime.position_manager import ShadowPositionManager
 from crypto_trader.runtime.execution_symbols import (
     PAPER_PERPETUAL_REFERENCE_SYMBOLS,
     execution_symbol_for,
@@ -55,6 +54,7 @@ from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.runtime.multi_symbol_chief_trader import MultiSymbolChiefTraderStrategyAdapter
 from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner
 from crypto_trader.runtime.position_lifecycle import PositionLifecycleTracker
+from crypto_trader.runtime.position_manager import ShadowPositionManager
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter

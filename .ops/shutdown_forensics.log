@@ -8,3 +8,15 @@
 {"timestamp_utc": "2026-08-30T02:51:29Z", "reason": "signal:SIGTERM", "pid": 74415, "ppid": 1, "uptime_seconds": 86.0, "mode": "PAPER"}
 {"timestamp_utc": "2026-08-30T03:09:16Z", "reason": "signal:SIGTERM", "pid": 76525, "ppid": 1, "uptime_seconds": 1057.9, "mode": "PAPER"}
 {"timestamp_utc": "2026-08-30T03:09:16Z", "reason": "signal:SIGTERM", "pid": 76525, "ppid": 1, "uptime_seconds": 1058.0, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:36:37Z", "reason": "signal:SIGTERM", "pid": 80886, "ppid": 1, "uptime_seconds": 5229.5, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:36:37Z", "reason": "signal:SIGTERM", "pid": 80886, "ppid": 1, "uptime_seconds": 5229.7, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:43:30Z", "reason": "signal:SIGTERM", "pid": 94142, "ppid": 1, "uptime_seconds": 363.4, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:43:30Z", "reason": "signal:SIGTERM", "pid": 94142, "ppid": 1, "uptime_seconds": 363.6, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:48:58Z", "reason": "signal:SIGTERM", "pid": 94692, "ppid": 1, "uptime_seconds": 318.0, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:48:58Z", "reason": "signal:SIGTERM", "pid": 94692, "ppid": 1, "uptime_seconds": 318.2, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:53:37Z", "reason": "signal:SIGTERM", "pid": 95326, "ppid": 1, "uptime_seconds": 262.0, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T04:53:37Z", "reason": "signal:SIGTERM", "pid": 95326, "ppid": 1, "uptime_seconds": 262.2, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T05:15:00Z", "reason": "signal:SIGTERM", "pid": 95818, "ppid": 1, "uptime_seconds": 1267.7, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T05:15:00Z", "reason": "signal:SIGTERM", "pid": 95818, "ppid": 1, "uptime_seconds": 1267.9, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T08:13:56Z", "reason": "signal:SIGTERM", "pid": 98135, "ppid": 1, "uptime_seconds": 10716.8, "mode": "PAPER"}
+{"timestamp_utc": "2026-08-30T08:13:56Z", "reason": "signal:SIGTERM", "pid": 98135, "ppid": 1, "uptime_seconds": 10717.0, "mode": "PAPER"}

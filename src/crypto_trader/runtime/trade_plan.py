@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import text
+from sqlalchemy import select
 
 
 @dataclass(frozen=True)
@@ -63,56 +63,149 @@ class TradePlan:
 
 
 class TradePlanStore:
-    """Durable TradePlan persistence (versioned schema; no runtime DDL)."""
+    """Durable TradePlan persistence via SQLAlchemy JSON type semantics."""
+
+    STATUS_TRANSITIONS = {
+        "PLANNED": {"PLANNED", "OPEN", "INVALIDATED"},
+        "OPEN": {"OPEN", "MANAGING", "CLOSED"},
+        "MANAGING": {"MANAGING", "EXIT_REQUESTED", "CLOSED"},
+        "EXIT_REQUESTED": {"EXIT_REQUESTED", "CLOSED"},
+        "CLOSED": {"CLOSED"},
+        "INVALIDATED": {"INVALIDATED"},
+    }
 
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
 
-    async def put(self, plan: TradePlan) -> None:
-        import json
+    def _table(self):
+        from crypto_trader.persistence.models import TradePlanORM
 
-        row = {k: (json.dumps(v) if isinstance(v, (list, dict)) else v)
-               for k, v in plan.to_row().items()}
+        return TradePlanORM.__table__
+
+    def _row(self, plan: TradePlan) -> dict:
+        return plan.to_row()
+
+    async def put(self, plan: TradePlan) -> None:
+        """Idempotent insert. On duplicate, only status refreshes (original
+        thesis/evidence fields remain immutable)."""
+        from crypto_trader.persistence.models import TradePlanORM
+
         async with self.session_factory() as session:
-            await session.execute(
-                text(
-                    "INSERT INTO trade_plans (trade_plan_id, decision_id, "
-                    "llm_invocation_id, symbol, execution_symbol, market_type, "
-                    "direction, selected_strategy, strategy_version, market_regime, "
-                    "entry_thesis, supporting_evidence, contradicting_evidence, "
-                    "invalidation_conditions, target_conditions, "
-                    "expected_horizon_seconds, max_holding_time_seconds, "
-                    "risk_intent, entry_price_reference, factor_snapshot_id, "
-                    "tool_trace_id, memory_refs, status, created_at) "
-                    "VALUES (:trade_plan_id, :decision_id, :llm_invocation_id, "
-                    ":symbol, :execution_symbol, :market_type, :direction, "
-                    ":selected_strategy, :strategy_version, :market_regime, "
-                    ":entry_thesis, :supporting_evidence, :contradicting_evidence, "
-                    ":invalidation_conditions, :target_conditions, "
-                    ":expected_horizon_seconds, :max_holding_time_seconds, "
-                    ":risk_intent, :entry_price_reference, :factor_snapshot_id, "
-                    ":tool_trace_id, :memory_refs, :status, :created_at) "
-                    "ON CONFLICT (trade_plan_id) DO UPDATE SET status=excluded.status"
-                ),
-                {**row, "created_at": datetime.now(UTC).replace(tzinfo=None)},
-            )
+            existing = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.trade_plan_id == plan.trade_plan_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.status = plan.status
+                await session.commit()
+                return
+            row = self._row(plan)
+            session.add(TradePlanORM(**row))
             await session.commit()
 
     async def get(self, trade_plan_id: str) -> dict | None:
+        from crypto_trader.persistence.models import TradePlanORM
+
         async with self.session_factory() as session:
-            result = await session.execute(
-                text(
-                    "SELECT trade_plan_id, decision_id, llm_invocation_id, symbol, "
-                    "execution_symbol, market_type, direction, selected_strategy, "
-                    "strategy_version, market_regime, entry_thesis, "
-                    "supporting_evidence, contradicting_evidence, "
-                    "invalidation_conditions, target_conditions, "
-                    "expected_horizon_seconds, max_holding_time_seconds, "
-                    "risk_intent, entry_price_reference, factor_snapshot_id, "
-                    "tool_trace_id, memory_refs, status, created_at "
-                    "FROM trade_plans WHERE trade_plan_id = :id"
-                ),
-                {"id": trade_plan_id},
-            )
-            row = result.mappings().first()
-            return dict(row) if row else None
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.trade_plan_id == trade_plan_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                "trade_plan_id": row.trade_plan_id,
+                "decision_id": row.decision_id,
+                "llm_invocation_id": row.llm_invocation_id,
+                "symbol": row.symbol,
+                "execution_symbol": row.execution_symbol,
+                "market_type": row.market_type,
+                "direction": row.direction,
+                "selected_strategy": row.selected_strategy,
+                "strategy_version": row.strategy_version,
+                "market_regime": row.market_regime,
+                "entry_thesis": row.entry_thesis,
+                "supporting_evidence": row.supporting_evidence or [],
+                "contradicting_evidence": row.contradicting_evidence or [],
+                "invalidation_conditions": row.invalidation_conditions or [],
+                "target_conditions": row.target_conditions or [],
+                "expected_horizon_seconds": row.expected_horizon_seconds,
+                "max_holding_time_seconds": row.max_holding_time_seconds,
+                "risk_intent": row.risk_intent,
+                "entry_price_reference": row.entry_price_reference,
+                "factor_snapshot_id": row.factor_snapshot_id,
+                "tool_trace_id": row.tool_trace_id,
+                "memory_refs": row.memory_refs or [],
+                "status": row.status,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+
+    async def get_by_decision_id(self, decision_id: str) -> dict | None:
+        from crypto_trader.persistence.models import TradePlanORM
+
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.decision_id == decision_id
+                    )
+                )
+            ).scalar_one_or_none()
+            return await self.get(row.trade_plan_id) if row else None
+
+    async def get_active_by_execution_symbol(self, execution_symbol: str) -> dict | None:
+        from crypto_trader.persistence.models import TradePlanORM
+
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM)
+                    .where(TradePlanORM.execution_symbol == execution_symbol)
+                    .where(TradePlanORM.status.in_(["OPEN", "MANAGING"]))
+                    .order_by(TradePlanORM.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return await self.get(row.trade_plan_id) if row else None
+
+    async def list_active(self) -> list[dict]:
+        from crypto_trader.persistence.models import TradePlanORM
+
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.status.in_(["OPEN", "MANAGING"])
+                    )
+                )
+            ).scalars().all()
+            return [await self.get(r.trade_plan_id) for r in rows]
+
+    async def update_status(self, trade_plan_id: str, status: str) -> bool:
+        """Validate and apply a status transition. Idempotent for same state."""
+        from crypto_trader.persistence.models import TradePlanORM
+
+        current = await self.get(trade_plan_id)
+        if current is None:
+            return False
+        old = current["status"]
+        if status not in self.STATUS_TRANSITIONS.get(old, set()):
+            return False
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.trade_plan_id == trade_plan_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is not None:
+                row.status = status
+                await session.commit()
+        return True

@@ -38,6 +38,7 @@ from crypto_trader.runtime.execution_symbols import (
     execution_symbol_for,
     is_paper_perpetual_symbol,
 )
+from crypto_trader.runtime.trade_plan import TradePlan
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 
 logger = logging.getLogger("crypto_trader.chief_trader")
@@ -82,6 +83,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         reversal_cooldown_seconds: float = 240.0,
         policy_manager=None,
         tool_journal=None,
+        trade_plan_store=None,
     ) -> None:
         self.provider = provider
         self.engine = ChiefTraderEngine(provider=provider)
@@ -118,6 +120,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         # §10 duplicate-entry gate must also see PAPER PERPETUAL state; the
         # provider is wired in bootstrap after PerpetualPaperEngine exists.
         self.perpetual_position_provider = perpetual_position_provider
+        self.trade_plan_store = trade_plan_store
         self.evidence_persist_failures = 0
         # P1 correction (CS-20260829-125002-P1-MULTISYMBOL-AUTHORITY): the
         # entry cooldown is SYMBOL-SCOPED. A trade in symbol A must never
@@ -681,8 +684,48 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             ),
         )
 
+    def _build_trade_plan(self, decision, ctx: StrategyContext, chief_ctx) -> TradePlan:
+        from crypto_trader.runtime.trade_plan import TradePlan
+
+        reference_symbol = ctx.symbol
+        execution_symbol = execution_symbol_for(reference_symbol)
+        is_perpetual = is_paper_perpetual_symbol(execution_symbol)
+        market_type = MarketType.PERPETUAL if is_perpetual else MarketType.SPOT
+        return TradePlan(
+            trade_plan_id=new_id("plan"),
+            decision_id=decision.decision_id,
+            llm_invocation_id=decision.llm_invocation_id,
+            symbol=reference_symbol,
+            execution_symbol=execution_symbol,
+            market_type=market_type.value,
+            direction=decision.action.upper(),
+            selected_strategy=decision.selected_strategy,
+            strategy_version=decision.strategy_version,
+            market_regime=decision.market_regime or str(chief_ctx.regime),
+            entry_thesis=decision.thesis[:500] or "llm_chief_trader",
+            supporting_evidence=list(decision.supporting_evidence or []),
+            contradicting_evidence=list(decision.contradicting_evidence or []),
+            invalidation_conditions=[],
+            target_conditions=[],
+            expected_horizon_seconds=None,
+            max_holding_time_seconds=None,
+            risk_intent="NORMAL",
+            entry_price_reference=(
+                str(chief_ctx.market_snapshot.get("mark_price") or "")
+                if chief_ctx.market_snapshot else ""
+            ),
+            factor_snapshot_id=decision.factor_snapshot_id,
+            tool_trace_id="",
+            memory_refs=list(chief_ctx.knowledge or []),
+            status="PLANNED",
+        )
+
     def _map_to_signals(
-        self, decision, ctx: StrategyContext, chief_ctx: ChiefTraderContext
+        self,
+        decision,
+        ctx: StrategyContext,
+        chief_ctx: ChiefTraderContext,
+        trade_plan_id: str = "",
     ) -> list[SignalIntent]:
         """Exhaustive entry mapping. Unknown/management actions -> no signal.
 
@@ -719,6 +762,7 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         ) if is_perpetual else PositionSide.FLAT
         metadata = {
             "decision_id": decision.decision_id,
+            "trade_plan_id": trade_plan_id,
             "thesis": decision.thesis[:500],
             "model_version": decision.model_version,
             "domain_model_version": getattr(self.provider, "domain_model_version", ""),
