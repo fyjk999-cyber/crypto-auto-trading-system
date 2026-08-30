@@ -180,9 +180,17 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
         started_mono: float,
         status: str,
         detail: str = "",
+        *,
+        tool_version: str = "",
+        source: str = "chief_trader_entry",
+        cache_state: str = "UNKNOWN",
+        error: str = "",
+        evidence_added: str = "UNKNOWN",
     ) -> None:
         """Phase H journal (fail-safe): buffer a tool invocation row for
-        later flush with decision lineage."""
+        later flush with decision lineage. P4 bounded audit fields travel
+        with the row (tool/version, source stage, cache state, bounded
+        error, evidence-added marker)."""
         if self.tool_journal is None:
             return
         try:
@@ -192,6 +200,11 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 latency_ms=int((time.monotonic() - started_mono) * 1000),
                 status=status,
                 detail=detail,
+                tool_version=tool_version,
+                source=source,
+                cache_state=cache_state,
+                error=error,
+                evidence_added=evidence_added,
             )
         except Exception:
             pass
@@ -232,7 +245,15 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             try:
                 bundle = await self.decision_context_provider.build(market_data)
                 self._defer_tool_call(
-                    "decision_context", ctx.symbol, _t0, "OK"
+                    "decision_context", ctx.symbol, _t0, "OK",
+                    tool_version=getattr(
+                        self.decision_context_provider, "version", ""
+                    ),
+                    cache_state=(
+                        "HIT" if getattr(self.decision_context_provider,
+                                         "last_cache_hit", False) else "MISS"
+                    ),
+                    evidence_added="ADDED" if bundle is not None else "EMPTY",
                 )
             except Exception as exc:
                 logger.warning(
@@ -243,6 +264,11 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 self._defer_tool_call(
                     "decision_context", ctx.symbol, _t0, "ERROR",
                     detail=type(exc).__name__,
+                    tool_version=getattr(
+                        self.decision_context_provider, "version", ""
+                    ),
+                    error=f"{type(exc).__name__}: {exc}"[:255],
+                    evidence_added="EMPTY",
                 )
                 bundle = None
         evidence = bundle.evidence if bundle is not None else {}
@@ -257,6 +283,13 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 self._defer_tool_call(
                     "memory_retrieval", ctx.symbol, _m0, "OK",
                     detail=f"knowledge={len(memory.get('knowledge', []))}",
+                    tool_version=getattr(self.memory_provider, "version", ""),
+                    evidence_added=(
+                        "ADDED"
+                        if (memory.get("knowledge") or memory.get("patterns")
+                            or memory.get("similar_episodes"))
+                        else "EMPTY"
+                    ),
                 )
             except Exception as exc:
                 # Memory is soft evidence: retrieval failure must never block
@@ -269,6 +302,9 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 self._defer_tool_call(
                     "memory_retrieval", ctx.symbol, _m0, "ERROR",
                     detail=type(exc).__name__,
+                    tool_version=getattr(self.memory_provider, "version", ""),
+                    error=f"{type(exc).__name__}: {exc}"[:255],
+                    evidence_added="EMPTY",
                 )
                 memory = {}
         self._last_memory = memory

@@ -29,6 +29,8 @@ from crypto_trader.persistence.models import (
 
 
 class LiveMemoryProvider:
+    version = "1.0.0"
+
     def __init__(
         self,
         session_factory,

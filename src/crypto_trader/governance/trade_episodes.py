@@ -348,13 +348,17 @@ def ensure_columns(conn) -> list[str]:
         "gross_pnl",
         "fees",
         "net_pnl",
+        # P4 CS-20260830-034530-P4-TOOL-LINEAGE: immutable episode -> entry
+        # decision link column (migration 0024_tool_lineage_audit).
+        "entry_decision_id",
     }
     missing = required - have
     if missing:
         raise RuntimeError(
             "ai_trade_episodes missing columns "
             f"{sorted(missing)}; run `alembic upgrade head` "
-            "(migration 0018_trade_episode_lineage). Runtime DDL is prohibited."
+            "(migration 0018_trade_episode_lineage / 0024_tool_lineage_audit). "
+            "Runtime DDL is prohibited."
         )
     return []
 
@@ -399,19 +403,28 @@ def persist_episode_sync(
 
     All numerics are bound as exact Decimal strings; ``leverage`` is the
     authoritative engine/ledger value (never '0'; SPOT defaults to 1).
+
+    P4 (CS-20260830-034530-P4-TOOL-LINEAGE): ``entry_decision_id`` is the
+    IMMUTABLE episode -> entry decision link. It is written only from the
+    canonical entry fill payload recorded at trade time (carried inside
+    ``lineage``) and, on replay, only fills a still-NULL value -- a
+    populated link is never overwritten and a missing one is never guessed.
     """
     lev = str(leverage if leverage is not None and leverage > 0 else D("1"))
+    entry_decision_id = str(lineage.get("entry_decision_id") or "") or None
     row = conn.execute(
         "SELECT 1 FROM ai_trade_episodes WHERE episode_id = ?",
         (episode["episode_id"],),
     ).fetchone()
     if row:
-        # deterministic derived fields: re-derive from canonical facts
+        # deterministic derived fields: re-derive from canonical facts.
+        # entry_decision_id is immutable: COALESCE keeps an existing link.
         conn.execute(
             "UPDATE ai_trade_episodes SET entry_price=?, exit_price=?, "
             "position_size=?, holding_time_seconds=?, pnl=?, gross_pnl=?, "
             "fees=?, net_pnl=?, result=?, market_type=?, direction=?, "
-            "exit_reason=?, lineage_json=?, leverage=? WHERE episode_id=?",
+            "exit_reason=?, lineage_json=?, leverage=?, "
+            "entry_decision_id=COALESCE(entry_decision_id, ?) WHERE episode_id=?",
             (
                 str(episode["entry_price"]),
                 str(episode["exit_price"]),
@@ -427,6 +440,7 @@ def persist_episode_sync(
                 exit_reason,
                 json.dumps(lineage, default=str),
                 lev,
+                entry_decision_id,
                 episode["episode_id"],
             ),
         )
@@ -436,8 +450,9 @@ def persist_episode_sync(
         "strategy_selected, llm_reasoning, entry_price, exit_price, "
         "position_size, leverage, holding_time_seconds, pnl, mfe, mae, "
         "result, review_status, created_at, market_type, direction, "
-        "exit_reason, gross_pnl, fees, net_pnl, lineage_json) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "exit_reason, gross_pnl, fees, net_pnl, lineage_json, "
+        "entry_decision_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             episode["episode_id"],
             episode["symbol"],
@@ -462,6 +477,7 @@ def persist_episode_sync(
             str(episode["fees"]),
             str(episode["net_pnl"]),
             json.dumps(lineage, default=str),
+            entry_decision_id,
         ),
     )
     return "inserted"

@@ -4,10 +4,13 @@ Usage (from repo root):
   python scripts/tool_utility_report.py --window-hours 24
   python scripts/tool_utility_report.py --window-hours 24 --emit-lesson
 
-The report is factual per-tool volume/error/latency plus decision-outcome
-pairing labelled CORRELATION_NOT_CAUSATION. Lessons are advisory evidence
-for the calibration agent and the LLM context — never a trading gate and
-never a risk authority.
+The report (P2 CS-20260830-034530-P4-TOOL-LINEAGE) is factual: per-tool
+volume/error/latency with sample sizes, decision-outcome pairing through the
+durable Episode -> entry decision -> tool invocation link, factor analysis
+(regime / strategy / symbol), attributable token cost, decision-evidence
+change markers and an information-value comparison -- all labelled
+CORRELATION_NOT_CAUSATION. Lessons are advisory evidence for the calibration
+agent and the LLM context - never a trading gate and never a risk authority.
 """
 
 from __future__ import annotations

@@ -29,6 +29,8 @@ class LiveDecisionBundle:
 
 
 class LiveDecisionContextProvider:
+    version = "1.0.0"
+
     def __init__(
         self,
         *,
@@ -55,6 +57,9 @@ class LiveDecisionContextProvider:
         self.candle_cache_seconds = max(float(candle_cache_seconds), 0.0)
         self._evidence_builders: dict[str, StrategyEvidenceBuilder] = {}
         self._candle_cache: dict[str, tuple[float, list[dict]]] = {}
+        # P4 audit: honest cache indication for the most recent candle fetch
+        # ( journaled as tool_invocations.cache_state ).
+        self.last_cache_hit: bool = False
         self.evidence_builder = self._builder_for(self.symbol)
 
     def _builder_for(self, symbol: str) -> StrategyEvidenceBuilder:
@@ -89,7 +94,9 @@ class LiveDecisionContextProvider:
         now = time.monotonic()
         cached = self._candle_cache.get(current_symbol)
         if cached is not None and now - cached[0] <= ttl:
+            self.last_cache_hit = True
             return list(cached[1])
+        self.last_cache_hit = False
         candles = await self.candle_provider(current_symbol)
         if candles:
             normalized = list(candles)

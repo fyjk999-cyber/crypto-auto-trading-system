@@ -394,6 +394,13 @@ class AITradeEpisodeORM(Base):
     fees: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     net_pnl: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     lineage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # P4 CS-20260830-034530-P4-TOOL-LINEAGE: immutable episode -> entry
+    # decision link. Populated ONLY from the canonical entry fill payload /
+    # lineage_json recorded at trade time; NULL stays an honest historical
+    # unknown. Never backfilled with guesses.
+    entry_decision_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -1169,6 +1176,21 @@ class ToolInvocationORM(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     detail: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # P4 CS-20260830-034530-P4-TOOL-LINEAGE: bounded audit fields. No raw
+    # prompts, order books, payloads or secrets are ever stored here.
+    tool_version: Mapped[str] = mapped_column(
+        String(32), default="", server_default=""
+    )
+    source: Mapped[str] = mapped_column(String(32), default="", server_default="")
+    cache_state: Mapped[str] = mapped_column(
+        String(16), default="UNKNOWN", server_default="UNKNOWN"
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str] = mapped_column(String(255), default="", server_default="")
+    evidence_added: Mapped[str] = mapped_column(
+        String(16), default="UNKNOWN", server_default="UNKNOWN"
+    )
 
 
 class MarketAttentionDecisionORM(Base):

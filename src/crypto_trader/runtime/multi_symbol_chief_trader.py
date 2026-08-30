@@ -121,6 +121,15 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                         latency_ms=int((time.monotonic() - _s0) * 1000),
                         status="OK" if score.eligible else "NOT_AVAILABLE",
                         detail=f"score={score.score:.3f}",
+                        tool_version=getattr(self.opportunity_scanner, "version", ""),
+                        source="multi_symbol_rotation",
+                        cache_state=(
+                            "HIT" if getattr(self.decision_context_provider,
+                                             "last_cache_hit", False) else "MISS"
+                        ),
+                        evidence_added=(
+                            "OBSERVABILITY_ONLY" if score.eligible else "EMPTY"
+                        ),
                     )
                 except Exception:
                     pass
@@ -245,18 +254,21 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
             )
             self.market_observer.update_ws_candidates(candidate)
             self._dynamic_symbols = self.market_observer.canonical_symbols_for(candidate)
+            summary = self.market_observer.observe(candidate)
+            evidence_added = "ADDED" if summary.get("available") else "EMPTY"
             attention = getattr(candidate, "attention", None)
             if attention is not None:
                 self._defer_attention_row(
-                    str(getattr(chief_ctx, "symbol", "") or ""), attention
+                    str(getattr(chief_ctx, "symbol", "") or ""),
+                    attention,
+                    evidence_added=evidence_added,
                 )
-            summary = self.market_observer.observe(candidate)
             if summary.get("available"):
                 chief_ctx.strategy_evidence["market_observer"] = summary
                 if self.tool_journal is not None:
                     self.tool_journal.defer(
                         "market_observer_evidence",
-                        symbol=chief_ctx.symbol,
+                        symbol=str(getattr(chief_ctx, "symbol", "") or ""),
                         latency_ms=int((time.monotonic() - _o0) * 1000),
                         status="OK",
                         detail=(
@@ -264,6 +276,21 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                             f"{len((summary.get('candidates') or {}).get('facts') or {})}"
                             f" source={summary.get('source')}"
                         ),
+                        tool_version=getattr(self.market_observer, "version", ""),
+                        source="market_observer",
+                        evidence_added="ADDED",
+                    )
+            else:
+                if self.tool_journal is not None:
+                    self.tool_journal.defer(
+                        "market_observer_evidence",
+                        symbol=str(getattr(chief_ctx, "symbol", "") or ""),
+                        latency_ms=int((time.monotonic() - _o0) * 1000),
+                        status="NOT_AVAILABLE",
+                        detail=str(summary.get("reason") or "")[:120],
+                        tool_version=getattr(self.market_observer, "version", ""),
+                        source="market_observer",
+                        evidence_added="EMPTY",
                     )
         except Exception as exc:
             self._observer_failures += 1
@@ -273,12 +300,12 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                 type(exc).__name__,
             )
 
-    def _defer_attention_row(self, symbol: str, attention) -> None:
+    def _defer_attention_row(self, symbol: str, attention, *, evidence_added: str) -> None:
         """Journal the Market Observer AI attention invocation (fail-safe).
 
         The attention decision itself is durably persisted by the observer's
         lineage sink (market_attention_decisions); this row ties it into the
-        decision-pipeline tool trace.
+        decision-pipeline tool trace with the P4 audit fields.
         """
         if self.tool_journal is None:
             return
@@ -300,6 +327,13 @@ class MultiSymbolChiefTraderStrategyAdapter(AIFirstChiefTraderStrategyAdapter):
                     f" roster={getattr(attention, 'roster_size', 0)}"
                     f" uid={getattr(attention, 'attention_uid', '')}"
                 ),
+                tool_version=str(getattr(attention, "version", "") or ""),
+                source="market_observer",
+                cache_state=str(getattr(attention, "cache_state", "") or "UNKNOWN"),
+                error=str(getattr(attention, "error", "") or ""),
+                evidence_added=evidence_added,
+                llm_invocation_id=str(getattr(attention, "llm_invocation_id", "") or "")
+                or None,
             )
         except Exception:
             pass
