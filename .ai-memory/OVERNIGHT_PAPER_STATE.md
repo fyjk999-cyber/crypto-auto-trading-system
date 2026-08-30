@@ -232,3 +232,18 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
   this runtime. If the external session is yours, let it finish; if not,
   stop it. This cron stands down from any intervention meanwhile.
 - CALIBRATION: OBSERVE-ONLY (no changes while operator conflict unresolved).
+
+## Latest Checkpoint: 2026-08-30T05:30Z (cron-9)
+- Health OK / PAPER / lease held / 0 stuck orders / policy v3 / observer WS.
+  Process 98135 (external operator's build, since 05:15Z) stable 15min;
+  last external SIGTERM 05:15:00Z (loop cadence irregular 4-21min).
+- Journal 3685 rows / 643 decisions, growing (latest 05:30:35).
+- Fills since 05:00: 3 reduce-only TIME_STOP exits (SOL 104.99, ETH
+  2456.1, BTC_PERP 78141.65 — all real prices). ZERO new entries since
+  05:00 (external build behavior change or AI declining entries — watch).
+- EXTERNAL BUILD HEALTH (not my code, monitoring only):
+  market_observer_ai 77 OK / 58 ERROR (43% err, up from 15% in 04:30 win);
+  live_analysis avg latency jumped 4.0s -> 17.6s with 1x 91s timeout fail.
+- CALIBRATION: OBSERVE-ONLY — dual-operator situation persists; no param
+  change while another operator actively redeploy (attribution would be
+  impossible). Standing down on changes until user resolves ownership.
