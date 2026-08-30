@@ -289,3 +289,18 @@ trade_memory_records, daily reviews). This file is an INDEX ONLY.
 - External operator's process (98135) — their fill->positions sync path
   needs their fix. This session makes NO code changes (cron authority).
 - Watching next rounds for auto-recovery or external redeploy.
+
+## Latest Checkpoint: 2026-08-30T07:00Z (cron-9)
+- Health OK / PAPER / lease held / 0 stuck orders / policy v3 / observer WS.
+- Stability: 105min no restart (external loop stopped); process 98135.
+- Journal 6100 rows / 1023 decisions (>1000 decisions milestone), growing.
+- Fills since 06:30: BNB entry 693.7 + 3 reduce-only exits (ADA 0.2021,
+  DOGE 0.08503, AVAX 7.322 — the incident position closed TIME_STOP WIN
+  with correct attribution). All real prices.
+- Episodes: ADA WIN / DOGE LOSS / AVAX WIN — cadence healthy.
+- EXTERNAL BUILD: market_observer_ai errors 39% -> 34% (78 OK / 41 ERROR,
+  improving); live_analysis avg 10.1s (from 17.5s) BUT 3x ~91s timeout
+  failures persist as a pattern — external operator should add a shorter
+  request timeout + retry to their new tool path.
+- CALIBRATION: OBSERVE-ONLY (7th window) — ownership still unconfirmed by
+  user; system stable and self-improving; no change warranted.
