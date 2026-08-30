@@ -1251,3 +1251,38 @@ class PositionReviewORM(Base):
     executed: Mapped[int] = mapped_column(Integer, default=0)
     manager_mode: Mapped[str] = mapped_column(String(10), default="SHADOW")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class TradePlanORM(Base):
+    """Durable full-lifecycle TradePlan (13).
+
+    One row per AI entry decision. The original thesis is immutable here;
+    current assessments live in position_reviews / decision evidence.
+    """
+
+    __tablename__ = "trade_plans"
+
+    trade_plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(64), index=True)
+    llm_invocation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    symbol: Mapped[str] = mapped_column(String(40), index=True)
+    execution_symbol: Mapped[str] = mapped_column(String(40), default="")
+    market_type: Mapped[str] = mapped_column(String(20), default="SPOT")
+    direction: Mapped[str] = mapped_column(String(10))
+    selected_strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    strategy_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    market_regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    entry_thesis: Mapped[str] = mapped_column(String(500))
+    supporting_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    contradicting_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    invalidation_conditions: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    target_conditions: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    expected_horizon_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_holding_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    risk_intent: Mapped[str] = mapped_column(String(16), default="NORMAL")
+    entry_price_reference: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    factor_snapshot_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tool_trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    memory_refs: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="PLANNED", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
