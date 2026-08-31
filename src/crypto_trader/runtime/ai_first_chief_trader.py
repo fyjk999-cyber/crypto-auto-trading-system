@@ -159,6 +159,11 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
         trade_plan_id, decision = await self._ensure_entry_trade_plan(
             decision, ctx, chief_ctx
         )
+        # Production fail-closed: a LONG/SHORT entry without a durable
+        # TradePlan (or with a persistence block) must never produce a Signal.
+        if decision.action in ("LONG", "SHORT") and not trade_plan_id:
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
         signals = self._map_to_signals(decision, ctx, chief_ctx, trade_plan_id)
         if signals:
             self._last_entry_initiated_at[ctx.symbol] = now_monotonic

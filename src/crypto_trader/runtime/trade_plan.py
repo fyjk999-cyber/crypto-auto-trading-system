@@ -4,7 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 
 @dataclass(frozen=True)
@@ -116,8 +117,20 @@ class TradePlanStore:
                 return by_decision.trade_plan_id
             row = self._row(plan)
             session.add(TradePlanORM(**row))
-            await session.commit()
-            return plan.trade_plan_id
+            try:
+                await session.commit()
+                return plan.trade_plan_id
+            except IntegrityError:
+                # Concurrent duplicate decision_id: the other writer won.
+                await session.rollback()
+                by_decision = (
+                    await session.execute(
+                        select(TradePlanORM).where(
+                            TradePlanORM.decision_id == plan.decision_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                return by_decision.trade_plan_id if by_decision else plan.trade_plan_id
 
     async def get(self, trade_plan_id: str) -> dict | None:
         from crypto_trader.persistence.models import TradePlanORM
@@ -199,6 +212,14 @@ class TradePlanStore:
                 )
             ).scalars().all()
             return [await self.get(r.trade_plan_id) for r in rows]
+
+    async def count_all(self) -> int:
+        from crypto_trader.persistence.models import TradePlanORM
+
+        async with self.session_factory() as session:
+            return int(
+                (await session.execute(select(func.count()).select_from(TradePlanORM))).scalar()
+            )
 
     async def update_status(self, trade_plan_id: str, status: str) -> bool:
         """Validate and apply a status transition. Idempotent for same state."""

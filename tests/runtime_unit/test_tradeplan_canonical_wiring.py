@@ -82,16 +82,6 @@ class _TestAIFirstAdapter(AIFirstChiefTraderStrategyAdapter):
     async def _persist_evidence(self, decision, ctx, chief_ctx, execution_reference=""):
         self.persisted.append(decision)
 
-    def _map_to_signals(self, decision, ctx, chief_ctx, trade_plan_id=""):
-        if decision.action in ("LONG", "SHORT") and not trade_plan_id:
-            return []
-        if decision.action in ("LONG", "SHORT"):
-            self.signals.append(SimpleNamespace(signal_id="sig_test", action=decision.action,
-                                                metadata={"trade_plan_id": trade_plan_id}))
-            return self.signals[-1:]
-        return []
-
-
 async def _run_decide(adapter, symbol="ETHUSDT"):
     ctx = SimpleNamespace(symbol=symbol, positions={})
     return await adapter._decide(ctx)
@@ -126,7 +116,7 @@ async def test_no_trade_does_not_create_plan(database):
     adapter = _TestAIFirstAdapter(_chief_context(), _decision("NO_TRADE"), store)
     signals = await _run_decide(adapter)
     assert signals == []
-    assert await store.list_active() == []
+    assert await store.count_all() == 0
 
 
 async def test_wait_does_not_create_plan(database):
@@ -134,7 +124,7 @@ async def test_wait_does_not_create_plan(database):
     adapter = _TestAIFirstAdapter(_chief_context(), _decision("WAIT"), store)
     signals = await _run_decide(adapter)
     assert signals == []
-    assert await store.list_active() == []
+    assert await store.count_all() == 0
 
 
 async def test_persist_failure_preserves_ai_action_and_blocks_signal(database):
@@ -151,6 +141,15 @@ async def test_persist_failure_preserves_ai_action_and_blocks_signal(database):
     persisted = adapter.persisted[-1]
     assert persisted.action == "LONG"
     assert persisted.execution_block_reason == "TRADE_PLAN_PERSIST_FAILED"
+
+
+async def test_store_none_fail_closed(database):
+    adapter = _TestAIFirstAdapter(_chief_context(), _decision("LONG"), store=None)
+    signals = await _run_decide(adapter)
+    assert signals == []
+    persisted = adapter.persisted[-1]
+    assert persisted.action == "LONG"
+    assert persisted.execution_block_reason == "TRADE_PLAN_PERSIST_UNAVAILABLE"
 
 
 async def test_decision_retry_reuses_same_plan(database):
@@ -287,7 +286,7 @@ async def _make_perp_bundle(database):
     return bundle
 
 
-async def test_perpetual_lineage_tradeplan_to_fill(database):
+async def test_perpetual_tradeplan_metadata_propagation(database):
     from crypto_trader.domain.enums import OrderSide, OrderType, PositionSide
     from crypto_trader.domain.models import SignalIntent
     from crypto_trader.runtime.execution_symbols import reference_symbol_for
@@ -324,5 +323,77 @@ async def test_perpetual_lineage_tradeplan_to_fill(database):
         assert payload.get("trade_plan_id") == "plan-perp-1"
         loaded = await store.get("plan-perp-1")
         assert loaded is not None and loaded["market_type"] == "PERPETUAL"
+    await bundle.engine.stop()
+    await bundle.database.close()
+
+
+class _PerpCanonicalAdapter(AIFirstChiefTraderStrategyAdapter):
+    symbol = "BTCUSDT"
+
+    def __init__(self, store, decision):
+        super().__init__(
+            min_strategy_fit=0.45, min_trade_confidence=0.55,
+            entry_cooldown_seconds=0.0, reversal_cooldown_seconds=0.0,
+            trade_plan_store=store,
+        )
+        self.engine = _DecisionEngine(decision)
+        self.persisted = []
+        self.test_context = _chief_context("BTCUSDT")
+
+    async def _build_context(self, ctx):
+        return self.test_context
+
+    async def _persist_evidence(self, decision, ctx, chief_ctx, execution_reference=""):
+        self.persisted.append(decision)
+
+    async def on_market_data(self, ctx):
+        return await self._decide(ctx)
+
+
+async def test_perpetual_canonical_full_lineage(database):
+    from crypto_trader.runtime.bootstrap import build_system
+
+    store = TradePlanStore(database.session_factory)
+    adapter = _PerpCanonicalAdapter(store, _decision("SHORT", "dec-perp-canon"))
+    settings = Settings(
+        _env_file=None, app_env="test", trading_mode="PAPER",
+        live_trading_enabled=False, database_url=database.url,
+        auto_start_runtime=False, paper_mode="PAPER_SYNTHETIC",
+        paper_initial_equity="100000", engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600, run_lease_renew_interval_seconds=3600,
+    )
+    bundle = await build_system(settings)
+    # Replace the engine's default strategy with the canonical AIFirst adapter
+    # wired to the same durable TradePlanStore.
+    bundle.engine.strategies = [adapter]
+    await bundle.engine.start()
+    await bundle.market_data.ingest_snapshot(
+        "BTCUSDT", 1,
+        [(Decimal("100"), Decimal("10"))], [(Decimal("101"), Decimal("10"))])
+    await bundle.engine.tick()
+    # Wait for perp fill
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import FillORM
+
+    fill = None
+    for _ in range(1000):
+        await asyncio.sleep(0.01)
+        async with database.session_factory() as session:
+            rows = (await session.execute(select(FillORM))).scalars().all()
+            if rows:
+                fill = rows[-1]
+                break
+    await bundle.engine.wait_for_event_queue()
+    assert fill is not None, "no perp fill"
+    payload = fill.payload_json or {}
+    plan_id = payload.get("trade_plan_id")
+    assert plan_id, "fill payload missing trade_plan_id"
+    plan = await store.get(plan_id)
+    assert plan is not None
+    assert plan["decision_id"] == "dec-perp-canon"
+    assert plan["market_type"] == "PERPETUAL"
+    # Signal metadata is the same plan id; production mapper was used.
+    assert adapter.persisted
     await bundle.engine.stop()
     await bundle.database.close()

@@ -66,12 +66,21 @@ class _DecisionEngine:
         return self.decision
 
 
+class _FakePlanStore:
+    async def get_by_decision_id(self, decision_id):
+        return None
+
+    async def put(self, plan):
+        return "plan-test"
+
+
 class _TestAIFirstAdapter(AIFirstChiefTraderStrategyAdapter):
-    def __init__(self, chief_ctx, decision) -> None:
+    def __init__(self, chief_ctx, decision, store=None) -> None:
         super().__init__(
             min_strategy_fit=0.45,
             min_trade_confidence=0.55,
             entry_cooldown_seconds=0.0,
+            trade_plan_store=store or _FakePlanStore(),
         )
         self.test_context = chief_ctx
         self.engine = _DecisionEngine(decision)

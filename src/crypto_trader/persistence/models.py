@@ -1263,7 +1263,7 @@ class TradePlanORM(Base):
     __tablename__ = "trade_plans"
 
     trade_plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    decision_id: Mapped[str] = mapped_column(String(64), index=True)
+    decision_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     llm_invocation_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     symbol: Mapped[str] = mapped_column(String(40), index=True)
     execution_symbol: Mapped[str] = mapped_column(String(40), default="")
