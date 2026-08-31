@@ -8,6 +8,14 @@ from crypto_trader.runtime.chief_trader_strategy import ChiefTraderStrategyAdapt
 from crypto_trader.strategy.base import StrategyContext
 
 
+class FakePlanStore:
+    async def get_by_decision_id(self, decision_id):
+        return None
+
+    async def put(self, plan):
+        return plan.trade_plan_id
+
+
 class StubProvider:
     name = "stub"
 
@@ -50,13 +58,15 @@ def make_ctx(symbol="BTCUSDT"):
 
 
 async def test_llm_no_trade_submits_nothing():
-    adapter = ChiefTraderStrategyAdapter(provider=StubProvider())
+    adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),provider=StubProvider())
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
 
 
 async def test_llm_long_maps_to_buy_signal():
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=StubProvider(
             {"action": "LONG", "thesis": "trend", "decision_id": "d2", "model_version": "1"}
         ),
@@ -70,6 +80,7 @@ async def test_llm_long_maps_to_buy_signal():
 
 async def test_llm_short_maps_to_sell_signal():
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=StubProvider(
             {"action": "SHORT", "thesis": "trend down", "decision_id": "d3", "model_version": "1"}
         ),
@@ -81,19 +92,22 @@ async def test_llm_short_maps_to_sell_signal():
 
 
 async def test_llm_failure_fails_closed():
-    adapter = ChiefTraderStrategyAdapter(provider=StubProvider(ok=False))
+    adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),provider=StubProvider(ok=False))
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
 
 
 async def test_unconfigured_llm_gateway_does_not_invoke_live_route():
-    adapter = ChiefTraderStrategyAdapter(provider=StubProvider(healthy=False))
+    adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),provider=StubProvider(healthy=False))
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
 
 
 async def test_llm_invalid_json_fails_closed():
-    adapter = ChiefTraderStrategyAdapter(provider=None)
+    adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),provider=None)
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
 
@@ -115,6 +129,7 @@ class CountingProvider(StubProvider):
 
 async def test_entry_decisions_are_rate_limited():
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=CountingProvider(), min_decision_interval_seconds=60.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -132,6 +147,7 @@ async def test_route_not_ready_blocks_invocation():
     provider = CountingProvider()
     provider.route_ready_flag = False
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0
     )
     signals = await adapter.on_market_data(make_ctx())
@@ -154,6 +170,7 @@ async def test_every_decision_is_persisted_as_evidence(database):
 
     backend = RecordingBackend()
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=StubProvider(), evidence_backend=backend,
         decision_context_provider=StaticContextProvider(),
     )
@@ -183,7 +200,8 @@ async def test_sql_evidence_backend_is_idempotent(database):
     from crypto_trader.evolution.persistence_backends import SqlEvidenceBackend
     from crypto_trader.persistence.models import DecisionEvidenceORM
 
-    adapter = ChiefTraderStrategyAdapter(provider=StubProvider())
+    adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),provider=StubProvider())
     signals = await adapter.on_market_data(make_ctx())
     assert signals == []
     sql_backend = SqlEvidenceBackend(database.session_factory)
@@ -306,6 +324,7 @@ async def test_scenario_A_trend_long_with_contradiction_trades():
     """Trend LONG + funding contradiction -> BUY still reaches RiskEngine."""
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -320,6 +339,7 @@ async def test_scenario_A_trend_long_with_contradiction_trades():
 async def test_scenario_G_wait_produces_no_order():
     provider = ScriptedProvider(_long_response(action="WAIT"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -330,6 +350,7 @@ async def test_scenario_G_wait_produces_no_order():
 async def test_scenario_H_unknown_action_fails_closed():
     provider = ScriptedProvider(_long_response(action="MOON"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -340,6 +361,7 @@ async def test_position_management_actions_produce_no_entry():
     for action in ("ADD", "REDUCE", "EXIT"):
         provider = ScriptedProvider(_long_response(action=action))
         adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
             provider=provider, min_decision_interval_seconds=0.0,
             decision_context_provider=StaticContextProvider(),
         )
@@ -371,6 +393,7 @@ async def test_scenario_E_weak_fit_still_reaches_ai():
             recorded.update(evidence_row)
 
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence=evidence),
         evidence_backend=Backend(),
@@ -386,6 +409,7 @@ async def test_low_confidence_does_not_veto_ai():
     """CORE_TRADING_DOCTRINE_V1: low confidence is evidence, never a veto."""
     provider = ScriptedProvider(_long_response(evidence_adjusted_confidence=0.40))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
         min_trade_confidence=0.55,
@@ -409,6 +433,7 @@ async def test_context_provider_failure_fails_closed():
             recorded.update(evidence_row)
 
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=BrokenProvider(),
         evidence_backend=Backend(),
@@ -428,6 +453,7 @@ async def test_missing_factor_snapshot_blocks_entry_before_llm():
 
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=NoneProvider(),
     )
@@ -439,6 +465,7 @@ async def test_missing_strategy_evidence_blocks_entry():
     """§2: snapshot present but no strategy candidates -> no entry, no LLM."""
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence={}),
     )
@@ -451,6 +478,7 @@ async def test_unwired_context_provider_blocks_entry():
     """§2: without a wired context provider there is NO real factor context."""
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
     )
     assert await adapter.on_market_data(make_ctx()) == []
@@ -464,6 +492,7 @@ async def test_evidence_persistence_failure_is_instrumented(caplog):
 
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
         evidence_backend=FailingBackend(),
@@ -480,6 +509,7 @@ async def test_evidence_persistence_failure_is_instrumented(caplog):
 async def test_short_and_buy_sell_mapping_exhaustive():
     provider = ScriptedProvider(_long_response(action="SHORT"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -488,6 +518,7 @@ async def test_short_and_buy_sell_mapping_exhaustive():
     # OPEN_LONG alias maps to BUY.
     provider2 = ScriptedProvider(_long_response(action="OPEN_LONG"))
     adapter2 = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider2, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -537,7 +568,8 @@ def _exploration_adapter(provider, backend=None, sampler=lambda: 0.0, **override
         evidence_backend=backend,
     )
     params.update(overrides)
-    return ChiefTraderStrategyAdapter(**params)
+    return ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),**params)
 
 
 def _mid_response(**overrides):
@@ -779,6 +811,7 @@ async def test_memory_retrieval_feeds_live_context(database):
             seen.update(evidence_row)
 
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
         memory_provider=memory, evidence_backend=Backend(),
@@ -800,6 +833,7 @@ async def test_memory_retrieval_failure_is_non_blocking(caplog):
 
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
         memory_provider=BrokenMemory(),
@@ -814,6 +848,7 @@ async def test_no_historical_memory_live_operates_empty():
     """Section 7B: no memory rows -> empty RelevantMemory, decision still works."""
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
         memory_provider=None,
@@ -846,6 +881,7 @@ async def test_unknown_regime_reaches_ai_as_evidence():
         "dominant_factors": [], "risk_flags": [],
     }
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence=evidence),
     )
@@ -863,6 +899,7 @@ async def test_missing_strategy_evidence_persists_no_trade(database):
 
     provider = ScriptedProvider(_long_response())
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence={}),
         evidence_backend=SqlEvidenceBackend(database.session_factory),
@@ -971,6 +1008,7 @@ async def test_doctrine_A_single_strong_strategy_suffices():
     }
     provider = ScriptedProvider(_long_response(strategy_fit_score=0.72))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence=evidence),
     )
@@ -999,6 +1037,7 @@ async def test_doctrine_D_raw_factor_without_strategy_interpretation_no_trade():
     # NO_TRADE -> no order. The system itself never maps a raw factor to one.
     provider = ScriptedProvider(_long_response(action="NO_TRADE"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(evidence=evidence),
     )
@@ -1046,6 +1085,7 @@ def test_doctrine_F_risk_engine_approval_allows_paper_execution():
 async def test_long_entry_maps_to_paper_perpetual():
     provider = ScriptedProvider(_long_response(action="LONG"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -1064,6 +1104,7 @@ async def test_long_entry_maps_to_paper_perpetual():
 async def test_short_entry_maps_to_paper_perpetual():
     provider = ScriptedProvider(_long_response(action="SHORT"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )
@@ -1081,6 +1122,7 @@ async def test_short_entry_maps_to_paper_perpetual():
 async def test_unknown_action_never_maps_to_perpetual():
     provider = ScriptedProvider(_long_response(action="MOON"))
     adapter = ChiefTraderStrategyAdapter(
+        trade_plan_store=FakePlanStore(),
         provider=provider, min_decision_interval_seconds=0.0,
         decision_context_provider=StaticContextProvider(),
     )

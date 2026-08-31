@@ -706,9 +706,10 @@ def test_expected_position_version_written_into_entry_metadata():
     )
     ctx = NS(symbol="TRXUSDT", positions={}, clock_time=datetime.now(UTC))
     chief_ctx = NS(symbol="TRXUSDT", regime="RISK_OFF", factor_snapshot={}, strategy_evidence={})
-    signals = adapter._map_to_signals(decision, ctx, chief_ctx)
+    signals = adapter._map_to_signals(decision, ctx, chief_ctx, trade_plan_id="plan-x")
     assert signals, "LONG decision must map to an entry intent"
     meta = signals[0].metadata
+    assert meta["trade_plan_id"] == "plan-x"
     assert meta["expected_position_version"] == str(
         lifecycle.position_version("TRXUSDT", MarketType.SPOT)
     )

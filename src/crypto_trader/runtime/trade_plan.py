@@ -120,8 +120,9 @@ class TradePlanStore:
             try:
                 await session.commit()
                 return plan.trade_plan_id
-            except IntegrityError:
-                # Concurrent duplicate decision_id: the other writer won.
+            except IntegrityError as exc:
+                # Concurrent duplicate decision_id: only return a winner if a
+                # durable existing row is actually found. Never return a ghost id.
                 await session.rollback()
                 by_decision = (
                     await session.execute(
@@ -130,7 +131,9 @@ class TradePlanStore:
                         )
                     )
                 ).scalar_one_or_none()
-                return by_decision.trade_plan_id if by_decision else plan.trade_plan_id
+                if by_decision is not None:
+                    return by_decision.trade_plan_id
+                raise exc
 
     async def get(self, trade_plan_id: str) -> dict | None:
         from crypto_trader.persistence.models import TradePlanORM

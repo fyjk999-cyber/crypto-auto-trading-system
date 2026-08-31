@@ -3,6 +3,8 @@ import asyncio
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 from crypto_trader.config import Settings
 from crypto_trader.domain.enums import MarketType, OrderStatus
 from crypto_trader.domain.models import Instrument
@@ -397,3 +399,73 @@ async def test_perpetual_canonical_full_lineage(database):
     assert adapter.persisted
     await bundle.engine.stop()
     await bundle.database.close()
+
+
+async def test_mapper_empty_long_returns_zero_signals(database):
+    store = TradePlanStore(database.session_factory)
+    adapter = _TestAIFirstAdapter(_chief_context(), _decision("LONG", "dec-map-long"), store)
+    signals = adapter._map_to_signals(_decision("LONG", "dec-map-long"),
+                                            SimpleNamespace(symbol="ETHUSDT"), adapter.test_context,
+                                            trade_plan_id="")
+    assert signals == []
+
+
+async def test_mapper_empty_short_returns_zero_signals(database):
+    store = TradePlanStore(database.session_factory)
+    adapter = _TestAIFirstAdapter(_chief_context(), _decision("SHORT", "dec-map-short"), store)
+    signals = adapter._map_to_signals(_decision("SHORT", "dec-map-short"),
+                                            SimpleNamespace(symbol="ETHUSDT"), adapter.test_context,
+                                            trade_plan_id="")
+    assert signals == []
+
+
+class _GhostSess:
+    def __init__(self):
+        self.rolled = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        pass
+
+    async def execute(self, stmt):
+        return _GhostResult()
+
+    async def commit(self):
+        from sqlalchemy.exc import IntegrityError, OperationalError
+
+        raise IntegrityError("stmt", {}, OperationalError("stmt", {}, Exception("dup")))
+
+    async def rollback(self):
+        self.rolled = True
+
+    def add(self, obj):
+        pass
+
+
+class _GhostResult:
+    def scalar_one_or_none(self):
+        return None
+
+
+class _GhostFactory:
+    def __init__(self):
+        self.sess = _GhostSess()
+
+    def __call__(self):
+        return self.sess
+
+
+async def test_ghost_trade_plan_id_not_returned():
+    from sqlalchemy.exc import IntegrityError
+
+    factory = _GhostFactory()
+    store = TradePlanStore(factory)
+    plan = TradePlan(
+        trade_plan_id="plan-ghost", decision_id="dec-ghost",
+        symbol="ETHUSDT", execution_symbol="ETHUSDT", market_type="SPOT",
+        direction="LONG", entry_thesis="ghost test", status="PLANNED")
+    with pytest.raises(IntegrityError):
+        await store.put(plan)
+    assert factory.sess.rolled

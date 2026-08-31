@@ -512,9 +512,18 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 await self._persist_evidence(decision, ctx, chief_ctx)
                 return []
 
+        # P1: durable TradePlan is a hard lifecycle prerequisite for new
+        # LONG/SHORT entries.
+        trade_plan_id, decision = await self._ensure_entry_trade_plan(
+            decision, ctx, chief_ctx
+        )
+        if decision.action in ("LONG", "SHORT") and not trade_plan_id:
+            await self._persist_evidence(decision, ctx, chief_ctx)
+            return []
+
         # Map first so the persisted evidence can reference the entry signal
         # (signal_id -> client_order_id join enables outcome attribution).
-        signals = self._map_to_signals(decision, ctx, chief_ctx)
+        signals = self._map_to_signals(decision, ctx, chief_ctx, trade_plan_id)
         if signals:
             self._last_entry_initiated_at[ctx.symbol] = now_monotonic
         await self._persist_evidence(
@@ -800,6 +809,16 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
                 "UNRECOGNIZED_ENTRY_ACTION_FAIL_CLOSED action=%s decision_id=%s",
                 decision.action,
                 decision.decision_id,
+            )
+            return []
+        # P1: durable TradePlan is a hard lifecycle prerequisite for new
+        # LONG/SHORT entries. If no trade_plan_id survived, never emit a signal.
+        if not trade_plan_id or getattr(decision, "execution_block_reason", ""):
+            logger.error(
+                "TRADE_PLAN_REQUIRED_FOR_ENTRY action=%s decision_id=%s reason=%s",
+                decision.action,
+                decision.decision_id,
+                getattr(decision, "execution_block_reason", ""),
             )
             return []
         # §7 exploration sizing: smaller experiments, same risk authority.
