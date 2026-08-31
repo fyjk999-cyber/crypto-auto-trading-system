@@ -56,6 +56,7 @@ from crypto_trader.runtime.opportunity_scanner import CheapOpportunityScanner
 from crypto_trader.runtime.position_lifecycle import PositionLifecycleTracker
 from crypto_trader.runtime.position_manager import ShadowPositionManager
 from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
+from crypto_trader.runtime.trade_plan import TradePlanStore
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.strategy.dummy import DummyStrategy
@@ -84,6 +85,7 @@ class RuntimeBundle:
     llm_repository: LLMRepository
     daily_review_scheduler: DailyReviewScheduler
     research_gateway: ResearchGateway
+    trade_plan_store: TradePlanStore
     app_state: AppState
 
 
@@ -346,6 +348,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         logger.warning("RUNTIME_BUILD_SHA_AUDIT_FAILED", exc_info=True)
 
     tool_journal = ToolInvocationJournal(database.session_factory)
+    trade_plan_store = TradePlanStore(database.session_factory)
 
     # Strategy directive Phase 2 (§76): SHADOW position manager. Records
     # bounded HOLD/EXIT/REDUCE reviews for open positions; never executes.
@@ -385,6 +388,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         policy_manager=policy_manager,
         market_observer=market_observer,
         tool_journal=tool_journal,
+        trade_plan_store=trade_plan_store,
     )
     strategies = [chief_trader] if settings.auto_start_runtime else [DummyStrategy()]
 
@@ -575,6 +579,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         llm_repository=llm_repository,
         daily_review_scheduler=daily_review_scheduler,
         research_gateway=research_gateway,
+        trade_plan_store=trade_plan_store,
         app_state=app_state,
     )
 

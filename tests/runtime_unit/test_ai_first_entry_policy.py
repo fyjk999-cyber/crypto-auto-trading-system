@@ -83,9 +83,10 @@ class _TestAIFirstAdapter(AIFirstChiefTraderStrategyAdapter):
     async def _persist_evidence(self, decision, ctx, chief_ctx, execution_reference=""):
         self.persisted.append(decision)
 
-    def _map_to_signals(self, decision, ctx, chief_ctx):
+    def _map_to_signals(self, decision, ctx, chief_ctx, trade_plan_id=""):
         if decision.action in ("LONG", "SHORT"):
-            return [SimpleNamespace(signal_id="sig_test", action=decision.action)]
+            return [SimpleNamespace(signal_id="sig_test", action=decision.action,
+                                    metadata={"trade_plan_id": trade_plan_id})]
         return []
 
 

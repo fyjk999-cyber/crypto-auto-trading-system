@@ -85,26 +85,39 @@ class TradePlanStore:
     def _row(self, plan: TradePlan) -> dict:
         return plan.to_row()
 
-    async def put(self, plan: TradePlan) -> None:
-        """Idempotent insert. On duplicate, only status refreshes (original
-        thesis/evidence fields remain immutable)."""
+    async def put(self, plan: TradePlan) -> str:
+        """Create an immutable original TradePlan.
+
+        Idempotent by decision_id: one entry decision == one TradePlan.
+        If a plan already exists for the same trade_plan_id or decision_id,
+        this is a NO-OP and returns the existing trade_plan_id. Status
+        transitions are only allowed via update_status().
+        """
         from crypto_trader.persistence.models import TradePlanORM
 
         async with self.session_factory() as session:
-            existing = (
+            by_pk = (
                 await session.execute(
                     select(TradePlanORM).where(
                         TradePlanORM.trade_plan_id == plan.trade_plan_id
                     )
                 )
             ).scalar_one_or_none()
-            if existing is not None:
-                existing.status = plan.status
-                await session.commit()
-                return
+            if by_pk is not None:
+                return by_pk.trade_plan_id
+            by_decision = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.decision_id == plan.decision_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if by_decision is not None:
+                return by_decision.trade_plan_id
             row = self._row(plan)
             session.add(TradePlanORM(**row))
             await session.commit()
+            return plan.trade_plan_id
 
     async def get(self, trade_plan_id: str) -> dict | None:
         from crypto_trader.persistence.models import TradePlanORM

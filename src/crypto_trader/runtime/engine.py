@@ -550,6 +550,7 @@ class TradingEngine:
                 "market_type": MarketType.PERPETUAL.value,
                 "position_side": position_side.value,
                 "decision_id": (intent.metadata or {}).get("decision_id", ""),
+                "trade_plan_id": (intent.metadata or {}).get("trade_plan_id", ""),
                 "signal_id": (intent.metadata or {}).get("signal_id", ""),
                 "reference_market_symbol": (
                     intent.metadata or {}

@@ -684,6 +684,57 @@ class ChiefTraderStrategyAdapter(StrategyPlugin):
             ),
         )
 
+    async def _ensure_entry_trade_plan(
+        self, decision, ctx: StrategyContext, chief_ctx
+    ) -> tuple[str, object]:
+        """Create/reuse the durable TradePlan for a LONG/SHORT decision.
+
+        Returns (trade_plan_id, decision). On durability failure the original
+        AI action is preserved and execution_block_reason is set; no Signal is
+        emitted. NO_TRADE/WAIT never reach this helper.
+        """
+        if decision.action not in ("LONG", "SHORT"):
+            return "", decision
+        if self.trade_plan_store is None:
+            return "", decision.model_copy(
+                update={"execution_block_reason": "TRADE_PLAN_PERSIST_UNAVAILABLE"}
+            )
+        try:
+            existing = await self.trade_plan_store.get_by_decision_id(
+                decision.decision_id
+            )
+            if existing is not None:
+                return existing["trade_plan_id"], decision
+        except Exception:
+            existing = None
+        try:
+            plan = self._build_trade_plan(decision, ctx, chief_ctx)
+            plan_id = await self.trade_plan_store.put(plan)
+            return plan_id, decision
+        except Exception as exc:
+            logger.warning(
+                "TRADE_PLAN_PERSIST_FAILED symbol=%s error=%s",
+                ctx.symbol,
+                type(exc).__name__,
+            )
+            try:
+                self._defer_tool_call(
+                    "trade_plan_persist",
+                    ctx.symbol,
+                    time.monotonic(),
+                    "ERROR",
+                    detail="entry blocked by durable TradePlan failure",
+                    tool_version="1.0",
+                    source="chief_trader_entry",
+                    error=f"{type(exc).__name__}: {exc}"[:255],
+                    evidence_added="EMPTY",
+                )
+            except Exception:
+                pass
+            return "", decision.model_copy(
+                update={"execution_block_reason": "TRADE_PLAN_PERSIST_FAILED"}
+            )
+
     def _build_trade_plan(self, decision, ctx: StrategyContext, chief_ctx) -> TradePlan:
         from crypto_trader.runtime.trade_plan import TradePlan
 

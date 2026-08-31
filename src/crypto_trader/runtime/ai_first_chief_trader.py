@@ -152,7 +152,14 @@ class AIFirstChiefTraderStrategyAdapter(ChiefTraderStrategyAdapter):
         if decision.action in ("LONG", "SHORT"):
             decision = self._annotate_evidence_strength(decision, chief_ctx)
 
-        signals = self._map_to_signals(decision, ctx, chief_ctx)
+        # P1 CS-20260831-060113: durable TradePlan is a lifecycle integrity
+        # prerequisite for LONG/SHORT SignalIntent. On persistence failure the
+        # AI action remains unchanged (DecisionEvidence.action=LONG/SHORT) but
+        # execution_block_reason is set and no Signal/Order/Fill is produced.
+        trade_plan_id, decision = await self._ensure_entry_trade_plan(
+            decision, ctx, chief_ctx
+        )
+        signals = self._map_to_signals(decision, ctx, chief_ctx, trade_plan_id)
         if signals:
             self._last_entry_initiated_at[ctx.symbol] = now_monotonic
         await self._persist_evidence(

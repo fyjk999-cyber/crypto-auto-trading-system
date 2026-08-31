@@ -48,12 +48,7 @@ async def test_trade_plan_original_thesis_not_overwritten(database):
         direction="SHORT", entry_thesis="range rejection at high",
         status="PLANNED")
     await store.put(plan)
-    plan2 = TradePlan(
-        trade_plan_id="tp-2", decision_id="dec-2", symbol="ETHUSDT",
-        execution_symbol="ETH-USDT-SWAP", market_type="PERPETUAL",
-        direction="SHORT", entry_thesis="range rejection at high",
-        status="CLOSED")
-    await store.put(plan2)
+    await store.update_status("tp-2", "INVALIDATED")
     loaded = await store.get("tp-2")
     assert loaded["entry_thesis"] == "range rejection at high"
-    assert loaded["status"] == "CLOSED"
+    assert loaded["status"] == "INVALIDATED"

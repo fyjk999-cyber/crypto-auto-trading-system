@@ -55,3 +55,6 @@ class ChiefTraderDecision(BaseModel):
     knowledge_version: str = "0"
     memory_version: str = "0"
     created_at: str = ""
+    # P1 CS-20260831-060113: set when the AI entry decision is preserved but
+    # execution is blocked by a lifecycle durability failure (never a quant gate).
+    execution_block_reason: str = ""
