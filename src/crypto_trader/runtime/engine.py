@@ -129,6 +129,10 @@ class TradingEngine:
 
         self.run_id: str | None = None
         self.lease: Lease | None = None
+        self._lease_valid = False
+        self._lease_task: asyncio.Task | None = None
+        self._lease_task_exception: str = ""
+        self._lease_renewals = 0
         self.reconciliation_halted = False
         self._event_queue: asyncio.Queue[ExchangeEvent] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
@@ -215,6 +219,7 @@ class TradingEngine:
                 await self._persist_run(RuntimeState.STOPPED)
                 self.state_machine.transition(RuntimeState.STOPPED)
                 raise LeaseNotHeld("another engine instance holds the execution lease")
+            self._lease_valid = True
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
 
         self.state_machine.transition(RuntimeState.RECOVERING)
@@ -241,7 +246,9 @@ class TradingEngine:
             asyncio.create_task(self._tick_loop(), name="engine-ticks"),
         ]
         if self.require_lease:
-            self._tasks.append(asyncio.create_task(self._lease_loop(), name="engine-lease"))
+            self._lease_task = asyncio.create_task(self._lease_loop(), name="engine-lease")
+            self._lease_task.add_done_callback(self._on_lease_task_done)
+            self._tasks.append(self._lease_task)
         self._tasks.append(asyncio.create_task(self._reconciliation_loop(), name="engine-recon"))
         await self.audit.log("ENGINE_STARTED", target=self.run_id, run_id=self.run_id)
         return self.run_id
@@ -309,16 +316,66 @@ class TradingEngine:
             await asyncio.sleep(self.settings.engine_tick_seconds)
             await self.tick()
 
+    def _on_lease_task_done(self, task: asyncio.Task) -> None:
+        """Observe unexpected engine-lease task termination.
+
+        Cancellation is expected during shutdown and is not treated as a
+        fault. Any other task death is a silent-writer hazard: mark lease
+        invalid, health false, and kill switch engaged (fail closed).
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            self._lease_valid = False
+            self.health.set("execution_lease", False)
+            self.risk_engine.kill_switch.engage("execution lease lost")
+            self._lease_task_exception = f"{type(exc).__name__}: {exc}"
+            logger.error(
+                "ENGINE_LEASE_TASK_DIED lease_key=%s run_id=%s owner_id=%s error=%s",
+                self.lease_key,
+                self.run_id,
+                f"engine_{self.run_id}" if self.run_id else "",
+                self._lease_task_exception,
+            )
+
     async def _lease_loop(self) -> None:
         while True:
             await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
-            if self.lease is not None:
+            if self.lease is None:
+                continue
+            try:
                 ok = await self.lease_manager.renew(
                     self.lease_key, self.lease.token, self.settings.run_lease_ttl_seconds
                 )
-                self.health.set("execution_lease", ok)
-                if not ok:
-                    self.risk_engine.kill_switch.engage("execution lease lost")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._lease_valid = False
+                self.health.set("execution_lease", False)
+                self.risk_engine.kill_switch.engage("execution lease lost")
+                self._lease_task_exception = f"{type(exc).__name__}: {exc}"
+                logger.exception(
+                    "LEASE_RENEW_FAILED lease_key=%s run_id=%s owner_id=%s token=%s error=%s",
+                    self.lease_key,
+                    self.run_id,
+                    self.lease.owner_id if self.lease else "",
+                    self.lease.token if self.lease else "",
+                    self._lease_task_exception,
+                )
+                # Ownership can no longer be trusted; drop in-memory lease so
+                # this process does not appear to hold a writer lease.
+                self.lease = None
+                continue
+            if ok:
+                self._lease_valid = True
+                self._lease_renewals += 1
+                self.health.set("execution_lease", True)
+            else:
+                self._lease_valid = False
+                self.health.set("execution_lease", False)
+                self.risk_engine.kill_switch.engage("execution lease lost")
+                self.lease = None
 
     async def _reconciliation_loop(self) -> None:
         while True:
@@ -1406,7 +1463,7 @@ class TradingEngine:
             "run_id": self.run_id,
             "state": self.state_machine.state.value,
             "mode": self.settings.effective_mode().value,
-            "lease_held": self.lease is not None,
+            "lease_held": bool(self.lease is not None and self._lease_valid),
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
             "kill_switch": self.kill_switch_snapshot(),
