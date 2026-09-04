@@ -29,7 +29,7 @@ class VaultError(Exception):
 class _KeychainKey:
     """Keychain access inside the broker process; no CLI for retrieving this key."""
 
-    def __init__(self):
+    def __init__(self, keychain_path=None, *, create_keychain=False, password=None):
         if sys.platform != "darwin":
             raise VaultError("MACOS_KEYCHAIN_REQUIRED")
         self._security = ctypes.CDLL("/System/Library/Frameworks/Security.framework/Security")
@@ -63,11 +63,48 @@ class _KeychainKey:
         s.SecKeychainItemDelete.restype = ctypes.c_int32
         self._cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
         self._cf.CFRelease.argtypes = [ctypes.c_void_p]
+        self._keychain = ctypes.c_void_p()
+        if keychain_path is not None:
+            # The human-held private Keychain password is never persisted. A
+            # locked Keychain (including after reboot) fails closed until unlocked
+            # through the administrator's protected terminal command.
+            s.SecKeychainSetUserInteractionAllowed.argtypes = [ctypes.c_bool]
+            s.SecKeychainSetUserInteractionAllowed(False)
+            s.SecKeychainOpen.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+            s.SecKeychainCreate.argtypes = [
+                ctypes.c_char_p,
+                ctypes.c_uint32,
+                ctypes.c_void_p,
+                ctypes.c_bool,
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            s.SecKeychainUnlock.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint32,
+                ctypes.c_void_p,
+                ctypes.c_bool,
+            ]
+            path = os.fsencode(keychain_path)
+            if create_keychain and not Path(keychain_path).exists():
+                if password is None or len(password) < 12:
+                    raise VaultError("STRONG_KEYCHAIN_PASSWORD_REQUIRED")
+                status = s.SecKeychainCreate(
+                    path, len(password), password, False, None, ctypes.byref(self._keychain)
+                )
+            else:
+                status = s.SecKeychainOpen(path, ctypes.byref(self._keychain))
+            if status != 0:
+                raise VaultError("PRIVATE_KEYCHAIN_UNAVAILABLE")
+            if password is not None:
+                if s.SecKeychainUnlock(self._keychain, len(password), password, True) != 0:
+                    raise VaultError("PRIVATE_KEYCHAIN_LOCKED")
+            Path(keychain_path).chmod(0o600)
 
     def _find(self):
         length, data, item = ctypes.c_uint32(), ctypes.c_void_p(), ctypes.c_void_p()
         status = self._security.SecKeychainFindGenericPassword(
-            None,
+            self._keychain,
             len(self._service),
             self._service,
             len(self._account),
@@ -90,7 +127,7 @@ class _KeychainKey:
             key = os.urandom(32)
             buffer = ctypes.create_string_buffer(key)
             result = self._security.SecKeychainAddGenericPassword(
-                None,
+                self._keychain,
                 len(self._service),
                 self._service,
                 len(self._account),

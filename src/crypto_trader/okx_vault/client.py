@@ -12,9 +12,7 @@ def default_socket():
     return Path(
         os.environ.get(
             "OKX_VAULT_SOCKET",
-            str(
-                Path(__file__).resolve().parents[3] / ".secrets/okx-broker.sock",
-            ),
+            "/Library/Application Support/CryptoOKXBroker/ipc/broker/broker.sock",
         )
     )
 

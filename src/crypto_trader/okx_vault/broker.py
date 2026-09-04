@@ -10,6 +10,7 @@ import json
 import os
 import re
 import socket
+import stat
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,15 +61,18 @@ def _project(value):
 
 
 class CredentialBroker:
-    def __init__(self, vault, root: Path, socket_path: Path, *, transport=None, spawn=None):
+    def __init__(
+        self, vault, root: Path, socket_path: Path, *, transport=None, spawn=None, isolated=False
+    ):
         self._vault, self._root, self._socket = vault, root, socket_path
         self._transport, self._spawn = transport, spawn or subprocess.Popen
         self._lock = asyncio.Lock()
         self._child = None
+        self._isolated = isolated
 
     def credential_status(self):
         # This is API isolation, not a claim of same-user OS isolation.
-        return {
+        status = {
             "bundle": BUNDLE,
             "provider": "OKX",
             "environment": "DEMO",
@@ -76,8 +80,18 @@ class CredentialBroker:
             "key_suffix": None,
             "storage": "AES_256_GCM_KEYCHAIN",
             "secret_return_supported": False,
-            "os_agent_isolation": "NOT_ENFORCED",
+            "os_agent_isolation": "DEDICATED_UID_PENDING_OS_AUDIT"
+            if self._isolated
+            else "NOT_ENFORCED",
+            "pid": os.getpid(),
+            "uid": os.getuid(),
         }
+        if self._isolated:
+            info = self._vault._path.parent.stat()
+            status.update(
+                vault_owner_uid=info.st_uid, vault_directory_mode=stat.S_IMODE(info.st_mode)
+            )
+        return status
 
     def configured(self):
         return {"configured": self.credential_status()["configured"]}
@@ -205,6 +219,10 @@ class CredentialBroker:
     def run_paper(self):
         if not self.verify()["ok"]:
             return failure("VAULT_UNAVAILABLE")
+        return self._launch_paper()
+
+    def _launch_paper(self):
+        """Fixed credential-free launch, after the caller's authorization gate."""
         if self._child is not None and self._child.poll() is None:
             return {"ok": True, "pid": self._child.pid, "mode": "PAPER", "already_running": True}
         # Fixed launch only. No caller-provided command, environment, port or executable.
@@ -223,6 +241,8 @@ class CredentialBroker:
             "LLM_PROVIDER",
             "LLM_MODEL",
             "LLM_BASE_URL",
+            "RUNNING_SHA",
+            "GIT_SHA",
         }
         env = {k: v for k, v in os.environ.items() if k in allowed}
         env.update(
@@ -279,6 +299,24 @@ class CredentialBroker:
             return failure("OPERATION_DENIED")
         if action == "validate_okx_demo":
             return await self.validate_okx_demo()
+        if action == "run_paper" and self._isolated:
+            # The trading application NEVER runs under the credential-owning UID.
+            # Only this fixed, credential-free request crosses to its launcher.
+            from .client import BrokerClient
+            from .isolation import PAPER_SOCKET
+
+            if not self.verify()["ok"]:
+                return failure("VAULT_UNAVAILABLE")
+            result = await BrokerClient(PAPER_SOCKET).run_paper()
+            if result.get("ok") is True and type(result.get("pid")) is int:
+                return {
+                    "ok": True,
+                    "pid": result["pid"],
+                    "mode": "PAPER",
+                    "live_trading_enabled": False,
+                    "credential_transport": "BROKER_SIGNING",
+                }
+            return failure("PAPER_LAUNCH_UNAVAILABLE")
         methods = {
             "verify": self.verify,
             "configured": self.configured,

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>com.crypto-trader.okx-broker</string>
+<key>UserName</key><string>crypto-okx-broker</string>
+<key>ProgramArguments</key><array>
+<string>/Library/Application Support/CryptoOKXBroker/runtime/bin/python3</string>
+<string>-I</string><string>-m</string><string>crypto_trader.okx_vault.service</string>
+</array>
+<key>WorkingDirectory</key><string>/Users/crypto-okx-broker</string>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>ThrottleInterval</key><integer>15</integer>
+<key>Umask</key><integer>63</integer>
+<key>SoftResourceLimits</key><dict><key>Core</key><integer>0</integer></dict>
+<key>HardResourceLimits</key><dict><key>Core</key><integer>0</integer></dict>
+<key>StandardOutPath</key><string>/dev/null</string>
+<key>StandardErrorPath</key><string>/dev/null</string>
+</dict></plist>

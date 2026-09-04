@@ -1,5 +1,11 @@
 # Opaque OKX PAPER credential bundle
 
+Deployment update: use [macOS isolation instructions](OKX_BROKER_ISOLATION.md).
+The historical same-user enrollment/LaunchAgent steps below are superseded.
+The unprivileged CLI now rejects save/delete and never installs a same-user broker.
+OS isolation remains unverified until the administrator installer and actual
+normal-user adversarial checks succeed; do not enroll real credentials beforehand.
+
 ## Status and threat model
 
 Application API isolation is implemented. **OS isolation from this Codex/Harness session is
