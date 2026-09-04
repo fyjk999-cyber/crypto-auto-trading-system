@@ -48,7 +48,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.risk_summary = risk_summary or {}
         self.symbol = evidence_engine.symbol
         self.retry_cooldown = timedelta(seconds=max(1.0, retry_cooldown_seconds))
-        self._last_directional_attempt: datetime | None = None
+        # This is an attempt cooldown, not an entry cooldown.  Every provider
+        # call consumes the interval, including NO_TRADE and fail-closed output.
+        self._last_decision_attempt: datetime | None = None
 
     async def on_market_data(self, ctx: StrategyContext):
         # OPEN-position management is a separate canonical LLM lifecycle.  New
@@ -59,8 +61,8 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
 
         now = ctx.clock_time.astimezone(UTC)
         if (
-            self._last_directional_attempt is not None
-            and now - self._last_directional_attempt < self.retry_cooldown
+            self._last_decision_attempt is not None
+            and now - self._last_decision_attempt < self.retry_cooldown
         ):
             return []
 
@@ -73,6 +75,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             portfolio_state=self._portfolio_state(ctx),
             risk_summary=self.risk_summary,
         )
+        self._last_decision_attempt = now
         decision = await self.chief.decide(chief_ctx)
 
         # This commit is deliberately before TradePlan creation.  It is the
@@ -91,8 +94,6 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
 
         if decision.action not in {"LONG", "SHORT"}:
             return []
-        self._last_directional_attempt = now
-
         try:
             _plan, signal = await self.planner.create_entry_signal(decision)
         except (TypeError, ValueError) as exc:

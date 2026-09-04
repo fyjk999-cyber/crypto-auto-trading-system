@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderSide
@@ -127,3 +127,38 @@ async def test_non_directional_llm_decision_fails_closed_without_tradeplan():
     assert planner.calls == 0
     assert signals == []
     assert events[0][0:2] == ("audit", "LIVE_LLM_DECISION")
+
+
+async def test_every_decision_result_uses_the_same_attempt_cooldown():
+    for action in ("NO_TRADE", "WAIT", "LONG", "SHORT"):
+        events = []
+        chief = FakeChief(action)
+        strategy = LiveLLMDecisionStrategy(
+            evidence_engine=FakeEvidenceEngine(),
+            chief=chief,
+            planner=FakePlanner(events),
+            audit=FakeAudit(events),
+        )
+        first = make_ctx()
+        await strategy.on_market_data(first)
+        await strategy.on_market_data(first)
+        assert chief.calls == 1
+        resumed = make_ctx()
+        resumed.clock_time = first.clock_time + timedelta(seconds=31)
+        await strategy.on_market_data(resumed)
+        assert chief.calls == 2
+
+
+async def test_fail_closed_decision_is_throttled():
+    events = []
+    chief = FakeChief("NO_TRADE")
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        chief=chief,
+        planner=FakePlanner(events),
+        audit=FakeAudit(events),
+    )
+    first = make_ctx()
+    await strategy.on_market_data(first)
+    await strategy.on_market_data(first)
+    assert chief.calls == 1
