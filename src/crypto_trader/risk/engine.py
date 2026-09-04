@@ -14,7 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from crypto_trader.domain.enums import ExecutionDecision
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Account, OrderIntent, Position, RiskDecision, SignalIntent
-from crypto_trader.domain.money import D
+from crypto_trader.domain.money import D, format_decimal
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.kill_switch import KillSwitch
 
 
@@ -86,19 +87,35 @@ class RiskEngine:
             return fail("INVALID_QUANTITY")
         if price <= 0:
             return fail("INVALID_PRICE")
-        notional = price * qty
+        contract_size = D(str(getattr(intent, "metadata", {}).get("contract_size", "1")))
+        contract_multiplier = D(
+            str(getattr(intent, "metadata", {}).get("contract_multiplier", "1"))
+        )
+        exposure = ExposureService.calculate(
+            quantity=qty,
+            price=price,
+            spec=InstrumentExposureSpec(
+                instrument_type=str(getattr(intent, "metadata", {}).get("instrument_type", "SPOT")),
+                contract_size=contract_size,
+                contract_multiplier=contract_multiplier,
+            ),
+            side="LONG" if intent.side.value == "BUY" else "SHORT",
+        )
+        notional = exposure.gross_notional
         if getattr(intent, "quote_order_qty", None) is not None:
             notional = D(intent.quote_order_qty)
 
         if notional > self.config.max_order_notional:
-            approved_quantity = self.config.max_order_notional / price
+            approved_quantity = self.config.max_order_notional / (
+                price * contract_size * contract_multiplier
+            )
             if approved_quantity <= 0:
                 return fail("MAX_ORDER_NOTIONAL")
             checks.update(
                 {
                     "max_order_notional": False,
                     "original_quantity": str(qty),
-                    "approved_quantity": str(approved_quantity),
+                    "approved_quantity": format_decimal(approved_quantity),
                     "original_notional": str(notional),
                     "approved_notional": str(self.config.max_order_notional),
                     "supporting_risk_evidence": "MAX_ORDER_NOTIONAL",
