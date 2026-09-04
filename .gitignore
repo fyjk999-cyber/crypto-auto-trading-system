@@ -15,3 +15,5 @@ data/*.db-*
 node_modules/
 .wrangler/
 .dev.vars*
+.secrets/
+*.key

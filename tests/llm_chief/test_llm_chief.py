@@ -15,6 +15,14 @@ def test_llm_provider_abstraction_without_key():
     assert provider.healthy() is False
 
 
+def test_deepseek_provider_uses_non_secret_runtime_configuration(monkeypatch):
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
+    provider = DeepSeekProvider(api_key=None)
+    assert provider.model == "deepseek-v4-pro"
+    assert provider.base_url == "https://api.deepseek.com"
+
+
 def test_chief_trader_decision_schema_and_fail_safe():
     decision = ChiefTraderDecision(
         decision_id="d1",
