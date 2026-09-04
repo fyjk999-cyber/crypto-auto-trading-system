@@ -693,6 +693,14 @@ class TradingEngine:
             metadata=metadata,
         )
         await self.portfolio.refresh(initial_balances=self._initial_balances)
+        # A submitted order is not evidence of an active plan.  Promote only
+        # after this factual fill has been projected into a non-zero position.
+        plan = await self.trade_plans.get_by_order(order.internal_order_id)
+        position = await self.portfolio.get_position(fill.symbol)
+        if plan is not None and plan.state == TradePlanState.APPROVED and position is not None:
+            expected_sign = 1 if plan.direction == "LONG" else -1
+            if position.quantity * expected_sign > 0:
+                await self.trade_plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
         await self.audit.log(
             "FILL_SETTLED",
             target=fill.fill_id,

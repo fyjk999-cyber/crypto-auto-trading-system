@@ -118,6 +118,16 @@ class TradePlanService:
             row = await session.get(TradePlanORM, trade_plan_id)
             return self._to_domain(row) if row is not None else None
 
+    async def get_by_order(self, order_id: str) -> TradePlan | None:
+        """Resolve factual execution lineage without trusting signal metadata."""
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.order_id == order_id)
+                )
+            ).scalar_one_or_none()
+            return self._to_domain(row) if row is not None else None
+
     async def transition(
         self, trade_plan_id: str, state: TradePlanState, *, reason: str | None = None
     ) -> TradePlan:
