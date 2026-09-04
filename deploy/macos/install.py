@@ -1,5 +1,7 @@
 """Administrator-reviewed one-shot install. Never enrolls or migrates credentials."""
 
+import argparse
+import errno
 import grp
 import json
 import os
@@ -16,10 +18,114 @@ HOME = Path("/Users/crypto-okx-broker")
 USER = "crypto-okx-broker"
 GROUP = "crypto-okx-ipc"
 ROOT = Path(__file__).resolve().parents[2]
+STAGE = "PREFLIGHT_PLATFORM"
+COMMAND = "NONE"
+DSCL = "/usr/bin/dscl"
+DAEMONS = Path("/Library/LaunchDaemons")
+SAFE_ERRORS = {
+    "MACOS_ADMIN_REQUIRED",
+    "MACOS_REQUIRED",
+    "NORMAL_CLIENT_REQUIRED",
+    "PASSWORDLESS_SUDO_RULES_REQUIRE_ADMIN_REVIEW",
+    "EXISTING_INSTALLATION_REQUIRES_ADMIN_REVIEW",
+    "EXISTING_GROUP_REFUSED",
+    "EXISTING_USER_REFUSED",
+    "EXISTING_DAEMON_REFUSED",
+    "SYMLINK_REFUSED",
+    "UID_GID_RANGE_EXHAUSTED",
+    "REQUIRED_TOOL_UNAVAILABLE",
+    "RUNTIME_SOURCE_UNAVAILABLE",
+    "SHARED_RUNTIME_SYMLINK_REFUSED",
+    "INVALID_INSTALLER_ARGUMENTS",
+    "HUMAN_TERMINAL_REQUIRED",
+}
 
 
-def run(*argv, **kwargs):
-    return subprocess.run(argv, check=True, **kwargs)
+class InstallerArguments(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse normally echoes unknown arguments, which may contain secrets.
+        raise RuntimeError("INVALID_INSTALLER_ARGUMENTS")
+
+
+def stage(name):
+    global STAGE, COMMAND
+    STAGE, COMMAND = name, "NONE"
+    print(f"INSTALL_STAGE = {name}", flush=True)
+
+
+def safe_stderr(value):
+    """Project only fixed error categories; never echo arbitrary external text.
+
+    Regex redaction cannot reliably identify unknown future secrets or environment
+    dumps. Preserve recognizable diagnostics, discard all surrounding free text.
+    """
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = (value or "").lower()
+    categories = {
+        "no such file or directory": "No such file or directory",
+        "permission denied": "Permission denied",
+        "operation not permitted": "Operation not permitted",
+        "a password is required": "Administrator authentication required",
+        "not allowed": "Operation not allowed",
+        "record was not found": "Directory record not found",
+        "file exists": "File exists",
+    }
+    return next(
+        (safe for phrase, safe in categories.items() if phrase in text),
+        "External diagnostic omitted (untrusted text)",
+    )
+
+
+def report_error(exc):
+    # Neither str(exc), exception args, command args, paths nor environment dump
+    # are safe in general. Preserve the real exception class and numeric code.
+    code = getattr(exc, "returncode", None)
+    if not isinstance(code, int):
+        code = getattr(exc, "errno", None)
+    detail = "Unclassified exception; details withheld"
+    if (
+        type(exc) is RuntimeError
+        and exc.args
+        and isinstance(exc.args[0], str)
+        and exc.args[0] in SAFE_ERRORS
+    ):
+        detail = exc.args[0]
+    elif isinstance(exc, OSError) and isinstance(code, int):
+        detail = errno.errorcode.get(code, "OS_ERROR") + ": " + os.strerror(code)
+    elif isinstance(exc, subprocess.CalledProcessError):
+        detail = safe_stderr(exc.stderr)
+    elif isinstance(exc, KeyError):
+        detail = "Required account or configuration lookup failed"
+    elif isinstance(exc, StopIteration):
+        detail = "No free identifier found"
+    elif isinstance(exc, subprocess.TimeoutExpired):
+        detail = "Command timed out"
+    print(f"INSTALL_STAGE = {STAGE}")
+    print(f"ERROR_TYPE = {type(exc).__name__}")
+    print(f"ERROR_COMMAND = {COMMAND}")
+    print(f"ERROR_CODE = {code if isinstance(code, int) else 'NONE'}")
+    print(f"ERROR_DETAIL = {detail}")
+    print("CREDENTIALS_ENROLLED = NO", flush=True)
+
+
+def run(*argv, interactive=False, **kwargs):
+    global COMMAND
+    name = Path(argv[0]).name
+    COMMAND = (
+        name
+        if name in {"sudo", "dscl", "dseditgroup", "git", "chmod", "launchctl", "python", "python3"}
+        else "UNRECOGNIZED_COMMAND"
+    )
+    kwargs.setdefault("stdout", None if interactive else subprocess.DEVNULL)
+    kwargs.setdefault("stderr", None if interactive else subprocess.PIPE)
+    result = subprocess.run(argv, check=True, **kwargs)
+    COMMAND = "NONE"
+    return result
+
+
+def output(*argv, **kwargs):
+    return run(*argv, stdout=subprocess.PIPE, **kwargs).stdout
 
 
 def mkdir(path, uid=0, gid=0, mode=0o755):
@@ -30,23 +136,42 @@ def mkdir(path, uid=0, gid=0, mode=0o755):
     path.chmod(mode)
 
 
-def main():
-    if sys.platform != "darwin" or os.getuid() != 0:
+def preflight(only=False):
+    stage("PREFLIGHT_PLATFORM")
+    if sys.platform != "darwin":
+        raise RuntimeError("MACOS_REQUIRED")
+    if not only and os.getuid() != 0:
         raise RuntimeError("MACOS_ADMIN_REQUIRED")
-    client = pwd.getpwnam(os.environ["SUDO_USER"])
+    stage("RESOLVE_CLIENT")
+    client = (
+        pwd.getpwnam(os.environ["SUDO_USER"]) if os.getuid() == 0 else pwd.getpwuid(os.getuid())
+    )
     if client.pw_uid == 0:
         raise RuntimeError("NORMAL_CLIENT_REQUIRED")
-    sudo_rules = subprocess.check_output(
-        ["/usr/bin/sudo", "-l", "-U", client.pw_name], stderr=subprocess.DEVNULL
-    )
-    if b"NOPASSWD:" in sudo_rules:
-        raise RuntimeError("PASSWORDLESS_SUDO_RULES_REQUIRE_ADMIN_REVIEW")
+    stage("AUDIT_SUDOERS")
+    audit_complete = os.getuid() == 0
+    if audit_complete:
+        sudo_rules = output("/usr/bin/sudo", "-l", "-U", client.pw_name)
+        if b"NOPASSWD:" in sudo_rules:
+            raise RuntimeError("PASSWORDLESS_SUDO_RULES_REQUIRE_ADMIN_REVIEW")
+    else:
+        print("AUDIT_SUDOERS = DEFERRED_ADMIN_REQUIRED")
     # Refuse updates/overwrites: the administrator must review preservation and
     # uninstall first. Existing vault/home are NEVER adopted, erased or migrated.
-    if BASE.exists() or HOME.exists():
+    stage("CHECK_EXISTING_INSTALL")
+    if BASE.exists() or HOME.exists() or BASE.is_symlink() or HOME.is_symlink():
         raise RuntimeError("EXISTING_INSTALLATION_REQUIRES_ADMIN_REVIEW")
+    for label in ("broker", "paper-launcher"):
+        target = DAEMONS / f"com.crypto-trader.okx-{label}.plist"
+        if target.exists() or target.is_symlink():
+            raise RuntimeError("EXISTING_DAEMON_REFUSED")
+    stage("ALLOCATE_UID_GID")
     used = {p.pw_uid for p in pwd.getpwall()} | {g.gr_gid for g in grp.getgrall()}
-    uid = next(i for i in range(450, 500) if i not in used)
+    free = [i for i in range(450, 500) if i not in used]
+    if len(free) < 2:
+        raise RuntimeError("UID_GID_RANGE_EXHAUSTED")
+    uid, gid = free[:2]
+    stage("CHECK_NAMES")
     for name in (USER, GROUP):
         try:
             grp.getgrnam(name)
@@ -60,12 +185,54 @@ def main():
         pass
     else:
         raise RuntimeError("EXISTING_USER_REFUSED")
-    gid = next(i for i in range(uid + 1, 500) if i not in used)
+    stage("CHECK_TOOLS_AND_RUNTIME")
+    for tool in (
+        DSCL,
+        "/usr/sbin/dseditgroup",
+        "/usr/bin/sudo",
+        "/usr/bin/git",
+        "/bin/chmod",
+        "/bin/launchctl",
+        "/usr/bin/env",
+    ):
+        if not Path(tool).is_file() or not os.access(tool, os.X_OK):
+            global COMMAND
+            COMMAND = "dscl" if tool == DSCL else Path(tool).name
+            raise FileNotFoundError(errno.ENOENT, "Required tool missing")
+    if not Path(sys.base_prefix).is_dir() or not Path(sysconfig.get_paths()["purelib"]).is_dir():
+        raise RuntimeError("RUNTIME_SOURCE_UNAVAILABLE")
+    output("/usr/bin/git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD")
+    plistlib.loads((ROOT / "deploy/macos/com.crypto-trader.okx-broker.plist").read_bytes())
+    for asset in ("deploy/macos/verify.py", "src/crypto_trader/okx_vault/enrollment.py"):
+        with (ROOT / asset).open("rb"):
+            pass
+    stage("CHECK_ENROLLMENT_TERMINAL")
+    terminal = sys.stdin.isatty() and sys.stdout.isatty()
+    if not only and not terminal:
+        raise RuntimeError("HUMAN_TERMINAL_REQUIRED")
+    if only and not terminal:
+        print("INSTALL_TERMINAL = REQUIRED_FOR_KEYCHAIN_INITIALIZATION")
+    if only:
+        print("PREFLIGHT_RESULT = " + ("PASS" if audit_complete else "ADMIN_AUDIT_REQUIRED"))
+        print("SYSTEM_MUTATIONS = ZERO")
+        print("CREDENTIALS_ENROLLED = NO")
+    return client, uid, gid, audit_complete
+
+
+def main(argv=None):
+    parser = InstallerArguments()
+    parser.add_argument("--preflight", action="store_true")
+    args = parser.parse_args(argv)
+    client, uid, gid, audit_complete = preflight(args.preflight)
+    if args.preflight:
+        return 0 if audit_complete else 2
     for name, number in ((USER, uid), (GROUP, gid)):
-        run("/usr/sbin/dscl", ".", "-create", f"/Groups/{name}")
-        run("/usr/sbin/dscl", ".", "-create", f"/Groups/{name}", "PrimaryGroupID", str(number))
+        stage("CREATE_BROKER_GROUP" if name == USER else "CREATE_IPC_GROUP")
+        run(DSCL, ".", "-create", f"/Groups/{name}")
+        run(DSCL, ".", "-create", f"/Groups/{name}", "PrimaryGroupID", str(number))
+    stage("CREATE_BROKER_USER")
     record = f"/Users/{USER}"
-    run("/usr/sbin/dscl", ".", "-create", record)
+    run(DSCL, ".", "-create", record)
     for key, value in {
         "UniqueID": str(uid),
         "PrimaryGroupID": str(uid),
@@ -75,9 +242,11 @@ def main():
         "Password": "*",
         "AuthenticationAuthority": ";DisabledUser;",
     }.items():
-        run("/usr/sbin/dscl", ".", "-create", record, key, value)
+        run(DSCL, ".", "-create", record, key, value)
+    stage("ADD_GROUP_MEMBERS")
     for member in (USER, client.pw_name):
         run("/usr/sbin/dseditgroup", "-o", "edit", "-a", member, "-t", "user", GROUP)
+    stage("CREATE_HOME")
     mkdir(HOME, uid, uid, 0o700)
     for rel in (
         ".crypto-okx",
@@ -92,6 +261,7 @@ def main():
     probe.write_bytes(b"OS access test; not a credential")
     os.chown(probe, uid, uid)
     probe.chmod(0o600)
+    stage("CREATE_PROTECTED_RUNTIME")
     mkdir(BASE)
     runtime = BASE / "runtime"
     # Copy the standalone interpreter AND dependency tree; no user-owned uv or
@@ -111,25 +281,21 @@ def main():
         ignore=shutil.ignore_patterns("*.pth", "__editable*"),
     )
     # Committed source only. Dirty project runtime/market work is not deployed.
-    files = subprocess.check_output(
-        [
-            "/usr/bin/git",
-            "-C",
-            str(ROOT),
-            "ls-tree",
-            "-rz",
-            "--name-only",
-            "HEAD",
-            "src/crypto_trader",
-        ]
+    files = output(
+        "/usr/bin/git",
+        "-C",
+        str(ROOT),
+        "ls-tree",
+        "-rz",
+        "--name-only",
+        "HEAD",
+        "src/crypto_trader",
     ).split(b"\0")
     for raw in filter(None, files):
         rel = Path(os.fsdecode(raw))
         target = site / rel.relative_to("src")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(
-            subprocess.check_output(["/usr/bin/git", "-C", str(ROOT), "show", "HEAD:" + str(rel)])
-        )
+        target.write_bytes(output("/usr/bin/git", "-C", str(ROOT), "show", "HEAD:" + str(rel)))
     for path in runtime.rglob("*"):
         if path.is_symlink():
             raise RuntimeError("SHARED_RUNTIME_SYMLINK_REFUSED")
@@ -162,8 +328,8 @@ def main():
         "client_groups": sorted(set(os.getgrouplist(client.pw_name, client.pw_gid) + [gid])),
         "paper_home": str(paper),
         "admin_sudoers_audit_no_nopasswd": True,
-        "source_sha": subprocess.check_output(
-            ["/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+        "source_sha": output(
+            "/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD", text=True
         ).strip(),
     }
     (BASE / "policy.json").write_text(json.dumps(policy))
@@ -172,7 +338,16 @@ def main():
     (BASE / "verify.py").chmod(0o644)
     # All descendants start with no inherited ACL grants.
     run("/bin/chmod", "-RN", str(BASE), str(HOME))
-    run(str(python), "-I", "-m", "crypto_trader.okx_vault.enrollment", "initialize")
+    stage("INITIALIZE_KEYCHAIN")
+    run(
+        str(python),
+        "-I",
+        "-m",
+        "crypto_trader.okx_vault.enrollment",
+        "initialize",
+        interactive=True,
+    )
+    stage("INSTALL_LAUNCHDAEMONS")
     template = plistlib.loads(
         (ROOT / "deploy/macos/com.crypto-trader.okx-broker.plist").read_bytes()
     )
@@ -204,13 +379,14 @@ def main():
             + [name + "=" + value for name, value in plist["EnvironmentVariables"].items()]
             + program
         )
-        target = Path("/Library/LaunchDaemons") / (label + ".plist")
+        target = DAEMONS / (label + ".plist")
         if target.exists():
             raise RuntimeError("EXISTING_DAEMON_REFUSED")
         target.write_bytes(plistlib.dumps(plist))
         target.chmod(0o644)
         run("/bin/launchctl", "bootstrap", "system", str(target))
     # Retire only the obsolete same-user service, retaining ALL old vault data.
+    stage("RETIRE_LEGACY_SERVICE")
     subprocess.run(
         [
             "/bin/launchctl",
@@ -224,6 +400,7 @@ def main():
     if old.is_file() and not old.is_symlink():
         old.rename(old.with_suffix(".plist.disabled"))
     print("Installed without credentials. Running actual pre-enrollment OS verification.")
+    stage("PRE_ENROLLMENT_VERIFY")
     run(
         str(python),
         "-I",
@@ -232,13 +409,20 @@ def main():
         group=client.pw_gid,
         extra_groups=policy["client_groups"],
         env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+        interactive=True,
     )
+    print("INSTALL_RESULT = PASS")
+    print("CREDENTIALS_ENROLLED = NO")
+    return 0
+
+
+def entry(argv=None):
+    try:
+        return main(argv)
+    except Exception as exc:
+        report_error(exc)
+        return 1
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        raise SystemExit(
-            "INSTALL_INCOMPLETE: no credentials enrolled; preserve files for review"
-        ) from None
+    raise SystemExit(entry())
