@@ -14,6 +14,7 @@ alembic upgrade head >/dev/null 2>&1 || true
 export TRADING_MODE=PAPER
 export PAPER_MODE=PAPER_REAL_MARKET
 export LIVE_TRADING_ENABLED=false
+export RUNNING_SHA="$(git rev-parse HEAD)"
 echo "Trading Mode: PAPER"
 echo "Market Data Mode: PAPER_REAL_MARKET"
 echo "Market Provider: OKX_PUBLIC"
