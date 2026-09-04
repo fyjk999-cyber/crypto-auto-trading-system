@@ -17,11 +17,16 @@ class LiveLLMTradePlanner:
         self.plans = plans
 
     async def create_entry_signal(
-        self, decision: ChiefTraderDecision, *, limit_price: Decimal | None = None
+        self,
+        decision: ChiefTraderDecision,
+        *,
+        limit_price: Decimal | None = None,
+        quantity: Decimal | None = None,
+        execution_metadata: dict | None = None,
     ) -> tuple[TradePlan | None, SignalIntent | None]:
         if decision.action not in {"LONG", "SHORT"}:
             return None, None
-        quantity = Decimal(str(decision.position_size_request))
+        quantity = quantity or Decimal(str(decision.position_size_request))
         if quantity <= 0 or not decision.thesis:
             raise ValueError("Live LLM entry decision requires positive size and thesis")
         plan = await self.plans.create(
@@ -45,10 +50,12 @@ class LiveLLMTradePlanner:
             metadata={
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_id": decision.decision_id,
+                "direction": decision.action.value,
                 "requested_leverage": str(decision.leverage_request),
                 "instrument_type": "LINEAR_PERP",
                 "contract_size": "1",
                 "contract_multiplier": "1",
+                **(execution_metadata or {}),
             },
         )
         await self.plans.link(plan.trade_plan_id, signal_id=signal.signal_id)

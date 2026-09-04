@@ -20,6 +20,7 @@ from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.observability.audit import AuditService
+from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 
 
@@ -44,6 +45,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         risk_summary: dict[str, Any] | None = None,
         retry_cooldown_seconds: float = 30.0,
         tool_chief: ToolDrivenChiefTrader | None = None,
+        sizer: LiveEntrySizingService | None = None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -54,6 +56,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.symbol = evidence_engine.symbol
         self.retry_cooldown = timedelta(seconds=max(1.0, retry_cooldown_seconds))
         self.tool_chief = tool_chief
+        self.sizer = sizer
         # This is an attempt cooldown, not an entry cooldown.  Every provider
         # call consumes the interval, including NO_TRADE and fail-closed output.
         self._last_decision_attempt: datetime | None = None
@@ -129,8 +132,56 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
 
         if decision.action not in {"LONG", "SHORT"}:
             return []
+        mid = ctx.book.mid_price()
+        if self.sizer is None or mid is None or ctx.instrument is None:
+            await self.audit.log(
+                "LIVE_LLM_SIZING_UNAVAILABLE",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+            )
+            return []
+        sized = self.sizer.size(
+            side=decision.action.value,
+            requested_quantity=Decimal(str(decision.position_size_request)),
+            requested_leverage=Decimal(str(decision.leverage_request or 1)),
+            account=ctx.account,
+            positions=ctx.positions,
+            instrument=ctx.instrument.model_copy(update={"instrument_type": "LINEAR_PERP"}),
+            price=mid,
+            stop_price=Decimal(str(decision.stop_loss)) if decision.stop_loss is not None else None,
+        )
+        if sized.normalized_quantity <= 0:
+            await self.audit.log(
+                "LIVE_LLM_SIZING_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"reason_codes": list(sized.sizing_reason_codes)},
+            )
+            return []
         try:
-            plan, signal = await self.planner.create_entry_signal(decision)
+            plan, signal = await self.planner.create_entry_signal(
+                decision,
+                limit_price=mid,
+                quantity=sized.normalized_quantity,
+                execution_metadata={
+                    "instrument_type": "LINEAR_PERP",
+                    "contract_size": str(ctx.instrument.contract_size),
+                    "contract_multiplier": str(ctx.instrument.contract_multiplier),
+                    "requested_quantity": str(decision.position_size_request),
+                    "normalized_quantity": str(sized.normalized_quantity),
+                    "requested_notional": str(sized.requested_notional),
+                    "risk_normalized_notional": str(sized.risk_normalized_notional),
+                    "requested_leverage": str(sized.requested_leverage),
+                    "sizing_approved_leverage": str(sized.risk_bounded_leverage),
+                    "max_loss_estimate": str(sized.max_loss_estimate),
+                    "portfolio_exposure_after_trade": str(
+                        sized.portfolio_exposure_after_trade
+                    ),
+                    "sizing_reason_codes": list(sized.sizing_reason_codes),
+                },
+            )
             if plan is not None:
                 await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
         except (TypeError, ValueError) as exc:

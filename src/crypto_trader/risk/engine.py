@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,6 +18,7 @@ from crypto_trader.domain.models import Account, OrderIntent, Position, RiskDeci
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.kill_switch import KillSwitch
+from crypto_trader.risk.leverage import clamp_leverage
 
 
 class RiskConfig(BaseModel):
@@ -61,7 +63,7 @@ class RiskEngine:
             or getattr(intent, "signal_id", None)
             or "unknown"
         )
-        checks: dict[str, bool | str] = {}
+        checks: dict[str, Any] = {}
 
         def fail(reason: str) -> RiskDecision:
             checks[reason] = False
@@ -119,36 +121,43 @@ class RiskEngine:
         if getattr(intent, "quote_order_qty", None) is not None:
             notional = D(intent.quote_order_qty)
 
-        if notional > self.config.max_order_notional:
+        original_notional = notional
+        approved_quantity = qty
+        adjustment_reasons: list[str] = []
+        if original_notional > self.config.max_order_notional:
             approved_quantity = self.config.max_order_notional / (
                 price * contract_size * contract_multiplier
             )
             if approved_quantity <= 0:
                 return fail("MAX_ORDER_NOTIONAL")
-            checks.update(
-                {
-                    "max_order_notional": False,
-                    "original_quantity": str(qty),
-                    "approved_quantity": format_decimal(approved_quantity),
-                    "original_notional": str(notional),
-                    "approved_notional": str(self.config.max_order_notional),
-                    "supporting_risk_evidence": "MAX_ORDER_NOTIONAL",
-                    "contrary_risk_evidence": "requested order exceeds configured limit",
-                }
-            )
-            return RiskDecision(
-                risk_decision_id=new_id("risk"),
-                order_id=order_id,
-                client_order_id=client_order_id,
-                symbol=intent.symbol,
-                side=intent.side,
-                decision=ExecutionDecision.SCALE_DOWN,
-                reason="MAX_ORDER_NOTIONAL",
-                checks=checks,
-                timestamp=now,
-                run_id=run_id,
-            )
-        checks["max_order_notional"] = True
+            adjustment_reasons.append("MAX_ORDER_NOTIONAL")
+        notional = approved_quantity * price * contract_size * contract_multiplier
+        checks["max_order_notional"] = original_notional <= self.config.max_order_notional
+        requested_leverage_raw = metadata.get("requested_leverage")
+        if requested_leverage_raw is not None and D(requested_leverage_raw) < 1:
+            return fail("INVALID_LEVERAGE")
+        requested_leverage = D(requested_leverage_raw or "1")
+        approved_leverage = clamp_leverage(
+            requested=requested_leverage,
+            max_leverage=self.config.max_leverage,
+            volatility=metadata.get("volatility", "0"),
+            liquidity=metadata.get("liquidity", "1"),
+        )
+        if approved_leverage < requested_leverage:
+            adjustment_reasons.append("LEVERAGE_CLAMPED")
+        checks.update(
+            {
+                "original_direction": metadata.get(
+                    "direction", "LONG" if intent.side.value == "BUY" else "SHORT"
+                ),
+                "original_quantity": str(qty),
+                "approved_quantity": format_decimal(approved_quantity),
+                "original_notional": str(original_notional),
+                "approved_notional": str(notional),
+                "requested_leverage": str(requested_leverage),
+                "approved_leverage": str(approved_leverage),
+            }
+        )
 
         if open_order_count >= self.config.max_open_orders:
             return fail("MAX_OPEN_ORDERS")
@@ -202,6 +211,24 @@ class RiskEngine:
         checks["max_leverage"] = True
 
         checks["notional"] = str(notional)
+        if adjustment_reasons:
+            checks["supporting_risk_evidence"] = adjustment_reasons
+            checks["contrary_risk_evidence"] = [
+                "requested execution parameters exceed deterministic risk bounds"
+            ]
+            checks["hard_limits_triggered"] = adjustment_reasons
+            return RiskDecision(
+                risk_decision_id=new_id("risk"),
+                order_id=order_id,
+                client_order_id=client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                decision=ExecutionDecision.SCALE_DOWN,
+                reason=";".join(adjustment_reasons),
+                checks=checks,
+                timestamp=now,
+                run_id=run_id,
+            )
         return RiskDecision(
             risk_decision_id=new_id("risk"),
             order_id=order_id,

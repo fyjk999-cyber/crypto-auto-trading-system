@@ -331,6 +331,7 @@ class TradingEngine:
             funding=market_state.funding_rate if market_state else None,
             oi=market_state.open_interest if market_state else None,
             basis=market_state.basis if market_state else None,
+            instrument=self._instruments.get(symbol),
         )
 
     # --------------------------------------------------------------- signals
@@ -450,10 +451,20 @@ class TradingEngine:
             self.health.set("risk", True)
             return risk_decision
 
-        executable_signal = signal
+        approved_metadata = {
+            **signal.metadata,
+            "approved_leverage": str(
+                risk_decision.checks.get(
+                    "approved_leverage", signal.metadata.get("requested_leverage", "1")
+                )
+            ),
+        }
+        executable_signal = signal.model_copy(update={"metadata": approved_metadata})
         if risk_decision.decision == ExecutionDecision.SCALE_DOWN:
             approved_quantity = D(str(risk_decision.checks["approved_quantity"]))
-            executable_signal = signal.model_copy(update={"quantity": approved_quantity})
+            executable_signal = executable_signal.model_copy(
+                update={"quantity": approved_quantity}
+            )
 
         instrument = self._instruments.get(symbol)
         lease_held = (
@@ -473,7 +484,7 @@ class TradingEngine:
             run_id=run_id,
             expires_at=executable_signal.expires_at,
             metadata={
-                **signal.metadata,
+                **executable_signal.metadata,
                 "signal_id": signal.signal_id,
                 "trade_plan_id": trade_plan_id or None,
             },

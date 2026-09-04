@@ -72,7 +72,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         market_regime="TREND",
         thesis="original long thesis",
         position_size_request=0.1,
-        leverage_request=2,
+        leverage_request=10,
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -89,6 +89,11 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     position = await engine.portfolio.get_position("BTCUSDT")
     assert active is not None and active.state == TradePlanState.ACTIVE
     assert position is not None and position.quantity == Decimal("0.1")
+    entry_order = list(engine.adapter.orders.values())[0]
+    persisted_entry = await engine.order_manager.get_by_client(entry_order.client_order_id)
+    assert persisted_entry is not None
+    assert persisted_entry.metadata["requested_leverage"] == "10.0"
+    assert persisted_entry.metadata["approved_leverage"] == "5"
 
     chief = SequencedChief([("HOLD", "0"), ("REDUCE", "0.04"), ("EXIT", "0")])
     engine.position_manager = LiveLLMPositionManager(

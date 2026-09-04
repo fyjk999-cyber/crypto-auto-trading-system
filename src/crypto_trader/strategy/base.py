@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from crypto_trader.domain.models import Account, Position, SignalIntent
+from crypto_trader.domain.models import Account, Instrument, Position, SignalIntent
 from crypto_trader.market_data.orderbook import OrderBook
 
 
@@ -24,6 +24,7 @@ class StrategyContext:
     funding: Decimal | None = None
     oi: Decimal | None = None
     basis: Decimal | None = None
+    instrument: Instrument | None = None
 
 
 class StrategyPlugin(ABC):

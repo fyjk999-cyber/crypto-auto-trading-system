@@ -35,6 +35,7 @@ from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
+from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.dummy import DummyStrategy
 from crypto_trader.trade_plan.service import TradePlanService
 
@@ -100,6 +101,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief = ChiefTraderEngine(provider=DeepSeekProvider())
     tool_chief = ToolDrivenChiefTrader(chief, build_canonical_tool_registry(alpha))
+    sizer = LiveEntrySizingService(
+        risk_fraction=Decimal(alpha.risk_per_trade),
+        max_order_notional=risk.config.max_order_notional,
+        max_leverage=risk.config.max_leverage,
+    )
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
         chief=chief,
@@ -108,6 +114,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         audit=audit,
         risk_summary=risk.config.model_dump(mode="json"),
         tool_chief=tool_chief,
+        sizer=sizer,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (

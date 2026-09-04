@@ -3,11 +3,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from crypto_trader.domain.enums import OrderSide
-from crypto_trader.domain.models import Account, SignalIntent
+from crypto_trader.domain.models import Account, Instrument, SignalIntent
 from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
 from crypto_trader.market_data.orderbook import OrderBook
+from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.base import StrategyContext
 
 
@@ -54,16 +55,18 @@ class FakePlanner:
     def __init__(self, events):
         self.events = events
         self.calls = 0
+        self.last_quantity = None
 
-    async def create_entry_signal(self, decision):
+    async def create_entry_signal(self, decision, **kwargs):
         self.calls += 1
+        self.last_quantity = kwargs.get("quantity")
         self.events.append(("plan", decision.decision_id))
         signal = SignalIntent(
             signal_id=decision.decision_id,
             strategy_id="live_llm",
             symbol=decision.symbol,
             side=OrderSide.BUY if decision.action == "LONG" else OrderSide.SELL,
-            quantity=Decimal(str(decision.position_size_request)),
+            quantity=kwargs.get("quantity", Decimal(str(decision.position_size_request))),
             reason=decision.thesis,
             metadata={"trade_plan_id": "plan_1", "decision_id": decision.decision_id},
         )
@@ -87,6 +90,9 @@ def make_ctx():
         clock_time=now,
         run_id="run_1",
         mark_price=Decimal("100.5"),
+        instrument=Instrument(
+            symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", step_size="0.00001"
+        ),
     )
 
 
@@ -100,6 +106,7 @@ async def test_live_llm_is_only_directional_signal_authority_and_audits_before_p
         planner=planner,
         decisions=LLMDecisionStore(database.session_factory),
         audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(),
     )
 
     signals = await strategy.on_market_data(make_ctx())
@@ -109,6 +116,7 @@ async def test_live_llm_is_only_directional_signal_authority_and_audits_before_p
     assert len(signals) == 1
     assert signals[0].strategy_id == "live_llm"
     assert signals[0].side == OrderSide.BUY
+    assert planner.last_quantity == Decimal("0.01")
     assert events[0][0:2] == ("audit", "LIVE_LLM_DECISION")
     assert events[1] == ("plan", "llm_runtime_test")
     stored = await LLMDecisionStore(database.session_factory).get("llm_runtime_test")
@@ -127,6 +135,7 @@ async def test_non_directional_llm_decision_fails_closed_without_tradeplan(datab
         planner=planner,
         decisions=LLMDecisionStore(database.session_factory),
         audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(),
     )
 
     signals = await strategy.on_market_data(make_ctx())
@@ -150,6 +159,7 @@ async def test_every_decision_result_uses_the_same_attempt_cooldown(database):
             planner=FakePlanner(events),
             decisions=LLMDecisionStore(database.session_factory),
             audit=FakeAudit(events),
+            sizer=LiveEntrySizingService(),
         )
         first = make_ctx()
         await strategy.on_market_data(first)
@@ -170,6 +180,7 @@ async def test_fail_closed_decision_is_throttled(database):
         planner=FakePlanner(events),
         decisions=LLMDecisionStore(database.session_factory),
         audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(),
     )
     first = make_ctx()
     await strategy.on_market_data(first)
