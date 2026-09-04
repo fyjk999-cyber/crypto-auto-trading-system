@@ -18,6 +18,7 @@ from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
@@ -51,6 +52,7 @@ class RuntimeBundle:
     adapter: SimulatedExchangeAdapter
     alpha: MultiStrategyAlpha
     engine: TradingEngine
+    position_manager: LiveLLMPositionManager | None
     app_state: AppState
 
 
@@ -93,16 +95,29 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_leverage="3",
     )
     trade_plans = TradePlanService(database.session_factory)
+    llm_decisions = LLMDecisionStore(database.session_factory)
     chief = ChiefTraderEngine(provider=DeepSeekProvider())
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
         chief=chief,
         planner=LiveLLMTradePlanner(trade_plans),
-        decisions=LLMDecisionStore(database.session_factory),
+        decisions=llm_decisions,
         audit=audit,
         risk_summary=risk.config.model_dump(mode="json"),
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
+    position_manager = (
+        LiveLLMPositionManager(
+            chief=chief,
+            evidence_engine=alpha,
+            decisions=llm_decisions,
+            plans=trade_plans,
+            audit=audit,
+            risk_summary=risk.config.model_dump(mode="json"),
+        )
+        if settings.auto_start_runtime
+        else None
+    )
 
     engine = TradingEngine(
         settings=settings,
@@ -120,6 +135,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         authority=ExecutionAuthority(),
         require_lease=True,
         trade_plans=trade_plans,
+        position_manager=position_manager,
     )
 
     app_state = AppState(
@@ -149,6 +165,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         adapter=adapter,
         alpha=alpha,
         engine=engine,
+        position_manager=position_manager,
         app_state=app_state,
     )
 

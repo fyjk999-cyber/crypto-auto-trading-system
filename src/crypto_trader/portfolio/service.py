@@ -52,6 +52,9 @@ class PortfolioService:
                     avg_entry_price=row.avg_entry_price,
                     cost_basis=row.cost_basis,
                     realized_pnl=row.realized_pnl,
+                    instrument_type=row.instrument_type,
+                    contract_size=row.contract_size,
+                    contract_multiplier=row.contract_multiplier,
                     updated_at=row.updated_at,
                 )
                 for row in rows
@@ -74,6 +77,9 @@ class PortfolioService:
                 avg_entry_price=row.avg_entry_price,
                 cost_basis=row.cost_basis,
                 realized_pnl=row.realized_pnl,
+                instrument_type=row.instrument_type,
+                contract_size=row.contract_size,
+                contract_multiplier=row.contract_multiplier,
                 updated_at=row.updated_at,
             )
 

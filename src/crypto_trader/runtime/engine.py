@@ -46,7 +46,13 @@ from crypto_trader.execution.authority import AuthorizationContext, ExecutionAut
 from crypto_trader.governance.memory import TradeMemoryRecord
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.ledger.projections import replay_projections
-from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
+from crypto_trader.ledger.service import (
+    LedgerPosting,
+    LedgerService,
+    build_derivative_trade_entries,
+    build_trade_entries,
+)
+from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -85,6 +91,7 @@ class TradingEngine:
         lease_key: str = "crypto_engine_execution",
         require_lease: bool = True,
         trade_plans: TradePlanService | None = None,
+        position_manager: LiveLLMPositionManager | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -103,6 +110,7 @@ class TradingEngine:
         self.lease_key = lease_key
         self.require_lease = require_lease
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
+        self.position_manager = position_manager
         self.event_bus = EventBus()
         self.health = HealthRegistry()
         self.state_machine = RuntimeStateMachine()
@@ -258,11 +266,34 @@ class TradingEngine:
                 decision = await self.process_signal(signal)
                 if decision is not None:
                     decisions.append(decision)
+        if self.position_manager is not None:
+            positions = await self.portfolio.get_positions()
+            for position in positions.values():
+                if position.quantity == 0:
+                    continue
+                ctx = await self._strategy_context(position.symbol)
+                if ctx is None:
+                    continue
+                try:
+                    signal = await self.position_manager.review(ctx, position)
+                except Exception:
+                    self.consecutive_failures += 1
+                    self.health.set("position_manager", False)
+                    continue
+                self.health.set("position_manager", True)
+                if signal is not None:
+                    decision = await self.process_signal(signal)
+                    if decision is not None:
+                        decisions.append(decision)
         self.health.set("engine_loop", True)
         return decisions
 
-    async def _strategy_context(self) -> StrategyContext | None:
-        symbol = getattr(self.strategies[0], "symbol", "BTCUSDT") if self.strategies else "BTCUSDT"
+    async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
+        symbol = symbol or (
+            getattr(self.strategies[0], "symbol", "BTCUSDT")
+            if self.strategies
+            else "BTCUSDT"
+        )
         book = self.market_data.books.get(symbol)
         try:
             fetched = await self.adapter.get_orderbook(symbol)
@@ -319,7 +350,9 @@ class TradingEngine:
             return None
 
         trade_plan_id = str(signal.metadata.get("trade_plan_id", ""))
-        if signal.strategy_id == "live_llm" and not trade_plan_id:
+        is_entry = signal.strategy_id == "live_llm"
+        is_position_action = signal.strategy_id == "live_llm_position"
+        if (is_entry or is_position_action) and not trade_plan_id:
             await self.audit.log(
                 "TRADEPLAN_REQUIRED",
                 target=client_order_id,
@@ -327,7 +360,7 @@ class TradingEngine:
                 after={"reason": "Live LLM entry has no durable TradePlan"},
             )
             return None
-        if signal.strategy_id == "live_llm":
+        if is_entry:
             plan = await self.trade_plans.get(trade_plan_id)
             expected_direction = "LONG" if signal.side == OrderSide.BUY else "SHORT"
             valid_plan = (
@@ -346,8 +379,40 @@ class TradingEngine:
                 )
                 return None
 
-        account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
+        if is_position_action:
+            plan = await self.trade_plans.get(trade_plan_id)
+            position = positions.get(signal.symbol)
+            action = signal.metadata.get("lifecycle_action")
+            expected_side = (
+                OrderSide.SELL if plan is not None and plan.direction == "LONG" else OrderSide.BUY
+            )
+            valid_reduction = (
+                plan is not None
+                and plan.symbol == signal.symbol
+                and plan.state == TradePlanState.ACTIVE
+                and plan.latest_position_decision_id == signal.metadata.get("decision_id")
+                and action in {"REDUCE", "EXIT"}
+                and signal.metadata.get("reduce_only") is True
+                and position is not None
+                and position.quantity != 0
+                and signal.side == expected_side
+                and signal.quantity <= abs(position.quantity)
+                and (
+                    (plan.direction == "LONG" and position.quantity > 0)
+                    or (plan.direction == "SHORT" and position.quantity < 0)
+                )
+            )
+            if not valid_reduction:
+                await self.audit.log(
+                    "POSITION_REDUCTION_INVALID",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"trade_plan_id": trade_plan_id},
+                )
+                return None
+
+        account = await self.portfolio.get_account(self.settings.effective_mode())
         book = self.market_data.books.get(symbol)
         market_price = D("0")
         if book is not None:
@@ -370,7 +435,7 @@ class TradingEngine:
                 trade_plan_id, risk_decision_id=risk_decision.risk_decision_id
             )
         if risk_decision.decision not in {ExecutionDecision.APPROVE, ExecutionDecision.SCALE_DOWN}:
-            if trade_plan_id:
+            if trade_plan_id and is_entry:
                 await self.trade_plans.transition(
                     trade_plan_id, TradePlanState.REJECTED, reason=risk_decision.reason
                 )
@@ -407,7 +472,11 @@ class TradingEngine:
             strategy_id=executable_signal.strategy_id,
             run_id=run_id,
             expires_at=executable_signal.expires_at,
-            metadata={"signal_id": signal.signal_id, "trade_plan_id": trade_plan_id or None},
+            metadata={
+                **signal.metadata,
+                "signal_id": signal.signal_id,
+                "trade_plan_id": trade_plan_id or None,
+            },
         )
         auth_ctx = AuthorizationContext(
             now=self.clock.now(),
@@ -447,7 +516,7 @@ class TradingEngine:
         order = await self.order_manager.create_from_intent(
             intent, trading_mode=self.settings.effective_mode()
         )
-        if trade_plan_id:
+        if trade_plan_id and is_entry:
             await self.trade_plans.link(trade_plan_id, order_id=order.internal_order_id)
             await self.trade_plans.transition(trade_plan_id, TradePlanState.APPROVED)
         await self.order_manager.validate(order.internal_order_id)
@@ -665,24 +734,38 @@ class TradingEngine:
         except Exception:
             pass
         position = await self.portfolio.get_position(fill.symbol)
-        cost_released = None
-        if order.side == OrderSide.SELL:
-            if position is None or position.quantity < fill.quantity:
-                # conservative: use current average cost for the filled slice
-                cost_released = (
-                    position.avg_entry_price if position else Decimal("0")
-                ) * fill.quantity
-            else:
-                cost_released = (position.avg_entry_price or Decimal("0")) * fill.quantity
-        postings, metadata = build_trade_entries(
-            side=order.side,
-            symbol=order.symbol,
-            quote_currency=fill.fee_currency or "USDT",
-            price=fill.price,
-            quantity=fill.quantity,
-            fee=fill.fee,
-            cost_released=cost_released,
-        )
+        if order.metadata.get("instrument_type") == "LINEAR_PERP":
+            postings, metadata = build_derivative_trade_entries(
+                side=order.side,
+                symbol=order.symbol,
+                quote_currency=fill.fee_currency or "USDT",
+                price=fill.price,
+                quantity=fill.quantity,
+                fee=fill.fee,
+                position_quantity_before=position.quantity if position else Decimal("0"),
+                average_entry_price=position.avg_entry_price if position else None,
+                contract_size=D(order.metadata.get("contract_size", "1")),
+                contract_multiplier=D(order.metadata.get("contract_multiplier", "1")),
+                reduce_only=order.metadata.get("reduce_only") is True,
+            )
+        else:
+            cost_released = None
+            if order.side == OrderSide.SELL:
+                if position is None or position.quantity < fill.quantity:
+                    cost_released = (
+                        position.avg_entry_price if position else Decimal("0")
+                    ) * fill.quantity
+                else:
+                    cost_released = (position.avg_entry_price or Decimal("0")) * fill.quantity
+            postings, metadata = build_trade_entries(
+                side=order.side,
+                symbol=order.symbol,
+                quote_currency=fill.fee_currency or "USDT",
+                price=fill.price,
+                quantity=fill.quantity,
+                fee=fill.fee,
+                cost_released=cost_released,
+            )
         metadata["base_asset"] = order.symbol.replace("USDT", "")
         await self.ledger.record(
             LedgerEntryType.TRADE,
@@ -695,12 +778,28 @@ class TradingEngine:
         await self.portfolio.refresh(initial_balances=self._initial_balances)
         # A submitted order is not evidence of an active plan.  Promote only
         # after this factual fill has been projected into a non-zero position.
-        plan = await self.trade_plans.get_by_order(order.internal_order_id)
+        trade_plan_id = str(order.metadata.get("trade_plan_id") or "")
+        plan = (
+            await self.trade_plans.get(trade_plan_id)
+            if trade_plan_id
+            else await self.trade_plans.get_by_order(order.internal_order_id)
+        )
         position = await self.portfolio.get_position(fill.symbol)
         if plan is not None and plan.state == TradePlanState.APPROVED and position is not None:
             expected_sign = 1 if plan.direction == "LONG" else -1
             if position.quantity * expected_sign > 0:
                 await self.trade_plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
+        elif (
+            plan is not None
+            and plan.state == TradePlanState.ACTIVE
+            and order.metadata.get("reduce_only") is True
+            and (position is None or position.quantity == 0)
+        ):
+            await self.trade_plans.transition(
+                plan.trade_plan_id,
+                TradePlanState.CLOSED,
+                reason=str(order.metadata.get("lifecycle_action") or "POSITION_CLOSED"),
+            )
         await self.audit.log(
             "FILL_SETTLED",
             target=fill.fill_id,

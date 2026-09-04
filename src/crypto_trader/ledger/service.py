@@ -101,6 +101,90 @@ def build_trade_entries(
     return postings, metadata
 
 
+def build_derivative_trade_entries(
+    *,
+    side: OrderSide,
+    symbol: str,
+    quote_currency: str,
+    price: Decimal,
+    quantity: Decimal,
+    fee: Decimal,
+    position_quantity_before: Decimal,
+    average_entry_price: Decimal | None,
+    contract_size: Decimal = Decimal("1"),
+    contract_multiplier: Decimal = Decimal("1"),
+    reduce_only: bool = False,
+) -> tuple[list[LedgerPosting], dict]:
+    """Balanced PAPER linear-contract journal with signed-position metadata."""
+    price, quantity, fee = D(price), D(quantity), D(fee)
+    before = D(position_quantity_before)
+    contract_size, contract_multiplier = D(contract_size), D(contract_multiplier)
+    delta = quantity if side == OrderSide.BUY else -quantity
+    if reduce_only and (before == 0 or before * delta >= 0 or abs(delta) > abs(before)):
+        raise ValueError("reduce_only derivative fill would create or reverse a position")
+    closing_quantity = (
+        min(abs(before), quantity) if before != 0 and before * delta < 0 else Decimal("0")
+    )
+    realized = Decimal("0")
+    if closing_quantity > 0:
+        entry = D(average_entry_price or "0")
+        direction = Decimal("1") if before > 0 else Decimal("-1")
+        realized = (
+            (price - entry)
+            * closing_quantity
+            * contract_size
+            * contract_multiplier
+            * direction
+        )
+    notional = price * quantity * contract_size * contract_multiplier
+    postings = [
+        LedgerPosting(
+            f"POSITION_NOTIONAL:{symbol}", LedgerDirection.DEBIT, notional, quote_currency
+        ),
+        LedgerPosting(
+            f"POSITION_NOTIONAL:{symbol}", LedgerDirection.CREDIT, notional, quote_currency
+        ),
+    ]
+    if realized > 0:
+        postings.extend(
+            [
+                LedgerPosting("CASH", LedgerDirection.DEBIT, realized, quote_currency),
+                LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, realized, quote_currency),
+            ]
+        )
+    elif realized < 0:
+        postings.extend(
+            [
+                LedgerPosting("REALIZED_PNL", LedgerDirection.DEBIT, -realized, quote_currency),
+                LedgerPosting("CASH", LedgerDirection.CREDIT, -realized, quote_currency),
+            ]
+        )
+    if fee > 0:
+        postings.extend(
+            [
+                LedgerPosting("FEE_EXPENSE", LedgerDirection.DEBIT, fee, quote_currency),
+                LedgerPosting("CASH", LedgerDirection.CREDIT, fee, quote_currency),
+            ]
+        )
+    metadata = {
+        "symbol": symbol,
+        "quote_currency": quote_currency,
+        "side": side.value,
+        "quantity": str(quantity),
+        "price": str(price),
+        "fee": str(fee),
+        "instrument_type": "LINEAR_PERP",
+        "contract_size": str(contract_size),
+        "contract_multiplier": str(contract_multiplier),
+        "reduce_only": reduce_only,
+        "position_quantity_before": str(before),
+        "realized_pnl": str(realized),
+    }
+    if not journal_balanced(postings):
+        raise JournalUnbalanced("generated derivative journal is not balanced")
+    return postings, metadata
+
+
 class LedgerService:
     """Atomic ledger writer and reader."""
 

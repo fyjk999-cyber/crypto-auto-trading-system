@@ -204,6 +204,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             created_at=raw.created_at,
             updated_at=raw.created_at,
             expires_at=raw.expires_at,
+            metadata=raw.metadata,
         )
 
     async def submit_order(self, order: Order) -> Order:
@@ -355,6 +356,11 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         quote = instrument.quote_asset
         base = instrument.base_asset
         gross = fill.price * fill.quantity
+        order = self.orders.get(fill.exchange_order_id or "")
+        metadata = order.metadata if order is not None else {}
+        if metadata.get("instrument_type") == "LINEAR_PERP":
+            self._apply_linear_perp_fill(fill, instrument, metadata)
+            return
         if fill.side == OrderSide.BUY:
             self.balances[base] = self.balances.get(base, Decimal("0")) + fill.quantity
             self.balances[quote] = self.balances.get(quote, Decimal("0")) - gross - fill.fee
@@ -380,6 +386,58 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 pos.avg_entry_price = None
                 pos.cost_basis = Decimal("0")
         pos.updated_at = fill.timestamp
+
+    def _apply_linear_perp_fill(
+        self, fill: Fill, instrument: Instrument, metadata: dict
+    ) -> None:
+        quote = instrument.quote_asset
+        pos = self.positions.get(fill.symbol)
+        if pos is None:
+            pos = Position(
+                symbol=fill.symbol,
+                base_asset=instrument.base_asset,
+                quote_asset=quote,
+                instrument_type="LINEAR_PERP",
+                contract_size=D(metadata.get("contract_size", "1")),
+                contract_multiplier=D(metadata.get("contract_multiplier", "1")),
+            )
+            self.positions[fill.symbol] = pos
+        delta = fill.quantity if fill.side == OrderSide.BUY else -fill.quantity
+        before = pos.quantity
+        if metadata.get("reduce_only") and (
+            before == 0 or before * delta >= 0 or abs(delta) > abs(before)
+        ):
+            raise InvalidOrder("reduce_only simulated fill would reverse position")
+        closing = min(abs(before), fill.quantity) if before * delta < 0 else Decimal("0")
+        realized = Decimal("0")
+        if closing > 0:
+            direction = Decimal("1") if before > 0 else Decimal("-1")
+            realized = (
+                (fill.price - (pos.avg_entry_price or Decimal("0")))
+                * closing
+                * pos.contract_size
+                * pos.contract_multiplier
+                * direction
+            )
+        after = before + delta
+        if before == 0 or before * delta > 0:
+            previous = abs(before) * (pos.avg_entry_price or Decimal("0"))
+            added = abs(delta) * fill.price
+            pos.avg_entry_price = (previous + added) / abs(after) if after else None
+        elif after == 0:
+            pos.avg_entry_price = None
+        elif before * after < 0:
+            pos.avg_entry_price = fill.price
+        pos.quantity = after
+        pos.cost_basis = (
+            abs(after)
+            * (pos.avg_entry_price or Decimal("0"))
+            * pos.contract_size
+            * pos.contract_multiplier
+        )
+        pos.realized_pnl += realized
+        pos.updated_at = fill.timestamp
+        self.balances[quote] = self.balances.get(quote, Decimal("0")) + realized - fill.fee
 
     async def cancel_order(self, symbol: str, exchange_order_id: str) -> Order:
         self._ensure_connected()

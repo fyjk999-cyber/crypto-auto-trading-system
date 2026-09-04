@@ -87,6 +87,20 @@ class RiskEngine:
             return fail("INVALID_QUANTITY")
         if price <= 0:
             return fail("INVALID_PRICE")
+        metadata = getattr(intent, "metadata", {})
+        reduce_only = metadata.get("reduce_only") is True
+        current_position = positions.get(intent.symbol)
+        if reduce_only:
+            if current_position is None or current_position.quantity == 0:
+                return fail("REDUCE_ONLY_NO_POSITION")
+            expected_side = (
+                "SELL" if current_position.quantity > 0 else "BUY"
+            )
+            if intent.side.value != expected_side:
+                return fail("REDUCE_ONLY_DIRECTION_REVERSAL")
+            if qty > abs(current_position.quantity):
+                return fail("REDUCE_ONLY_CROSSES_ZERO")
+            checks["reduce_only"] = True
         contract_size = D(str(getattr(intent, "metadata", {}).get("contract_size", "1")))
         contract_multiplier = D(
             str(getattr(intent, "metadata", {}).get("contract_multiplier", "1"))
@@ -153,15 +167,24 @@ class RiskEngine:
         checks["max_drawdown"] = True
 
         cash = account.equity
-        existing_notional = sum((p.cost_basis for p in positions.values()), Decimal("0"))
+        existing_notional = sum((abs(p.cost_basis) for p in positions.values()), Decimal("0"))
         current_symbol = positions.get(intent.symbol)
-        symbol_notional = (current_symbol.cost_basis if current_symbol else Decimal("0")) + notional
+        current_symbol_notional = abs(current_symbol.cost_basis) if current_symbol else Decimal("0")
+        symbol_notional = (
+            max(current_symbol_notional - notional, Decimal("0"))
+            if reduce_only
+            else current_symbol_notional + notional
+        )
 
         if symbol_notional > self.config.max_symbol_exposure:
             return fail("MAX_SYMBOL_EXPOSURE")
         checks["max_symbol_exposure"] = True
 
-        projected_exposure = existing_notional + notional
+        projected_exposure = (
+            max(existing_notional - notional, Decimal("0"))
+            if reduce_only
+            else existing_notional + notional
+        )
         if projected_exposure > self.config.max_account_exposure:
             return fail("MAX_ACCOUNT_EXPOSURE")
         checks["max_account_exposure"] = True

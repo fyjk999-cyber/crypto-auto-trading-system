@@ -96,6 +96,7 @@ class OrderORM(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[str | None] = mapped_column(String(255))
     last_event_id: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
     events: Mapped[list[OrderEventORM]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
@@ -233,6 +234,11 @@ class PositionProjectionORM(Base):
     avg_entry_price: Mapped[Decimal | None] = mapped_column(ExactDecimal())
     cost_basis: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     realized_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    instrument_type: Mapped[str] = mapped_column(String(24), default="SPOT")
+    contract_size: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("1"))
+    contract_multiplier: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("1")
+    )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -298,6 +304,10 @@ class TradePlanORM(Base):
     risk_decision_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     order_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     position_symbol: Mapped[str | None] = mapped_column(String(64))
+    latest_position_decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    exit_decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     terminal_reason: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

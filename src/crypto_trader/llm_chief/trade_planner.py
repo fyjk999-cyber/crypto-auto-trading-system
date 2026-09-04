@@ -46,6 +46,9 @@ class LiveLLMTradePlanner:
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_id": decision.decision_id,
                 "requested_leverage": str(decision.leverage_request),
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": "1",
+                "contract_multiplier": "1",
             },
         )
         await self.plans.link(plan.trade_plan_id, signal_id=signal.signal_id)

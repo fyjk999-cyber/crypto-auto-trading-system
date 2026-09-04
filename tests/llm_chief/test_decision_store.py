@@ -22,6 +22,7 @@ def decision(action: str, *, state: str = "FLAT") -> ChiefTraderDecision:
         model_provider="deepseek",
         model="deepseek-v4-pro",
         model_version="live-v1",
+        position_size_request=0.5 if action == "REDUCE" else 0,
         created_at=datetime.now(UTC).isoformat(),
     )
 

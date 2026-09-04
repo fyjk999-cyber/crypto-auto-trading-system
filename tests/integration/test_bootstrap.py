@@ -20,6 +20,11 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     assert bundle.engine is not None
     # Quant is evidence-only; the accepted canonical entry authority is Live LLM.
     assert [strategy.name for strategy in bundle.engine.strategies] == ["live_llm"]
+    assert bundle.position_manager is not None
+    assert bundle.engine.position_manager is bundle.position_manager
+    assert bundle.position_manager.chief is bundle.engine.strategies[0].chief
+    assert bundle.position_manager.__class__.__name__ == "LiveLLMPositionManager"
+    assert not hasattr(bundle, "ai_position_bridge")
     run_id = await bundle.engine.start()
     assert run_id
     assert bundle.engine.state_machine.state.value == "RUNNING"

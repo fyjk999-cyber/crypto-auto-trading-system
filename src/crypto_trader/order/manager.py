@@ -54,6 +54,7 @@ def _orm_to_order(row: OrderORM) -> Order:
         expires_at=row.expires_at,
         rejection_reason=row.rejection_reason,
         last_event_id=row.last_event_id,
+        metadata=row.metadata_json or {},
     )
 
 
@@ -119,6 +120,7 @@ class OrderManager:
                 created_at=now,
                 updated_at=now,
                 expires_at=intent.expires_at,
+                metadata_json=intent.metadata,
             )
             session.add(row)
             await session.flush()

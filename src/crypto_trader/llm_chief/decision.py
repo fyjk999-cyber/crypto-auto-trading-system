@@ -79,4 +79,6 @@ class ChiefTraderDecision(BaseModel):
             raise ValueError(
                 f"{self.action} is not valid while position is {self.position_state}"
             )
+        if self.action == OpenAction.REDUCE and self.position_size_request <= 0:
+            raise ValueError("REDUCE requires a positive reduction quantity")
         return self

@@ -32,6 +32,9 @@ class PositionView:
     avg_entry_price: Decimal | None = None
     cost_basis: Decimal = Decimal("0")
     realized_pnl: Decimal = Decimal("0")
+    instrument_type: str = "SPOT"
+    contract_size: Decimal = Decimal("1")
+    contract_multiplier: Decimal = Decimal("1")
 
 
 @dataclass
@@ -64,6 +67,9 @@ class ProjectionSnapshot:
                     else None,
                     "cost_basis": str(v.cost_basis),
                     "realized_pnl": str(v.realized_pnl),
+                    "instrument_type": v.instrument_type,
+                    "contract_size": str(v.contract_size),
+                    "contract_multiplier": str(v.contract_multiplier),
                 }
                 for k, v in self.positions.items()
             },
@@ -96,7 +102,14 @@ class ProjectionBuilder:
     def _refresh_equity(self) -> None:
         self.snapshot.equity = sum(
             (row["total"] for row in self.snapshot.balances.values()), Decimal("0")
-        ) + sum((p.cost_basis for p in self.snapshot.positions.values()), Decimal("0"))
+        ) + sum(
+            (
+                p.cost_basis
+                for p in self.snapshot.positions.values()
+                if p.instrument_type == "SPOT"
+            ),
+            Decimal("0"),
+        )
 
     def apply_transaction(self, txn: LedgerTransactionORM) -> None:
         entry_type = LedgerEntryType(txn.entry_type)
@@ -133,8 +146,15 @@ class ProjectionBuilder:
                 symbol=symbol,
                 base_asset=metadata.get("base_asset", symbol.replace("USDT", "")),
                 quote_asset=metadata.get("quote_currency", "USDT"),
+                instrument_type=metadata.get("instrument_type", "SPOT"),
+                contract_size=D(metadata.get("contract_size", "1")),
+                contract_multiplier=D(metadata.get("contract_multiplier", "1")),
             )
             self.snapshot.positions[symbol] = pos
+        if metadata.get("instrument_type") == "LINEAR_PERP":
+            self._apply_linear_perp(pos, side, quantity, price, metadata)
+            self._refresh_equity()
+            return
         gross = price * quantity
         if side == OrderSide.BUY:
             new_qty = pos.quantity + quantity
@@ -157,6 +177,42 @@ class ProjectionBuilder:
             else:
                 pos.avg_entry_price = (pos.cost_basis / pos.quantity) if pos.quantity > 0 else None
         self._refresh_equity()
+
+    def _apply_linear_perp(
+        self,
+        pos: PositionView,
+        side: OrderSide,
+        quantity: Decimal,
+        price: Decimal,
+        metadata: dict,
+    ) -> None:
+        delta = quantity if side == OrderSide.BUY else -quantity
+        before = pos.quantity
+        if metadata.get("reduce_only") and (
+            before == 0 or before * delta >= 0 or abs(delta) > abs(before)
+        ):
+            raise ValueError("reduce_only derivative projection would reverse position")
+        after = before + delta
+        if before == 0 or before * delta > 0:
+            previous_notional = abs(before) * (pos.avg_entry_price or Decimal("0"))
+            added_notional = abs(delta) * price
+            pos.avg_entry_price = (
+                (previous_notional + added_notional) / abs(after) if after else None
+            )
+        elif after == 0:
+            pos.avg_entry_price = None
+        elif before * after < 0:
+            pos.avg_entry_price = price
+        realized = D(metadata.get("realized_pnl", "0"))
+        pos.quantity = after
+        pos.cost_basis = (
+            abs(after)
+            * (pos.avg_entry_price or Decimal("0"))
+            * pos.contract_size
+            * pos.contract_multiplier
+        )
+        pos.realized_pnl += realized
+        self.snapshot.realized_pnl += realized
 
     def finalize(self) -> ProjectionSnapshot:
         return self.snapshot
@@ -216,6 +272,9 @@ async def rebuild_projections(
                 avg_entry_price=pos.avg_entry_price,
                 cost_basis=pos.cost_basis,
                 realized_pnl=pos.realized_pnl,
+                instrument_type=pos.instrument_type,
+                contract_size=pos.contract_size,
+                contract_multiplier=pos.contract_multiplier,
                 updated_at=now,
             )
         )

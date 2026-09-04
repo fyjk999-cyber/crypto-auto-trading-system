@@ -64,6 +64,10 @@ class TradePlan:
     signal_id: str | None
     risk_decision_id: str | None
     order_id: str | None
+    latest_position_decision_id: str | None
+    exit_decision_id: str | None
+    opened_at: datetime | None
+    closed_at: datetime | None
     terminal_reason: str | None
 
 
@@ -128,6 +132,20 @@ class TradePlanService:
             ).scalar_one_or_none()
             return self._to_domain(row) if row is not None else None
 
+    async def get_active_for_symbol(self, symbol: str) -> TradePlan | None:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM)
+                    .where(
+                        TradePlanORM.symbol == symbol,
+                        TradePlanORM.state == TradePlanState.ACTIVE.value,
+                    )
+                    .order_by(TradePlanORM.opened_at.desc(), TradePlanORM.created_at.desc())
+                )
+            ).scalars().first()
+            return self._to_domain(row) if row is not None else None
+
     async def transition(
         self, trade_plan_id: str, state: TradePlanState, *, reason: str | None = None
     ) -> TradePlan:
@@ -142,6 +160,11 @@ class TradePlanService:
                 raise ValueError(f"invalid TradePlan transition: {current} -> {state}")
             row.state = state.value
             row.updated_at = datetime.now(UTC)
+            if state == TradePlanState.ACTIVE and row.opened_at is None:
+                row.opened_at = row.updated_at
+                row.position_symbol = row.symbol
+            if state == TradePlanState.CLOSED:
+                row.closed_at = row.updated_at
             if state in TERMINAL_STATES:
                 row.terminal_reason = reason or state.value
             await session.commit()
@@ -167,6 +190,26 @@ class TradePlanService:
                 row.order_id = order_id
             row.updated_at = datetime.now(UTC)
             await session.commit()
+        return self._to_domain(row)
+
+    async def link_position_decision(
+        self,
+        trade_plan_id: str,
+        decision_id: str,
+        *,
+        is_exit: bool = False,
+    ) -> TradePlan:
+        async with self.session_factory() as session:
+            row = await session.get(TradePlanORM, trade_plan_id)
+            if row is None:
+                raise KeyError(f"unknown TradePlan: {trade_plan_id}")
+            if TradePlanState(row.state) != TradePlanState.ACTIVE:
+                raise ValueError("position decisions require an ACTIVE TradePlan")
+            row.latest_position_decision_id = decision_id
+            if is_exit:
+                row.exit_decision_id = decision_id
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
             return self._to_domain(row)
 
     @staticmethod
@@ -183,5 +226,9 @@ class TradePlanService:
             signal_id=row.signal_id,
             risk_decision_id=row.risk_decision_id,
             order_id=row.order_id,
+            latest_position_decision_id=row.latest_position_decision_id,
+            exit_decision_id=row.exit_decision_id,
+            opened_at=row.opened_at,
+            closed_at=row.closed_at,
             terminal_reason=row.terminal_reason,
         )

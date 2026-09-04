@@ -58,6 +58,9 @@ class Instrument(BaseModel):
     price_precision: int = 8
     quantity_precision: int = 8
     exchange: str = "UNKNOWN"
+    instrument_type: str = "SPOT"
+    contract_size: QuantityValue = Decimal("1")
+    contract_multiplier: Decimal = Decimal("1")
 
 
 class TradingPair(Instrument):
@@ -117,6 +120,7 @@ class Order(BaseModel):
     expires_at: datetime | None = None
     rejection_reason: str | None = None
     last_event_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def remaining_quantity(self) -> Decimal:
@@ -171,6 +175,9 @@ class Position(BaseModel):
     avg_entry_price: PriceValue | None = None
     cost_basis: CostBasisValue = Decimal("0")
     realized_pnl: MoneyValue = Decimal("0")
+    instrument_type: str = "SPOT"
+    contract_size: QuantityValue = Decimal("1")
+    contract_multiplier: Decimal = Decimal("1")
     updated_at: datetime | None = None
 
 
