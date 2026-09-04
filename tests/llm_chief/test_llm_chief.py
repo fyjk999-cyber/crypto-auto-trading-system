@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from crypto_trader.api.deps import LLMRuntimeStatus
 from crypto_trader.llm_chief.coin_profile import CoinProfileStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.conviction import ConvictionEngine
@@ -21,6 +22,16 @@ def test_deepseek_provider_uses_non_secret_runtime_configuration(monkeypatch):
     provider = DeepSeekProvider(api_key=None)
     assert provider.model == "deepseek-v4-pro"
     assert provider.base_url == "https://api.deepseek.com"
+
+
+async def test_llm_runtime_health_is_explicit_when_not_configured(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    status = LLMRuntimeStatus()
+    await status.probe()
+    assert status.snapshot()["configured"] is False
+    assert status.snapshot()["reachable"] is False
+    assert status.snapshot()["last_error"] == "NOT_CONFIGURED"
 
 
 def test_chief_trader_decision_schema_and_fail_safe():

@@ -72,6 +72,52 @@ class OKXConnectionState:
 
 
 @dataclass
+class LLMRuntimeStatus:
+    """Non-secret provider health for the canonical PAPER runtime."""
+
+    provider: str = "none"
+    model: str | None = None
+    configured: bool = False
+    reachable: bool = False
+    last_success_ts: str | None = None
+    last_error: str | None = None
+
+    async def probe(self) -> None:
+        import os
+
+        from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+        self.provider = os.environ.get("LLM_PROVIDER", "none").lower()
+        self.model = os.environ.get("LLM_MODEL")
+        self.configured = self.provider == "deepseek" and bool(
+            os.environ.get("DEEPSEEK_API_KEY")
+        )
+        self.reachable = False
+        self.last_error = None
+        if not self.configured:
+            self.last_error = "NOT_CONFIGURED"
+            return
+        result = await DeepSeekProvider().complete_json(
+            prompt='Return only valid JSON: {"runtime_health":"ok"}', retries=0
+        )
+        self.reachable = result.ok and result.parsed_json is not None
+        if self.reachable:
+            self.last_success_ts = datetime.now(UTC).isoformat()
+        else:
+            self.last_error = result.error or "PROBE_FAILED"
+
+    def snapshot(self) -> dict:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "configured": self.configured,
+            "reachable": self.reachable,
+            "last_success_ts": self.last_success_ts,
+            "last_error": self.last_error,
+        }
+
+
+@dataclass
 class AppState:
     settings: Settings
     database: Database
@@ -86,6 +132,7 @@ class AppState:
     engine: TradingEngine | None = None
     supervisor: TradingRuntimeSupervisor | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
+    llm_runtime: LLMRuntimeStatus = field(default_factory=LLMRuntimeStatus)
 
 
 async def require_api_key(

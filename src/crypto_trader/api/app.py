@@ -18,10 +18,6 @@ from crypto_trader.config import get_settings
 from crypto_trader.credentials import EnvCredentialStore
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
-from crypto_trader.exchange.binance_futures_public import (
-    BinancePublicDataUnavailable,
-    BinanceUSDMFuturesPublicClient,
-)
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.memory_persistence import MemoryPersistence
@@ -68,7 +64,14 @@ def create_app(state: AppState) -> FastAPI:
     async def lifespan(_app: FastAPI):
         if state.engine is not None:
             await state.engine.start()
+        if state.supervisor is not None:
+            await state.supervisor.start(run_id=state.engine.run_id if state.engine else None)
+        # Provider reachability is observability only.  A failed probe leaves
+        # the PAPER runtime running and must never synthesize a trade decision.
+        await state.llm_runtime.probe()
         yield
+        if state.supervisor is not None:
+            await state.supervisor.stop()
         if state.engine is not None:
             await state.engine.stop()
 
@@ -100,6 +103,10 @@ def create_app(state: AppState) -> FastAPI:
             }
         )
         return snapshot
+
+    @app.get("/llm/health")
+    async def llm_health():
+        return state.llm_runtime.snapshot()
 
     @app.get("/ready")
     async def ready():
@@ -295,11 +302,9 @@ def create_app(state: AppState) -> FastAPI:
             except Exception as exc:
                 detail = str(exc)
                 return {
-                    "provider": "BINANCE_USDM",
-                    "source": "BINANCE_USDM",
-                    "status": "GEO_RESTRICTED"
-                    if "451" in detail or "restricted" in detail.lower()
-                    else "UNAVAILABLE",
+                    "provider": "OKX_PUBLIC",
+                    "source": "OKX_PUBLIC",
+                    "status": "UNAVAILABLE",
                     "data_source": "REAL",
                     "last_error": detail,
                 }
@@ -312,8 +317,8 @@ def create_app(state: AppState) -> FastAPI:
                 "symbol": "BTCUSDT",
             }
         return {
-            "provider": "BINANCE_USDM",
-            "source": "BINANCE_USDM",
+            "provider": "OKX_PUBLIC",
+            "source": "OKX_PUBLIC",
             "status": "UNAVAILABLE",
             "data_source": "REAL",
             "symbol": "BTCUSDT",
@@ -373,33 +378,14 @@ def create_app(state: AppState) -> FastAPI:
                 }
             finally:
                 await client.disconnect()
-        client = BinanceUSDMFuturesPublicClient()
-        try:
-            raw = await client.get_klines(symbol, interval=interval, limit=limit)
-            candles = BinanceUSDMFuturesPublicClient.normalize_kline_array(raw, symbol, interval)
-            return {
-                "symbol": symbol,
-                "interval": interval,
-                "source": "BINANCE_USDM",
-                "status": "HEALTHY",
-                "candles": candles,
-            }
-        except BinancePublicDataUnavailable as exc:
-            status = (
-                "GEO_RESTRICTED"
-                if ("451" in str(exc) or "restricted" in str(exc).lower())
-                else "UNAVAILABLE"
-            )
-            return {
-                "symbol": symbol,
-                "interval": interval,
-                "source": "BINANCE_USDM",
-                "status": status,
-                "candles": [],
-                "last_error": str(exc),
-            }
-        finally:
-            await client.close()
+        return {
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "source": "OKX",
+            "status": "UNAVAILABLE",
+            "candles": [],
+            "last_error": "Only the OKX public market-data provider is enabled",
+        }
 
     @app.get("/market/sources")
     async def market_sources():
@@ -411,8 +397,8 @@ def create_app(state: AppState) -> FastAPI:
                 return {k: v.model_dump(mode="json") for k, v in ms.sources.items()}
             except Exception as exc:
                 return {
-                    "provider": "BINANCE_USDM",
-                    "source": "BINANCE_USDM",
+                    "provider": "OKX_PUBLIC",
+                    "source": "OKX_PUBLIC",
                     "status": "UNAVAILABLE",
                     "data_source": "REAL",
                     "last_error": str(exc),
@@ -425,8 +411,8 @@ def create_app(state: AppState) -> FastAPI:
                 "data_source": "SYNTHETIC",
             }
         return {
-            "provider": "BINANCE_USDM",
-            "source": "BINANCE_USDM",
+            "provider": "OKX_PUBLIC",
+            "source": "OKX_PUBLIC",
             "status": "UNAVAILABLE",
             "data_source": "REAL",
         }
