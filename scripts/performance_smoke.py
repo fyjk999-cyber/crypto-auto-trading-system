@@ -4,7 +4,10 @@ from __future__ import annotations
 import time
 from decimal import Decimal
 
-from crypto_trader.capital_management.engine import CapitalAllocationContext, CapitalAllocationEngine
+from crypto_trader.capital_management.engine import (
+    CapitalAllocationContext,
+    CapitalAllocationEngine,
+)
 from crypto_trader.execution_intelligence.liquidity import ExecutionPlanner, LiquidityAssessor
 from crypto_trader.portfolio_risk.budget_engine import (
     PortfolioRiskBudget,
@@ -63,7 +66,11 @@ def main():
     state = make_state()
 
     print("PERFORMANCE_SMOKE")
-    timeit("capital_allocate", lambda: alloc.allocate("a", "d", "BTCUSDT", Decimal("0.04"), ctx), 2000)
+    timeit(
+        "capital_allocate",
+        lambda: alloc.allocate("a", "d", "BTCUSDT", Decimal("0.04"), ctx),
+        2000,
+    )
     timeit("portfolio_risk", lambda: risk.evaluate_new_risk(
         state=state, symbol="SOLUSDT", cluster="HIGH_BETA_ALT",
         requested_exposure_delta=Decimal("500"), direction="LONG"), 2000)

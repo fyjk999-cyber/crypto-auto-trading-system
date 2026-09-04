@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from crypto_trader.api.app import create_app
@@ -14,6 +15,12 @@ from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.lease import LeaseManager
+
+
+@pytest.fixture(autouse=True)
+def isolate_real_broker(monkeypatch, tmp_path):
+    # Never connect a test to the user's enrolled/running credential broker.
+    monkeypatch.setenv("OKX_VAULT_SOCKET", str(tmp_path / "nonexistent-test-broker.sock"))
 
 
 def make_state(database, tmp_env: str):
@@ -50,19 +57,24 @@ async def test_credential_save_status_delete(database, monkeypatch, tmp_path):
             "demo": True,
         },
     )
-    assert response.status_code == 200
-    assert response.json()["key_suffix"] == "ABCD"
+    assert response.status_code == 403
+    assert response.json()["detail"] == "HUMAN_VAULT_CLI_REQUIRED"
     assert "secret" not in response.text
     assert "pass-1" not in response.text
 
+    class Client:
+        async def credential_status(self):
+            return {"configured": True, "key_suffix": None, "environment": "DEMO"}
+
+    monkeypatch.setattr("crypto_trader.api.app.BrokerClient", Client)
+    client = TestClient(create_app(state))
     status = client.get("/exchange/okx/status").json()
     assert status["configured"] is True
-    assert status["key_suffix"] == "ABCD"
+    assert status["key_suffix"] is None
     assert "secret" not in status
 
-    delete = client.delete("/exchange/okx/credentials").json()
-    assert delete["configured"] is False
-    assert EnvCredentialStore(env_file).read() == {}
+    assert client.delete("/exchange/okx/credentials").status_code == 403
+    assert not env_file.exists()
 
 
 async def test_credential_live_rejected(database, monkeypatch, tmp_path):
@@ -88,12 +100,24 @@ async def test_credential_validate_missing_returns_not_configured(database, monk
     client = TestClient(create_app(make_state(database, str(env_file))))
     response = client.post("/exchange/okx/validate")
     assert response.status_code == 200
-    assert response.json()["reason_code"] == "NOT_CONFIGURED"
+    assert response.json()["reason_code"] == "BROKER_UNAVAILABLE"
 
 
-def test_credential_store_key_suffix_only():
-    assert EnvCredentialStore.key_suffix("abcd1234") == "1234"
-    assert EnvCredentialStore.key_suffix(None) is None
+def test_legacy_plaintext_read_write_delete_denied(tmp_path):
+    store = EnvCredentialStore(tmp_path / ".env")
+    for action in (store.read, lambda: store.write({}), store.clear):
+        with pytest.raises(PermissionError):
+            action()
+    assert not (tmp_path / ".env").exists()
+
+
+def test_runtime_environment_credentials_override_legacy_file(monkeypatch, tmp_path):
+    # Environment injection is retired as well as file storage.
+    import secrets
+
+    monkeypatch.setenv("OKX_API_KEY", secrets.token_urlsafe(24))
+    with pytest.raises(PermissionError):
+        EnvCredentialStore(tmp_path / ".env").read()
 
 
 def test_env_file_is_gitignored():

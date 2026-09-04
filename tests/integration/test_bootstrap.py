@@ -18,7 +18,8 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     )
     bundle = await build_system(settings)
     assert bundle.engine is not None
-    assert bundle.engine.strategies[0].name == "multi_strategy_alpha"
+    # Quant is evidence-only; the accepted canonical entry authority is Live LLM.
+    assert [strategy.name for strategy in bundle.engine.strategies] == ["live_llm"]
     run_id = await bundle.engine.start()
     assert run_id
     assert bundle.engine.state_machine.state.value == "RUNNING"

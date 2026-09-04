@@ -194,7 +194,7 @@ describe("中文加密交易终端 V2", () => {
     expect(marketPanel?.textContent).not.toContain("99999");
   });
 
-  it("OKX 凭据面板使用密码字段，仅将 DEMO 凭据提交至后端且不持久化浏览器", async () => {
+  it("OKX 凭据仅经本机保管库录入，网页不收集或提交密钥", async () => {
     window.location.hash = "#/system";
     const setItem = vi.spyOn(Storage.prototype, "setItem");
     const fetchMock = backend({
@@ -204,21 +204,13 @@ describe("中文加密交易终端 V2", () => {
     setup(fetchMock);
     await waitFor(() => expect(screen.getByRole("heading", { name: "OKX 交易所连接" })).toBeTruthy());
     expect(screen.getByText("模拟盘 DEMO")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "配置 API" }));
-    const apiKey = screen.getByLabelText("OKX API Key") as HTMLInputElement;
-    expect(apiKey.type).toBe("password");
-    expect((screen.getByLabelText("OKX Secret Key") as HTMLInputElement).type).toBe("password");
-    expect((screen.getByLabelText("OKX Passphrase") as HTMLInputElement).type).toBe("password");
-    fireEvent.change(apiKey, { target: { value: "never-persist" } });
-    expect(setItem).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText("OKX Secret Key"), { target: { value: "secret" } });
-    fireEvent.change(screen.getByLabelText("OKX Passphrase"), { target: { value: "passphrase" } });
-    fireEvent.submit(screen.getByRole("button", { name: "保存配置" }).closest("form")!);
-    await waitFor(() => expect(screen.getByText("DEMO 凭据已提交至受保护后端，浏览器未保存凭据。")).toBeTruthy());
+    expect(screen.queryByLabelText("OKX API Key")).toBeNull();
+    expect(screen.queryByLabelText("OKX Secret Key")).toBeNull();
+    expect(screen.queryByLabelText("OKX Passphrase")).toBeNull();
+    expect(screen.getByText("./scripts/okx-vault.sh save")).toBeTruthy();
     expect(setItem).not.toHaveBeenCalled();
     const credentialCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/local-api/exchange/okx/credentials"));
-    expect(credentialCall?.[1]).toMatchObject({ method: "POST" });
-    expect(String(credentialCall?.[1]?.body)).toContain('"demo":true');
+    expect(credentialCall).toBeUndefined();
   });
 
   it("OKX 验证保留 DEGRADED 并显示失败阶段和中文原因，不显示凭据", async () => {

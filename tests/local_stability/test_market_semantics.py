@@ -62,10 +62,10 @@ async def test_synthetic_requires_explicit_mode_and_never_reports_binance(databa
     assert "BINANCE" not in data["source"]
 
 
-async def test_real_market_unavailable_reports_binance_not_synthetic(database):
+async def test_real_market_unavailable_reports_okx_not_synthetic(database):
     client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
     data = client.get("/market").json()
-    assert data["provider"] == "BINANCE_USDM"
+    assert data["provider"] == "OKX_PUBLIC"
     assert data["status"] == "UNAVAILABLE"
 
 
@@ -115,17 +115,11 @@ async def test_okx_kline_failure_returns_empty_unavailable_data(database, monkey
     assert data["candles"] == []
 
 
-async def test_binance_compatibility_branch_retains_geo_restricted_status(database, monkeypatch):
-    from crypto_trader.exchange.binance_futures_public import BinanceUSDMFuturesPublicClient
-
-    async def fail_get_klines(self, symbol, interval="1m", limit=500):
-        raise BinancePublicDataUnavailable("HTTP_451_GEO_RESTRICTED")
-
-    monkeypatch.setattr(BinanceUSDMFuturesPublicClient, "get_klines", fail_get_klines)
+async def test_non_okx_kline_provider_is_explicitly_unavailable(database):
     state = make_state(database, "PAPER_REAL_MARKET")
     state.settings.kline_provider = "BINANCE"
     client = TestClient(create_app(state))
     data = client.get("/market/klines?symbol=BTCUSDT&interval=1m&limit=100").json()
-    assert data["source"] == "BINANCE_USDM"
-    assert data["status"] == "GEO_RESTRICTED"
+    assert data["source"] == "OKX"
+    assert data["status"] == "UNAVAILABLE"
     assert data["candles"] == []

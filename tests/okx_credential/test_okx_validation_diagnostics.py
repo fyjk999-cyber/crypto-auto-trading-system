@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 from test_credential_api import make_state
 
 from crypto_trader.api.app import create_app
-from crypto_trader.credentials import EnvCredentialStore
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 
 
@@ -104,32 +103,19 @@ def test_validate_empty_account_config_is_malformed_and_never_returns_secret(
 ):
     env_file = tmp_path / ".env"
     monkeypatch.setenv("OKX_CREDENTIALS_ENV_FILE", str(env_file))
-    EnvCredentialStore(env_file).write(
-        {
-            "OKX_API_KEY": "demo-key-1234",
-            "OKX_API_SECRET": "demo-secret",
-            "OKX_API_PASSPHRASE": "demo-pass",
-            "OKX_DEMO": "true",
-        }
-    )
 
-    class EmptyConfigAdapter:
-        def __init__(self, **_kwargs):
-            pass
+    # The HTTP control plane only forwards a typed, sanitized broker result.
+    # The real empty-config validation is exercised by test_opaque_okx_vault.py.
+    class EmptyConfigBroker:
+        async def validate_okx_demo(self):
+            return {
+                "authenticated": False,
+                "health": "DEGRADED",
+                "stage": "ACCOUNT_CONFIG",
+                "reason_code": "MALFORMED_RESPONSE",
+            }
 
-        async def connect(self):
-            pass
-
-        async def disconnect(self):
-            pass
-
-        async def sync_server_time(self):
-            return {"offset_ms": 0}
-
-        async def get_account_config(self):
-            return {"code": "0", "data": []}
-
-    monkeypatch.setattr("crypto_trader.api.app.OKXAdapter", EmptyConfigAdapter)
+    monkeypatch.setattr("crypto_trader.api.app.BrokerClient", EmptyConfigBroker)
     response = TestClient(create_app(make_state(database, str(env_file)))).post(
         "/exchange/okx/validate"
     )
@@ -139,7 +125,6 @@ def test_validate_empty_account_config_is_malformed_and_never_returns_secret(
         "health": "DEGRADED",
         "stage": "ACCOUNT_CONFIG",
         "reason_code": "MALFORMED_RESPONSE",
-        "message": "OKX account configuration response is incomplete",
     }
     assert "demo-secret" not in response.text
     assert "demo-pass" not in response.text

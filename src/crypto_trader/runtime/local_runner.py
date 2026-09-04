@@ -28,7 +28,9 @@ def parse_args() -> argparse.Namespace:
 
 
 async def main_async(host: str, port: int) -> None:
-    settings = Settings()
+    # OKX authentication is broker-owned. Never import legacy file/environment
+    # credentials into the trading process even if old local configuration remains.
+    settings = Settings(okx_api_key=None, okx_api_secret=None, okx_api_passphrase=None)
     if settings.trading_mode.value == "LIVE":
         raise RuntimeError("LIVE mode is not allowed in local runner")
     bundle = await build_system(settings)

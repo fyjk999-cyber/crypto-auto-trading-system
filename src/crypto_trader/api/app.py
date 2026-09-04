@@ -15,7 +15,6 @@ from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
-from crypto_trader.credentials import EnvCredentialStore
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
@@ -23,6 +22,7 @@ from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
+from crypto_trader.okx_vault.client import BrokerClient
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.risk.engine import RiskEngine
@@ -46,19 +46,8 @@ def serialize_order(order) -> dict:
     return order.model_dump(mode="json")
 
 
-class OKXCredentialRequest(BaseModel):
-    api_key: str
-    api_secret: str
-    api_passphrase: str
-    base_url: str = "https://openapi.okx.com"
-    demo: bool = True
-
-
 def create_app(state: AppState) -> FastAPI:
-    initial_credentials = EnvCredentialStore().read()
-    state.okx_connection.configure(
-        initial_credentials, EnvCredentialStore.key_suffix(initial_credentials.get("OKX_API_KEY"))
-    )
+    okx_broker = BrokerClient()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -128,126 +117,33 @@ def create_app(state: AppState) -> FastAPI:
     @app.post(
         "/exchange/okx/credentials", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
-    async def save_okx_credentials(body: OKXCredentialRequest):
-        if not body.demo:
-            raise HTTPException(status_code=403, detail="LIVE is forbidden")
-        store = EnvCredentialStore()
-        store.write(
-            {
-                "OKX_API_KEY": body.api_key,
-                "OKX_API_SECRET": body.api_secret,
-                "OKX_API_PASSPHRASE": body.api_passphrase,
-                "OKX_BASE_URL": body.base_url,
-                "OKX_DEMO": "true",
-            }
-        )
-        state.okx_connection.configure(store.read(), EnvCredentialStore.key_suffix(body.api_key))
-        return {
-            "saved": True,
-            "demo": True,
-            "key_suffix": EnvCredentialStore.key_suffix(body.api_key),
-        }
+    async def save_okx_credentials():
+        # Do not parse a secret request model: validation errors could echo input.
+        raise HTTPException(status_code=403, detail="HUMAN_VAULT_CLI_REQUIRED")
 
     @app.get("/exchange/okx/status")
     async def okx_status():
-        return state.okx_connection.snapshot()
+        status = await okx_broker.credential_status()
+        return {
+            **state.okx_connection.snapshot(),
+            **status,
+            "configured": status.get("configured", False),
+            "key_suffix": None,
+        }
 
     @app.post(
         "/exchange/okx/validate", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def validate_okx_credentials():
-        values = EnvCredentialStore().read()
-        if not (
-            values.get("OKX_API_KEY")
-            and values.get("OKX_API_SECRET")
-            and values.get("OKX_API_PASSPHRASE")
-        ):
-            result = {
-                "authenticated": False,
-                "health": "NOT_CONFIGURED",
-                "stage": "CREDENTIALS",
-                "reason_code": "NOT_CONFIGURED",
-            }
-            state.okx_connection.validation(result)
-            return result
-        adapter = OKXAdapter(
-            base_url=values.get("OKX_BASE_URL", "https://openapi.okx.com"),
-            api_key=values["OKX_API_KEY"],
-            api_secret=values["OKX_API_SECRET"],
-            api_passphrase=values["OKX_API_PASSPHRASE"],
-            demo=values.get("OKX_DEMO", "true") == "true",
-        )
-        await adapter.connect()
-        stage = "PUBLIC_TIME"
-        try:
-            time_result = await adapter.sync_server_time()
-            if abs(time_result["offset_ms"]) > 1500:
-                result = {
-                    "authenticated": False,
-                    "health": "DEGRADED",
-                    "stage": "PUBLIC_TIME",
-                    "reason_code": "TIME_OFFSET",
-                }
-                state.okx_connection.validation(result)
-                return result
-            stage = "ACCOUNT_CONFIG"
-            account_config = await adapter.get_account_config()
-            config_rows = account_config.get("data") if isinstance(account_config, dict) else None
-            if (
-                not isinstance(config_rows, list)
-                or not config_rows
-                or not isinstance(config_rows[0], dict)
-            ):
-                result = {
-                    "authenticated": False,
-                    "health": "DEGRADED",
-                    "stage": "ACCOUNT_CONFIG",
-                    "reason_code": "MALFORMED_RESPONSE",
-                    "message": "OKX account configuration response is incomplete",
-                }
-                state.okx_connection.validation(result)
-                return result
-            stage = "BALANCE"
-            balances = await adapter.get_balances()
-            stage = "POSITIONS"
-            positions = await adapter.get_positions()
-            stage = "PENDING_ORDERS"
-            pending = await adapter.get_pending_orders()
-            result = {
-                "authenticated": True,
-                "health": "HEALTHY",
-                "stage": "COMPLETE",
-                "reason_code": None,
-                "account_mode": config_rows[0].get("acctLv", "unknown"),
-                "position_mode": config_rows[0].get("posMode", "unknown"),
-                "instrument": "BTC-USDT-SWAP",
-                "balances": len(balances),
-                "positions": len(positions),
-                "pending_orders": len(pending.get("data", [])),
-            }
-            state.okx_connection.validation(result)
-            return result
-        except OKXDiagnosticError as exc:
-            result = {
-                "authenticated": False,
-                "health": "DEGRADED",
-                "stage": stage,
-                "reason_code": exc.reason_code,
-                "exchange_code": exc.exchange_code,
-                "message": exc.safe_message,
-            }
-            state.okx_connection.validation(result)
-            return result
-        finally:
-            await adapter.disconnect()
+        result = await okx_broker.validate_okx_demo()
+        state.okx_connection.validation(result)
+        return result
 
     @app.delete(
         "/exchange/okx/credentials", dependencies=[Depends(require_role_dependency(Role.ADMIN))]
     )
     async def delete_okx_credentials():
-        EnvCredentialStore().clear()
-        state.okx_connection.configure({}, None)
-        return state.okx_connection.snapshot()
+        raise HTTPException(status_code=403, detail="HUMAN_VAULT_CLI_REQUIRED")
 
     def _perpetual_engine():
         contract = PerpetualContract(
