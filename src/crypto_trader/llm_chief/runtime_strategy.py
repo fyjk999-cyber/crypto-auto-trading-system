@@ -15,6 +15,7 @@ from typing import Any
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.llm_chief.context import ChiefTraderContext
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.observability.audit import AuditService
@@ -37,6 +38,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         evidence_engine: MultiStrategyAlpha,
         chief: ChiefTraderEngine,
         planner: LiveLLMTradePlanner,
+        decisions: LLMDecisionStore,
         audit: AuditService,
         risk_summary: dict[str, Any] | None = None,
         retry_cooldown_seconds: float = 30.0,
@@ -44,6 +46,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.evidence_engine = evidence_engine
         self.chief = chief
         self.planner = planner
+        self.decisions = decisions
         self.audit = audit
         self.risk_summary = risk_summary or {}
         self.symbol = evidence_engine.symbol
@@ -78,6 +81,18 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self._last_decision_attempt = now
         decision = await self.chief.decide(chief_ctx)
 
+        evidence_refs = [
+            str(ref)
+            for ref in evidence.get("source_refs", [])
+            if isinstance(ref, (str, int, float))
+        ]
+        await self.decisions.save(
+            decision,
+            run_id=ctx.run_id,
+            prompt_version=self.version,
+            tool_refs=evidence_refs,
+        )
+
         # This commit is deliberately before TradePlan creation.  It is the
         # durable factual proof that the LLM owned the proposed direction.
         await self.audit.log(
@@ -95,7 +110,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         if decision.action not in {"LONG", "SHORT"}:
             return []
         try:
-            _plan, signal = await self.planner.create_entry_signal(decision)
+            plan, signal = await self.planner.create_entry_signal(decision)
+            if plan is not None:
+                await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
         except (TypeError, ValueError) as exc:
             await self.audit.log(
                 "LIVE_LLM_DECISION_INVALID",

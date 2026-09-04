@@ -16,6 +16,7 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
@@ -97,6 +98,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         evidence_engine=alpha,
         chief=chief,
         planner=LiveLLMTradePlanner(trade_plans),
+        decisions=LLMDecisionStore(database.session_factory),
         audit=audit,
         risk_summary=risk.config.model_dump(mode="json"),
     )

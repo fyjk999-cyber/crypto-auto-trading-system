@@ -303,6 +303,43 @@ class TradePlanORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class LLMDecisionORM(Base):
+    """Canonical truth store for every real ChiefTrader decision attempt."""
+
+    __tablename__ = "llm_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    position_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    model_provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_regime: Mapped[str] = mapped_column(String(64), nullable=False)
+    thesis: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    supporting_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    contradicting_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    tool_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    memory_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    research_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    episode_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    requested_exposure: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    requested_quantity: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    requested_leverage: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    parent_decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    position_quantity_before: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    entry_price: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    mark_price: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    unrealized_pnl: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    time_in_trade_seconds: Mapped[float | None] = mapped_column(Float)
+    original_trade_plan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    original_entry_decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AuditEventORM(Base):
     __tablename__ = "audit_events"
     __table_args__ = (UniqueConstraint("event_id", name="uq_audit_events_event_id"),)

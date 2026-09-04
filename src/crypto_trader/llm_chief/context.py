@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from crypto_trader.llm_chief.decision import PositionState
+
 
 @dataclass
 class ChiefTraderContext:
@@ -14,6 +16,8 @@ class ChiefTraderContext:
     quant_evidence: list[dict]
     portfolio_state: dict
     risk_summary: dict
+    position_state: PositionState = PositionState.FLAT
+    position_context: dict = field(default_factory=dict)
     knowledge: list[dict] = field(default_factory=list)
     similar_episodes: list[dict] = field(default_factory=list)
     coin_profile: dict = field(default_factory=dict)
@@ -33,6 +37,8 @@ class ChiefTraderContext:
                         "quant": self.quant_evidence,
                         "portfolio": self.portfolio_state,
                         "risk": self.risk_summary,
+                        "position_state": self.position_state,
+                        "position": self.position_context,
                         "knowledge": self.knowledge,
                         "episodes": self.similar_episodes,
                         "coin": self.coin_profile,
