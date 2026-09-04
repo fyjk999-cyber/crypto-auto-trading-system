@@ -61,6 +61,7 @@ from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
+from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 
 
 class TradingEngine:
@@ -83,6 +84,7 @@ class TradingEngine:
         authority: ExecutionAuthority | None = None,
         lease_key: str = "crypto_engine_execution",
         require_lease: bool = True,
+        trade_plans: TradePlanService | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -100,6 +102,7 @@ class TradingEngine:
         self.authority = authority or ExecutionAuthority()
         self.lease_key = lease_key
         self.require_lease = require_lease
+        self.trade_plans = trade_plans or TradePlanService(database.session_factory)
         self.event_bus = EventBus()
         self.health = HealthRegistry()
         self.state_machine = RuntimeStateMachine()
@@ -315,6 +318,16 @@ class TradingEngine:
             )
             return None
 
+        trade_plan_id = str(signal.metadata.get("trade_plan_id", ""))
+        if signal.strategy_id == "live_llm" and not trade_plan_id:
+            await self.audit.log(
+                "TRADEPLAN_REQUIRED",
+                target=client_order_id,
+                run_id=run_id,
+                after={"reason": "Live LLM entry has no durable TradePlan"},
+            )
+            return None
+
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
         book = self.market_data.books.get(symbol)
@@ -334,7 +347,15 @@ class TradingEngine:
             run_id=run_id,
         )
         await self._persist_risk(risk_decision)
+        if trade_plan_id:
+            await self.trade_plans.link(
+                trade_plan_id, risk_decision_id=risk_decision.risk_decision_id
+            )
         if risk_decision.decision != ExecutionDecision.APPROVE:
+            if trade_plan_id:
+                await self.trade_plans.transition(
+                    trade_plan_id, TradePlanState.REJECTED, reason=risk_decision.reason
+                )
             await self.audit.log(
                 "RISK_REJECT",
                 target=client_order_id,
@@ -403,6 +424,9 @@ class TradingEngine:
         order = await self.order_manager.create_from_intent(
             intent, trading_mode=self.settings.effective_mode()
         )
+        if trade_plan_id:
+            await self.trade_plans.link(trade_plan_id, order_id=order.internal_order_id)
+            await self.trade_plans.transition(trade_plan_id, TradePlanState.APPROVED)
         await self.order_manager.validate(order.internal_order_id)
         await self.order_manager.submitting(order.internal_order_id)
         await self.order_manager.submitted(order.internal_order_id)

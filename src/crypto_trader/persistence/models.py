@@ -280,6 +280,29 @@ class RiskDecisionORM(Base):
     run_id: Mapped[str | None] = mapped_column(String(64))
 
 
+class TradePlanORM(Base):
+    """Durable entry thesis with one plan per Live-LLM decision."""
+
+    __tablename__ = "trade_plans"
+    __table_args__ = (UniqueConstraint("decision_id", name="uq_trade_plans_decision_id"),)
+
+    trade_plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="PLANNED")
+    thesis: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    requested_quantity: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    requested_leverage: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    signal_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    risk_decision_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    order_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    position_symbol: Mapped[str | None] = mapped_column(String(64))
+    terminal_reason: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AuditEventORM(Base):
     __tablename__ = "audit_events"
     __table_args__ = (UniqueConstraint("event_id", name="uq_audit_events_event_id"),)
