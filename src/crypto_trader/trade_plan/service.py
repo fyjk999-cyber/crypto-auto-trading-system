@@ -96,6 +96,11 @@ class TradePlanService:
                 ).scalar_one()
             return self._to_domain(row)
 
+    async def get(self, trade_plan_id: str) -> TradePlan | None:
+        async with self.session_factory() as session:
+            row = await session.get(TradePlanORM, trade_plan_id)
+            return self._to_domain(row) if row is not None else None
+
     async def transition(
         self, trade_plan_id: str, state: TradePlanState, *, reason: str | None = None
     ) -> TradePlan:

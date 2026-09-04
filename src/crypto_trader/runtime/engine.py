@@ -327,6 +327,24 @@ class TradingEngine:
                 after={"reason": "Live LLM entry has no durable TradePlan"},
             )
             return None
+        if signal.strategy_id == "live_llm":
+            plan = await self.trade_plans.get(trade_plan_id)
+            expected_direction = "LONG" if signal.side == OrderSide.BUY else "SHORT"
+            valid_plan = (
+                plan is not None
+                and plan.decision_id == signal.metadata.get("decision_id")
+                and plan.symbol == signal.symbol
+                and plan.direction == expected_direction
+                and plan.state == TradePlanState.PLANNED
+            )
+            if not valid_plan:
+                await self.audit.log(
+                    "TRADEPLAN_INVALID",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"trade_plan_id": trade_plan_id},
+                )
+                return None
 
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()

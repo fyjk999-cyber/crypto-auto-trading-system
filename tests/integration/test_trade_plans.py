@@ -51,3 +51,16 @@ async def test_trade_plan_rejects_planless_or_malformed_entry_proposals(database
             thesis="invalid size",
             requested_quantity=Decimal("0"),
         )
+
+
+async def test_trade_plan_can_be_retrieved_after_restart_boundary(database):
+    plans = TradePlanService(database.session_factory)
+    created = await plans.create(
+        decision_id="decision_restart",
+        symbol="ETHUSDT",
+        direction="SHORT",
+        thesis="thesis",
+        requested_quantity=Decimal("1"),
+    )
+    recovered = await TradePlanService(database.session_factory).get(created.trade_plan_id)
+    assert recovered == created
