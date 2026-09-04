@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from crypto_trader.domain.identifiers import new_id
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.provider import LLMProvider
@@ -44,8 +45,11 @@ class ChiefTraderEngine:
         )
 
     def parse_decision(self, raw: dict, ctx: ChiefTraderContext) -> ChiefTraderDecision:
-        raw.setdefault("decision_id", f"llm_{datetime.now(UTC).timestamp()}")
-        raw.setdefault("symbol", ctx.symbol)
+        # Model-supplied identifiers must never become authoritative lineage.
+        # The runtime owns both the decision id and the contextual symbol.
+        raw = dict(raw)
+        raw["decision_id"] = new_id("llm")
+        raw["symbol"] = ctx.symbol
         raw.setdefault("market_regime", ctx.regime)
         raw.setdefault("action", "NO_TRADE")
         raw.setdefault("created_at", datetime.now(UTC).isoformat())

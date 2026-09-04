@@ -55,6 +55,7 @@ def test_chief_trader_engine_parse_decision():
     )
     assert decision.action == "LONG"
     assert decision.symbol == "BTCUSDT"
+    assert decision.decision_id.startswith("llm_")
 
 
 def test_knowledge_base_retrieval_versioned():
