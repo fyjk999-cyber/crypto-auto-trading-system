@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -17,10 +17,41 @@ from crypto_trader.llm_chief.decision import (
 from crypto_trader.llm_chief.provider import LLMProvider
 
 
+class ToolSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tools: list[str] = Field(default_factory=list, max_length=12)
+
+
 class ChiefTraderEngine:
     def __init__(self, provider: LLMProvider | None = None, model_version: str = "0.1.0") -> None:
         self.provider = provider
         self.model_version = model_version
+
+    async def select_tools(
+        self, ctx: ChiefTraderContext, available_tools: list[str]
+    ) -> tuple[list[str] | None, str | None]:
+        if self.provider is None:
+            return None, "LLM_UNAVAILABLE"
+        prompt = (
+            "You are the same Chief Trader that will make the final decision. "
+            "Select only the factual read-only tools needed for this context. "
+            "Return JSON only as {\"tools\":[...]}.\n"
+            f"Symbol: {ctx.symbol}\nPositionState: {ctx.position_state.value}\n"
+            f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
+        )
+        response = await self.provider.complete_json(prompt=prompt)
+        if not response.ok or response.parsed_json is None:
+            return None, response.error or "TOOL_SELECTION_FAILED"
+        try:
+            selection = ToolSelection(**response.parsed_json)
+        except ValidationError:
+            return None, "INVALID_TOOL_SELECTION"
+        if len(selection.tools) != len(set(selection.tools)):
+            return None, "INVALID_TOOL_SELECTION"
+        if any(tool not in available_tools for tool in selection.tools):
+            return None, "UNKNOWN_TOOL_SELECTED"
+        return selection.tools, None
 
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)

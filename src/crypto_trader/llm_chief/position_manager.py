@@ -13,6 +13,7 @@ from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import OpenAction, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.strategy.base import StrategyContext
 from crypto_trader.trade_plan.service import TradePlanService
@@ -34,6 +35,7 @@ class LiveLLMPositionManager:
         audit: AuditService,
         risk_summary: dict[str, Any] | None = None,
         review_cooldown_seconds: float = 30.0,
+        tool_chief: ToolDrivenChiefTrader | None = None,
     ) -> None:
         self.chief = chief
         self.evidence_engine = evidence_engine
@@ -42,6 +44,7 @@ class LiveLLMPositionManager:
         self.audit = audit
         self.risk_summary = risk_summary or {}
         self.review_cooldown = timedelta(seconds=max(1.0, review_cooldown_seconds))
+        self.tool_chief = tool_chief
         self._last_review_attempt: dict[str, datetime] = {}
 
     async def review(
@@ -63,7 +66,11 @@ class LiveLLMPositionManager:
         if last_attempt is not None and now - last_attempt < self.review_cooldown:
             return None
 
-        evidence = self.evidence_engine.analyze_evidence(ctx)
+        evidence = (
+            self.evidence_engine.analyze_evidence(ctx)
+            if self.tool_chief is None
+            else {"regime": "UNKNOWN", "source_refs": []}
+        )
         mark = ctx.mark_price or ctx.book.mid_price() or position.avg_entry_price or Decimal("0")
         entry = position.avg_entry_price or Decimal("0")
         unrealized = (mark - entry) * position.quantity
@@ -100,7 +107,19 @@ class LiveLLMPositionManager:
             position_context=position_context,
         )
         self._last_review_attempt[position.symbol] = now
-        decision = await self.chief.decide(chief_ctx)
+        if self.tool_chief is None:
+            decision = await self.chief.decide(chief_ctx)
+        else:
+            decision, package = await self.tool_chief.decide(
+                chief_ctx,
+                tool_context={"strategy_context": ctx},
+                now=now,
+            )
+            if package is not None:
+                evidence = {
+                    "source_refs": package.source_refs,
+                    "selected_tools": package.selected_tools,
+                }
         await self.decisions.save(
             decision,
             run_id=ctx.run_id,

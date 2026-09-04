@@ -16,11 +16,13 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
+from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -97,6 +99,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     trade_plans = TradePlanService(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief = ChiefTraderEngine(provider=DeepSeekProvider())
+    tool_chief = ToolDrivenChiefTrader(chief, build_canonical_tool_registry(alpha))
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
         chief=chief,
@@ -104,6 +107,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         decisions=llm_decisions,
         audit=audit,
         risk_summary=risk.config.model_dump(mode="json"),
+        tool_chief=tool_chief,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (
@@ -114,6 +118,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             plans=trade_plans,
             audit=audit,
             risk_summary=risk.config.model_dump(mode="json"),
+            tool_chief=tool_chief,
         )
         if settings.auto_start_runtime
         else None

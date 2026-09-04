@@ -17,6 +17,7 @@ from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
@@ -42,6 +43,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         audit: AuditService,
         risk_summary: dict[str, Any] | None = None,
         retry_cooldown_seconds: float = 30.0,
+        tool_chief: ToolDrivenChiefTrader | None = None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -51,6 +53,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.risk_summary = risk_summary or {}
         self.symbol = evidence_engine.symbol
         self.retry_cooldown = timedelta(seconds=max(1.0, retry_cooldown_seconds))
+        self.tool_chief = tool_chief
         # This is an attempt cooldown, not an entry cooldown.  Every provider
         # call consumes the interval, including NO_TRADE and fail-closed output.
         self._last_decision_attempt: datetime | None = None
@@ -69,7 +72,11 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         ):
             return []
 
-        evidence = self.evidence_engine.analyze_evidence(ctx)
+        evidence = (
+            self.evidence_engine.analyze_evidence(ctx)
+            if self.tool_chief is None
+            else {"regime": "UNKNOWN", "source_refs": []}
+        )
         chief_ctx = ChiefTraderContext(
             symbol=ctx.symbol,
             market_snapshot=self._market_snapshot(ctx),
@@ -79,7 +86,19 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             risk_summary=self.risk_summary,
         )
         self._last_decision_attempt = now
-        decision = await self.chief.decide(chief_ctx)
+        if self.tool_chief is None:
+            decision = await self.chief.decide(chief_ctx)
+        else:
+            decision, package = await self.tool_chief.decide(
+                chief_ctx,
+                tool_context={"strategy_context": ctx},
+                now=now,
+            )
+            if package is not None:
+                evidence = {
+                    "source_refs": package.source_refs,
+                    "selected_tools": package.selected_tools,
+                }
 
         evidence_refs = [
             str(ref)
@@ -103,6 +122,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             after={
                 "decision": decision.model_dump(mode="json"),
                 "evidence_source": self.evidence_engine.name,
+                "selected_tools": evidence.get("selected_tools", []),
                 "decision_authority": "LIVE_LLM_ONLY",
             },
         )

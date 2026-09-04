@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 
 @dataclass(frozen=True)
 class ToolEvidence:
@@ -19,6 +21,34 @@ class ToolEvidence:
     confidence_of_measurement: float
     data_quality: str
     source_refs: list[str]
+
+
+class EvidenceItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str
+    symbol: str
+    timestamp: datetime
+    finding: dict[str, Any] = Field(default_factory=dict)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    contrary_evidence: list[str] = Field(default_factory=list)
+    confidence_of_measurement: float = Field(ge=0.0, le=1.0)
+    data_quality: str
+    freshness: str
+    source_refs: list[str] = Field(default_factory=list)
+
+
+class DynamicEvidencePackage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str
+    selected_tools: list[str]
+    items: list[EvidenceItem]
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def source_refs(self) -> list[str]:
+        return sorted({ref for item in self.items for ref in item.source_refs})
 
 
 EvidenceTool = Callable[[str, dict[str, Any]], Awaitable[ToolEvidence]]
@@ -55,3 +85,40 @@ class LLMToolRegistry:
                 data_quality="UNAVAILABLE",
                 source_refs=[],
             )
+
+    async def build_package(
+        self,
+        names: list[str],
+        symbol: str,
+        context: dict[str, Any],
+        *,
+        now: datetime,
+        max_age_seconds: float = 30.0,
+    ) -> DynamicEvidencePackage:
+        if len(names) != len(set(names)) or any(name not in self._tools for name in names):
+            raise ValueError("tool selection contains unknown or duplicate tools")
+        items: list[EvidenceItem] = []
+        for name in names:
+            evidence = await self.call(name, symbol, context)
+            timestamp = (
+                evidence.timestamp.astimezone(UTC)
+                if evidence.timestamp.tzinfo is not None
+                else evidence.timestamp.replace(tzinfo=UTC)
+            )
+            age = max(0.0, (now.astimezone(UTC) - timestamp).total_seconds())
+            freshness = "FRESH" if age <= max_age_seconds else "STALE"
+            items.append(
+                EvidenceItem(
+                    tool_name=evidence.tool_name,
+                    symbol=evidence.symbol,
+                    timestamp=timestamp,
+                    finding=evidence.features,
+                    supporting_evidence=evidence.supporting_evidence,
+                    contrary_evidence=evidence.contrary_evidence,
+                    confidence_of_measurement=evidence.confidence_of_measurement,
+                    data_quality=evidence.data_quality,
+                    freshness=freshness,
+                    source_refs=evidence.source_refs,
+                )
+            )
+        return DynamicEvidencePackage(symbol=symbol, selected_tools=names, items=items)
