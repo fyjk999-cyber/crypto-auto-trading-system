@@ -58,7 +58,11 @@ def test_max_order_notional_rejects():
         market_price=Decimal("100"),
         open_order_count=0,
     )
+    assert decision.decision == ExecutionDecision.SCALE_DOWN
     assert decision.reason == "MAX_ORDER_NOTIONAL"
+    assert decision.side == OrderSide.BUY
+    assert decision.checks["original_quantity"] == "1"
+    assert decision.checks["approved_quantity"] == "0.1"
 
 
 def test_max_open_orders_rejects():

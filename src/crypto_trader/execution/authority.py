@@ -104,7 +104,10 @@ class ExecutionAuthority:
         if ctx.duplicate_client_order:
             return hold("DUPLICATE_CLIENT_ORDER_ID")
         # 11. risk must still be valid
-        if ctx.risk_decision is None or ctx.risk_decision.decision != ExecutionDecision.APPROVE:
+        if ctx.risk_decision is None or ctx.risk_decision.decision not in {
+            ExecutionDecision.APPROVE,
+            ExecutionDecision.SCALE_DOWN,
+        }:
             return reject("RISK_NOT_VALID")
         # 12. precision, min quantity, min notional
         instrument = ctx.instrument

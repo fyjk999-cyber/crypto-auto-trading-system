@@ -91,7 +91,32 @@ class RiskEngine:
             notional = D(intent.quote_order_qty)
 
         if notional > self.config.max_order_notional:
-            return fail("MAX_ORDER_NOTIONAL")
+            approved_quantity = self.config.max_order_notional / price
+            if approved_quantity <= 0:
+                return fail("MAX_ORDER_NOTIONAL")
+            checks.update(
+                {
+                    "max_order_notional": False,
+                    "original_quantity": str(qty),
+                    "approved_quantity": str(approved_quantity),
+                    "original_notional": str(notional),
+                    "approved_notional": str(self.config.max_order_notional),
+                    "supporting_risk_evidence": "MAX_ORDER_NOTIONAL",
+                    "contrary_risk_evidence": "requested order exceeds configured limit",
+                }
+            )
+            return RiskDecision(
+                risk_decision_id=new_id("risk"),
+                order_id=order_id,
+                client_order_id=client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                decision=ExecutionDecision.SCALE_DOWN,
+                reason="MAX_ORDER_NOTIONAL",
+                checks=checks,
+                timestamp=now,
+                run_id=run_id,
+            )
         checks["max_order_notional"] = True
 
         if open_order_count >= self.config.max_open_orders:

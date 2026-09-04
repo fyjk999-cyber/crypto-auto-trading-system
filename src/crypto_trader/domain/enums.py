@@ -133,6 +133,7 @@ class ExchangeEventType(str, Enum):
 
 class ExecutionDecision(str, Enum):
     APPROVE = "APPROVE"
+    SCALE_DOWN = "SCALE_DOWN"
     HOLD = "HOLD"
     REJECT = "REJECT"
 

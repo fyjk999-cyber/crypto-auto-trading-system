@@ -351,7 +351,7 @@ class TradingEngine:
             await self.trade_plans.link(
                 trade_plan_id, risk_decision_id=risk_decision.risk_decision_id
             )
-        if risk_decision.decision != ExecutionDecision.APPROVE:
+        if risk_decision.decision not in {ExecutionDecision.APPROVE, ExecutionDecision.SCALE_DOWN}:
             if trade_plan_id:
                 await self.trade_plans.transition(
                     trade_plan_id, TradePlanState.REJECTED, reason=risk_decision.reason
@@ -367,6 +367,11 @@ class TradingEngine:
             self.health.set("risk", True)
             return risk_decision
 
+        executable_signal = signal
+        if risk_decision.decision == ExecutionDecision.SCALE_DOWN:
+            approved_quantity = D(str(risk_decision.checks["approved_quantity"]))
+            executable_signal = signal.model_copy(update={"quantity": approved_quantity})
+
         instrument = self._instruments.get(symbol)
         lease_held = (
             self.require_lease
@@ -376,15 +381,15 @@ class TradingEngine:
         intent = OrderIntent(
             client_order_id=client_order_id,
             symbol=symbol,
-            side=signal.side,
-            order_type=signal.order_type,
-            time_in_force=signal.time_in_force,
-            price=signal.limit_price,
-            quantity=signal.quantity,
-            strategy_id=signal.strategy_id,
+            side=executable_signal.side,
+            order_type=executable_signal.order_type,
+            time_in_force=executable_signal.time_in_force,
+            price=executable_signal.limit_price,
+            quantity=executable_signal.quantity,
+            strategy_id=executable_signal.strategy_id,
             run_id=run_id,
-            expires_at=signal.expires_at,
-            metadata={"signal_id": signal.signal_id},
+            expires_at=executable_signal.expires_at,
+            metadata={"signal_id": signal.signal_id, "trade_plan_id": trade_plan_id or None},
         )
         auth_ctx = AuthorizationContext(
             now=self.clock.now(),
