@@ -16,6 +16,10 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.provider import DeepSeekProvider
+from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
+from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -28,6 +32,7 @@ from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.strategy.dummy import DummyStrategy
+from crypto_trader.trade_plan.service import TradePlanService
 
 
 @dataclass
@@ -77,13 +82,25 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             }
         )
 
+    # Quant is evidence-only.  The official auto-start runtime installs a
+    # single Live-LLM adapter as its executable strategy slot so no quant
+    # component can bypass ChiefTraderEngine for a new direction.
     alpha = MultiStrategyAlpha(
         symbol="BTCUSDT",
         risk_per_trade="0.0005",
         max_position_notional="5000",
         max_leverage="3",
     )
-    strategies = [alpha] if settings.auto_start_runtime else [DummyStrategy()]
+    trade_plans = TradePlanService(database.session_factory)
+    chief = ChiefTraderEngine(provider=DeepSeekProvider())
+    live_llm = LiveLLMDecisionStrategy(
+        evidence_engine=alpha,
+        chief=chief,
+        planner=LiveLLMTradePlanner(trade_plans),
+        audit=audit,
+        risk_summary=risk.config.model_dump(mode="json"),
+    )
+    strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
 
     engine = TradingEngine(
         settings=settings,
@@ -100,6 +117,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         strategies=strategies,
         authority=ExecutionAuthority(),
         require_lease=True,
+        trade_plans=trade_plans,
     )
 
     app_state = AppState(
