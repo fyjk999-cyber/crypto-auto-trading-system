@@ -278,9 +278,9 @@ print("ALPHA_CLEAN")
     assert "ALPHA_CLEAN" in result.stdout
 
 
-def test_ensemble_produces_signal_intent_for_long_and_short():
+def test_ensemble_produces_evidence_but_no_executable_signal():
     alpha = MultiStrategyAlpha("BTCUSDT")
-    # uptrend book/account context -> LONG signal
+    # uptrend produces measurable bullish evidence, never an entry intent.
     up_book = OrderBook(symbol="BTCUSDT")
     up_book.apply_snapshot(1, [(Decimal("100"), Decimal("1"))], [(Decimal("100.1"), Decimal("1"))])
     account = Account(balances={}, equity=Decimal("10000"))
@@ -290,15 +290,18 @@ def test_ensemble_produces_signal_intent_for_long_and_short():
     # seed many bars into alpha.mde directly so features have trend
     alpha.mde = make_mde(uptrend(120))
     signals = __import__("asyncio").run(alpha.on_market_data(ctx))
-    assert len(signals) >= 1
-    assert signals[0].side.value == "BUY"
-    assert "alpha_decision" in signals[0].metadata
+    evidence = alpha.analyze_evidence(ctx)
+    assert signals == []
+    assert evidence["tool_name"] == "multi_strategy_alpha"
+    assert evidence["strategy_fit"]["side"] == "LONG"
 
     # downtrend -> SELL signal
     alpha_down = MultiStrategyAlpha("BTCUSDT")
     alpha_down.mde = make_mde(downtrend(120))
     signals_down = __import__("asyncio").run(alpha_down.on_market_data(ctx))
-    assert signals_down[0].side.value == "SELL"
+    evidence_down = alpha_down.analyze_evidence(ctx)
+    assert signals_down == []
+    assert evidence_down["strategy_fit"]["side"] == "SHORT"
 
 
 def test_ensemble_no_trade_for_flat_market():
@@ -316,3 +319,4 @@ def test_ensemble_no_trade_for_flat_market():
     )
     signals = __import__("asyncio").run(alpha.on_market_data(ctx))
     assert signals == []
+    assert alpha.analyze_evidence(ctx)["strategy_fit"]["side"] == "NO_TRADE"

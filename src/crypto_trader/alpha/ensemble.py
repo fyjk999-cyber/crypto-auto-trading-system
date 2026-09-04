@@ -11,12 +11,10 @@ from decimal import Decimal
 
 from crypto_trader.alpha.features import compute_features
 from crypto_trader.alpha.learning import FastLearning, SlowLearning
-from crypto_trader.alpha.leverage import recommend_leverage
 from crypto_trader.alpha.market_data_engine import MarketDataEngine
 from crypto_trader.alpha.meta_decision import MetaDecision
 from crypto_trader.alpha.ml_meta import MLMeta
 from crypto_trader.alpha.regime import RegimeEngine
-from crypto_trader.alpha.sizing import recommend_position
 from crypto_trader.alpha.sub_strategy import (
     BreakoutStrategy,
     FundingBasisStrategy,
@@ -24,10 +22,9 @@ from crypto_trader.alpha.sub_strategy import (
     MomentumStrategy,
     TrendFollowingStrategy,
 )
-from crypto_trader.alpha.sub_strategy.base import AlphaContext, AlphaSide
-from crypto_trader.domain.enums import OrderSide, OrderType, TimeInForce
+from crypto_trader.alpha.sub_strategy.base import AlphaContext
 from crypto_trader.domain.models import SignalIntent
-from crypto_trader.domain.money import D, floor_to_step, round_tick
+from crypto_trader.domain.money import D
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 
 
@@ -71,10 +68,15 @@ class MultiStrategyAlpha(StrategyPlugin):
         self.last_meta: MetaDecision | None = None
 
     async def on_market_data(self, ctx: StrategyContext) -> list[SignalIntent]:
+        """Collect quant evidence only; the Live LLM owns entry direction."""
+        self.analyze_evidence(ctx)
+        return []
+
+    def analyze_evidence(self, ctx: StrategyContext) -> dict:
         book = ctx.book
         mid = book.mid_price()
         if mid is None:
-            return []
+            return {"status": "NO_ORDERBOOK", "symbol": self.symbol}
         ts = ctx.clock_time
         volume = Decimal("0")
         best_bid = book.best_bid()
@@ -105,53 +107,30 @@ class MultiStrategyAlpha(StrategyPlugin):
         )
         self.last_meta = meta
         self.fast_learning.record_regime(regime.regime.value)
-        if meta.side == AlphaSide.NO_TRADE:
-            return []
-
-        price = mid
-        if meta.side == AlphaSide.LONG:
-            price = mid * (D("1") + self.slippage_bps / D("10000"))
-        else:
-            price = mid * (D("1") - self.slippage_bps / D("10000"))
-        price = round_tick(price, self.tick_size)
-        quantity = recommend_position(
-            meta,
-            account_equity=ctx.account.equity,
-            price=price,
-            volatility=feature.realized_vol_20 or D("0.01"),
-            risk_per_trade=self.risk_per_trade,
-            max_position_notional=self.max_position_notional,
-        )
-        quantity = floor_to_step(quantity, self.step_size)
-        if quantity <= 0:
-            return []
-        leverage = recommend_leverage(
-            meta,
-            regime=regime.regime,
-            volatility=feature.realized_vol_20 or D("0.01"),
-            max_leverage=self.max_leverage,
-        )
-        return [
-            SignalIntent(
-                signal_id=f"alpha_{int(ts.timestamp() * 1000)}_{meta.side.value}",
-                strategy_id=self.name,
-                symbol=self.symbol,
-                side=OrderSide.BUY if meta.side == AlphaSide.LONG else OrderSide.SELL,
-                quantity=quantity,
-                limit_price=price,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.GTC,
-                expires_at=ts + __import__("datetime").timedelta(minutes=5),
-                reason=str(meta.reason_codes),
-                run_id=ctx.run_id,
-                metadata={
-                    "alpha_decision": meta.model_dump(mode="json"),
-                    "recommended_leverage": str(leverage),
-                    "regime": regime.regime.value,
-                    "alpha_version": self.version,
-                },
-            )
-        ]
+        return {
+            "tool_name": "multi_strategy_alpha",
+            "symbol": self.symbol,
+            "timestamp": ts.isoformat(),
+            "features": feature.model_dump(mode="json"),
+            "signals": [
+                {
+                    "strategy": signal.strategy,
+                    "version": signal.version,
+                    "side": signal.side.value,
+                    "confidence": str(signal.confidence),
+                    "reason_codes": signal.reason_codes,
+                    "metadata": signal.metadata,
+                }
+                for signal in signals
+            ],
+            "regime": regime.model_dump(mode="json"),
+            "strategy_fit": meta.model_dump(mode="json"),
+            "supporting_evidence": list(meta.reason_codes),
+            "contrary_evidence": [],
+            "confidence_of_measurement": float(meta.confidence),
+            "data_quality": "FACTUAL_ORDERBOOK",
+            "source_refs": [f"orderbook:{self.symbol}", f"alpha:{self.version}"],
+        }
 
     def update_fast_learning(self, strategy: str, side: str, pnl) -> None:
         self.fast_learning.record_trade(strategy, side, pnl)
