@@ -29,12 +29,13 @@ case "save":
     let data = FileHandle.standardInput.readDataToEndOfFile()
     guard !data.isEmpty else { exit(65) }
     deleteExisting()
-    let status = data.withUnsafeBytes { bytes in
-        SecKeychainAddGenericPassword(
+    let status = data.withUnsafeBytes { bytes -> OSStatus in
+        guard let baseAddress = bytes.baseAddress else { return errSecParam }
+        return SecKeychainAddGenericPassword(
             nil,
             UInt32(service.utf8.count), service,
             UInt32(account.utf8.count), account,
-            UInt32(data.count), bytes.baseAddress, nil
+            UInt32(data.count), baseAddress, nil
         )
     }
     exit(status == errSecSuccess ? 0 : 1)
