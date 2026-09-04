@@ -314,6 +314,55 @@ class OKXAdapter(ExchangeAdapter):
             "mark": raw.get("markPx", "0"),
         }
 
+    async def get_mark_price(self, symbol: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/public/mark-price", params={"instType": "SWAP", "instId": symbol}
+        )
+        if not data.get("data"):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX mark-price response is empty")
+        raw = data["data"][0]
+        funding = await self.get_funding_rate(symbol)
+        return {
+            "mark_price": raw.get("markPx", "0"),
+            "index_price": raw.get("idxPx", "0"),
+            "funding_rate": funding["funding_rate"],
+            "next_funding_time": funding.get("next_funding_time"),
+        }
+
+    async def get_funding_rate(self, symbol: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/public/funding-rate", params={"instId": symbol}
+        )
+        if not data.get("data"):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX funding response is empty")
+        raw = data["data"][0]
+        next_time = raw.get("nextFundingTime")
+        return {
+            "funding_rate": raw.get("fundingRate", "0"),
+            "next_funding_time": (
+                datetime.fromtimestamp(int(next_time) / 1000, tz=UTC) if next_time else None
+            ),
+        }
+
+    async def get_open_interest(self, symbol: str) -> dict:
+        data = await self._public_request(
+            "GET", "/api/v5/public/open-interest", params={"instType": "SWAP", "instId": symbol}
+        )
+        if not data.get("data"):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX open-interest response is empty")
+        raw = data["data"][0]
+        return {"open_interest": raw.get("oi", "0"), "open_interest_ccy": raw.get("oiCcy", "0")}
+
+    async def get_instruments(self, instrument_type: str) -> list[dict]:
+        """Return factual public instrument metadata without execution credentials."""
+        data = await self._public_request(
+            "GET", "/api/v5/public/instruments", params={"instType": instrument_type}
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX instruments response is invalid")
+        return rows
+
     async def get_candles(self, inst_id: str, bar: str, limit: int = 500) -> list[list[str]]:
         """Fetch public OKX candles; no credentials or demo headers are used."""
         data = await self._public_request(
