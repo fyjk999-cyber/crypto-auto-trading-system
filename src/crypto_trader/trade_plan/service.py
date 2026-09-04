@@ -33,6 +33,23 @@ TERMINAL_STATES = {
     TradePlanState.CLOSED,
 }
 
+ALLOWED_TRANSITIONS = {
+    TradePlanState.PLANNED: {
+        TradePlanState.APPROVED,
+        TradePlanState.REJECTED,
+        TradePlanState.CANCELLED,
+        TradePlanState.EXPIRED,
+        TradePlanState.INVALIDATED,
+    },
+    TradePlanState.APPROVED: {
+        TradePlanState.ACTIVE,
+        TradePlanState.CANCELLED,
+        TradePlanState.EXPIRED,
+        TradePlanState.INVALIDATED,
+    },
+    TradePlanState.ACTIVE: {TradePlanState.CLOSED, TradePlanState.INVALIDATED},
+}
+
 
 @dataclass(frozen=True)
 class TradePlan:
@@ -109,8 +126,10 @@ class TradePlanService:
             if row is None:
                 raise KeyError(f"unknown TradePlan: {trade_plan_id}")
             current = TradePlanState(row.state)
-            if current in TERMINAL_STATES and current != state:
-                raise ValueError(f"terminal TradePlan cannot transition: {current}")
+            if current == state:
+                return self._to_domain(row)
+            if state not in ALLOWED_TRANSITIONS.get(current, set()):
+                raise ValueError(f"invalid TradePlan transition: {current} -> {state}")
             row.state = state.value
             row.updated_at = datetime.now(UTC)
             if state in TERMINAL_STATES:

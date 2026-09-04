@@ -64,3 +64,21 @@ async def test_trade_plan_can_be_retrieved_after_restart_boundary(database):
     )
     recovered = await TradePlanService(database.session_factory).get(created.trade_plan_id)
     assert recovered == created
+
+
+async def test_trade_plan_transition_matrix_fails_closed_and_is_idempotent(database):
+    plans = TradePlanService(database.session_factory)
+    plan = await plans.create(
+        decision_id="decision_matrix", symbol="BTCUSDT", direction="LONG", thesis="x",
+        requested_quantity=Decimal("1"),
+    )
+    same = await plans.transition(plan.trade_plan_id, TradePlanState.PLANNED)
+    assert same.state == TradePlanState.PLANNED
+    with pytest.raises(ValueError):
+        await plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
+    approved = await plans.transition(plan.trade_plan_id, TradePlanState.APPROVED)
+    assert approved.state == TradePlanState.APPROVED
+    active = await plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
+    assert active.state == TradePlanState.ACTIVE
+    closed = await plans.transition(plan.trade_plan_id, TradePlanState.CLOSED)
+    assert closed.state == TradePlanState.CLOSED
