@@ -8,6 +8,7 @@ import os
 import plistlib
 import pwd
 import shutil
+import stat
 import subprocess
 import sys
 import sysconfig
@@ -38,6 +39,10 @@ SAFE_ERRORS = {
     "SHARED_RUNTIME_SYMLINK_REFUSED",
     "INVALID_INSTALLER_ARGUMENTS",
     "HUMAN_TERMINAL_REQUIRED",
+    "RESUME_ADMIN_REQUIRED",
+    "RESUME_STATE_UNSAFE",
+    "RESUME_CREDENTIAL_BUNDLE_PRESENT",
+    "RESUME_DAEMON_PRESENT",
 }
 
 
@@ -221,8 +226,12 @@ def preflight(only=False):
 
 def main(argv=None):
     parser = InstallerArguments()
-    parser.add_argument("--preflight", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--preflight", action="store_true")
+    mode.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
+    if args.resume:
+        return resume()
     client, uid, gid, audit_complete = preflight(args.preflight)
     if args.preflight:
         return 0 if audit_complete else 2
@@ -338,6 +347,11 @@ def main(argv=None):
     (BASE / "verify.py").chmod(0o644)
     # All descendants start with no inherited ACL grants.
     run("/bin/chmod", "-RN", str(BASE), str(HOME))
+    return complete_install(client, policy, paper, python)
+
+
+def complete_install(client, policy, paper, python):
+    """Only runs after either fresh install or validated credential-free resume."""
     stage("INITIALIZE_KEYCHAIN")
     run(
         str(python),
@@ -414,6 +428,135 @@ def main(argv=None):
     print("INSTALL_RESULT = PASS")
     print("CREDENTIALS_ENROLLED = NO")
     return 0
+
+
+def root_mode(path, *, uid=0, mode=None):
+    if path.is_symlink() or not path.exists():
+        return False
+    info = path.stat()
+    return info.st_uid == uid and (mode is None or stat.S_IMODE(info.st_mode) == mode)
+
+
+def resume_context():
+    """Validate only the known credential-free partial state; never repair it blindly."""
+    stage("RESUME_PREFLIGHT")
+    if sys.platform != "darwin" or os.getuid() != 0:
+        raise RuntimeError("RESUME_ADMIN_REQUIRED")
+    client = pwd.getpwnam(os.environ["SUDO_USER"])
+    if client.pw_uid == 0:
+        raise RuntimeError("NORMAL_CLIENT_REQUIRED")
+    sudo_rules = output("/usr/bin/sudo", "-l", "-U", client.pw_name)
+    if b"NOPASSWD:" in sudo_rules:
+        raise RuntimeError("PASSWORDLESS_SUDO_RULES_REQUIRE_ADMIN_REVIEW")
+    stage("RESUME_VALIDATE_PARTIAL_STATE")
+    if not root_mode(BASE, mode=0o755) or not root_mode(BASE / "runtime", mode=0o755):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    policy_path = BASE / "policy.json"
+    if not root_mode(policy_path, mode=0o644):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    policy = json.loads(policy_path.read_text())
+    required = {
+        "broker_uid",
+        "broker_gid",
+        "ipc_gid",
+        "client_uid",
+        "client_gid",
+        "client_groups",
+        "paper_home",
+    }
+    if not required <= policy.keys() or policy["client_uid"] != client.pw_uid:
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    try:
+        broker = pwd.getpwnam(USER)
+        broker_group = grp.getgrnam(USER)
+        ipc_group = grp.getgrnam(GROUP)
+    except KeyError:
+        raise RuntimeError("RESUME_STATE_UNSAFE") from None
+    if (broker.pw_uid, broker.pw_gid, broker_group.gr_gid, ipc_group.gr_gid) != (
+        policy["broker_uid"],
+        policy["broker_gid"],
+        policy["broker_gid"],
+        policy["ipc_gid"],
+    ):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    if not root_mode(HOME, uid=broker.pw_uid, mode=0o700):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    vault = HOME / ".crypto-okx/vault"
+    if not root_mode(vault, uid=broker.pw_uid, mode=0o700):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    if (vault / "okx-paper-credentials.enc").exists():
+        raise RuntimeError("RESUME_CREDENTIAL_BUNDLE_PRESENT")
+    keychain = HOME / "Library/Keychains/okx-broker.keychain-db"
+    if keychain.exists() and not root_mode(keychain, uid=broker.pw_uid, mode=0o600):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    paper = Path(policy["paper_home"])
+    if paper != BASE / "paper-state" or paper.is_symlink() or not paper.exists():
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    if paper.stat().st_uid != client.pw_uid or stat.S_IMODE(paper.stat().st_mode) != 0o700:
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    for label in ("broker", "paper-launcher"):
+        if (DAEMONS / f"com.crypto-trader.okx-{label}.plist").exists():
+            raise RuntimeError("RESUME_DAEMON_PRESENT")
+    for socket_path in (BASE / "ipc/broker/broker.sock", BASE / "ipc/paper/paper.sock"):
+        if socket_path.exists() or socket_path.is_symlink():
+            raise RuntimeError("RESUME_STATE_UNSAFE")
+    return client, policy
+
+
+def refresh_resume_assets(python):
+    """Refresh only root-owned broker modules from committed Git, never worktree files."""
+    stage("RESUME_REFRESH_PROTECTED_CODE")
+    site = (
+        BASE
+        / "runtime/lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages"
+    )
+    if not root_mode(site, mode=0o755):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    files = output(
+        "/usr/bin/git",
+        "-C",
+        str(ROOT),
+        "ls-tree",
+        "-rz",
+        "--name-only",
+        "HEAD",
+        "src/crypto_trader/okx_vault",
+    ).split(b"\0")
+    if not files:
+        raise RuntimeError("RUNTIME_SOURCE_UNAVAILABLE")
+    for raw in filter(None, files):
+        rel = Path(os.fsdecode(raw))
+        target = site / rel.relative_to("src")
+        if target.exists() and (target.is_symlink() or target.stat().st_uid != 0):
+            raise RuntimeError("RESUME_STATE_UNSAFE")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(output("/usr/bin/git", "-C", str(ROOT), "show", "HEAD:" + str(rel)))
+        os.chown(target, 0, 0)
+        target.chmod(0o644)
+    verify = BASE / "verify.py"
+    if verify.is_symlink() or verify.stat().st_uid != 0:
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    verify.write_bytes(
+        output("/usr/bin/git", "-C", str(ROOT), "show", "HEAD:deploy/macos/verify.py")
+    )
+    verify.chmod(0o644)
+    run(str(python), "-I", "-c", "import crypto_trader.okx_vault.enrollment")
+
+
+def resume():
+    client, policy = resume_context()
+    python = BASE / "runtime/bin/python3"
+    if not root_mode(python, mode=0o755):
+        raise RuntimeError("RESUME_STATE_UNSAFE")
+    refresh_resume_assets(python)
+    policy["source_sha"] = output(
+        "/usr/bin/git", "-C", str(ROOT), "rev-parse", "HEAD", text=True
+    ).strip()
+    (BASE / "policy.json").write_text(json.dumps(policy))
+    (BASE / "policy.json").chmod(0o644)
+    return complete_install(client, policy, Path(policy["paper_home"]), python)
 
 
 def entry(argv=None):

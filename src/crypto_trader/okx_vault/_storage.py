@@ -25,6 +25,11 @@ AAD = BUNDLE.encode() + MAGIC
 class VaultError(Exception):
     """Error without raw library exceptions or credential material."""
 
+    def __init__(self, code, *, os_status=None):
+        super().__init__(code)
+        self.code = code
+        self.os_status = os_status
+
 
 class _KeychainKey:
     """Keychain access inside the broker process; no CLI for retrieving this key."""
@@ -86,7 +91,8 @@ class _KeychainKey:
                 ctypes.c_bool,
             ]
             path = os.fsencode(keychain_path)
-            if create_keychain and not Path(keychain_path).exists():
+            creating = create_keychain and not Path(keychain_path).exists()
+            if creating:
                 if password is None or len(password) < 12:
                     raise VaultError("STRONG_KEYCHAIN_PASSWORD_REQUIRED")
                 status = s.SecKeychainCreate(
@@ -95,10 +101,12 @@ class _KeychainKey:
             else:
                 status = s.SecKeychainOpen(path, ctypes.byref(self._keychain))
             if status != 0:
-                raise VaultError("PRIVATE_KEYCHAIN_UNAVAILABLE")
+                operation = "CREATE" if creating else "OPEN"
+                raise VaultError(f"PRIVATE_KEYCHAIN_{operation}_FAILED", os_status=status)
             if password is not None:
-                if s.SecKeychainUnlock(self._keychain, len(password), password, True) != 0:
-                    raise VaultError("PRIVATE_KEYCHAIN_LOCKED")
+                unlock_status = s.SecKeychainUnlock(self._keychain, len(password), password, True)
+                if unlock_status != 0:
+                    raise VaultError("PRIVATE_KEYCHAIN_UNLOCK_FAILED", os_status=unlock_status)
             Path(keychain_path).chmod(0o600)
 
     def _find(self):

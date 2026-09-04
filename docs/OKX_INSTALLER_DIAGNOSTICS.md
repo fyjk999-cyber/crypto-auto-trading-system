@@ -55,6 +55,31 @@ installation is performed by tests.
 Administrator preflight is the next gate. Actual installation, protected Keychain
 initialization and OS isolation remain unverified until their real stages run.
 
+## Credential-free partial-install recovery
+
+If a fresh installation reaches `INITIALIZE_KEYCHAIN` but fails before daemon
+installation, do not rerun the ordinary installer and do not remove system files.
+The explicit `--resume` mode is the only recovery path. It requires administrator
+authentication and validates all of the following before it writes anything:
+
+- dedicated user/group IDs still match the root-owned policy;
+- protected runtime, policy, broker home, vault and PAPER state ownership/modes;
+- no encrypted `okx-paper-credentials.enc` bundle;
+- no Broker/PAPER daemon plist or socket;
+- no unsafe/symlinked private Keychain file.
+
+It refreshes only the root-owned Broker modules from the committed Git revision,
+then retries Keychain initialization and continues to daemon installation. It
+never reads, exports, replaces or removes a vault bundle. A keychain created by a
+previous failed attempt is preserved; the prompt calls it an existing Keychain and
+requires its original password. If no Keychain exists, it asks for a new password
+and confirmation.
+
+The protected enrollment helper now emits only safe stages/codes. It separates a
+password-confirmation failure from an OS Keychain create/open/unlock status. It
+never prints the password, credential fields, raw Keychain data, exception text,
+environment or arbitrary stderr.
+
 Verification: 23 diagnostic regressions passed; the clean staged canonical
 snapshot passed 541 backend tests (one existing Starlette deprecation warning).
 Ruff and launcher shell syntax passed. Pre-existing dirty runtime/market/frontend

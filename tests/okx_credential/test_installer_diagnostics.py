@@ -222,3 +222,18 @@ def test_install_without_human_terminal_fails_before_mutation(host, monkeypatch,
     output = capsys.readouterr().out
     assert "INSTALL_STAGE = CHECK_ENROLLMENT_TERMINAL" in output
     assert "HUMAN_TERMINAL_REQUIRED" in output
+
+
+def test_resume_is_an_explicit_separate_path(monkeypatch):
+    mod = load_installer()
+    monkeypatch.setattr(mod, "resume", lambda: 7)
+    assert mod.entry(["--resume"]) == 7
+
+
+def test_resume_rejects_missing_or_untrusted_partial_state(host, monkeypatch, capsys):
+    mod, _ = host
+    forbid_mutations(monkeypatch, mod)
+    assert mod.entry(["--resume"]) == 1
+    output = capsys.readouterr().out
+    assert "INSTALL_STAGE = RESUME_VALIDATE_PARTIAL_STATE" in output
+    assert "RESUME_STATE_UNSAFE" in output

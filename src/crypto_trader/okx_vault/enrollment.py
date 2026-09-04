@@ -6,7 +6,7 @@ import resource
 import subprocess
 import sys
 
-from ._storage import BUNDLE, FIELDS, _KeychainKey, _Vault
+from ._storage import BUNDLE, FIELDS, VaultError, _KeychainKey, _Vault
 from .cli import _human_terminal
 from .isolation import BASE, HOME, KEYCHAIN, RUNTIME, USER, VAULT, protected_policy
 
@@ -34,13 +34,20 @@ def main():
     os.environ.clear()
     os.environ.update(HOME=str(HOME), USER=USER, PATH="/usr/bin:/bin:/usr/sbin:/sbin")
     os.chdir(HOME)
-    password = getpass.getpass("Private Broker Keychain password (12+ characters): ").encode()
+    keychain_exists = KEYCHAIN.is_file()
+    prompt = (
+        "Existing private Broker Keychain password: "
+        if keychain_exists
+        else ("New private Broker Keychain password (12+ characters): ")
+    )
+    print("ENROLLMENT_STAGE = KEYCHAIN_PASSWORD_ENTRY", flush=True)
+    password = getpass.getpass(prompt).encode()
     try:
-        if (
-            command == "initialize"
-            and getpass.getpass("Confirm Keychain password: ").encode() != password
-        ):
-            raise PermissionError
+        if command == "initialize" and not keychain_exists:
+            print("ENROLLMENT_STAGE = KEYCHAIN_PASSWORD_CONFIRMATION", flush=True)
+            if getpass.getpass("Confirm Keychain password: ").encode() != password:
+                raise VaultError("KEYCHAIN_PASSWORD_CONFIRMATION_FAILED")
+        print("ENROLLMENT_STAGE = KEYCHAIN_CREATE_OR_UNLOCK", flush=True)
         keys = _KeychainKey(KEYCHAIN, create_keychain=command == "initialize", password=password)
     finally:
         del password
@@ -65,5 +72,15 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except VaultError as exc:
+        print("ENROLLMENT_ERROR_TYPE = VaultError")
+        print(f"ENROLLMENT_ERROR_CODE = {exc.code}")
+        if isinstance(exc.os_status, int):
+            print(f"ENROLLMENT_OS_STATUS = {exc.os_status}")
+        print("CREDENTIALS_ENROLLED = NO")
+        raise SystemExit("PROTECTED_ENROLLMENT_FAILED") from None
     except Exception:
+        print("ENROLLMENT_ERROR_TYPE = InternalError")
+        print("ENROLLMENT_ERROR_CODE = INTERNAL_ERROR")
+        print("CREDENTIALS_ENROLLED = NO")
         raise SystemExit("PROTECTED_ENROLLMENT_FAILED") from None
