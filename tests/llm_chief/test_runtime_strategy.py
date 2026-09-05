@@ -173,7 +173,7 @@ async def test_every_decision_result_uses_the_same_attempt_cooldown(database):
 
 async def test_fail_closed_decision_is_throttled(database):
     events = []
-    chief = FakeChief("NO_TRADE")
+    chief = FakeChief("FAIL_CLOSED")
     strategy = LiveLLMDecisionStrategy(
         evidence_engine=FakeEvidenceEngine(),
         chief=chief,
@@ -186,3 +186,6 @@ async def test_fail_closed_decision_is_throttled(database):
     await strategy.on_market_data(first)
     await strategy.on_market_data(first)
     assert chief.calls == 1
+    stored = await LLMDecisionStore(database.session_factory).get("llm_runtime_test")
+    assert stored is not None
+    assert stored.action == "FAIL_CLOSED"
