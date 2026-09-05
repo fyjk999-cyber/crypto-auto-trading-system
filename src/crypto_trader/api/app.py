@@ -19,6 +19,7 @@ from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.factors.service import FactorService
+from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
@@ -112,6 +113,9 @@ def create_app(state: AppState) -> FastAPI:
         for strategy in state.engine.strategies:
             if getattr(strategy, "name", None) == "multi_strategy_alpha":
                 return strategy
+            evidence_engine = getattr(strategy, "evidence_engine", None)
+            if evidence_engine is not None:
+                return evidence_engine
         return None
 
     @app.post(
@@ -372,9 +376,10 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/reviews")
     async def reviews(limit: int = 50):
-        # Structured reviews are emitted by governance runtime; persisted
-        # review storage is not yet implemented, so this is intentionally empty.
-        return {"reviews": [], "count": 0}
+        rows = await FactualEpisodeLearning(state.database.session_factory).list_reviews(
+            limit=limit
+        )
+        return {"reviews": rows, "count": len(rows)}
 
     @app.get("/stress-tests")
     async def stress_tests(limit: int = 50):
@@ -403,12 +408,14 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/learning")
     async def learning():
         alpha = _alpha_from_state()
+        factual = await FactualEpisodeLearning(state.database.session_factory).snapshot()
         if alpha is None:
-            return {"status": "NO_ALPHA", "fast_learning": {}}
+            return {"status": "NO_ALPHA", "fast_learning": {}, "factual": factual}
         return {
             "status": "OK",
             "fast_learning": alpha.fast_learning.snapshot(),
             "slow_learning_candidates": list(alpha.slow_learning.candidates.keys()),
+            "factual": factual,
         }
 
     @app.get("/exchange-health")

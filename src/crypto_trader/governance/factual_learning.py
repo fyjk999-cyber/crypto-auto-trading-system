@@ -96,6 +96,40 @@ class FactualEpisodeLearning:
                 pattern.version += 1
             await session.commit()
 
+    async def list_reviews(self, *, limit: int = 50) -> list[dict]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(AITradeReviewORM)
+                    .order_by(AITradeReviewORM.created_at.desc())
+                    .limit(limit)
+                )
+            ).scalars().all()
+            return [
+                {
+                    "episode_id": row.episode_id,
+                    "success_factors": list(row.success_factors_json or []),
+                    "failure_factors": list(row.failure_factors_json or []),
+                    "mistakes": list(row.mistakes_json or []),
+                    "lessons": list(row.lessons_json or []),
+                    "future_rules": list(row.future_rules_json or []),
+                    "confidence": str(row.confidence),
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in rows
+            ]
+
+    async def snapshot(self) -> dict:
+        async with self.session_factory() as session:
+            reviews = (await session.execute(select(AITradeReviewORM))).scalars().all()
+            patterns = (await session.execute(select(AIMarketPatternORM))).scalars().all()
+            return {
+                "status": "FACTUAL_EPISODES_ONLY",
+                "review_count": len(reviews),
+                "pattern_count": len(patterns),
+                "sample_count": sum(row.sample_count for row in patterns),
+            }
+
 
 def _pattern_id(symbol: str, regime: str, direction: str) -> str:
     identity = f"{symbol}|{regime}|{direction}".encode()
