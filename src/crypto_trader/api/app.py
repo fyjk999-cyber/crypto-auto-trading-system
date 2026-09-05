@@ -117,7 +117,13 @@ def create_app(state: AppState) -> FastAPI:
                 await session.execute(text("SELECT 1"))
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
-        return {"ready": True, "mode": state.settings.effective_mode().value}
+        runtime = state.engine.runtime_snapshot() if state.engine is not None else None
+        return {
+            "ready": True,
+            "mode": state.settings.effective_mode().value,
+            "live_trading_enabled": state.settings.live_trading_enabled,
+            "runtime": runtime,
+        }
 
     def _alpha_from_state():
         if state.engine is None:

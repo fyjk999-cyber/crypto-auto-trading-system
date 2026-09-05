@@ -924,11 +924,22 @@ class TradingEngine:
         return self.risk_engine.kill_switch.snapshot()
 
     def runtime_snapshot(self) -> dict:
+        lease = self.lease
         return {
             "run_id": self.run_id,
             "state": self.state_machine.state.value,
             "mode": self.settings.effective_mode().value,
             "lease_held": self._lease_valid,
+            "execution_lease": {
+                "required": self.require_lease,
+                "held": self._lease_valid,
+                "lease_key": self.lease_key if self.require_lease else None,
+                "owner_id": lease.owner_id if lease is not None else None,
+                "fence_generation": (
+                    lease.fence_generation if lease is not None else None
+                ),
+                "single_writer": self._lease_valid if self.require_lease else True,
+            },
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
             "kill_switch": self.kill_switch_snapshot(),

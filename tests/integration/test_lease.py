@@ -96,6 +96,17 @@ async def test_engine_lease_loss_is_factual_fail_closed_and_restart_recovers(dat
         engine_tick_seconds=3600,
     )
     await recovered.start("lease-loss-recovered")
-    assert recovered.runtime_snapshot()["lease_held"] is True
+    snapshot = recovered.runtime_snapshot()
+    assert snapshot["lease_held"] is True
+    assert snapshot["execution_lease"] == {
+        "required": True,
+        "held": True,
+        "lease_key": recovered.lease_key,
+        "owner_id": "engine_lease-loss-recovered",
+        "fence_generation": recovered.lease.fence_generation,
+        "single_writer": True,
+    }
+    assert "token" not in str(snapshot["execution_lease"]).lower()
+    assert recovered.lease.token not in str(snapshot)
     assert recovered.risk_engine.kill_switch.enabled is False
     await recovered.stop()

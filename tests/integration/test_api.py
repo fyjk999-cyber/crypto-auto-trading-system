@@ -41,6 +41,8 @@ async def test_api_health_and_ready(database):
     ready = client.get("/ready")
     assert ready.status_code == 200
     assert ready.json()["mode"] == "PAPER"
+    assert ready.json()["live_trading_enabled"] is False
+    assert ready.json()["runtime"] is None
     runtime = client.get("/runtime")
     assert runtime.status_code == 200
     assert runtime.json()["engine"] == "not attached"
