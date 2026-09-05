@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
 
 from crypto_trader.domain.clock import Clock
 from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
@@ -203,6 +204,15 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     assert enriched.memory_refs == [f"review:{episode.episode_id}"]
     assert enriched.similar_episodes[0]["net_pnl"] == str(episode.net_pnl)
     assert enriched.pattern_refs == [patterns[0].pattern_id]
+    async with database.session_factory() as session:
+        stored_episode = await session.get(TradeEpisodeORM, episode.episode_id)
+        stored_episode.closed_at = datetime(2026, 1, 1, 23, tzinfo=UTC)
+        await session.commit()
+    local_day = await TradeEpisodeStore(database.session_factory).load_closed_on(
+        "2026-01-02",
+        timezone=timezone(timedelta(hours=12)),
+    )
+    assert [item.episode_id for item in local_day] == [episode.episode_id]
     await engine.stop()
 
 

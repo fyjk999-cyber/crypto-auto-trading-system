@@ -33,7 +33,11 @@ class DailyReviewScheduler:
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
         date = date or now.date().isoformat()
-        episodes = await self.episodes.load_closed_on(date, limit=1000)
+        episodes = await self.episodes.load_closed_on(
+            date,
+            limit=1000,
+            timezone=now.tzinfo or UTC,
+        )
         records = [_episode_record(episode) for episode in episodes]
         if not self.canonical_only and not records:
             records = await self.persistence.load_trade_memory(limit=1000)

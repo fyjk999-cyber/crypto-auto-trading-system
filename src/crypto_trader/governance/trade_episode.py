@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -185,7 +185,13 @@ class TradeEpisodeStore:
             await session.commit()
             return _to_domain(row)
 
-    async def load_closed_on(self, date: str, *, limit: int = 1000) -> list[FactualTradeEpisode]:
+    async def load_closed_on(
+        self,
+        date: str,
+        *,
+        limit: int = 1000,
+        timezone: tzinfo = UTC,
+    ) -> list[FactualTradeEpisode]:
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -198,7 +204,7 @@ class TradeEpisodeStore:
             return [
                 _to_domain(row)
                 for row in rows
-                if _as_utc(row.closed_at).date().isoformat() == date
+                if _as_utc(row.closed_at).astimezone(timezone).date().isoformat() == date
             ]
 
     async def mark_reviewed(self, episode_ids: list[str]) -> None:
