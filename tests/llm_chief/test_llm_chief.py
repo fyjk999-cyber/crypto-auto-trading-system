@@ -84,6 +84,52 @@ async def test_deepseek_provider_classifies_prose_contamination_without_parsing_
     assert provider.diagnostics()["last_token_usage"] == {"completion_tokens": 3}
 
 
+async def test_deepseek_provider_retries_invalid_json_then_accepts_valid_json():
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = "" if calls == 1 else '{"action":"WAIT"}'
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": content}}],
+                "usage": {"completion_tokens": calls},
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=1)
+    assert result.ok is True
+    assert result.parsed_json == {"action": "WAIT"}
+    assert calls == 2
+    assert provider.diagnostics()["last_attempt_count"] == 2
+
+
+async def test_deepseek_provider_exhausts_invalid_json_fail_closed():
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": ""}}]},
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=1)
+    assert result.ok is False
+    assert result.error == "EMPTY_CONTENT"
+    assert calls == 2
+    assert provider.diagnostics()["last_attempt_count"] == 2
+
+
 async def test_deepseek_provider_malformed_payload_fails_closed():
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": []})

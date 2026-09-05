@@ -56,6 +56,7 @@ class DeepSeekProvider:
         self.last_error: str | None = None
         self.last_latency_ms: float | None = None
         self.last_token_usage: dict | None = None
+        self.last_attempt_count: int | None = None
 
     def healthy(self) -> bool:
         return bool(self.api_key)
@@ -91,7 +92,9 @@ class DeepSeekProvider:
             timeout=timeout_seconds,
             transport=self._transport,
         ) as client:
-            for _ in range(retries + 1):
+            last_invalid_response: LLMResponse | None = None
+            for attempt in range(retries + 1):
+                self.last_attempt_count = attempt + 1
                 try:
                     response = await client.post(
                         "/chat/completions",
@@ -158,7 +161,7 @@ class DeepSeekProvider:
                         )
                         self.last_latency_ms = latency_ms
                         self.last_token_usage = usage
-                        return LLMResponse(
+                        last_invalid_response = LLMResponse(
                             text=content,
                             provider=self.name,
                             model=self.model,
@@ -167,12 +170,22 @@ class DeepSeekProvider:
                             error=self.last_error,
                             token_usage=usage,
                         )
+                        # Empty, truncated, or prose-contaminated JSON is a
+                        # recoverable provider response, not a trading signal.
+                        # Retry only within the caller's bounded retry budget;
+                        # if every response is invalid the final result remains
+                        # fail-closed and no TradePlan can be created.
+                        if attempt < retries:
+                            continue
+                        return last_invalid_response
                 except httpx.TimeoutException:
                     self.last_error = "LLM_TIMEOUT"
                     continue
                 except httpx.HTTPError:
                     self.last_error = "LLM_TRANSPORT_ERROR"
                     continue
+        if last_invalid_response is not None:
+            return last_invalid_response
         result = LLMResponse(
             text="",
             provider=self.name,
@@ -195,4 +208,5 @@ class DeepSeekProvider:
             "last_error": self.last_error,
             "last_latency_ms": self.last_latency_ms,
             "last_token_usage": self.last_token_usage,
+            "last_attempt_count": self.last_attempt_count,
         }
