@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.identifiers import new_id
@@ -149,7 +149,7 @@ class LeaseManager:
         fence_generation: int | None = None,
     ) -> bool:
         async with self.session_factory() as session:
-            statement = delete(RuntimeLeaseORM).where(
+            statement = update(RuntimeLeaseORM).where(
                 RuntimeLeaseORM.lease_key == lease_key,
                 RuntimeLeaseORM.token == token,
             )
@@ -159,7 +159,16 @@ class LeaseManager:
                 statement = statement.where(
                     RuntimeLeaseORM.fence_generation == int(fence_generation)
                 )
-            result = await session.execute(statement)
+            # Preserve the row as a fencing tombstone.  The next acquisition
+            # must CAS this expired generation forward instead of recreating
+            # generation 1, so a controlled restart is visibly newer.
+            result = await session.execute(
+                statement.values(
+                    expires_at=0.0,
+                    renewed_at=_epoch(),
+                    version=RuntimeLeaseORM.version + 1,
+                )
+            )
             await session.commit()
             return result.rowcount == 1
 

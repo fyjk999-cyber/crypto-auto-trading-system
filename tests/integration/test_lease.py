@@ -12,6 +12,13 @@ async def test_single_engine_acquires_renews_and_releases(database):
     assert await mgr.renew("exec", lease.token, ttl_seconds=10) is True
     assert await mgr.release("exec", lease.token) is True
     assert await mgr.is_held("exec", lease.token) is False
+    restarted = await mgr.acquire("exec", "engine_b", ttl_seconds=10)
+    assert restarted is not None
+    assert restarted.token != lease.token
+    assert restarted.fence_generation == lease.fence_generation + 1
+    assert await mgr.is_current(
+        "exec", lease.token, lease.fence_generation, owner_id="engine_a"
+    ) is False
 
 
 async def test_dual_engine_lease_blocks_second_writer(database):
