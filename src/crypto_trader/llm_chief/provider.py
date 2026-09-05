@@ -105,21 +105,31 @@ class DeepSeekProvider:
                         if response.status_code != 429 and response.status_code < 500:
                             break
                         continue
-                    payload = response.json()
-                    content = payload["choices"][0]["message"]["content"]
+                    try:
+                        payload = response.json()
+                        content = payload["choices"][0]["message"]["content"]
+                        if not isinstance(content, str):
+                            raise TypeError("content is not text")
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        self.last_error = "MALFORMED_PROVIDER_RESPONSE"
+                        break
+                    latency_ms = (time.monotonic() - start) * 1000
+                    usage = payload.get("usage")
                     try:
                         parsed = json.loads(content)
                         if not isinstance(parsed, dict):
                             self.last_error = "INVALID_JSON_OBJECT"
+                            self.last_latency_ms = latency_ms
+                            self.last_token_usage = usage
                             break
                         result = LLMResponse(
                             text=content,
                             provider=self.name,
                             model=self.model,
-                            latency_ms=(time.monotonic() - start) * 1000,
+                            latency_ms=latency_ms,
                             parsed_json=parsed,
                             ok=True,
-                            token_usage=payload.get("usage"),
+                            token_usage=usage,
                         )
                         self.last_success_ts = datetime.now(UTC).isoformat()
                         self.last_error = None
@@ -127,14 +137,23 @@ class DeepSeekProvider:
                         self.last_token_usage = result.token_usage
                         return result
                     except json.JSONDecodeError:
-                        self.last_error = "INVALID_JSON"
+                        self.last_error = (
+                            "EMPTY_CONTENT"
+                            if not content.strip()
+                            else "PROSE_CONTAMINATION"
+                            if content.lstrip().startswith("```")
+                            else "INVALID_JSON"
+                        )
+                        self.last_latency_ms = latency_ms
+                        self.last_token_usage = usage
                         return LLMResponse(
                             text=content,
                             provider=self.name,
                             model=self.model,
-                            latency_ms=(time.monotonic() - start) * 1000,
+                            latency_ms=latency_ms,
                             ok=False,
-                            error="INVALID_JSON",
+                            error=self.last_error,
+                            token_usage=usage,
                         )
                 except httpx.TimeoutException:
                     self.last_error = "LLM_TIMEOUT"

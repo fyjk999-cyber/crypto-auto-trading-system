@@ -62,6 +62,37 @@ async def test_deepseek_provider_fails_closed_without_retrying_nonretryable_http
     assert "unsafe external detail" not in str(provider.diagnostics())
 
 
+async def test_deepseek_provider_classifies_prose_contamination_without_parsing_it():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "```json\n{}\n```"}}],
+                "usage": {"completion_tokens": 3},
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=0)
+    assert result.ok is False
+    assert result.error == "PROSE_CONTAMINATION"
+    assert provider.diagnostics()["last_token_usage"] == {"completion_tokens": 3}
+
+
+async def test_deepseek_provider_malformed_payload_fails_closed():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": []})
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=0)
+    assert result.ok is False
+    assert result.error == "MALFORMED_PROVIDER_RESPONSE"
+
+
 def test_llm_provider_abstraction_without_key():
     provider = DeepSeekProvider(api_key=None)
     assert provider.healthy() is False

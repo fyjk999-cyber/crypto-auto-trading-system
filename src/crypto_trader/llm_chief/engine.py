@@ -45,7 +45,7 @@ class ChiefTraderEngine:
             temperature=0.0,
             timeout_seconds=20.0,
             retries=1,
-            max_tokens=256,
+            max_tokens=768,
         )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
