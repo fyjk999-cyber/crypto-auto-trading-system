@@ -40,7 +40,13 @@ class ChiefTraderEngine:
             f"Symbol: {ctx.symbol}\nPositionState: {ctx.position_state.value}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
-        response = await self.provider.complete_json(prompt=prompt)
+        response = await self.provider.complete_json(
+            prompt=prompt,
+            temperature=0.0,
+            timeout_seconds=20.0,
+            retries=1,
+            max_tokens=256,
+        )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
         try:
@@ -55,7 +61,17 @@ class ChiefTraderEngine:
 
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
-        response = await self.provider.complete_json(prompt=prompt) if self.provider else None
+        response = (
+            await self.provider.complete_json(
+                prompt=prompt,
+                temperature=0.2,
+                timeout_seconds=30.0,
+                retries=1,
+                max_tokens=1200,
+            )
+            if self.provider
+            else None
+        )
         if response is not None and response.ok and response.parsed_json:
             try:
                 return self.parse_decision(

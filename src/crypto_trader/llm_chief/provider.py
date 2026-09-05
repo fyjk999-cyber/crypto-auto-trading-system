@@ -29,7 +29,8 @@ class LLMProvider(Protocol):
         prompt: str,
         temperature: float = 0.2,
         timeout_seconds: float = 30.0,
-        retries: int = 2,
+        retries: int = 1,
+        max_tokens: int = 1200,
     ) -> LLMResponse: ...
 
     def healthy(self) -> bool: ...
@@ -63,7 +64,8 @@ class DeepSeekProvider:
         prompt: str,
         temperature: float = 0.2,
         timeout_seconds: float = 30.0,
-        retries: int = 2,
+        retries: int = 1,
+        max_tokens: int = 1200,
     ) -> LLMResponse:
         import json
         import time
@@ -94,6 +96,7 @@ class DeepSeekProvider:
                             "model": self.model,
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": temperature,
+                            "max_tokens": max_tokens,
                             "response_format": {"type": "json_object"},
                         },
                     )

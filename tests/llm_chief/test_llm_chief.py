@@ -15,7 +15,10 @@ from crypto_trader.llm_chief.provider import DeepSeekProvider
 
 async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
     async def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
         assert request.headers["authorization"] == "Bearer test-secret"
+        assert json.loads(request.content)["max_tokens"] == 64
         return httpx.Response(
             200,
             json={
@@ -29,7 +32,7 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
         model="deepseek-v4-pro",
         transport=httpx.MockTransport(handler),
     )
-    result = await provider.complete_json(prompt="JSON", retries=0)
+    result = await provider.complete_json(prompt="JSON", retries=0, max_tokens=64)
     diagnostics = provider.diagnostics()
     assert result.ok is True
     assert diagnostics["provider"] == "deepseek"
