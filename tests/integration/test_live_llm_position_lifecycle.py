@@ -337,3 +337,52 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     assert closed.state == TradePlanState.CLOSED
     assert closed.terminal_reason == "TIME_STOP_SAFETY_FALLBACK"
     await engine.stop()
+
+
+async def test_paper_restart_restores_active_position_without_fabricating_fill(database):
+    first = make_paper_engine(database, engine_tick_seconds=3600)
+    await first.start("run-before-restart")
+    assert await first._strategy_context("BTCUSDT") is not None
+    plans = TradePlanService(database.session_factory)
+    decisions = LLMDecisionStore(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-restart",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="durable restart thesis",
+        position_size_request=0.1,
+        leverage_request=2,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=first.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await first.process_signal(signal)
+    await first.wait_for_event_queue()
+    fills_before = len(first.adapter.event_log)
+    expected = await first.portfolio.get_position("BTCUSDT")
+    assert expected is not None and expected.quantity == Decimal("0.1")
+    await first.stop()
+
+    recovered = make_paper_engine(database, engine_tick_seconds=3600)
+    await recovered.start("run-after-restart")
+    restored = await recovered.adapter.get_positions()
+    assert len(restored) == 1
+    assert restored[0].quantity == expected.quantity
+    assert restored[0].avg_entry_price == expected.avg_entry_price
+    assert restored[0].contract_size == expected.contract_size
+    assert recovered.adapter.event_log == []
+    assert fills_before > 0
+    report = await recovered.reconciliation.reconcile(recovered.adapter)
+    assert report.ok is True
+    assert report.halt is False
+    assert recovered.runtime_snapshot()["health"]["components"][
+        "paper_restart_recovery"
+    ]["ok"] is True
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await recovered.stop()

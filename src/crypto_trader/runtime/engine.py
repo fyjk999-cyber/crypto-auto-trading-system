@@ -157,6 +157,7 @@ class TradingEngine:
         await self._persist_run(RuntimeState.RECOVERING)
         await self._seed_initial_balances()
         await self._load_instruments()
+        await self._restore_paper_adapter_state()
         self.order_manager.settlement_callback = self._settle_fill
         await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
         self.health.set("recovery", True)
@@ -918,6 +919,20 @@ class TradingEngine:
             self._instruments = {i.symbol: i for i in instruments}
         except Exception:
             self._instruments = {}
+
+    async def _restore_paper_adapter_state(self) -> None:
+        """Restore the process-local PAPER simulator from durable projections."""
+
+        restore = getattr(self.adapter, "restore_from_canonical_state", None)
+        if restore is None or self.settings.effective_mode() != TradingMode.PAPER:
+            return
+        account = await self.portfolio.get_account(self.settings.effective_mode())
+        positions = await self.portfolio.get_positions()
+        await restore(
+            balances={currency: balance.total for currency, balance in account.balances.items()},
+            positions=positions,
+        )
+        self.health.set("paper_restart_recovery", True)
 
     # ---------------------------------------------------------------- helpers
     def kill_switch_snapshot(self) -> dict:

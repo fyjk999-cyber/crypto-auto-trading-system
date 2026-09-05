@@ -509,6 +509,26 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self._ensure_connected()
         return list(self.positions.values())
 
+    async def restore_from_canonical_state(
+        self,
+        *,
+        balances: dict[str, Decimal],
+        positions: dict[str, Position],
+    ) -> None:
+        """Hydrate volatile PAPER state from durable ledger projections.
+
+        This is restart recovery, not a fill or market-data fallback.  No
+        order/event is created and the durable ledger remains authoritative.
+        """
+
+        self._ensure_connected()
+        self.balances = {currency: D(amount) for currency, amount in balances.items()}
+        self.positions = {
+            symbol: position.model_copy(deep=True)
+            for symbol, position in positions.items()
+            if position.quantity != 0
+        }
+
     # ------------------------------------------------------------ normalize
     def normalize_symbol(self, raw: object) -> str:
         return str(raw).upper()

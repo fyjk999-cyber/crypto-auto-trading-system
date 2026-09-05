@@ -58,8 +58,7 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         if min(tick_size, lot_size, min_size, contract_size, contract_multiplier) <= 0:
             return []
         base, quote, *_ = provider_symbol.split("-")
-        return [
-            Instrument(
+        instrument = Instrument(
                 symbol=canonical,
                 base_asset=base,
                 quote_asset=quote,
@@ -75,7 +74,8 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
                 contract_size=contract_size,
                 contract_multiplier=contract_multiplier,
             )
-        ]
+        self.instruments[canonical] = instrument
+        return [instrument]
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:
