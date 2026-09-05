@@ -19,6 +19,7 @@ from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
+from crypto_trader.exposure.service import ExposureService
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory_persistence import MemoryPersistence
@@ -46,6 +47,16 @@ class ManualOrderBody(BaseModel):
 
 def serialize_order(order) -> dict:
     return order.model_dump(mode="json")
+
+
+def serialize_position(position) -> dict:
+    """Serialize a position with the same canonical exposure used by Risk."""
+
+    payload = position.model_dump(mode="json")
+    exposure = ExposureService.for_position(position)
+    payload["gross_notional"] = str(exposure.gross_notional)
+    payload["signed_notional"] = str(exposure.signed_notional)
+    return payload
 
 
 def create_app(state: AppState) -> FastAPI:
@@ -378,10 +389,21 @@ def create_app(state: AppState) -> FastAPI:
     async def margin():
         account = await state.portfolio.get_account(state.settings.effective_mode())
         positions = await state.portfolio.get_positions()
+        serialized = {symbol: serialize_position(pos) for symbol, pos in positions.items()}
+        gross_exposure = sum(
+            (ExposureService.for_position(pos).gross_notional for pos in positions.values()),
+            Decimal("0"),
+        )
+        net_exposure = sum(
+            (ExposureService.for_position(pos).signed_notional for pos in positions.values()),
+            Decimal("0"),
+        )
         return {
             "equity": str(account.equity),
             "balances": {k: v.model_dump(mode="json") for k, v in account.balances.items()},
-            "positions": {k: v.model_dump(mode="json") for k, v in positions.items()},
+            "positions": serialized,
+            "gross_exposure": str(gross_exposure),
+            "net_exposure": str(net_exposure),
         }
 
     @app.get("/reviews")
@@ -504,7 +526,7 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/positions")
     async def positions():
         positions = await state.portfolio.get_positions()
-        return {symbol: pos.model_dump(mode="json") for symbol, pos in positions.items()}
+        return {symbol: serialize_position(pos) for symbol, pos in positions.items()}
 
     @app.get("/account")
     async def account():

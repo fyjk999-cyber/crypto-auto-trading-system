@@ -2,10 +2,11 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
-from crypto_trader.api.app import create_app
+from crypto_trader.api.app import create_app, serialize_position
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType
+from crypto_trader.domain.models import Position
 from crypto_trader.ledger.service import LedgerPosting, LedgerService
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -68,6 +69,24 @@ async def test_api_financial_endpoints_return_strings_not_floats(database):
 
     audit = client.get("/audit").json()
     assert any(row["action"] == "TEST_API" for row in audit)
+
+
+def test_position_api_uses_canonical_contract_size_exposure():
+    payload = serialize_position(
+        Position(
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            quantity=Decimal("-2"),
+            avg_entry_price=Decimal("50000"),
+            cost_basis=Decimal("1000"),
+            instrument_type="LINEAR_PERP",
+            contract_size=Decimal("0.01"),
+            contract_multiplier=Decimal("1"),
+        )
+    )
+    assert payload["gross_notional"] == "1000.00"
+    assert payload["signed_notional"] == "-1000.00"
 
 
 async def test_api_version_endpoint(database, monkeypatch):
