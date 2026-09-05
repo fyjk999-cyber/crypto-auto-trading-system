@@ -1,4 +1,5 @@
 from crypto_trader.exchange.okx import OKXAdapter
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 
 
 def test_okx_auth_headers_demo_and_not_live():
@@ -91,3 +92,9 @@ def test_okx_cl_ord_id_is_bounded_and_stable():
     cid = adapter._cl_ord_id("client_order_1")
     assert len(cid) <= 32
     assert adapter._cl_ord_id("client_order_1") == cid
+
+
+def test_symbol_mapping_supports_dynamic_usdt_swap_universe():
+    mapper = SymbolMapper()
+    assert mapper.to_okx("DOGEUSDT") == "DOGE-USDT-SWAP"
+    assert mapper.to_canonical("DOGE-USDT-SWAP") == "DOGEUSDT"

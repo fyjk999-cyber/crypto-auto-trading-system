@@ -33,6 +33,11 @@ class MarketState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     symbol: str
+    provider: str = "BINANCE_USDM_PUBLIC"
+    data_source: str = "REAL"
+    instrument_id: str | None = None
+    instrument_type: str = "SWAP"
+    status: DataHealth = DataHealth.UNAVAILABLE
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     price: StrictDecimal = Decimal("0")
     mark_price: StrictDecimal = Decimal("0")
@@ -74,6 +79,7 @@ class MarketState(BaseModel):
 
     def mark_healthy_from_sources(self) -> None:
         self.health = self.overall_health()
+        self.status = self.health
         self.freshness = self.health
         self.new_risk_allowed = self.health == DataHealth.HEALTHY
         if not self.new_risk_allowed:

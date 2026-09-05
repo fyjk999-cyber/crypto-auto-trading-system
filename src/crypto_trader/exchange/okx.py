@@ -309,9 +309,11 @@ class OKXAdapter(ExchangeAdapter):
         raw = data["data"][0]
         return {
             "symbol": raw["instId"],
+            "last": raw.get("last", "0"),
             "bid": raw.get("bidPx", "0"),
             "ask": raw.get("askPx", "0"),
-            "mark": raw.get("markPx", "0"),
+            "volume_24h": raw.get("vol24h", "0"),
+            "source_timestamp": raw.get("ts"),
         }
 
     async def get_mark_price(self, symbol: str) -> dict:
@@ -321,13 +323,20 @@ class OKXAdapter(ExchangeAdapter):
         if not data.get("data"):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX mark-price response is empty")
         raw = data["data"][0]
-        funding = await self.get_funding_rate(symbol)
         return {
             "mark_price": raw.get("markPx", "0"),
-            "index_price": raw.get("idxPx", "0"),
-            "funding_rate": funding["funding_rate"],
-            "next_funding_time": funding.get("next_funding_time"),
+            "source_timestamp": raw.get("ts"),
         }
+
+    async def get_index_price(self, symbol: str) -> dict:
+        index_symbol = symbol.removesuffix("-SWAP")
+        data = await self._public_request(
+            "GET", "/api/v5/market/index-tickers", params={"instId": index_symbol}
+        )
+        if not data.get("data"):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX index response is empty")
+        raw = data["data"][0]
+        return {"index_price": raw.get("idxPx", "0"), "source_timestamp": raw.get("ts")}
 
     async def get_funding_rate(self, symbol: str) -> dict:
         data = await self._public_request(

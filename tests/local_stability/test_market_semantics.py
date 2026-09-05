@@ -7,9 +7,9 @@ from crypto_trader.api.app import create_app
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.domain.errors import MarketDataUnhealthy
-from crypto_trader.exchange.binance_futures_public import BinancePublicDataUnavailable
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.ledger.service import LedgerService
+from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -70,17 +70,77 @@ async def test_real_market_unavailable_reports_okx_not_synthetic(database):
 
 
 async def test_real_market_adapter_does_not_silent_fallback():
-    class FailingPublicClient:
-        async def get_orderbook(self, symbol, limit=100):
-            raise BinancePublicDataUnavailable("HTTP_451_GEO_RESTRICTED")
+    class FailingOKX:
+        def __getattr__(self, name):
+            if name == "disconnect":
+
+                async def disconnect():
+                    return None
+
+                return disconnect
+
+            async def unavailable(*args, **kwargs):
+                raise OKXDiagnosticError("NETWORK_ERROR", "OKX unavailable")
+
+            return unavailable
 
     adapter = PaperRealMarketAdapter(
         initial_balances={"USDT": Decimal("100000")},
+        feed=OKXPublicMarketFeed(client=FailingOKX()),
     )
-    adapter.public_client = FailingPublicClient()
     await adapter.connect()
     with pytest.raises(MarketDataUnhealthy):
         await adapter.get_orderbook("BTCUSDT")
+
+
+async def test_real_market_adapter_exposes_complete_factual_okx_state():
+    class FactualOKX:
+        async def get_ticker(self, symbol):
+            assert symbol == "DOGE-USDT-SWAP"
+            return {
+                "last": "0.25",
+                "volume_24h": "2000",
+                "source_timestamp": "1722470400000",
+            }
+
+        async def get_orderbook(self, symbol):
+            return {
+                "data": [
+                    {
+                        "ts": "1722470400000",
+                        "bids": [["0.24", "10"]],
+                        "asks": [["0.26", "8"]],
+                    }
+                ]
+            }
+
+        async def get_mark_price(self, symbol):
+            return {"mark_price": "0.251"}
+
+        async def get_index_price(self, symbol):
+            return {"index_price": "0.249"}
+
+        async def get_funding_rate(self, symbol):
+            return {"funding_rate": "0.0001", "next_funding_time": None}
+
+        async def get_open_interest(self, symbol):
+            return {"open_interest": "12345"}
+
+        async def disconnect(self):
+            return None
+
+    adapter = PaperRealMarketAdapter(feed=OKXPublicMarketFeed(client=FactualOKX()))
+    state = await adapter.get_market_state("DOGEUSDT")
+    assert state.provider == "OKX_PUBLIC"
+    assert state.instrument_id == "DOGE-USDT-SWAP"
+    assert state.status.value == "HEALTHY"
+    assert state.price == Decimal("0.25")
+    assert state.mark_price == Decimal("0.251")
+    assert state.index_price == Decimal("0.249")
+    assert state.funding_rate == Decimal("0.0001")
+    assert state.open_interest == Decimal("12345")
+    assert state.spread == Decimal("0.02")
+    assert all(source.source == "OKX_PUBLIC" for source in state.sources.values())
 
 
 async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):
