@@ -13,8 +13,14 @@ from crypto_trader.trade_plan.service import TradePlan, TradePlanService
 class LiveLLMTradePlanner:
     """Creates a TradePlan before returning a SignalIntent; never calls execution."""
 
-    def __init__(self, plans: TradePlanService) -> None:
+    def __init__(
+        self,
+        plans: TradePlanService,
+        *,
+        max_holding_time_seconds: float = 86400.0,
+    ) -> None:
         self.plans = plans
+        self.max_holding_time_seconds = max_holding_time_seconds
 
     async def create_entry_signal(
         self,
@@ -38,6 +44,17 @@ class LiveLLMTradePlanner:
             requested_leverage=Decimal(str(decision.leverage_request))
             if decision.leverage_request > 0
             else None,
+            requested_exposure=(
+                Decimal(str(decision.requested_exposure))
+                if decision.requested_exposure is not None
+                else None
+            ),
+            entry_conditions=[decision.entry_plan] if decision.entry_plan else [],
+            invalidation_conditions=decision.invalidation_conditions,
+            reduce_conditions=decision.reduce_conditions,
+            exit_conditions=decision.exit_conditions,
+            expected_holding_period=decision.expected_holding_period,
+            max_holding_time_seconds=self.max_holding_time_seconds,
         )
         signal = SignalIntent(
             signal_id=decision.decision_id,

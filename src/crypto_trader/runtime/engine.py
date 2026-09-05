@@ -423,7 +423,7 @@ class TradingEngine:
                 and plan.symbol == signal.symbol
                 and plan.state == TradePlanState.ACTIVE
                 and plan.latest_position_decision_id == signal.metadata.get("decision_id")
-                and action in {"REDUCE", "EXIT"}
+                and action in {"REDUCE", "EXIT", "TIME_STOP_SAFETY_FALLBACK"}
                 and signal.metadata.get("reduce_only") is True
                 and position is not None
                 and position.quantity != 0

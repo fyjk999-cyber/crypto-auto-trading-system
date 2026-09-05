@@ -112,7 +112,10 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
         chief=chief,
-        planner=LiveLLMTradePlanner(trade_plans),
+        planner=LiveLLMTradePlanner(
+            trade_plans,
+            max_holding_time_seconds=settings.max_holding_time_seconds,
+        ),
         decisions=llm_decisions,
         audit=audit,
         risk_summary=risk.config.model_dump(mode="json"),

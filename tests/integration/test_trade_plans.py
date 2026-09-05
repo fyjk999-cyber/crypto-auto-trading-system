@@ -16,6 +16,13 @@ async def test_trade_plan_is_idempotent_by_decision_id_and_has_terminal_semantic
         thesis="breakout structure remains valid",
         requested_quantity=Decimal("0.1"),
         requested_leverage=Decimal("2"),
+        requested_exposure=Decimal("500"),
+        entry_conditions=["breakout confirmed"],
+        invalidation_conditions=["close below support"],
+        reduce_conditions=["momentum weakens"],
+        exit_conditions=["thesis invalidated"],
+        expected_holding_period="4h",
+        max_holding_time_seconds=7200,
     )
     duplicate = await plans.create(
         decision_id="decision_1",
@@ -27,6 +34,9 @@ async def test_trade_plan_is_idempotent_by_decision_id_and_has_terminal_semantic
 
     assert first.trade_plan_id == duplicate.trade_plan_id
     assert first.state == TradePlanState.PLANNED
+    assert first.requested_exposure == Decimal("500")
+    assert first.invalidation_conditions == ["close below support"]
+    assert first.max_holding_time_seconds == 7200
     rejected = await plans.transition(first.trade_plan_id, TradePlanState.REJECTED, reason="risk")
     assert rejected.terminal_reason == "risk"
     with pytest.raises(ValueError):

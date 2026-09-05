@@ -50,6 +50,7 @@ class ChiefTraderDecision(BaseModel):
     expected_holding_period: str = ""
     entry_plan: str = ""
     position_size_request: float = Field(default=0.0, ge=0.0)
+    requested_exposure: float | None = Field(default=None, ge=0.0)
     leverage_request: float = Field(default=0.0, ge=0.0)
     stop_loss: float | None = None
     take_profit: float | None = None

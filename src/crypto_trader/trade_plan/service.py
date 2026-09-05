@@ -61,6 +61,13 @@ class TradePlan:
     thesis: str
     requested_quantity: Decimal
     requested_leverage: Decimal | None
+    requested_exposure: Decimal | None
+    entry_conditions: list[str]
+    invalidation_conditions: list[str]
+    reduce_conditions: list[str]
+    exit_conditions: list[str]
+    expected_holding_period: str
+    max_holding_time_seconds: float
     signal_id: str | None
     risk_decision_id: str | None
     order_id: str | None
@@ -84,8 +91,19 @@ class TradePlanService:
         thesis: str,
         requested_quantity: Decimal,
         requested_leverage: Decimal | None = None,
+        requested_exposure: Decimal | None = None,
+        entry_conditions: list[str] | None = None,
+        invalidation_conditions: list[str] | None = None,
+        reduce_conditions: list[str] | None = None,
+        exit_conditions: list[str] | None = None,
+        expected_holding_period: str = "",
+        max_holding_time_seconds: float = 86400.0,
     ) -> TradePlan:
-        if direction not in {"LONG", "SHORT"} or requested_quantity <= 0:
+        if (
+            direction not in {"LONG", "SHORT"}
+            or requested_quantity <= 0
+            or max_holding_time_seconds <= 0
+        ):
             raise ValueError("TradePlan requires a directional positive-size proposal")
         async with self.session_factory() as session:
             existing = (
@@ -104,6 +122,13 @@ class TradePlanService:
                 thesis=thesis,
                 requested_quantity=requested_quantity,
                 requested_leverage=requested_leverage,
+                requested_exposure=requested_exposure,
+                entry_conditions_json=list(entry_conditions or []),
+                invalidation_conditions_json=list(invalidation_conditions or []),
+                reduce_conditions_json=list(reduce_conditions or []),
+                exit_conditions_json=list(exit_conditions or []),
+                expected_holding_period=expected_holding_period,
+                max_holding_time_seconds=max_holding_time_seconds,
             )
             session.add(row)
             try:
@@ -223,6 +248,13 @@ class TradePlanService:
             thesis=row.thesis,
             requested_quantity=row.requested_quantity,
             requested_leverage=row.requested_leverage,
+            requested_exposure=row.requested_exposure,
+            entry_conditions=list(row.entry_conditions_json or []),
+            invalidation_conditions=list(row.invalidation_conditions_json or []),
+            reduce_conditions=list(row.reduce_conditions_json or []),
+            exit_conditions=list(row.exit_conditions_json or []),
+            expected_holding_period=row.expected_holding_period,
+            max_holding_time_seconds=row.max_holding_time_seconds,
             signal_id=row.signal_id,
             risk_decision_id=row.risk_decision_id,
             order_id=row.order_id,

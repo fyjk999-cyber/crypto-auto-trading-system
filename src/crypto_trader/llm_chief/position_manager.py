@@ -88,6 +88,11 @@ class LiveLLMPositionManager:
             "trade_plan_id": plan.trade_plan_id,
             "entry_decision_id": plan.decision_id,
             "original_thesis": plan.thesis,
+            "invalidation_conditions": plan.invalidation_conditions,
+            "reduce_conditions": plan.reduce_conditions,
+            "exit_conditions": plan.exit_conditions,
+            "expected_holding_period": plan.expected_holding_period,
+            "max_holding_time_seconds": plan.max_holding_time_seconds,
         }
         chief_ctx = ChiefTraderContext(
             symbol=position.symbol,
@@ -129,10 +134,17 @@ class LiveLLMPositionManager:
             position_context=position_context,
         )
         await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
+        max_hold_reached = (
+            position_context["time_in_trade_seconds"] >= plan.max_holding_time_seconds
+        )
+        time_stop = max_hold_reached and decision.action in {
+            OpenAction.HOLD,
+            OpenAction.FAIL_CLOSED,
+        }
         await self.plans.link_position_decision(
             plan.trade_plan_id,
             decision.decision_id,
-            is_exit=decision.action == OpenAction.EXIT,
+            is_exit=decision.action == OpenAction.EXIT or time_stop,
         )
         await self.audit.log(
             "LIVE_LLM_POSITION_DECISION",
@@ -146,12 +158,12 @@ class LiveLLMPositionManager:
                 "decision_authority": "LIVE_LLM_ONLY",
             },
         )
-        if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED}:
+        if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
             return None
 
         quantity = (
             abs(position.quantity)
-            if decision.action == OpenAction.EXIT
+            if decision.action == OpenAction.EXIT or time_stop
             else Decimal(str(decision.position_size_request))
         )
         if quantity <= 0 or quantity > abs(position.quantity):
@@ -169,12 +181,19 @@ class LiveLLMPositionManager:
             symbol=position.symbol,
             side=OrderSide.SELL if position.quantity > 0 else OrderSide.BUY,
             quantity=quantity,
-            reason=decision.thesis or decision.action.value,
+            reason=(
+                "maximum holding time safety fallback"
+                if time_stop
+                else decision.thesis or decision.action.value
+            ),
             metadata={
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_id": decision.decision_id,
                 "entry_decision_id": plan.decision_id,
-                "lifecycle_action": decision.action.value,
+                "lifecycle_action": (
+                    "TIME_STOP_SAFETY_FALLBACK" if time_stop else decision.action.value
+                ),
+                "time_stop": time_stop,
                 "reduce_only": True,
                 "instrument_type": position.instrument_type,
                 "contract_size": str(position.contract_size),

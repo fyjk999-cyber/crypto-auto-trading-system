@@ -238,3 +238,60 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
         assert episode.closed_quantity == Decimal("0.1")
         assert episode.gross_pnl == Decimal("-0.01")
     await engine.stop()
+
+
+async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-time-stop")
+    assert await engine._strategy_context("BTCUSDT") is not None
+
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-time-stop",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="time bounded thesis",
+        position_size_request=0.1,
+        leverage_request=1,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(
+        plans, max_holding_time_seconds=60
+    ).create_entry_signal(entry, limit_price=Decimal("101"))
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    chief = SequencedChief([("HOLD", "0"), ("HOLD", "0")])
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    order_count = len(engine.adapter.orders)
+    await engine.tick()
+    assert len(engine.adapter.orders) == order_count
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+
+    clock.advance(61)
+    await engine.tick()
+    submitted = list(engine.adapter.orders.values())[-1]
+    assert submitted.metadata["reduce_only"] is True
+    assert submitted.metadata["time_stop"] is True
+    assert submitted.metadata["lifecycle_action"] == "TIME_STOP_SAFETY_FALLBACK"
+    await engine.wait_for_event_queue()
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == 0
+    closed = await plans.get(plan.trade_plan_id)
+    assert closed.state == TradePlanState.CLOSED
+    assert closed.terminal_reason == "TIME_STOP_SAFETY_FALLBACK"
+    await engine.stop()

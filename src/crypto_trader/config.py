@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     paper_initial_equity: str = "100000"
     paper_settlement_asset: str = "USDT"
     daily_review_time_utc: str = "00:05"
+    max_holding_time_seconds: int = 86400
 
     # Runtime
     run_lease_ttl_seconds: int = 10
