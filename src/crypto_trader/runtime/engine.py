@@ -121,6 +121,7 @@ class TradingEngine:
 
         self.run_id: str | None = None
         self.lease: Lease | None = None
+        self._lease_valid = not require_lease
         self.reconciliation_halted = False
         self._event_queue: asyncio.Queue[ExchangeEvent] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
@@ -147,6 +148,7 @@ class TradingEngine:
                 await self._persist_run(RuntimeState.STOPPED)
                 self.state_machine.transition(RuntimeState.STOPPED)
                 raise LeaseNotHeld("another engine instance holds the execution lease")
+            self._lease_valid = True
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
 
         self.state_machine.transition(RuntimeState.RECOVERING)
@@ -189,8 +191,14 @@ class TradingEngine:
             except asyncio.CancelledError:
                 pass
         if self.lease is not None:
-            await self.lease_manager.release(self.lease_key, self.lease.token)
+            await self.lease_manager.release(
+                self.lease_key,
+                self.lease.token,
+                owner_id=self.lease.owner_id,
+                fence_generation=self.lease.fence_generation,
+            )
             self.lease = None
+        self._lease_valid = not self.require_lease
         await self.adapter.disconnect()
         self.state_machine.transition(RuntimeState.STOPPING)
         self.state_machine.transition(RuntimeState.STOPPED)
@@ -241,12 +249,26 @@ class TradingEngine:
         while True:
             await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
             if self.lease is not None:
-                ok = await self.lease_manager.renew(
-                    self.lease_key, self.lease.token, self.settings.run_lease_ttl_seconds
-                )
+                try:
+                    ok = await self.lease_manager.renew(
+                        self.lease_key,
+                        self.lease.token,
+                        self.settings.run_lease_ttl_seconds,
+                        owner_id=self.lease.owner_id,
+                        fence_generation=self.lease.fence_generation,
+                    )
+                except Exception:
+                    ok = False
+                self._lease_valid = ok
                 self.health.set("execution_lease", ok)
                 if not ok:
                     self.risk_engine.kill_switch.engage("execution lease lost")
+                    await self.audit.log(
+                        "EXECUTION_LEASE_LOST",
+                        target=self.lease_key,
+                        run_id=self.run_id,
+                    )
+                    return
 
     async def _reconciliation_loop(self) -> None:
         while True:
@@ -475,11 +497,15 @@ class TradingEngine:
             )
 
         instrument = self._instruments.get(symbol)
-        lease_held = (
-            self.require_lease
-            and self.lease is not None
-            and await self.lease_manager.is_held(self.lease_key, self.lease.token)
-        )
+        lease_held = not self.require_lease
+        if self.require_lease and self.lease is not None and self._lease_valid:
+            lease_held = await self.lease_manager.is_current(
+                self.lease_key,
+                self.lease.token,
+                self.lease.fence_generation,
+                owner_id=self.lease.owner_id,
+            )
+            self._lease_valid = lease_held
         intent = OrderIntent(
             client_order_id=client_order_id,
             symbol=symbol,
@@ -501,7 +527,7 @@ class TradingEngine:
             now=self.clock.now(),
             trading_mode=self.settings.effective_mode(),
             live_enabled=self.settings.live_trading_enabled,
-            lease_held=lease_held or not self.require_lease,
+            lease_held=lease_held,
             kill_switch=self.risk_engine.kill_switch,
             order_status=OrderStatus.CREATED,
             expires_at=intent.expires_at,
@@ -863,7 +889,7 @@ class TradingEngine:
             "run_id": self.run_id,
             "state": self.state_machine.state.value,
             "mode": self.settings.effective_mode().value,
-            "lease_held": self.lease is not None,
+            "lease_held": self._lease_valid,
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
             "kill_switch": self.kill_switch_snapshot(),

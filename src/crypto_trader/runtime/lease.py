@@ -56,7 +56,13 @@ class LeaseManager:
                     row.renewed_at = now
                     row.version += 1
                     await session.commit()
-                    return Lease(lease_key, owner_id, row.token, expires_at)
+                    return Lease(
+                        lease_key,
+                        owner_id,
+                        row.token,
+                        expires_at,
+                        row.fence_generation,
+                    )
                 return None
             if row is None:
                 session.add(
@@ -104,29 +110,56 @@ class LeaseManager:
                 )
         return None
 
-    async def renew(self, lease_key: str, token: str, ttl_seconds: float) -> bool:
+    async def renew(
+        self,
+        lease_key: str,
+        token: str,
+        ttl_seconds: float,
+        *,
+        owner_id: str | None = None,
+        fence_generation: int | None = None,
+    ) -> bool:
         now = _epoch()
         expires_at = now + ttl_seconds
         async with self.session_factory() as session:
-            result = await session.execute(
-                update(RuntimeLeaseORM)
-                .where(
-                    RuntimeLeaseORM.lease_key == lease_key,
-                    RuntimeLeaseORM.token == token,
-                    RuntimeLeaseORM.expires_at > now,
+            statement = update(RuntimeLeaseORM).where(
+                RuntimeLeaseORM.lease_key == lease_key,
+                RuntimeLeaseORM.token == token,
+                RuntimeLeaseORM.expires_at > now,
+            )
+            if owner_id is not None:
+                statement = statement.where(RuntimeLeaseORM.owner_id == owner_id)
+            if fence_generation is not None:
+                statement = statement.where(
+                    RuntimeLeaseORM.fence_generation == int(fence_generation)
                 )
+            result = await session.execute(
+                statement
                 .values(expires_at=expires_at, renewed_at=now, version=RuntimeLeaseORM.version + 1)
             )
             await session.commit()
             return result.rowcount == 1
 
-    async def release(self, lease_key: str, token: str) -> bool:
+    async def release(
+        self,
+        lease_key: str,
+        token: str,
+        *,
+        owner_id: str | None = None,
+        fence_generation: int | None = None,
+    ) -> bool:
         async with self.session_factory() as session:
-            result = await session.execute(
-                delete(RuntimeLeaseORM).where(
-                    RuntimeLeaseORM.lease_key == lease_key, RuntimeLeaseORM.token == token
-                )
+            statement = delete(RuntimeLeaseORM).where(
+                RuntimeLeaseORM.lease_key == lease_key,
+                RuntimeLeaseORM.token == token,
             )
+            if owner_id is not None:
+                statement = statement.where(RuntimeLeaseORM.owner_id == owner_id)
+            if fence_generation is not None:
+                statement = statement.where(
+                    RuntimeLeaseORM.fence_generation == int(fence_generation)
+                )
+            result = await session.execute(statement)
             await session.commit()
             return result.rowcount == 1
 
@@ -144,7 +177,14 @@ class LeaseManager:
             ).scalar_one_or_none()
             return row is not None and row.expires_at > now
 
-    async def is_current(self, lease_key: str, token: str, fence_generation: int) -> bool:
+    async def is_current(
+        self,
+        lease_key: str,
+        token: str,
+        fence_generation: int,
+        *,
+        owner_id: str | None = None,
+    ) -> bool:
         now = _epoch()
         async with self.session_factory() as session:
             row = (
@@ -155,11 +195,12 @@ class LeaseManager:
                     )
                 )
             ).scalar_one_or_none()
-            return (
+            current = (
                 row is not None
                 and row.expires_at > now
                 and row.fence_generation == int(fence_generation)
             )
+            return current and (owner_id is None or row.owner_id == owner_id)
 
     async def status(self, lease_key: str) -> dict | None:
         async with self.session_factory() as session:
