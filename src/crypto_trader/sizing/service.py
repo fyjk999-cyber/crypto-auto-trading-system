@@ -97,7 +97,13 @@ class LiveEntrySizingService:
             spec=spec,
             side=side,
         ).gross_notional
-        existing = sum((abs(position.cost_basis) for position in positions.values()), Decimal("0"))
+        existing = sum(
+            (
+                ExposureService.for_position(position).gross_notional
+                for position in positions.values()
+            ),
+            Decimal("0"),
+        )
         bounded_leverage = clamp_leverage(
             requested=requested_leverage,
             max_leverage=self.max_leverage,

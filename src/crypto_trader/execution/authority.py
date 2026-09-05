@@ -14,6 +14,7 @@ from crypto_trader.domain.enums import ExecutionDecision, OrderStatus, TradingMo
 from crypto_trader.domain.models import Instrument, OrderIntent, RiskDecision
 from crypto_trader.domain.money import D, floor_to_step, round_tick
 from crypto_trader.execution.rate_limiter import RateLimiter
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.kill_switch import KillSwitch
 
 
@@ -121,7 +122,16 @@ class ExecutionAuthority:
             return reject("QUANTITY_PRECISION_INVALID")
         if qty < instrument.min_qty:
             return reject("MIN_QUANTITY_NOT_MET")
-        notional = (price * qty) if price > 0 else D("0")
+        notional = ExposureService.calculate(
+            quantity=qty,
+            price=price,
+            spec=InstrumentExposureSpec(
+                instrument_type=instrument.instrument_type,
+                contract_size=instrument.contract_size,
+                contract_multiplier=instrument.contract_multiplier,
+            ),
+            side="LONG" if intent.side.value == "BUY" else "SHORT",
+        ).gross_notional
         if notional > 0 and notional < instrument.min_notional:
             return reject("MIN_NOTIONAL_NOT_MET")
         if not ctx.min_notional_ok:

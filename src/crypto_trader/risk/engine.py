@@ -131,7 +131,16 @@ class RiskEngine:
             if approved_quantity <= 0:
                 return fail("MAX_ORDER_NOTIONAL")
             adjustment_reasons.append("MAX_ORDER_NOTIONAL")
-        notional = approved_quantity * price * contract_size * contract_multiplier
+        notional = ExposureService.calculate(
+            quantity=approved_quantity,
+            price=price,
+            spec=InstrumentExposureSpec(
+                instrument_type=str(metadata.get("instrument_type", "SPOT")),
+                contract_size=contract_size,
+                contract_multiplier=contract_multiplier,
+            ),
+            side="LONG" if intent.side.value == "BUY" else "SHORT",
+        ).gross_notional
         checks["max_order_notional"] = original_notional <= self.config.max_order_notional
         requested_leverage_raw = metadata.get("requested_leverage")
         if requested_leverage_raw is not None and D(requested_leverage_raw) < 1:
@@ -176,9 +185,19 @@ class RiskEngine:
         checks["max_drawdown"] = True
 
         cash = account.equity
-        existing_notional = sum((abs(p.cost_basis) for p in positions.values()), Decimal("0"))
+        existing_notional = sum(
+            (
+                ExposureService.for_position(position).gross_notional
+                for position in positions.values()
+            ),
+            Decimal("0"),
+        )
         current_symbol = positions.get(intent.symbol)
-        current_symbol_notional = abs(current_symbol.cost_basis) if current_symbol else Decimal("0")
+        current_symbol_notional = (
+            ExposureService.for_position(current_symbol).gross_notional
+            if current_symbol
+            else Decimal("0")
+        )
         symbol_notional = (
             max(current_symbol_notional - notional, Decimal("0"))
             if reduce_only

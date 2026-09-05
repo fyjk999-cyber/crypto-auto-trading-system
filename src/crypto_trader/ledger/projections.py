@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType, OrderSide
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.persistence.models import (
     AccountProjectionORM,
     LedgerTransactionORM,
@@ -205,12 +206,16 @@ class ProjectionBuilder:
             pos.avg_entry_price = price
         realized = D(metadata.get("realized_pnl", "0"))
         pos.quantity = after
-        pos.cost_basis = (
-            abs(after)
-            * (pos.avg_entry_price or Decimal("0"))
-            * pos.contract_size
-            * pos.contract_multiplier
-        )
+        pos.cost_basis = ExposureService.calculate(
+            quantity=after,
+            price=pos.avg_entry_price or Decimal("0"),
+            spec=InstrumentExposureSpec(
+                instrument_type=pos.instrument_type,
+                contract_size=pos.contract_size,
+                contract_multiplier=pos.contract_multiplier,
+            ),
+            side="LONG" if after >= 0 else "SHORT",
+        ).gross_notional
         pos.realized_pnl += realized
         self.snapshot.realized_pnl += realized
 

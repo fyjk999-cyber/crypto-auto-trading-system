@@ -24,6 +24,7 @@ from crypto_trader.domain.errors import JournalUnbalanced
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import LedgerEntry, LedgerTransaction
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.persistence.models import LedgerEntryORM, LedgerTransactionORM
 
 
@@ -136,7 +137,16 @@ def build_derivative_trade_entries(
             * contract_multiplier
             * direction
         )
-    notional = price * quantity * contract_size * contract_multiplier
+    notional = ExposureService.calculate(
+        quantity=quantity,
+        price=price,
+        spec=InstrumentExposureSpec(
+            instrument_type="LINEAR_PERP",
+            contract_size=contract_size,
+            contract_multiplier=contract_multiplier,
+        ),
+        side="LONG" if side == OrderSide.BUY else "SHORT",
+    ).gross_notional
     postings = [
         LedgerPosting(
             f"POSITION_NOTIONAL:{symbol}", LedgerDirection.DEBIT, notional, quote_currency

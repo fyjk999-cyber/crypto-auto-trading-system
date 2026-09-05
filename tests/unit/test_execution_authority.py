@@ -122,6 +122,24 @@ async def test_min_quantity_rejects():
     assert decision == ExecutionDecision.REJECT
 
 
+async def test_min_notional_uses_canonical_derivative_contract_size():
+    instrument = ctx().instrument.model_copy(
+        update={"instrument_type": "LINEAR_PERP", "contract_size": "0.01"}
+    )
+    decision, notes = await ExecutionAuthority().authorize(
+        OrderIntent(
+            client_order_id="swap-min-notional",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price="100",
+            quantity="2",
+        ),
+        ctx(instrument=instrument),
+    )
+    assert decision == ExecutionDecision.REJECT
+    assert "MIN_NOTIONAL_NOT_MET" in notes
+
+
 async def test_expired_order_rejects():
     past = datetime.now(UTC) - timedelta(seconds=1)
     intent = make_intent()
