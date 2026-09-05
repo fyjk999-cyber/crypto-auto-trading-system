@@ -50,6 +50,7 @@ async def test_store_persists_non_directional_and_open_decisions_idempotently(da
         first = await store.save(item, run_id="run-1", prompt_version="prompt-v1")
         second = await store.save(item, run_id="run-1", prompt_version="prompt-v1")
         assert first == second
+        assert first.reason_codes == item.reason_codes
     assert [row.action for row in await store.list_for_symbol("ETHUSDT")] == [
         "NO_TRADE",
         "WAIT",

@@ -245,7 +245,19 @@ class TradingEngine:
     async def _tick_loop(self) -> None:
         while True:
             await asyncio.sleep(self.settings.engine_tick_seconds)
-            await self.tick()
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.consecutive_failures += 1
+                self.health.set("engine_loop", False, type(exc).__name__)
+                await self.audit.log(
+                    "ENGINE_TICK_FAILED",
+                    target=self.run_id or "unknown",
+                    run_id=self.run_id,
+                    after={"error_type": type(exc).__name__},
+                )
 
     async def _lease_loop(self) -> None:
         while True:

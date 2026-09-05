@@ -25,6 +25,7 @@ class LLMDecisionRecord:
     model_version: str
     prompt_version: str
     thesis: str
+    reason_codes: list[str]
     trade_plan_id: str | None
     created_at: datetime
 
@@ -61,13 +62,16 @@ class LLMDecisionStore:
                     prompt_version=prompt_version,
                     market_regime=decision.market_regime,
                     thesis=decision.thesis,
+                    reason_codes_json=decision.reason_codes,
                     supporting_evidence_json=decision.supporting_evidence,
                     contradicting_evidence_json=decision.contradicting_evidence,
                     tool_refs_json=tool_refs or [],
                     memory_refs_json=decision.memory_refs,
-                    research_refs_json=research_refs or [],
-                    episode_refs_json=episode_refs or [],
-                    requested_exposure=_decimal_or_none(position.get("requested_exposure")),
+                    research_refs_json=research_refs or decision.knowledge_refs,
+                    episode_refs_json=episode_refs or decision.pattern_refs,
+                    requested_exposure=_decimal_or_none(
+                        position.get("requested_exposure", decision.requested_exposure)
+                    ),
                     requested_quantity=Decimal(str(decision.position_size_request)),
                     requested_leverage=Decimal(str(decision.leverage_request)),
                     parent_decision_id=parent_decision_id,
@@ -126,6 +130,7 @@ class LLMDecisionStore:
             model_version=row.model_version,
             prompt_version=row.prompt_version,
             thesis=row.thesis,
+            reason_codes=list(row.reason_codes_json or []),
             trade_plan_id=row.trade_plan_id,
             created_at=created_at,
         )

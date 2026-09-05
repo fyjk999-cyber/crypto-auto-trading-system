@@ -336,6 +336,7 @@ class LLMDecisionORM(Base):
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
     market_regime: Mapped[str] = mapped_column(String(64), nullable=False)
     thesis: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    reason_codes_json: Mapped[list[Any] | None] = mapped_column(JSON)
     supporting_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
     contradicting_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
     tool_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)

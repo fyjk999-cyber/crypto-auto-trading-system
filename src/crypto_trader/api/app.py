@@ -419,7 +419,7 @@ def create_app(state: AppState) -> FastAPI:
         market_snapshot = await market()
         return {
             "market_data": {
-                "provider": "BINANCE_USDM",
+                "provider": market_snapshot.get("provider", "OKX_PUBLIC"),
                 "mode": "REAL" if state.settings.paper_mode == "PAPER_REAL_MARKET" else "SYNTHETIC",
                 "status": market_snapshot.get("status", "UNAVAILABLE"),
             },
@@ -438,7 +438,7 @@ def create_app(state: AppState) -> FastAPI:
         import os
 
         return {
-            "git_sha": os.environ.get("GIT_SHA", "0dc4884ae3e416dc1df22f96620f55e8e4f41734"),
+            "git_sha": os.environ.get("RUNNING_SHA") or os.environ.get("GIT_SHA", "unknown"),
             "api_version": "v1",
             "schema_version": "1",
             "deployment_id": os.environ.get("DEPLOYMENT_ID", "local"),

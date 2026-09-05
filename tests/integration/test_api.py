@@ -70,13 +70,15 @@ async def test_api_financial_endpoints_return_strings_not_floats(database):
     assert any(row["action"] == "TEST_API" for row in audit)
 
 
-async def test_api_version_endpoint(database):
+async def test_api_version_endpoint(database, monkeypatch):
+    monkeypatch.setenv("RUNNING_SHA", "canonical-running-sha")
     state = make_state(database)
     client = TestClient(create_app(state))
     response = client.get("/version")
     assert response.status_code == 200
     assert response.json()["api_version"] == "v1"
     assert response.json()["environment"] == "test"
+    assert response.json()["git_sha"] == "canonical-running-sha"
 
 
 async def test_api_killswitch_route(database):

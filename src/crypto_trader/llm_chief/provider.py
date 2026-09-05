@@ -16,6 +16,7 @@ class LLMResponse:
     parsed_json: dict | None = None
     ok: bool = True
     error: str | None = None
+    token_usage: dict | None = None
 
 
 class LLMProvider(Protocol):
@@ -84,11 +85,13 @@ class DeepSeekProvider:
                             "model": self.model,
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": temperature,
+                            "response_format": {"type": "json_object"},
                         },
                     )
                     if response.status_code != 200:
                         continue
-                    content = response.json()["choices"][0]["message"]["content"]
+                    payload = response.json()
+                    content = payload["choices"][0]["message"]["content"]
                     try:
                         parsed = json.loads(content)
                         return LLMResponse(
@@ -98,6 +101,7 @@ class DeepSeekProvider:
                             latency_ms=(time.monotonic() - start) * 1000,
                             parsed_json=parsed,
                             ok=True,
+                            token_usage=payload.get("usage"),
                         )
                     except json.JSONDecodeError:
                         return LLMResponse(

@@ -67,6 +67,8 @@ async def test_real_market_unavailable_reports_okx_not_synthetic(database):
     data = client.get("/market").json()
     assert data["provider"] == "OKX_PUBLIC"
     assert data["status"] == "UNAVAILABLE"
+    health = client.get("/exchange-health").json()
+    assert health["market_data"]["provider"] == "OKX_PUBLIC"
 
 
 async def test_real_market_adapter_does_not_silent_fallback():
