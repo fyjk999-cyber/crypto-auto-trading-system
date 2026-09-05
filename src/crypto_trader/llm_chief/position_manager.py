@@ -76,7 +76,14 @@ class LiveLLMPositionManager:
         )
         mark = ctx.mark_price or ctx.book.mid_price() or position.avg_entry_price or Decimal("0")
         entry = position.avg_entry_price or Decimal("0")
-        unrealized = (mark - entry) * position.quantity
+        # Keep OPEN-decision PnL context on the same linear-contract semantics
+        # used by fills, ledger projections, sizing, Risk, and exposure APIs.
+        unrealized = (
+            (mark - entry)
+            * position.quantity
+            * position.contract_size
+            * position.contract_multiplier
+        )
         opened_at = _utc(plan.opened_at or position.updated_at or now)
         position_context = {
             "symbol": position.symbol,
@@ -99,11 +106,7 @@ class LiveLLMPositionManager:
         }
         chief_ctx = ChiefTraderContext(
             symbol=position.symbol,
-            market_snapshot={
-                "timestamp": now.isoformat(),
-                "mark_price": str(mark),
-                "source": "OKX_PUBLIC",
-            },
+            market_snapshot=_market_snapshot(ctx, now, mark),
             regime=_regime(evidence),
             quant_evidence=[evidence],
             portfolio_state={
@@ -215,6 +218,36 @@ def _regime(evidence: dict[str, Any]) -> str:
     if isinstance(raw, dict):
         return str(raw.get("regime") or raw.get("value") or "UNKNOWN")
     return str(raw)
+
+
+def _market_snapshot(
+    ctx: StrategyContext, now: datetime, mark: Decimal
+) -> dict[str, Any]:
+    """Return the factual OKX state needed to reassess the entry thesis."""
+
+    best_bid = ctx.book.best_bid()
+    best_ask = ctx.book.best_ask()
+    return {
+        "symbol": ctx.symbol,
+        "timestamp": now.isoformat(),
+        "best_bid": str(best_bid.price) if best_bid is not None else None,
+        "best_ask": str(best_ask.price) if best_ask is not None else None,
+        "mark_price": str(mark),
+        "index_price": str(ctx.index_price) if ctx.index_price is not None else None,
+        "funding": str(ctx.funding) if ctx.funding is not None else None,
+        "open_interest": str(ctx.oi) if ctx.oi is not None else None,
+        "basis": str(ctx.basis) if ctx.basis is not None else None,
+        "source": "OKX_PUBLIC",
+        "instrument": (
+            {
+                "instrument_type": ctx.instrument.instrument_type,
+                "contract_size": str(ctx.instrument.contract_size),
+                "contract_multiplier": str(ctx.instrument.contract_multiplier),
+            }
+            if ctx.instrument is not None
+            else None
+        ),
+    }
 
 
 def _utc(value: datetime) -> datetime:

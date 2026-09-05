@@ -27,9 +27,11 @@ class Chief:
         self.action = action
         self.quantity = quantity
         self.calls = 0
+        self.last_context = None
 
     async def decide(self, ctx):
         self.calls += 1
+        self.last_context = ctx
         return ChiefTraderDecision(
             decision_id=f"open-{self.action.lower()}",
             symbol=ctx.symbol,
@@ -147,3 +149,34 @@ async def test_reduce_cannot_cross_zero_and_cooldown_applies_to_hold(database):
     await subject.review(ctx, position)
     await subject.review(ctx, position)
     assert chief.calls == 1
+
+
+async def test_open_context_uses_factual_market_and_contract_aware_pnl(database):
+    await active_plan(database, "LONG")
+    ctx, position = context("2")
+    position.contract_size = Decimal("0.01")
+    position.contract_multiplier = Decimal("2")
+    ctx.index_price = Decimal("100.5")
+    ctx.funding = Decimal("0.0001")
+    ctx.oi = Decimal("12345")
+    ctx.basis = Decimal("-0.5")
+    chief = Chief("HOLD")
+
+    assert await manager(database, chief).review(ctx, position) is None
+
+    captured = chief.last_context
+    assert captured is not None
+    assert captured.market_snapshot == {
+        "symbol": "ETHUSDT",
+        "timestamp": ctx.clock_time.isoformat(),
+        "best_bid": "99",
+        "best_ask": "101",
+        "mark_price": "100",
+        "index_price": "100.5",
+        "funding": "0.0001",
+        "open_interest": "12345",
+        "basis": "-0.5",
+        "source": "OKX_PUBLIC",
+        "instrument": None,
+    }
+    assert captured.position_context["unrealized_pnl"] == "0.20"
