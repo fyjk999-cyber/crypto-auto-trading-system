@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.perpetual.domain import (
     ContractType,
     MarginPosition,
@@ -111,3 +112,37 @@ def test_funding_long_pays_short_receives():
     assert p_long.amount == -p_short.amount
     assert p_long.amount < 0
     assert p_short.amount > 0
+
+
+def test_perpetual_consumers_share_canonical_contract_size_notional():
+    contract = make_contract()
+    contract.contract_size = Decimal("0.01")
+    quantity = Decimal("2")
+    price = Decimal("50000")
+    canonical = ExposureService.calculate(
+        quantity=quantity,
+        price=price,
+        spec=InstrumentExposureSpec(
+            instrument_type="LINEAR_PERP",
+            contract_size=contract.contract_size,
+        ),
+        side="LONG",
+    ).gross_notional
+    assert canonical == Decimal("1000.00")
+
+    margin = MarginCalculator()
+    assert margin.initial_margin(contract, quantity, price, Decimal("5")) == canonical / 5
+    assert margin.maintenance_margin(contract, quantity, price) == canonical * Decimal(
+        "0.001"
+    )
+
+    position = MarginPosition(
+        symbol=contract.symbol,
+        side=PositionSide.LONG,
+        quantity=quantity,
+        avg_entry_price=price,
+    )
+    payment = FundingCalculator().payment(
+        position, Decimal("0.0001"), price, contract.contract_size
+    )
+    assert payment.notional == canonical

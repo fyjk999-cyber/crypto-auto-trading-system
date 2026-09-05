@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.ledger.service import LedgerPosting, LedgerService
 from crypto_trader.perpetual.domain import MarginPosition, PerpetualContract, PositionSide
 from crypto_trader.persistence.models import LedgerTransactionORM
@@ -79,7 +80,7 @@ class FuturesLedger:
         order_id: str | None = None,
     ) -> None:
         symbol = contract.symbol
-        notional = abs(D(quantity)) * D(entry_price) * contract.contract_size
+        notional = _notional(contract, quantity, entry_price, side)
         postings = [
             LedgerPosting(
                 f"FUTURES_POSITION_ASSET:{symbol}",
@@ -130,7 +131,7 @@ class FuturesLedger:
         order_id: str | None = None,
     ) -> None:
         symbol = contract.symbol
-        entry_notional = abs(D(quantity)) * D(entry_price) * contract.contract_size
+        entry_notional = _notional(contract, quantity, entry_price, side)
         pnl = D(realized_pnl)
         postings = [
             LedgerPosting(
@@ -246,6 +247,23 @@ async def rebuild_futures_projection(session: AsyncSession) -> FuturesProjection
     for txn in result.scalars().all():
         _apply_txn(snap, txn)
     return snap
+
+
+def _notional(
+    contract: PerpetualContract,
+    quantity: Decimal,
+    price: Decimal,
+    side: PositionSide,
+) -> Decimal:
+    return ExposureService.calculate(
+        quantity=quantity,
+        price=price,
+        spec=InstrumentExposureSpec(
+            instrument_type="LINEAR_PERP",
+            contract_size=contract.contract_size,
+        ),
+        side=side.value,
+    ).gross_notional
 
 
 def _apply_txn(snap: FuturesProjectionSnapshot, txn: LedgerTransactionORM) -> None:

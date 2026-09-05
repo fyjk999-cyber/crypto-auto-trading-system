@@ -7,6 +7,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict
 
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.perpetual.domain import (
     LiquidationPrice,
     MarginPosition,
@@ -77,7 +78,15 @@ class LiquidationCalculator:
         liquidated = (position.side == PositionSide.LONG and D(mark_price) <= liq.value) or (
             position.side == PositionSide.SHORT and D(mark_price) >= liq.value
         )
-        notional = abs(position.quantity) * D(mark_price) * contract.contract_size
+        notional = ExposureService.calculate(
+            quantity=position.quantity,
+            price=mark_price,
+            spec=InstrumentExposureSpec(
+                instrument_type="LINEAR_PERP",
+                contract_size=contract.contract_size,
+            ),
+            side=position.side.value,
+        ).gross_notional
         fee = notional * self.liquidation_fee_rate
         if position.side == PositionSide.LONG:
             bankruptcy = position.avg_entry_price - position.initial_margin / (

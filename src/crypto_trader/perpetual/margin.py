@@ -7,6 +7,7 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict
 
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.perpetual.domain import (
     MarginPosition,
     MarginRatio,
@@ -60,7 +61,7 @@ class MarginCalculator:
         qty = D(quantity)
         price = D(entry_price)
         lev = self.effective_leverage(leverage, contract.max_leverage)
-        notional = abs(qty) * price * contract.contract_size
+        notional = _notional(contract, qty, price)
         if self.tier_provider is not None:
             rate = self.tier_provider(contract.symbol, notional)
             return notional * rate
@@ -73,7 +74,7 @@ class MarginCalculator:
         entry_price: Decimal,
         rate: str | None = None,
     ) -> Decimal:
-        notional = abs(D(quantity)) * D(entry_price) * contract.contract_size
+        notional = _notional(contract, quantity, entry_price)
         maintenance_rate = D(rate) if rate else self._default_maintenance_rate(notional)
         return notional * maintenance_rate
 
@@ -114,3 +115,17 @@ class MarginCalculator:
         if per_qty <= 0:
             return Decimal("0")
         return (position.initial_margin - maintenance) / per_qty
+
+
+def _notional(
+    contract: PerpetualContract, quantity: Decimal, price: Decimal
+) -> Decimal:
+    return ExposureService.calculate(
+        quantity=quantity,
+        price=price,
+        spec=InstrumentExposureSpec(
+            instrument_type="LINEAR_PERP",
+            contract_size=contract.contract_size,
+        ),
+        side="LONG" if D(quantity) >= 0 else "SHORT",
+    ).gross_notional

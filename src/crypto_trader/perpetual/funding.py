@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.perpetual.domain import FundingPayment, MarginPosition, PositionSide
 
 
@@ -24,7 +25,15 @@ class FundingCalculator:
                 rate=D(rate),
                 notional=Decimal("0"),
             )
-        notional = abs(position.quantity) * D(mark_price) * D(contract_size)
+        notional = ExposureService.calculate(
+            quantity=position.quantity,
+            price=mark_price,
+            spec=InstrumentExposureSpec(
+                instrument_type="LINEAR_PERP",
+                contract_size=D(contract_size),
+            ),
+            side=position.side.value,
+        ).gross_notional
         raw = notional * D(rate)
         if position.side == PositionSide.LONG:
             amount = -raw
