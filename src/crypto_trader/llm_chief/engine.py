@@ -46,6 +46,7 @@ class ChiefTraderEngine:
             timeout_seconds=20.0,
             retries=1,
             max_tokens=768,
+            thinking=False,
         )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
@@ -68,6 +69,8 @@ class ChiefTraderEngine:
                 timeout_seconds=30.0,
                 retries=1,
                 max_tokens=1200,
+                thinking=True,
+                reasoning_effort="low",
             )
             if self.provider
             else None

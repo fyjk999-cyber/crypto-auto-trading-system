@@ -18,7 +18,10 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
         import json
 
         assert request.headers["authorization"] == "Bearer test-secret"
-        assert json.loads(request.content)["max_tokens"] == 64
+        payload = json.loads(request.content)
+        assert payload["max_tokens"] == 64
+        assert payload["thinking"] == {"type": "enabled"}
+        assert payload["reasoning_effort"] == "low"
         return httpx.Response(
             200,
             json={
