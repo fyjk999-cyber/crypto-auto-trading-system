@@ -91,6 +91,19 @@ class ChiefTraderEngine:
             if ctx.position_state == PositionState.FLAT
             else "HOLD,REDUCE,EXIT"
         )
+        action_contract = (
+            '{"action":"LONG|SHORT|NO_TRADE|WAIT","market_regime":"string",'
+            '"strategy_selected":["string"],"thesis":"string",'
+            '"supporting_evidence":["string"],"contradicting_evidence":["string"],'
+            '"position_size_request":number,"requested_exposure":number|null,'
+            '"leverage_request":number,"raw_llm_confidence":number,'
+            '"reason_codes":["string"]}'
+            if ctx.position_state == PositionState.FLAT
+            else '{"action":"HOLD|REDUCE|EXIT","market_regime":"string",'
+            '"thesis":"string","supporting_evidence":["string"],'
+            '"contradicting_evidence":["string"],'
+            '"position_size_request":number,"reason_codes":["string"]}'
+        )
         return (
             "You are the Chief Trader of a crypto fund. Return JSON only.\n"
             f"Symbol: {ctx.symbol}\nRegime: {ctx.regime}\n"
@@ -101,8 +114,10 @@ class ChiefTraderEngine:
             f"OpenPosition: {ctx.position_context}\n"
             f"Knowledge: {ctx.knowledge}\nSimilarEpisodes: {ctx.similar_episodes}\n"
             f"CoinProfile: {ctx.coin_profile}\nExperience: {ctx.compressed_experience}\n"
-            "Output keys: decision_id,symbol,action,market_regime,strategy_selected,thesis,"
-            "position_size_request,leverage_request,raw_llm_confidence,reason_codes."
+            f"FailureWarnings: {ctx.failure_warnings}\n"
+            f"OutputContract: {action_contract}\n"
+            "Do not add fields outside this contract. Numeric fields must be JSON numbers. "
+            "The application creates decision_id and binds symbol."
         )
 
     def parse_decision(

@@ -7,11 +7,17 @@ from sqlalchemy import select
 
 from crypto_trader.domain.clock import Clock
 from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.llm_chief.context import ChiefTraderContext
+from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
-from crypto_trader.persistence.models import TradeEpisodeORM
+from crypto_trader.persistence.models import (
+    AIMarketPatternORM,
+    AITradeReviewORM,
+    TradeEpisodeORM,
+)
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 from tests.conftest import make_paper_engine
 
@@ -167,10 +173,36 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         database.session_factory, canonical_only=True
     ).run_once(episode.closed_at.date().isoformat())
     assert review["trade_count"] == 1
+    duplicate_review = await DailyReviewScheduler(
+        database.session_factory, canonical_only=True
+    ).run_once(episode.closed_at.date().isoformat())
+    assert duplicate_review["trade_count"] == 1
     async with database.session_factory() as session:
         episodes = (await session.execute(select(TradeEpisodeORM))).scalars().all()
         assert len(episodes) == 1
         assert episodes[0].review_status == "REVIEWED"
+        reviews = (await session.execute(select(AITradeReviewORM))).scalars().all()
+        patterns = (await session.execute(select(AIMarketPatternORM))).scalars().all()
+        assert len(reviews) == 1
+        assert reviews[0].episode_id == episode.episode_id
+        assert reviews[0].mistakes_json == []
+        assert len(patterns) == 1
+        assert patterns[0].sample_count == 1
+
+    enriched = await ChiefContextLoader(database.session_factory).enrich(
+        ChiefTraderContext(
+            symbol="BTCUSDT",
+            market_snapshot={},
+            regime="TREND",
+            quant_evidence=[],
+            portfolio_state={},
+            risk_summary={},
+        )
+    )
+    assert enriched.episode_refs == [episode.episode_id]
+    assert enriched.memory_refs == [f"review:{episode.episode_id}"]
+    assert enriched.similar_episodes[0]["net_pnl"] == str(episode.net_pnl)
+    assert enriched.pattern_refs == [patterns[0].pattern_id]
     await engine.stop()
 
 

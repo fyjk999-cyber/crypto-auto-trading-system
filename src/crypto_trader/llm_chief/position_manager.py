@@ -10,6 +10,7 @@ from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Position, SignalIntent
 from crypto_trader.llm_chief.context import ChiefTraderContext
+from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision import OpenAction, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
@@ -36,6 +37,7 @@ class LiveLLMPositionManager:
         risk_summary: dict[str, Any] | None = None,
         review_cooldown_seconds: float = 30.0,
         tool_chief: ToolDrivenChiefTrader | None = None,
+        context_loader: ChiefContextLoader | None = None,
     ) -> None:
         self.chief = chief
         self.evidence_engine = evidence_engine
@@ -45,6 +47,7 @@ class LiveLLMPositionManager:
         self.risk_summary = risk_summary or {}
         self.review_cooldown = timedelta(seconds=max(1.0, review_cooldown_seconds))
         self.tool_chief = tool_chief
+        self.context_loader = context_loader
         self._last_review_attempt: dict[str, datetime] = {}
 
     async def review(
@@ -111,6 +114,8 @@ class LiveLLMPositionManager:
             position_state=PositionState.OPEN,
             position_context=position_context,
         )
+        if self.context_loader is not None:
+            chief_ctx = await self.context_loader.enrich(chief_ctx)
         self._last_review_attempt[position.symbol] = now
         if self.tool_chief is None:
             decision = await self.chief.decide(chief_ctx)
@@ -130,6 +135,9 @@ class LiveLLMPositionManager:
             run_id=ctx.run_id,
             prompt_version=self.version,
             tool_refs=[str(ref) for ref in evidence.get("source_refs", [])],
+            memory_refs=chief_ctx.memory_refs,
+            research_refs=chief_ctx.research_refs,
+            episode_refs=chief_ctx.episode_refs,
             parent_decision_id=plan.decision_id,
             position_context=position_context,
         )

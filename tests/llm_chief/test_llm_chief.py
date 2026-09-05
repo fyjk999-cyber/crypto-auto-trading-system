@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import httpx
+
 from crypto_trader.api.deps import LLMRuntimeStatus
 from crypto_trader.llm_chief.coin_profile import CoinProfileStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -9,6 +11,52 @@ from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.knowledge import KnowledgeBase, StrategyCard, ToolRecord
 from crypto_trader.llm_chief.memory import ExperienceMemory, MarketPattern, TradeEpisode
 from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+
+async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer test-secret"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"action":"WAIT"}'}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret",
+        model="deepseek-v4-pro",
+        transport=httpx.MockTransport(handler),
+    )
+    result = await provider.complete_json(prompt="JSON", retries=0)
+    diagnostics = provider.diagnostics()
+    assert result.ok is True
+    assert diagnostics["provider"] == "deepseek"
+    assert diagnostics["model"] == "deepseek-v4-pro"
+    assert diagnostics["last_token_usage"] == {
+        "prompt_tokens": 4,
+        "completion_tokens": 2,
+    }
+    assert "test-secret" not in str(diagnostics)
+
+
+async def test_deepseek_provider_fails_closed_without_retrying_nonretryable_http():
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(400, json={"error": "unsafe external detail"})
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=3)
+    assert result.ok is False
+    assert result.error == "HTTP_400"
+    assert calls == 1
+    assert "unsafe external detail" not in str(provider.diagnostics())
 
 
 def test_llm_provider_abstraction_without_key():

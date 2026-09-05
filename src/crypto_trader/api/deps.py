@@ -81,6 +81,7 @@ class LLMRuntimeStatus:
     reachable: bool = False
     last_success_ts: str | None = None
     last_error: str | None = None
+    provider_instance: object | None = field(default=None, repr=False)
 
     async def probe(self) -> None:
         import os
@@ -97,7 +98,8 @@ class LLMRuntimeStatus:
         if not self.configured:
             self.last_error = "NOT_CONFIGURED"
             return
-        result = await DeepSeekProvider().complete_json(
+        provider = self.provider_instance or DeepSeekProvider()
+        result = await provider.complete_json(
             prompt='Return only valid JSON: {"runtime_health":"ok"}', retries=0
         )
         self.reachable = result.ok and result.parsed_json is not None
@@ -107,7 +109,7 @@ class LLMRuntimeStatus:
             self.last_error = result.error or "PROBE_FAILED"
 
     def snapshot(self) -> dict:
-        return {
+        snapshot = {
             "provider": self.provider,
             "model": self.model,
             "configured": self.configured,
@@ -115,6 +117,18 @@ class LLMRuntimeStatus:
             "last_success_ts": self.last_success_ts,
             "last_error": self.last_error,
         }
+        diagnostics = getattr(self.provider_instance, "diagnostics", None)
+        if callable(diagnostics):
+            actual = diagnostics()
+            snapshot.update(
+                {
+                    "decision_last_success_ts": actual.get("last_success_ts"),
+                    "decision_last_error": actual.get("last_error"),
+                    "decision_last_latency_ms": actual.get("last_latency_ms"),
+                    "decision_last_token_usage": actual.get("last_token_usage"),
+                }
+            )
+        return snapshot
 
 
 @dataclass

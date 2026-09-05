@@ -12,13 +12,14 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
-from crypto_trader.api.deps import AppState
+from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
+from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
@@ -102,7 +103,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)
-    chief = ChiefTraderEngine(provider=DeepSeekProvider())
+    chief_context = ChiefContextLoader(database.session_factory)
+    llm_provider = DeepSeekProvider()
+    chief = ChiefTraderEngine(provider=llm_provider)
     tool_chief = ToolDrivenChiefTrader(chief, build_canonical_tool_registry(alpha))
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
@@ -121,6 +124,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         risk_summary=risk.config.model_dump(mode="json"),
         tool_chief=tool_chief,
         sizer=sizer,
+        context_loader=chief_context,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (
@@ -132,6 +136,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             audit=audit,
             risk_summary=risk.config.model_dump(mode="json"),
             tool_chief=tool_chief,
+            context_loader=chief_context,
         )
         if settings.auto_start_runtime
         else None
@@ -180,6 +185,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         leases=leases,
         reconciliation=reconciliation,
         engine=engine,
+        llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
     )
     return RuntimeBundle(
         settings=settings,

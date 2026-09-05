@@ -23,6 +23,10 @@ class ChiefTraderContext:
     coin_profile: dict = field(default_factory=dict)
     compressed_experience: list[dict] = field(default_factory=list)
     failure_warnings: list[str] = field(default_factory=list)
+    memory_refs: list[str] = field(default_factory=list)
+    research_refs: list[str] = field(default_factory=list)
+    episode_refs: list[str] = field(default_factory=list)
+    pattern_refs: list[str] = field(default_factory=list)
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def estimate_tokens(self) -> int:

@@ -41,6 +41,7 @@ class LLMDecisionStore:
         run_id: str | None,
         prompt_version: str,
         tool_refs: list[str] | None = None,
+        memory_refs: list[str] | None = None,
         research_refs: list[str] | None = None,
         episode_refs: list[str] | None = None,
         parent_decision_id: str | None = None,
@@ -66,7 +67,7 @@ class LLMDecisionStore:
                     supporting_evidence_json=decision.supporting_evidence,
                     contradicting_evidence_json=decision.contradicting_evidence,
                     tool_refs_json=tool_refs or [],
-                    memory_refs_json=decision.memory_refs,
+                    memory_refs_json=memory_refs or decision.memory_refs,
                     research_refs_json=research_refs or decision.knowledge_refs,
                     episode_refs_json=episode_refs or decision.pattern_refs,
                     requested_exposure=_decimal_or_none(

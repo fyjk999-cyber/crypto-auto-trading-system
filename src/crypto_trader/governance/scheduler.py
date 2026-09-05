@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.governance.daily_review import DailyReview
+from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory import FailureMemory, TradeMemory, TradeMemoryRecord
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
@@ -24,6 +25,7 @@ class DailyReviewScheduler:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
         self.episodes = TradeEpisodeStore(session_factory)
+        self.learning = FactualEpisodeLearning(session_factory)
         self.review_time_utc = review_time_utc
         self.canonical_only = canonical_only
         self.use_local_time = use_local_time
@@ -44,6 +46,8 @@ class DailyReviewScheduler:
                 failure_memory.record(record.decision_id, record.failure_class)
         stats = DailyReview(trade_memory, failure_memory).run(date)
         await self.persistence.save_daily_review(date, stats)
+        for episode in episodes:
+            await self.learning.review(episode)
         await self.episodes.mark_reviewed([episode.episode_id for episode in episodes])
         return {
             "date": date,

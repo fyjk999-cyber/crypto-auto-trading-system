@@ -15,6 +15,7 @@ from typing import Any
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.llm_chief.context import ChiefTraderContext
+from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
@@ -46,6 +47,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         retry_cooldown_seconds: float = 30.0,
         tool_chief: ToolDrivenChiefTrader | None = None,
         sizer: LiveEntrySizingService | None = None,
+        context_loader: ChiefContextLoader | None = None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -57,6 +59,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.retry_cooldown = timedelta(seconds=max(1.0, retry_cooldown_seconds))
         self.tool_chief = tool_chief
         self.sizer = sizer
+        self.context_loader = context_loader
         # This is an attempt cooldown, not an entry cooldown.  Every provider
         # call consumes the interval, including NO_TRADE and fail-closed output.
         self._last_decision_attempt: datetime | None = None
@@ -88,6 +91,8 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             portfolio_state=self._portfolio_state(ctx),
             risk_summary=self.risk_summary,
         )
+        if self.context_loader is not None:
+            chief_ctx = await self.context_loader.enrich(chief_ctx)
         self._last_decision_attempt = now
         if self.tool_chief is None:
             decision = await self.chief.decide(chief_ctx)
@@ -113,6 +118,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             run_id=ctx.run_id,
             prompt_version=self.version,
             tool_refs=evidence_refs,
+            memory_refs=chief_ctx.memory_refs,
+            research_refs=chief_ctx.research_refs,
+            episode_refs=chief_ctx.episode_refs,
         )
 
         # This commit is deliberately before TradePlan creation.  It is the
