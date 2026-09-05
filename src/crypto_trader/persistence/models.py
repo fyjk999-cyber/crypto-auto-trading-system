@@ -350,6 +350,40 @@ class LLMDecisionORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class TradeEpisodeORM(Base):
+    """One factual, fully closed canonical trading lifecycle."""
+
+    __tablename__ = "trade_episodes"
+
+    episode_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trade_plan_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    entry_decision_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    position_decision_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    order_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    fill_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    entry_price: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    exit_price: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    opened_quantity: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    closed_quantity: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    leverage: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    fees: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False, default=Decimal("0"))
+    funding_pnl: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), nullable=False, default=Decimal("0")
+    )
+    gross_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    net_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    holding_time_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_market_regime: Mapped[str] = mapped_column(String(64), nullable=False)
+    terminal_reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    factual: Mapped[bool] = mapped_column(nullable=False, default=True)
+    review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class AuditEventORM(Base):
     __tablename__ = "audit_events"
     __table_args__ = (UniqueConstraint("event_id", name="uq_audit_events_event_id"),)

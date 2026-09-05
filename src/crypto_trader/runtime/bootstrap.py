@@ -15,6 +15,8 @@ from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
@@ -98,6 +100,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_leverage="3",
     )
     trade_plans = TradePlanService(database.session_factory)
+    trade_episodes = TradeEpisodeStore(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief = ChiefTraderEngine(provider=DeepSeekProvider())
     tool_chief = ToolDrivenChiefTrader(chief, build_canonical_tool_registry(alpha))
@@ -148,6 +151,17 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         require_lease=True,
         trade_plans=trade_plans,
         position_manager=position_manager,
+        trade_episodes=trade_episodes,
+        daily_review_scheduler=(
+            DailyReviewScheduler(
+                database.session_factory,
+                review_time_utc="00:00",
+                canonical_only=True,
+                use_local_time=True,
+            )
+            if settings.auto_start_runtime
+            else None
+        ),
     )
 
     app_state = AppState(

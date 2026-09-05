@@ -43,8 +43,8 @@ from crypto_trader.domain.models import (
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.base import ExchangeAdapter
 from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
-from crypto_trader.governance.memory import TradeMemoryRecord
-from crypto_trader.governance.memory_persistence import MemoryPersistence
+from crypto_trader.governance.scheduler import DailyReviewScheduler
+from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import (
     LedgerPosting,
@@ -92,6 +92,8 @@ class TradingEngine:
         require_lease: bool = True,
         trade_plans: TradePlanService | None = None,
         position_manager: LiveLLMPositionManager | None = None,
+        trade_episodes: TradeEpisodeStore | None = None,
+        daily_review_scheduler: DailyReviewScheduler | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -111,6 +113,8 @@ class TradingEngine:
         self.require_lease = require_lease
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
         self.position_manager = position_manager
+        self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
+        self.daily_review_scheduler = daily_review_scheduler
         self.event_bus = EventBus()
         self.health = HealthRegistry()
         self.state_machine = RuntimeStateMachine()
@@ -166,6 +170,10 @@ class TradingEngine:
         if self.require_lease:
             self._tasks.append(asyncio.create_task(self._lease_loop(), name="engine-lease"))
         self._tasks.append(asyncio.create_task(self._reconciliation_loop(), name="engine-recon"))
+        if self.daily_review_scheduler is not None:
+            self._tasks.append(
+                asyncio.create_task(self.daily_review_scheduler.loop(), name="daily-review")
+            )
         await self.audit.log("ENGINE_STARTED", target=self.run_id, run_id=self.run_id)
         return self.run_id
 
@@ -718,32 +726,6 @@ class TradingEngine:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return
-        try:
-            persistence = MemoryPersistence(self.database.session_factory)
-            await persistence.save_trade_memory(
-                TradeMemoryRecord(
-                    decision_id=fill.fill_id,
-                    symbol=fill.symbol,
-                    side=order.side.value,
-                    regime="UNKNOWN",
-                    strategy_scores={},
-                    effective_weights={},
-                    raw_confidence=Decimal("0"),
-                    calibrated_confidence=Decimal("0"),
-                    recommended_position=fill.quantity,
-                    approved_position=fill.quantity,
-                    recommended_leverage=Decimal("1"),
-                    approved_leverage=Decimal("1"),
-                    entry=fill.price,
-                    exit=fill.price,
-                    fees=fill.fee,
-                    funding_pnl=Decimal("0"),
-                    realized_pnl=Decimal("0"),
-                    r_multiple=Decimal("0"),
-                )
-            )
-        except Exception:
-            pass
         position = await self.portfolio.get_position(fill.symbol)
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
             postings, metadata = build_derivative_trade_entries(
@@ -806,11 +788,29 @@ class TradingEngine:
             and order.metadata.get("reduce_only") is True
             and (position is None or position.quantity == 0)
         ):
-            await self.trade_plans.transition(
+            closed_plan = await self.trade_plans.transition(
                 plan.trade_plan_id,
                 TradePlanState.CLOSED,
                 reason=str(order.metadata.get("lifecycle_action") or "POSITION_CLOSED"),
             )
+            episode = await self.trade_episodes.build_for_closed_plan(closed_plan.trade_plan_id)
+            if episode is None:
+                self.health.set("trade_episode", False, "closed lifecycle lacks factual lineage")
+                await self.audit.log(
+                    "TRADE_EPISODE_INCOMPLETE",
+                    target=closed_plan.trade_plan_id,
+                    run_id=self.run_id,
+                    order_id=order.internal_order_id,
+                )
+            else:
+                self.health.set("trade_episode", True)
+                await self.audit.log(
+                    "TRADE_EPISODE_CREATED",
+                    target=episode.episode_id,
+                    run_id=self.run_id,
+                    order_id=order.internal_order_id,
+                    after={"trade_plan_id": closed_plan.trade_plan_id},
+                )
         await self.audit.log(
             "FILL_SETTLED",
             target=fill.fill_id,

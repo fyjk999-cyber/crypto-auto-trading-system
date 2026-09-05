@@ -3,11 +3,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from crypto_trader.domain.clock import Clock
+from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
+from crypto_trader.persistence.models import TradeEpisodeORM
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 from tests.conftest import make_paper_engine
 
@@ -122,6 +126,8 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     )
     assert persisted_reduction is not None
     assert persisted_reduction.metadata["reduce_only"] is True
+    async with database.session_factory() as session:
+        assert (await session.execute(select(TradeEpisodeORM))).scalars().all() == []
 
     clock.advance()
     await engine.tick()
@@ -136,6 +142,35 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     assert closed_plan.terminal_reason == "EXIT"
     assert closed_plan.closed_at is not None
     assert chief.calls == 3
+
+    async with database.session_factory() as session:
+        episodes = (await session.execute(select(TradeEpisodeORM))).scalars().all()
+        assert len(episodes) == 1
+        episode = episodes[0]
+        assert episode.trade_plan_id == plan.trade_plan_id
+        assert episode.entry_decision_id == "entry-long"
+        assert episode.position_decision_ids_json == [
+            "position-1-hold",
+            "position-2-reduce",
+            "position-3-exit",
+        ]
+        assert len(episode.order_ids_json) == 3
+        assert len(episode.fill_ids_json) == 3
+        assert episode.opened_quantity == Decimal("0.1")
+        assert episode.closed_quantity == Decimal("0.1")
+        assert episode.factual is True
+        assert episode.review_status == "PENDING"
+
+    duplicate = await engine.trade_episodes.build_for_closed_plan(plan.trade_plan_id)
+    assert duplicate is not None and duplicate.episode_id == episode.episode_id
+    review = await DailyReviewScheduler(
+        database.session_factory, canonical_only=True
+    ).run_once(episode.closed_at.date().isoformat())
+    assert review["trade_count"] == 1
+    async with database.session_factory() as session:
+        episodes = (await session.execute(select(TradeEpisodeORM))).scalars().all()
+        assert len(episodes) == 1
+        assert episodes[0].review_status == "REVIEWED"
     await engine.stop()
 
 
@@ -196,4 +231,10 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     assert closed is not None and closed.quantity == 0
     assert final_plan is not None and final_plan.state == TradePlanState.CLOSED
     assert all(order.side.value == "BUY" for order in list(engine.adapter.orders.values())[1:])
+    async with database.session_factory() as session:
+        episode = (await session.execute(select(TradeEpisodeORM))).scalar_one()
+        assert episode.direction == "SHORT"
+        assert episode.opened_quantity == Decimal("0.1")
+        assert episode.closed_quantity == Decimal("0.1")
+        assert episode.gross_pnl == Decimal("-0.01")
     await engine.stop()
