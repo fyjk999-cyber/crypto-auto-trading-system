@@ -20,10 +20,10 @@ class DemoExecutor:
         self.adapter = adapter or OKXAdapter(demo=True)
 
     async def submit(self, order) -> DemoOrderResult:
-        if not self.adapter.demo:
-            return DemoOrderResult(False, False, reason="LIVE_FORBIDDEN")
-        try:
-            normalized = await self.adapter.submit_order(order)
-            return DemoOrderResult(True, True, normalized.exchange_order_id)
-        except Exception as exc:
-            return DemoOrderResult(False, True, reason=type(exc).__name__)
+        # Legacy compatibility object only. Canonical execution must always
+        # pass RiskEngine and ExecutionAuthority through TradingEngine.
+        return DemoOrderResult(
+            False,
+            bool(self.adapter.demo),
+            reason="CANONICAL_ENGINE_REQUIRED",
+        )

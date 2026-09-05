@@ -165,6 +165,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             if settings.auto_start_runtime
             else None
         ),
+        enforce_llm_entry_authority=settings.auto_start_runtime,
     )
 
     app_state = AppState(

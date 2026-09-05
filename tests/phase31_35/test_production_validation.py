@@ -27,9 +27,12 @@ def test_virtual_execution_long_short_metrics_deterministic():
     assert metrics.short_accuracy == Decimal("1")
 
 
-def test_demo_executor_never_live():
+async def test_demo_executor_never_live_or_bypasses_canonical_engine():
     executor = DemoExecutor()
     assert executor.adapter.demo is True
+    result = await executor.submit(object())
+    assert result.accepted is False
+    assert result.reason == "CANONICAL_ENGINE_REQUIRED"
 
 
 def test_ai_optimizer_promotion_and_rollback():

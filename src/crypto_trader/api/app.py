@@ -568,6 +568,8 @@ def create_app(state: AppState) -> FastAPI:
         """Manual order entry through the same core path (authority + engine required)."""
         if state.engine is None:
             raise HTTPException(status_code=409, detail="engine not running")
+        if state.engine.enforce_llm_entry_authority:
+            raise HTTPException(status_code=403, detail="NEW_DIRECTION_REQUIRES_LIVE_LLM")
         existing = await state.order_manager.get_by_client(body.client_order_id)
         if existing is not None:
             return {"idempotent": True, "order": serialize_order(existing)}

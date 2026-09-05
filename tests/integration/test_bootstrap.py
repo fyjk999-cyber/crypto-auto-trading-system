@@ -1,4 +1,6 @@
 from crypto_trader.config import Settings
+from crypto_trader.domain.enums import OrderSide
+from crypto_trader.domain.models import SignalIntent
 from crypto_trader.runtime.bootstrap import build_system
 
 
@@ -27,9 +29,22 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     assert bundle.position_manager.tool_chief.chief is bundle.position_manager.chief
     assert bundle.position_manager.__class__.__name__ == "LiveLLMPositionManager"
     assert not hasattr(bundle, "ai_position_bridge")
+    assert bundle.engine.enforce_llm_entry_authority is True
     run_id = await bundle.engine.start()
     assert run_id
     assert bundle.engine.state_machine.state.value == "RUNNING"
     assert bundle.engine.lease is not None
+    result = await bundle.engine.process_signal(
+        SignalIntent(
+            signal_id="quant-direct-entry",
+            strategy_id="multi_strategy_alpha",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            quantity="1",
+            limit_price="101",
+        )
+    )
+    assert result is None
+    assert await bundle.order_manager.count_open() == 0
     await bundle.engine.stop()
     await bundle.database.close()

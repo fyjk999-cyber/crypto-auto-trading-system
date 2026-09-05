@@ -94,6 +94,7 @@ class TradingEngine:
         position_manager: LiveLLMPositionManager | None = None,
         trade_episodes: TradeEpisodeStore | None = None,
         daily_review_scheduler: DailyReviewScheduler | None = None,
+        enforce_llm_entry_authority: bool = False,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -115,6 +116,7 @@ class TradingEngine:
         self.position_manager = position_manager
         self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
         self.daily_review_scheduler = daily_review_scheduler
+        self.enforce_llm_entry_authority = enforce_llm_entry_authority
         self.event_bus = EventBus()
         self.health = HealthRegistry()
         self.state_machine = RuntimeStateMachine()
@@ -369,6 +371,17 @@ class TradingEngine:
         run_id = self.run_id
         symbol = signal.symbol
         client_order_id = f"{signal.strategy_id}_{signal.signal_id}"[:60]
+        if self.enforce_llm_entry_authority and signal.strategy_id not in {
+            "live_llm",
+            "live_llm_position",
+        }:
+            await self.audit.log(
+                "NON_LLM_DIRECTIONAL_AUTHORITY_REJECTED",
+                target=client_order_id,
+                run_id=run_id,
+                after={"strategy_id": signal.strategy_id},
+            )
+            return None
         existing = await self.order_manager.get_by_client(client_order_id)
         if existing is not None:
             await self.audit.log(
