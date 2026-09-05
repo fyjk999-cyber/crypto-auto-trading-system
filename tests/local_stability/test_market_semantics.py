@@ -101,7 +101,10 @@ async def test_real_market_adapter_does_not_silent_fallback():
 
 async def test_real_market_adapter_exposes_complete_factual_okx_state():
     class FactualOKX:
+        calls = 0
+
         async def get_ticker(self, symbol):
+            self.calls += 1
             assert symbol == "DOGE-USDT-SWAP"
             return {
                 "last": "0.25",
@@ -150,6 +153,10 @@ async def test_real_market_adapter_exposes_complete_factual_okx_state():
     assert state.new_risk_allowed is True
     assert state.new_risk_block_reason == "MARKET_DATA_HEALTHY"
     assert all(source.source == "OKX_PUBLIC" for source in state.sources.values())
+    same_state = await adapter.get_market_state("DOGEUSDT")
+    assert same_state is state
+    assert state.generation == 1
+    assert adapter.feed.client.calls == 1
 
 
 async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):

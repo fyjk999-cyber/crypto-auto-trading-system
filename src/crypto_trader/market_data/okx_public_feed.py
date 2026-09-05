@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.domain.money import D
@@ -17,11 +17,20 @@ class OKXPublicMarketFeed:
 
     source = "OKX_PUBLIC"
 
-    def __init__(self, symbol: str = "BTCUSDT", *, client: OKXAdapter | None = None) -> None:
+    def __init__(
+        self,
+        symbol: str = "BTCUSDT",
+        *,
+        client: OKXAdapter | None = None,
+        min_refresh_interval_seconds: float = 1.0,
+    ) -> None:
         self.symbol = symbol
         self.client = client or OKXAdapter(demo=False)
         self.states: dict[str, MarketState] = {}
         self._oi_previous: dict[str, Decimal] = {}
+        self.min_refresh_interval = timedelta(
+            seconds=max(0.0, min_refresh_interval_seconds)
+        )
 
     def provider_symbol(self, symbol: str) -> str:
         return SymbolMapper().to_okx(symbol)
@@ -60,8 +69,15 @@ class OKXPublicMarketFeed:
     async def refresh(self, symbol: str | None = None) -> MarketState:
         symbol = symbol or self.symbol
         provider_symbol = self.provider_symbol(symbol)
-        state = self._state(symbol)
         now = datetime.now(UTC)
+        existing = self.states.get(symbol)
+        if (
+            existing is not None
+            and now - existing.received_timestamp < self.min_refresh_interval
+        ):
+            self._update_source_ages(existing, now)
+            return existing
+        state = self._state(symbol)
         # A generation is a completed factual provider observation attempt.
         # Without it the new-risk gate must (correctly) reject all entries.
         state.generation += 1
@@ -86,6 +102,12 @@ class OKXPublicMarketFeed:
             state.new_risk_allowed = False
             state.new_risk_block_reason = "CORE_OKX_MARKET_UNAVAILABLE"
         return state
+
+    @staticmethod
+    def _update_source_ages(state: MarketState, now: datetime) -> None:
+        for source in state.sources.values():
+            if source.updated_at is not None:
+                source.age_seconds = max(0.0, (now - source.updated_at).total_seconds())
 
     async def _refresh_ticker(self, state: MarketState, symbol: str, now: datetime) -> None:
         try:

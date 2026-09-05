@@ -339,13 +339,34 @@ class TradingEngine:
             else "BTCUSDT"
         )
         book = self.market_data.books.get(symbol)
+        market_state = None
+        get_market_state = getattr(self.adapter, "get_market_state", None)
         try:
-            fetched = await self.adapter.get_orderbook(symbol)
+            if get_market_state is not None:
+                market_state = await get_market_state(symbol)
+                if (
+                    market_state.health.value != "HEALTHY"
+                    or market_state.best_bid <= 0
+                    or market_state.best_ask <= 0
+                ):
+                    raise ValueError("factual market state is not healthy")
+                sequence = market_state.generation
+                bids = [(market_state.best_bid, Decimal("1"))]
+                asks = [(market_state.best_ask, Decimal("1"))]
+            else:
+                fetched = await self.adapter.get_orderbook(symbol)
+                sequence = fetched.sequence
+                bids = [
+                    (level.price, level.quantity) for level in fetched.bids.values()
+                ]
+                asks = [
+                    (level.price, level.quantity) for level in fetched.asks.values()
+                ]
             await self.market_data.ingest_snapshot(
                 symbol,
-                fetched.sequence,
-                [(level.price, level.quantity) for level in fetched.bids.values()],
-                [(level.price, level.quantity) for level in fetched.asks.values()],
+                sequence,
+                bids,
+                asks,
             )
             book = self.market_data.books[symbol]
         except Exception:
@@ -356,13 +377,6 @@ class TradingEngine:
             return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
-        market_state = None
-        get_market_state = getattr(self.adapter, "get_market_state", None)
-        if get_market_state is not None:
-            try:
-                market_state = await get_market_state(symbol)
-            except Exception:
-                market_state = None
         return StrategyContext(
             symbol=symbol,
             book=book,
