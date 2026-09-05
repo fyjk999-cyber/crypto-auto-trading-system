@@ -53,6 +53,10 @@ def test_start_script_sets_real_market():
     text = (Path(__file__).resolve().parents[2] / "scripts" / "start-paper.sh").read_text()
     assert "PAPER_MODE=PAPER_REAL_MARKET" in text
     assert "Market Data Mode: PAPER_REAL_MARKET" in text
+    assert "alembic upgrade head >/dev/null 2>&1 || true" not in text
+    assert "PAPER RUNTIME READY" in text
+    assert 'curl -fsS --max-time 1 "http://$HOST:$PORT/ready"' in text
+    assert 'kill -0 "$PID"' in text
 
 
 async def test_synthetic_requires_explicit_mode_and_never_reports_binance(database):

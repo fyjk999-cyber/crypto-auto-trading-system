@@ -10,6 +10,7 @@ build/
 .env
 data/*.db
 data/*.db-*
+data/*.pid
 .DS_Store
 .ruff_cache/
 node_modules/
