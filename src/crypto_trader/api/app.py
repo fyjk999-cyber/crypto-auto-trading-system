@@ -18,6 +18,7 @@ from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory_persistence import MemoryPersistence
@@ -231,7 +232,16 @@ def create_app(state: AppState) -> FastAPI:
             return {"status": "INVALID_INTERVAL", "candles": []}
         limit = max(1, min(limit, 500))
         if state.settings.kline_provider.upper() == "OKX":
-            provider_symbol = "BTC-USDT-SWAP" if symbol.upper() == "BTCUSDT" else symbol.upper()
+            try:
+                provider_symbol = SymbolMapper().to_okx(symbol.upper())
+            except ValueError:
+                return {
+                    "symbol": symbol.upper(),
+                    "interval": interval,
+                    "source": "OKX",
+                    "status": "INVALID_SYMBOL",
+                    "candles": [],
+                }
             client = OKXAdapter(base_url=state.settings.okx_base_url)
             try:
                 rows = await client.get_candles(provider_symbol, interval_map[interval], limit)

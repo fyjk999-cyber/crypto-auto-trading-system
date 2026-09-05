@@ -6,6 +6,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.errors import MarketDataUnhealthy
+from crypto_trader.domain.models import Instrument
+from crypto_trader.domain.money import D
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import MarketState
@@ -27,6 +30,52 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
 
     async def get_market_state(self, symbol: str) -> MarketState:
         return await self.feed.refresh(symbol)
+
+    async def get_exchange_info(self, symbol: str | None = None) -> list[Instrument]:
+        """Load the bounded execution symbol's factual OKX linear-SWAP contract."""
+
+        canonical = (symbol or self.feed.symbol).upper()
+        provider_symbol = SymbolMapper().to_okx(canonical)
+        try:
+            rows = await self.feed.client.get_instruments("SWAP")
+        except Exception:
+            return []
+        matches = [
+            row
+            for row in rows
+            if row.get("instId") == provider_symbol
+            and row.get("state") == "live"
+            and row.get("ctType", "linear") == "linear"
+        ]
+        if len(matches) != 1:
+            return []
+        raw = matches[0]
+        tick_size = D(raw.get("tickSz", "0"))
+        lot_size = D(raw.get("lotSz", "0"))
+        min_size = D(raw.get("minSz", "0"))
+        contract_size = D(raw.get("ctVal", "0"))
+        contract_multiplier = D(raw.get("ctMult") or "1")
+        if min(tick_size, lot_size, min_size, contract_size, contract_multiplier) <= 0:
+            return []
+        base, quote, *_ = provider_symbol.split("-")
+        return [
+            Instrument(
+                symbol=canonical,
+                base_asset=base,
+                quote_asset=quote,
+                status="TRADING",
+                tick_size=tick_size,
+                step_size=lot_size,
+                min_qty=min_size,
+                min_notional=Decimal("0.00000001"),
+                price_precision=_precision(tick_size),
+                quantity_precision=_precision(lot_size),
+                exchange="OKX",
+                instrument_type="LINEAR_PERP",
+                contract_size=contract_size,
+                contract_multiplier=contract_multiplier,
+            )
+        ]
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:
@@ -61,3 +110,7 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
     async def disconnect(self) -> None:
         await self.feed.close()
         await super().disconnect()
+
+
+def _precision(step: Decimal) -> int:
+    return max(0, -step.normalize().as_tuple().exponent)

@@ -78,3 +78,15 @@ def test_sizing_reports_existing_exposure_and_caps_requested_notional():
     assert result.risk_normalized_notional == Decimal("10000")
     assert result.portfolio_exposure_after_trade == Decimal("10500")
     assert "MAX_ORDER_NOTIONAL" in result.sizing_reason_codes
+
+
+def test_sizing_accepts_exposure_request_using_factual_contract_spec():
+    result = size(
+        requested_quantity=Decimal("0"),
+        requested_exposure=Decimal("500"),
+        instrument=instrument("0.01", "1"),
+        stop_price=None,
+    )
+    assert result.requested_notional == Decimal("500")
+    assert result.normalized_quantity == Decimal("500")
+    assert result.risk_normalized_notional == Decimal("500")

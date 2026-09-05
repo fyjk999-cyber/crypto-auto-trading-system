@@ -41,6 +41,7 @@ class LiveEntrySizingService:
         *,
         side: str,
         requested_quantity: Decimal,
+        requested_exposure: Decimal | None = None,
         requested_leverage: Decimal,
         account: Account,
         positions: dict[str, Position],
@@ -56,13 +57,20 @@ class LiveEntrySizingService:
         contract_size = D(instrument.contract_size)
         multiplier = D(instrument.contract_multiplier)
         lot_size = D(instrument.step_size)
-        if requested_quantity <= 0 or price <= 0 or account.equity <= 0:
+        requested_exposure = D(requested_exposure or "0")
+        if price <= 0 or account.equity <= 0:
             return _zero(requested_leverage, "INVALID_SIZING_INPUT")
         spec = InstrumentExposureSpec(
             instrument_type=instrument.instrument_type,
             contract_size=contract_size,
             contract_multiplier=multiplier,
         )
+        if requested_quantity <= 0 and requested_exposure > 0:
+            requested_quantity = requested_exposure / (
+                price * contract_size * multiplier
+            )
+        if requested_quantity <= 0:
+            return _zero(requested_leverage, "INVALID_SIZING_INPUT")
         requested_notional = ExposureService.calculate(
             quantity=requested_quantity,
             price=price,

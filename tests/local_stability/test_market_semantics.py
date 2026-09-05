@@ -135,6 +135,22 @@ async def test_real_market_adapter_exposes_complete_factual_okx_state():
         async def get_open_interest(self, symbol):
             return {"open_interest": "12345"}
 
+        async def get_instruments(self, instrument_type):
+            assert instrument_type == "SWAP"
+            return [
+                {
+                    "instId": "DOGE-USDT-SWAP",
+                    "instType": "SWAP",
+                    "ctType": "linear",
+                    "state": "live",
+                    "tickSz": "0.0001",
+                    "lotSz": "1",
+                    "minSz": "1",
+                    "ctVal": "10",
+                    "ctMult": "1",
+                }
+            ]
+
         async def disconnect(self):
             return None
 
@@ -157,6 +173,11 @@ async def test_real_market_adapter_exposes_complete_factual_okx_state():
     assert same_state is state
     assert state.generation == 1
     assert adapter.feed.client.calls == 1
+    instruments = await adapter.get_exchange_info("DOGEUSDT")
+    assert len(instruments) == 1
+    assert instruments[0].instrument_type == "LINEAR_PERP"
+    assert instruments[0].contract_size == Decimal("10")
+    assert instruments[0].step_size == Decimal("1")
 
 
 async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):
@@ -177,6 +198,18 @@ async def test_klines_use_okx_public_data_in_chronological_order(database, monke
     assert data["provider_symbol"] == "BTC-USDT-SWAP"
     assert [row["close"] for row in data["candles"]] == ["1.5", "2.6"]
     assert data["candles"][0]["closed"] is False
+
+
+async def test_klines_map_any_canonical_usdt_symbol_to_okx(database, monkeypatch):
+    async def candles(self, inst_id, bar, limit=500):
+        assert inst_id == "DOGE-USDT-SWAP"
+        return []
+
+    monkeypatch.setattr(OKXAdapter, "get_candles", candles)
+    client = TestClient(create_app(make_state(database, "PAPER_REAL_MARKET")))
+    data = client.get("/market/klines?symbol=DOGEUSDT&interval=1d&limit=10").json()
+    assert data["provider_symbol"] == "DOGE-USDT-SWAP"
+    assert data["status"] == "HEALTHY"
 
 
 async def test_okx_kline_failure_returns_empty_unavailable_data(database, monkeypatch):

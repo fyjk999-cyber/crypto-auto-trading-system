@@ -152,6 +152,11 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         sized = self.sizer.size(
             side=decision.action.value,
             requested_quantity=Decimal(str(decision.position_size_request)),
+            requested_exposure=(
+                Decimal(str(decision.requested_exposure))
+                if decision.requested_exposure is not None
+                else None
+            ),
             requested_leverage=Decimal(str(decision.leverage_request or 1)),
             account=ctx.account,
             positions=ctx.positions,
@@ -237,4 +242,17 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             "open_interest": str(ctx.oi) if ctx.oi is not None else None,
             "basis": str(ctx.basis) if ctx.basis is not None else None,
             "source": "OKX_PUBLIC",
+            "instrument": (
+                {
+                    "symbol": ctx.instrument.symbol,
+                    "instrument_type": ctx.instrument.instrument_type,
+                    "contract_size": str(ctx.instrument.contract_size),
+                    "contract_multiplier": str(ctx.instrument.contract_multiplier),
+                    "lot_size": str(ctx.instrument.step_size),
+                    "min_quantity": str(ctx.instrument.min_qty),
+                    "tick_size": str(ctx.instrument.tick_size),
+                }
+                if ctx.instrument is not None
+                else None
+            ),
         }
