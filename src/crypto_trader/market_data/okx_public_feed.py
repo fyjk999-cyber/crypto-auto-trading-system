@@ -62,6 +62,9 @@ class OKXPublicMarketFeed:
         provider_symbol = self.provider_symbol(symbol)
         state = self._state(symbol)
         now = datetime.now(UTC)
+        # A generation is a completed factual provider observation attempt.
+        # Without it the new-risk gate must (correctly) reject all entries.
+        state.generation += 1
 
         await self._refresh_ticker(state, provider_symbol, now)
         await self._refresh_book(state, provider_symbol, now)

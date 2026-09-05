@@ -82,8 +82,9 @@ class MarketState(BaseModel):
         self.status = self.health
         self.freshness = self.health
         self.new_risk_allowed = self.health == DataHealth.HEALTHY
-        if not self.new_risk_allowed:
-            self.new_risk_block_reason = self.health.value
+        self.new_risk_block_reason = (
+            "MARKET_DATA_HEALTHY" if self.new_risk_allowed else self.health.value
+        )
 
     def compute_basis(self) -> None:
         if self.index_price and self.index_price > 0:

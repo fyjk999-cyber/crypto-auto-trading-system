@@ -146,6 +146,9 @@ async def test_real_market_adapter_exposes_complete_factual_okx_state():
     assert state.funding_rate == Decimal("0.0001")
     assert state.open_interest == Decimal("12345")
     assert state.spread == Decimal("0.02")
+    assert state.generation == 1
+    assert state.new_risk_allowed is True
+    assert state.new_risk_block_reason == "MARKET_DATA_HEALTHY"
     assert all(source.source == "OKX_PUBLIC" for source in state.sources.values())
 
 
