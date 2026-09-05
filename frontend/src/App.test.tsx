@@ -213,6 +213,28 @@ describe("中文加密交易终端 V2", () => {
     expect(credentialCall).toBeUndefined();
   });
 
+  it("系统页只显示 OKX 公开行情，不再把数据源标为 Binance", async () => {
+    window.location.hash = "#/system";
+    setup(backend({
+      "/market": { symbol: "BTCUSDT", provider: "OKX_PUBLIC", status: "HEALTHY", price: "100" },
+      "/exchange-health": { adapter: "connected", mode: "PAPER", market_data: { provider: "OKX_PUBLIC", status: "HEALTHY" } },
+    }));
+    await waitFor(() => expect(screen.getByText("OKX 公开行情")).toBeTruthy());
+    expect(screen.queryByText("Binance 行情")).toBeNull();
+    expect(screen.getAllByText("OKX 实时").length).toBeGreaterThan(0);
+  });
+
+  it("复盘页读取后端 daily_pnl 并显示事实复盘状态", async () => {
+    window.location.hash = "#/review";
+    setup(backend({
+      "/daily-reviews": { daily_reviews: [{ daily_pnl: "12.5", win_rate: "0.5", profit_factor: "1.2", trade_count: 2 }], count: 1 },
+      "/learning": { status: "OK", fast_learning: {}, slow_learning_candidates: [], factual: { status: "FACTUAL_EPISODES_ONLY", review_count: 2 } },
+    }));
+    await waitFor(() => expect(screen.getByText("$12.5")).toBeTruthy());
+    expect(screen.getByText("FACTUAL_EPISODES_ONLY")).toBeTruthy();
+    expect(screen.getAllByText("2").length).toBeGreaterThan(0);
+  });
+
   it("OKX 验证保留 DEGRADED 并显示失败阶段和中文原因，不显示凭据", async () => {
     window.location.hash = "#/system";
     const fetchMock = backend({
