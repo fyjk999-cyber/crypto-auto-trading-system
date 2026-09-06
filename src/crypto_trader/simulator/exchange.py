@@ -28,6 +28,7 @@ from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Instrument, Order, Position
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exchange.base import ExchangeAdapter
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.market_data.orderbook import OrderBook
 
 
@@ -294,7 +295,16 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 break
             qty = min(remaining, level.quantity)
             price = level.price
-            gross = price * qty
+            gross = ExposureService.calculate(
+                quantity=qty,
+                price=price,
+                spec=InstrumentExposureSpec(
+                    instrument_type=instrument.instrument_type,
+                    contract_size=instrument.contract_size,
+                    contract_multiplier=instrument.contract_multiplier,
+                ),
+                side="LONG" if order.side == OrderSide.BUY else "SHORT",
+            ).gross_notional
             fee = (gross * self.fee_rate).quantize(Decimal("0.00000001"))
             fill = Fill(
                 fill_id=new_id("fill"),

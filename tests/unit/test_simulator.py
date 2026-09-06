@@ -12,7 +12,7 @@ from crypto_trader.domain.enums import (
     TradingMode,
 )
 from crypto_trader.domain.errors import OrderRejected, RateLimited, UnknownExecutionState
-from crypto_trader.domain.models import Order
+from crypto_trader.domain.models import Instrument, Order
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 
 
@@ -68,6 +68,52 @@ async def test_marketable_limit_fills_and_updates_balance():
     assert balances["USDT"] == Decimal("9949.924975")
     positions = await sim.get_positions()
     assert positions[0].quantity == Decimal("0.5")
+
+
+async def test_linear_perp_fee_uses_canonical_contract_notional():
+    instrument = Instrument(
+        symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        tick_size="0.1",
+        step_size="1",
+        min_qty="1",
+        min_notional="0.01",
+        price_precision=1,
+        quantity_precision=0,
+        exchange="OKX",
+        instrument_type="LINEAR_PERP",
+        contract_size="0.01",
+        contract_multiplier="1",
+    )
+    sim = SimulatedExchangeAdapter(
+        initial_balances={"USDT": Decimal("1000")}, instruments=[instrument]
+    )
+    await sim.connect()
+    events = []
+    await sim.subscribe_order_updates(lambda event: events.append(event) or _noop())
+    order = make_order(qty="2", price="101").model_copy(
+        update={
+            "metadata": {
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": "0.01",
+                "contract_multiplier": "1",
+            }
+        }
+    )
+    await sim.submit_order(order)
+    fills = [
+        event
+        for event in events
+        if event.event_type
+        in {ExchangeEventType.ORDER_PARTIALLY_FILLED, ExchangeEventType.ORDER_FILLED}
+    ]
+    # One contract fills at 100.05 and one at 100.10. Both use 0.01 contract size.
+    assert sum((Decimal(event.payload["fee"]) for event in fills), Decimal("0")) == Decimal(
+        "0.0020015"
+    )
+    balances = {row.currency: row.total for row in await sim.get_balances()}
+    assert balances["USDT"] == Decimal("999.9979985")
 
 
 async def test_fill_before_ack_ordering():
