@@ -235,6 +235,37 @@ def test_chief_trader_decision_schema_and_fail_safe():
     assert decision.action == "NO_TRADE"
 
 
+async def test_chief_trader_reserves_output_budget_after_reasoning_tokens():
+    class CapturingProvider:
+        name = "deepseek"
+        model = "deepseek-v4-pro"
+
+        async def complete_json(self, **kwargs):
+            self.kwargs = kwargs
+            return LLMResponse(
+                text="",
+                provider=self.name,
+                model=self.model,
+                latency_ms=1,
+                ok=False,
+                error="EMPTY_CONTENT",
+            )
+
+    provider = CapturingProvider()
+    context = ChiefTraderContext(
+        symbol="BTCUSDT",
+        market_snapshot={"price": "100"},
+        regime="RANGE",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
+    decision = await ChiefTraderEngine(provider=provider).decide(context)
+    assert provider.kwargs["max_tokens"] == 2400
+    assert decision.action == "FAIL_CLOSED"
+    assert decision.reason_codes == ["EMPTY_CONTENT"]
+
+
 def test_chief_trader_engine_parse_decision():
     engine = ChiefTraderEngine()
     ctx = ChiefTraderContext(

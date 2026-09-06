@@ -69,7 +69,7 @@ class ChiefTraderEngine:
                 temperature=0.2,
                 timeout_seconds=30.0,
                 retries=1,
-                max_tokens=1200,
+                max_tokens=2400,
                 thinking=True,
                 reasoning_effort="low",
                 operation="trading_decision",
