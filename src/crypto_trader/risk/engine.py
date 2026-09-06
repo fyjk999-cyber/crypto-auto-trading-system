@@ -199,19 +199,19 @@ class RiskEngine:
         checks["max_drawdown"] = True
 
         cash = account.equity
-        existing_notional = sum(
-            (
-                ExposureService.for_position(position).gross_notional
-                for position in positions.values()
-            ),
-            Decimal("0"),
+        portfolio_exposure = ExposureService.for_portfolio(
+            positions,
+            prices={intent.symbol: market_price},
         )
+        existing_notional = portfolio_exposure.gross_notional
         current_symbol = positions.get(intent.symbol)
         current_symbol_notional = (
-            ExposureService.for_position(current_symbol).gross_notional
+            ExposureService.for_position(current_symbol, price=market_price).gross_notional
             if current_symbol
             else Decimal("0")
         )
+        checks["existing_notional"] = str(existing_notional)
+        checks["existing_symbol_notional"] = str(current_symbol_notional)
         symbol_notional = (
             max(current_symbol_notional - notional, Decimal("0"))
             if reduce_only

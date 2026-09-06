@@ -87,10 +87,11 @@ def test_position_api_uses_canonical_contract_size_exposure():
             instrument_type="LINEAR_PERP",
             contract_size=Decimal("0.01"),
             contract_multiplier=Decimal("1"),
-        )
+        ),
+        price=Decimal("51000"),
     )
-    assert payload["gross_notional"] == "1000.00"
-    assert payload["signed_notional"] == "-1000.00"
+    assert payload["gross_notional"] == "1020.00"
+    assert payload["signed_notional"] == "-1020.00"
 
 
 async def test_api_version_endpoint(database, monkeypatch):

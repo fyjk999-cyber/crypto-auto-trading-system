@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -56,3 +57,21 @@ class ExposureService:
             ),
             side=side,
         )
+
+    @staticmethod
+    def for_portfolio(
+        positions: Mapping[str, object],
+        *,
+        prices: Mapping[str, Decimal] | None = None,
+    ) -> Exposure:
+        prices = prices or {}
+        gross = Decimal("0")
+        signed = Decimal("0")
+        for symbol, position in positions.items():
+            exposure = ExposureService.for_position(
+                position,
+                price=prices.get(symbol),
+            )
+            gross += exposure.gross_notional
+            signed += exposure.signed_notional
+        return Exposure(gross_notional=gross, signed_notional=signed)

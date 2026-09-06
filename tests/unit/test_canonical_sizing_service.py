@@ -90,3 +90,17 @@ def test_sizing_accepts_exposure_request_using_factual_contract_spec():
     assert result.requested_notional == Decimal("500")
     assert result.normalized_quantity == Decimal("500")
     assert result.risk_normalized_notional == Decimal("500")
+
+
+def test_sizing_values_existing_same_symbol_position_at_current_price():
+    position = Position(
+        symbol="ETHUSDT",
+        base_asset="ETH",
+        quote_asset="USDT",
+        quantity=Decimal("1"),
+        avg_entry_price=Decimal("50"),
+        cost_basis=Decimal("50"),
+    )
+    result = size(positions={"ETHUSDT": position})
+    assert result.risk_normalized_notional == Decimal("200")
+    assert result.portfolio_exposure_after_trade == Decimal("300")

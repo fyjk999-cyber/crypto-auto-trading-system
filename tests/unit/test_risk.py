@@ -202,3 +202,25 @@ def test_reduce_only_can_decrease_risk_even_when_projected_exposure_remains_over
         "max_leverage",
     ):
         assert decision.checks[check] is True
+
+
+def test_existing_symbol_exposure_is_valued_at_current_market_price():
+    engine = RiskEngine(RiskConfig(max_symbol_exposure=Decimal("250")))
+    position = Position(
+        symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        quantity=Decimal("2"),
+        avg_entry_price=Decimal("100"),
+        cost_basis=Decimal("200"),
+    )
+    decision = engine.check(
+        make_signal(qty="0.1").model_copy(update={"limit_price": Decimal("120")}),
+        account=make_account(),
+        positions={"BTCUSDT": position},
+        market_price=Decimal("120"),
+        open_order_count=0,
+    )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert decision.reason == "MAX_SYMBOL_EXPOSURE"
+    assert decision.checks["existing_notional"] == "240"

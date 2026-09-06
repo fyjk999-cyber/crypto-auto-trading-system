@@ -17,6 +17,7 @@ from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
+from crypto_trader.domain.money import D
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.exposure.service import ExposureService
@@ -50,11 +51,11 @@ def serialize_order(order) -> dict:
     return order.model_dump(mode="json")
 
 
-def serialize_position(position) -> dict:
+def serialize_position(position, *, price: Decimal | None = None) -> dict:
     """Serialize a position with the same canonical exposure used by Risk."""
 
     payload = position.model_dump(mode="json")
-    exposure = ExposureService.for_position(position)
+    exposure = ExposureService.for_position(position, price=price)
     payload["gross_notional"] = str(exposure.gross_notional)
     payload["signed_notional"] = str(exposure.signed_notional)
     return payload
@@ -151,6 +152,22 @@ def create_app(state: AppState) -> FastAPI:
             if evidence_engine is not None:
                 return evidence_engine
         return None
+
+    async def _position_mark_prices(positions: dict) -> dict[str, Decimal]:
+        adapter = getattr(state.engine, "adapter", None) if state.engine else None
+        get_market_state = getattr(adapter, "get_market_state", None)
+        prices: dict[str, Decimal] = {}
+        if get_market_state is None:
+            return prices
+        for symbol in positions:
+            try:
+                snapshot = await get_market_state(symbol)
+            except Exception:
+                continue
+            price = snapshot.mark_price or snapshot.last_price
+            if price is not None and D(price) > 0:
+                prices[symbol] = D(price)
+        return prices
 
     @app.post(
         "/exchange/okx/credentials", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
@@ -424,21 +441,18 @@ def create_app(state: AppState) -> FastAPI:
     async def margin():
         account = await state.portfolio.get_account(state.settings.effective_mode())
         positions = await state.portfolio.get_positions()
-        serialized = {symbol: serialize_position(pos) for symbol, pos in positions.items()}
-        gross_exposure = sum(
-            (ExposureService.for_position(pos).gross_notional for pos in positions.values()),
-            Decimal("0"),
-        )
-        net_exposure = sum(
-            (ExposureService.for_position(pos).signed_notional for pos in positions.values()),
-            Decimal("0"),
-        )
+        prices = await _position_mark_prices(positions)
+        serialized = {
+            symbol: serialize_position(pos, price=prices.get(symbol))
+            for symbol, pos in positions.items()
+        }
+        exposure = ExposureService.for_portfolio(positions, prices=prices)
         return {
             "equity": str(account.equity),
             "balances": {k: v.model_dump(mode="json") for k, v in account.balances.items()},
             "positions": serialized,
-            "gross_exposure": str(gross_exposure),
-            "net_exposure": str(net_exposure),
+            "gross_exposure": str(exposure.gross_notional),
+            "net_exposure": str(exposure.signed_notional),
         }
 
     @app.get("/reviews")
@@ -567,7 +581,11 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/positions")
     async def positions():
         positions = await state.portfolio.get_positions()
-        return {symbol: serialize_position(pos) for symbol, pos in positions.items()}
+        prices = await _position_mark_prices(positions)
+        return {
+            symbol: serialize_position(pos, price=prices.get(symbol))
+            for symbol, pos in positions.items()
+        }
 
     @app.get("/account")
     async def account():
