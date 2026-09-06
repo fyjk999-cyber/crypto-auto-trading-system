@@ -119,12 +119,14 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     )
 
     before_orders = len(engine.adapter.orders)
-    await engine.tick()
+    hold_decisions = await engine.tick()
+    assert hold_decisions == []
     assert len(engine.adapter.orders) == before_orders
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
 
     clock.advance()
-    await engine.tick()
+    reduction_decisions = await engine.tick()
+    assert reduction_decisions[0].checks["original_direction"] == "LONG"
     await engine.wait_for_event_queue()
     reduced = await engine.portfolio.get_position("BTCUSDT")
     assert reduced is not None and reduced.quantity == Decimal("0.06")
@@ -139,7 +141,8 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         assert (await session.execute(select(TradeEpisodeORM))).scalars().all() == []
 
     clock.advance()
-    await engine.tick()
+    exit_decisions = await engine.tick()
+    assert exit_decisions[0].checks["original_direction"] == "LONG"
     submitted = await plans.get(plan.trade_plan_id)
     assert submitted is not None
     assert submitted.state == TradePlanState.ACTIVE
@@ -261,14 +264,16 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
         audit=engine.audit,
         review_cooldown_seconds=30,
     )
-    await engine.tick()
+    reduction_decisions = await engine.tick()
+    assert reduction_decisions[0].checks["original_direction"] == "SHORT"
     await engine.wait_for_event_queue()
     reduced = await engine.portfolio.get_position("BTCUSDT")
     assert reduced is not None and reduced.quantity == Decimal("-0.06")
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
 
     clock.advance()
-    await engine.tick()
+    exit_decisions = await engine.tick()
+    assert exit_decisions[0].checks["original_direction"] == "SHORT"
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     await engine.wait_for_event_queue()
     closed = await engine.portfolio.get_position("BTCUSDT")

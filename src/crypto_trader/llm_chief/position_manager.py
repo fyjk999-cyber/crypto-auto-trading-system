@@ -201,6 +201,7 @@ class LiveLLMPositionManager:
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_id": decision.decision_id,
                 "entry_decision_id": plan.decision_id,
+                "direction": plan.direction,
                 "lifecycle_action": (
                     "TIME_STOP_SAFETY_FALLBACK" if time_stop else decision.action.value
                 ),
