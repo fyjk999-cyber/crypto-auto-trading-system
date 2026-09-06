@@ -482,6 +482,14 @@ class TradingEngine:
                     after={"trade_plan_id": trade_plan_id},
                 )
                 return None
+            if await self.order_manager.has_pending_position_action(trade_plan_id):
+                await self.audit.log(
+                    "POSITION_ACTION_ALREADY_PENDING",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"trade_plan_id": trade_plan_id},
+                )
+                return None
 
         account = await self.portfolio.get_account(self.settings.effective_mode())
         book = self.market_data.books.get(symbol)

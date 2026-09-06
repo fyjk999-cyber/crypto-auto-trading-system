@@ -352,6 +352,60 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     await engine.stop()
 
 
+async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-duplicate-exit")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    plans = TradePlanService(database.session_factory)
+    decisions = LLMDecisionStore(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-duplicate-exit",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="durable duplicate-exit thesis",
+        position_size_request=0.1,
+        leverage_request=1,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    # Leave the first close order resting so the next LLM tick exercises the
+    # persisted TradePlan-level guard rather than client-id idempotency.
+    match_order = engine.adapter._match_order
+    engine.adapter._match_order = lambda _order: []
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief([("EXIT", "0"), ("EXIT", "0")]),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    await engine.tick()
+    assert len(engine.adapter.orders) == 2
+    assert await engine.order_manager.has_pending_position_action(plan.trade_plan_id)
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+
+    engine.adapter._match_order = match_order
+    clock.advance()
+    await engine.tick()
+    assert len(engine.adapter.orders) == 2
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await engine.stop()
+
+
 async def test_paper_restart_restores_active_position_without_fabricating_fill(database):
     first = make_paper_engine(database, engine_tick_seconds=3600)
     await first.start("run-before-restart")

@@ -210,6 +210,34 @@ class OrderManager:
     async def count_open(self) -> int:
         return len(await self.list_open())
 
+    async def has_pending_position_action(self, trade_plan_id: str) -> bool:
+        """Return factual restart-safe suppression for duplicate REDUCE/EXIT orders."""
+
+        pending = [
+            OrderStatus.CREATED.value,
+            OrderStatus.VALIDATED.value,
+            OrderStatus.SUBMITTING.value,
+            OrderStatus.SUBMITTED.value,
+            OrderStatus.ACKNOWLEDGED.value,
+            OrderStatus.OPEN.value,
+            OrderStatus.PARTIALLY_FILLED.value,
+            OrderStatus.CANCEL_PENDING.value,
+            OrderStatus.UNKNOWN.value,
+        ]
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OrderORM).where(
+                        OrderORM.strategy_id == "live_llm_position",
+                        OrderORM.status.in_(pending),
+                    )
+                )
+            ).scalars()
+            return any(
+                (row.metadata_json or {}).get("trade_plan_id") == trade_plan_id
+                for row in rows
+            )
+
     async def list_all(self, limit: int = 200) -> list[Order]:
         async with self.session_factory() as session:
             rows = (
