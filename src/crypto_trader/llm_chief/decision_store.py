@@ -24,6 +24,7 @@ class LLMDecisionRecord:
     model: str
     model_version: str
     prompt_version: str
+    market_regime: str
     thesis: str
     reason_codes: list[str]
     trade_plan_id: str | None
@@ -141,6 +142,7 @@ class LLMDecisionStore:
             model=row.model,
             model_version=row.model_version,
             prompt_version=row.prompt_version,
+            market_regime=row.market_regime,
             thesis=row.thesis,
             reason_codes=list(row.reason_codes_json or []),
             trade_plan_id=row.trade_plan_id,

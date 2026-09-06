@@ -378,20 +378,29 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/signals")
     async def signals(limit: int = 50):
-        alpha = _alpha_from_state()
-        if alpha is None or alpha.last_meta is None:
-            return {"signals": []}
+        rows = await LLMDecisionStore(state.database.session_factory).list_recent(limit)
         return {
             "signals": [
                 {
-                    "symbol": alpha.last_meta.symbol,
-                    "side": alpha.last_meta.side.value,
-                    "confidence": str(alpha.last_meta.confidence),
-                    "reasons": alpha.last_meta.reason_codes,
-                    "regime": alpha.last_meta.regime,
+                    "decision_id": row.decision_id,
+                    "symbol": row.symbol,
+                    "side": row.action,
+                    "decision": row.action,
+                    "position_state": row.position_state.value,
+                    "reasons": row.reason_codes,
+                    "regime": row.market_regime,
+                    "thesis": row.thesis,
+                    "trade_plan_id": row.trade_plan_id,
+                    "provider": row.model_provider,
+                    "model": row.model,
+                    "created_at": row.created_at.isoformat(),
+                    "authority": "CHIEF_TRADER_LLM",
+                    "executable": False,
                 }
+                for row in rows
             ],
-            "count": 1,
+            "count": len(rows),
+            "quant_direct_trade_authority": 0,
         }
 
     @app.get("/strategies")

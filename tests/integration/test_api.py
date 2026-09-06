@@ -129,6 +129,15 @@ async def test_api_exposes_sanitized_durable_llm_decision_lineage(database):
     assert decision["trade_plan_id"] is None
     assert "api_key" not in str(response.json()).lower()
 
+    signals = TestClient(create_app(state)).get("/signals")
+    assert signals.status_code == 200
+    assert signals.json()["quant_direct_trade_authority"] == 0
+    signal = signals.json()["signals"][0]
+    assert signal["decision_id"] == "llm-api-wait"
+    assert signal["decision"] == "WAIT"
+    assert signal["authority"] == "CHIEF_TRADER_LLM"
+    assert signal["executable"] is False
+
 
 async def test_api_killswitch_route(database):
     state = make_state(database)
