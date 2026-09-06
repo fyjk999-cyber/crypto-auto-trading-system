@@ -73,6 +73,21 @@ def test_portfolio_risk_exposure():
     assert snapshot.total_exposure == Decimal("1500")
     assert snapshot.asset_concentration["BTCUSDT"] > snapshot.asset_concentration["ETHUSDT"]
 
+    derivative = engine.analyze(
+        [
+            {
+                "symbol": "ETHUSDT",
+                "quantity": "3",
+                "mark_price": "2000",
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": "0.1",
+                "contract_multiplier": "2",
+                "notional": "1",
+            }
+        ]
+    )
+    assert derivative.total_exposure == Decimal("1200.0")
+
 
 def test_risk_v3_30pct_drawdown_levels():
     risk = RiskV3()

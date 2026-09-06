@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService
 
 
 @dataclass
@@ -19,18 +20,16 @@ class PortfolioRiskSnapshot:
 
 class PortfolioRiskEngine:
     def analyze(self, positions: list[dict]) -> PortfolioRiskSnapshot:
-        total = sum((abs(D(p.get("notional", "0"))) for p in positions), D("0"))
+        notionals = [ExposureService.for_mapping(position).gross_notional for position in positions]
+        total = sum(notionals, D("0"))
         concentration: dict[str, Decimal] = {}
-        for p in positions:
+        for p, notional in zip(positions, notionals, strict=True):
             symbol = p["symbol"]
-            notional = abs(D(p.get("notional", "0")))
             concentration[symbol] = notional / total * D("100") if total > 0 else D("0")
         strategy_exposure: dict[str, Decimal] = {}
-        for p in positions:
+        for p, notional in zip(positions, notionals, strict=True):
             key = p.get("strategy", "unknown")
-            strategy_exposure[key] = strategy_exposure.get(key, D("0")) + abs(
-                D(p.get("notional", "0"))
-            )
+            strategy_exposure[key] = strategy_exposure.get(key, D("0")) + notional
         correlation_risk = min(D("1"), total / D("1000000")) if total > 0 else D("0")
         beta = (
             sum((D(p.get("beta", "1")) for p in positions), D("0")) / Decimal(len(positions))

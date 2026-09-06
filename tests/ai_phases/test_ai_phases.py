@@ -123,6 +123,22 @@ def test_portfolio_allocator_exposure_capital():
     assert exposure.total_exposure == Decimal("1500")
     assert exposure.asset_concentration["BTCUSDT"] > Decimal("60")
 
+    derivative = ExposureEngine().calculate(
+        [
+            {
+                "symbol": "BTCUSDT",
+                "quantity": "-2",
+                "mark_price": "51000",
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": "0.01",
+                "contract_multiplier": "1",
+                "notional": "999999",
+                "strategy": "chief",
+            }
+        ]
+    )
+    assert derivative.total_exposure == Decimal("1020.00")
+
 
 def test_correlation_engine():
     engine = CorrelationEngine()

@@ -59,6 +59,47 @@ class ExposureService:
         )
 
     @staticmethod
+    def for_mapping(position: Mapping[str, object]) -> Exposure:
+        """Calculate from factual position fields, with legacy notional compatibility.
+
+        When quantity is present it is authoritative and a caller-provided
+        ``notional`` value is deliberately ignored. This keeps reporting and
+        risk analytics on the same contract-size-aware definition.
+        """
+
+        if "quantity" not in position:
+            gross = abs(D(position.get("notional", "0")))
+            side = str(position.get("side") or "LONG").upper()
+            return Exposure(
+                gross_notional=gross,
+                signed_notional=-gross if side == "SHORT" else gross,
+            )
+        quantity = D(position["quantity"])
+        instrument_type = str(position.get("instrument_type") or "SPOT")
+        raw_price = (
+            position.get("mark_price")
+            or position.get("price")
+            or position.get("avg_entry_price")
+        )
+        inverse = instrument_type.upper() in {
+            "INVERSE",
+            "INVERSE_PERP",
+            "INVERSE_FUTURES",
+        }
+        if raw_price is None and not inverse:
+            raise ValueError("canonical exposure requires a factual position price")
+        return ExposureService.calculate(
+            quantity=quantity,
+            price=raw_price or "1",
+            spec=InstrumentExposureSpec(
+                instrument_type=instrument_type,
+                contract_size=D(position.get("contract_size", "1")),
+                contract_multiplier=D(position.get("contract_multiplier", "1")),
+            ),
+            side="LONG" if quantity >= 0 else "SHORT",
+        )
+
+    @staticmethod
     def for_portfolio(
         positions: Mapping[str, object],
         *,

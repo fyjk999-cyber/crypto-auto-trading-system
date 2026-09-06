@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService
 
 
 @dataclass
@@ -17,12 +18,12 @@ class ExposureSnapshot:
 
 class ExposureEngine:
     def calculate(self, positions: list[dict]) -> ExposureSnapshot:
-        total = sum((abs(D(str(p.get("notional", "0")))) for p in positions), D("0"))
+        notionals = [ExposureService.for_mapping(position).gross_notional for position in positions]
+        total = sum(notionals, D("0"))
         concentration = {}
         strategy = {}
-        for p in positions:
+        for p, notional in zip(positions, notionals, strict=True):
             symbol = p["symbol"]
-            notional = abs(D(str(p.get("notional", "0"))))
             concentration[symbol] = notional / total * D("100") if total > 0 else D("0")
             key = p.get("strategy", "unknown")
             strategy[key] = strategy.get(key, D("0")) + notional
