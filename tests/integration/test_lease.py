@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from crypto_trader.runtime.lease import LeaseManager
 from tests.conftest import make_paper_engine
 
@@ -117,3 +119,34 @@ async def test_engine_lease_loss_is_factual_fail_closed_and_restart_recovers(dat
     assert recovered.lease.token not in str(snapshot)
     assert recovered.risk_engine.kill_switch.enabled is False
     await recovered.stop()
+
+
+@pytest.mark.parametrize("failure_mode", ["false", "exception"])
+async def test_engine_lease_renew_failure_modes_fail_closed(
+    database, monkeypatch, failure_mode
+):
+    engine = make_paper_engine(
+        database,
+        run_lease_renew_interval_seconds=1,
+        run_lease_ttl_seconds=30,
+        engine_tick_seconds=3600,
+    )
+    engine.settings.run_lease_renew_interval_seconds = 0.01
+
+    async def failed_renew(*_args, **_kwargs):
+        if failure_mode == "exception":
+            raise RuntimeError("simulated storage outage")
+        return False
+
+    monkeypatch.setattr(engine.lease_manager, "renew", failed_renew)
+    await engine.start(f"lease-renew-{failure_mode}")
+    await asyncio.sleep(0.04)
+
+    snapshot = engine.runtime_snapshot()
+    assert snapshot["lease_held"] is False
+    assert snapshot["health"]["components"]["execution_lease"]["ok"] is False
+    assert snapshot["kill_switch"]["enabled"] is True
+    assert snapshot["kill_switch"]["reason"] == "execution lease lost"
+    audit = await engine.audit.list_recent(limit=20)
+    assert any(row.action == "EXECUTION_LEASE_LOST" for row in audit)
+    await engine.stop()
