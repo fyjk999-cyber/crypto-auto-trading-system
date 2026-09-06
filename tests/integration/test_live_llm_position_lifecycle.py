@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from crypto_trader.domain.clock import Clock
@@ -529,28 +530,34 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     await recovered.stop()
 
 
-async def test_risk_scale_down_quantity_reaches_existing_order_path(database):
+@pytest.mark.parametrize(
+    ("action", "expected_side", "stop_loss", "limit_price"),
+    [("LONG", "BUY", 95, "101"), ("SHORT", "SELL", 105, "99")],
+)
+async def test_risk_scale_down_quantity_reaches_existing_order_path(
+    database, action, expected_side, stop_loss, limit_price
+):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
-    engine.risk_engine.config.max_order_notional = Decimal("101")
+    engine.risk_engine.config.max_order_notional = Decimal(limit_price)
     await engine.start("run-risk-scale-down")
     assert await engine._strategy_context("BTCUSDT") is not None
     decisions = LLMDecisionStore(database.session_factory)
     plans = TradePlanService(database.session_factory)
     entry = ChiefTraderDecision(
-        decision_id="entry-risk-scale-down",
+        decision_id=f"entry-risk-scale-down-{action.lower()}",
         symbol="BTCUSDT",
-        action="LONG",
+        action=action,
         market_regime="TREND",
-        thesis="direction remains long after magnitude clamp",
+        thesis=f"direction remains {action.lower()} after magnitude clamp",
         position_size_request=2,
         leverage_request=2,
-        stop_loss=95,
+        stop_loss=stop_loss,
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal(limit_price)
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -559,11 +566,11 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(database):
     await engine.wait_for_event_queue()
 
     assert risk is not None and risk.decision == ExecutionDecision.SCALE_DOWN
-    assert risk.side.value == "BUY"
+    assert risk.side.value == expected_side
     assert risk.checks["original_quantity"] == "2.0"
     assert risk.checks["approved_quantity"] == "1"
     order = list(engine.adapter.orders.values())[-1]
-    assert order.side.value == "BUY"
+    assert order.side.value == expected_side
     assert order.quantity == Decimal("1")
     assert order.metadata["trade_plan_id"] == plan.trade_plan_id
     assert order.metadata["decision_id"] == entry.decision_id
