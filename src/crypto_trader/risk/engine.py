@@ -111,6 +111,7 @@ class RiskEngine:
         if reduce_only:
             if current_position is None or current_position.quantity == 0:
                 return fail("REDUCE_ONLY_NO_POSITION")
+            expected_direction = "LONG" if current_position.quantity > 0 else "SHORT"
             expected_side = (
                 "SELL" if current_position.quantity > 0 else "BUY"
             )
@@ -119,6 +120,10 @@ class RiskEngine:
             if qty > abs(current_position.quantity):
                 return fail("REDUCE_ONLY_CROSSES_ZERO")
             checks["reduce_only"] = True
+        else:
+            expected_direction = "LONG" if intent.side.value == "BUY" else "SHORT"
+        if str(original_direction).upper() != expected_direction:
+            return fail("DIRECTION_METADATA_MISMATCH")
         contract_size = D(str(getattr(intent, "metadata", {}).get("contract_size", "1")))
         contract_multiplier = D(
             str(getattr(intent, "metadata", {}).get("contract_multiplier", "1"))

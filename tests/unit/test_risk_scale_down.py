@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from crypto_trader.domain.enums import ExecutionDecision, OrderSide
-from crypto_trader.domain.models import Account, SignalIntent
+from crypto_trader.domain.models import Account, Position, SignalIntent
 from crypto_trader.risk.engine import RiskConfig, RiskEngine
 
 
@@ -133,3 +133,52 @@ def test_reject_contract_is_explainable_and_never_reverses_direction():
         assert result.checks["approved_leverage"] == "0"
         assert result.checks["contrary_risk_evidence"] == ["INVALID_LEVERAGE"]
         assert result.checks["hard_limits_triggered"] == ["INVALID_LEVERAGE"]
+
+
+def test_direction_metadata_mismatch_is_rejected_not_corrected_or_reversed():
+    engine = RiskEngine()
+    entry = engine.check(
+        SignalIntent(
+            signal_id="direction-mismatch-entry",
+            strategy_id="live_llm",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            quantity=Decimal("1"),
+            limit_price=Decimal("100"),
+            metadata={"direction": "SHORT"},
+        ),
+        account=Account(equity=Decimal("10000")),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+    )
+    assert entry.decision == ExecutionDecision.REJECT
+    assert entry.reason == "DIRECTION_METADATA_MISMATCH"
+    assert entry.side == OrderSide.BUY
+
+    long_position = Position(
+        symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        quantity=Decimal("2"),
+        avg_entry_price=Decimal("100"),
+        cost_basis=Decimal("200"),
+    )
+    reduction = engine.check(
+        SignalIntent(
+            signal_id="direction-mismatch-reduce",
+            strategy_id="live_llm_position",
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=Decimal("1"),
+            limit_price=Decimal("100"),
+            metadata={"direction": "SHORT", "reduce_only": True},
+        ),
+        account=Account(equity=Decimal("10000")),
+        positions={"BTCUSDT": long_position},
+        market_price=Decimal("100"),
+        open_order_count=0,
+    )
+    assert reduction.decision == ExecutionDecision.REJECT
+    assert reduction.reason == "DIRECTION_METADATA_MISMATCH"
+    assert reduction.side == OrderSide.SELL
