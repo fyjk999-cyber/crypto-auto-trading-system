@@ -117,6 +117,7 @@ def test_funding_long_pays_short_receives():
 def test_perpetual_consumers_share_canonical_contract_size_notional():
     contract = make_contract()
     contract.contract_size = Decimal("0.01")
+    contract.contract_multiplier = Decimal("2")
     quantity = Decimal("2")
     price = Decimal("50000")
     canonical = ExposureService.calculate(
@@ -125,10 +126,11 @@ def test_perpetual_consumers_share_canonical_contract_size_notional():
         spec=InstrumentExposureSpec(
             instrument_type="LINEAR_PERP",
             contract_size=contract.contract_size,
+            contract_multiplier=contract.contract_multiplier,
         ),
         side="LONG",
     ).gross_notional
-    assert canonical == Decimal("1000.00")
+    assert canonical == Decimal("2000.00")
 
     margin = MarginCalculator()
     assert margin.initial_margin(contract, quantity, price, Decimal("5")) == canonical / 5
@@ -141,8 +143,12 @@ def test_perpetual_consumers_share_canonical_contract_size_notional():
         side=PositionSide.LONG,
         quantity=quantity,
         avg_entry_price=price,
+        contract_size=contract.contract_size,
+        contract_multiplier=contract.contract_multiplier,
     )
+    assert position.notional() == canonical
+    assert MarginState(positions=[position]).position_notional() == canonical
     payment = FundingCalculator().payment(
-        position, Decimal("0.0001"), price, contract.contract_size
+        position, Decimal("0.0001"), price
     )
     assert payment.notional == canonical

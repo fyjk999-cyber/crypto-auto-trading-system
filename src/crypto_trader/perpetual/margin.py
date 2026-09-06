@@ -107,11 +107,19 @@ class MarginCalculator:
             return Decimal("0")
         maintenance = position.maintenance_margin
         if position.side == PositionSide.LONG:
-            per_qty = abs(position.quantity) * contract.contract_size
+            per_qty = (
+                abs(position.quantity)
+                * contract.contract_size
+                * contract.contract_multiplier
+            )
             if per_qty <= 0:
                 return Decimal("0")
             return (position.initial_margin - maintenance) / per_qty
-        per_qty = abs(position.quantity) * contract.contract_size
+        per_qty = (
+            abs(position.quantity)
+            * contract.contract_size
+            * contract.contract_multiplier
+        )
         if per_qty <= 0:
             return Decimal("0")
         return (position.initial_margin - maintenance) / per_qty
@@ -126,6 +134,7 @@ def _notional(
         spec=InstrumentExposureSpec(
             instrument_type="LINEAR_PERP",
             contract_size=contract.contract_size,
+            contract_multiplier=contract.contract_multiplier,
         ),
         side="LONG" if D(quantity) >= 0 else "SHORT",
     ).gross_notional

@@ -112,6 +112,8 @@ class FuturesLedger:
                 "entry_price": str(entry_price),
                 "leverage": str(leverage),
                 "initial_margin": str(initial_margin),
+                "contract_size": str(contract.contract_size),
+                "contract_multiplier": str(contract.contract_multiplier),
                 "fee": str(fee),
                 "action": "OPEN",
             },
@@ -261,6 +263,7 @@ def _notional(
         spec=InstrumentExposureSpec(
             instrument_type="LINEAR_PERP",
             contract_size=contract.contract_size,
+            contract_multiplier=contract.contract_multiplier,
         ),
         side=side.value,
     ).gross_notional
@@ -284,6 +287,8 @@ def _apply_txn(snap: FuturesProjectionSnapshot, txn: LedgerTransactionORM) -> No
         pos.avg_entry_price = D(meta["entry_price"])
         pos.initial_margin = D(meta["initial_margin"])
         pos.leverage = D(meta["leverage"])
+        pos.contract_size = D(meta.get("contract_size", "1"))
+        pos.contract_multiplier = D(meta.get("contract_multiplier", "1"))
         snap.margin_balance += D(meta["initial_margin"])
     elif action == "CLOSE":
         pos = snap.positions.get(symbol)

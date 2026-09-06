@@ -9,6 +9,7 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
 from crypto_trader.domain.money import StrictDecimal
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 
 
 class ContractType(str, Enum):
@@ -36,6 +37,7 @@ class PerpetualContract(BaseModel):
     quote: str
     settlement_asset: str
     contract_size: StrictDecimal = Decimal("1")
+    contract_multiplier: StrictDecimal = Decimal("1")
     tick_size: StrictDecimal = Decimal("0.01")
     quantity_step: StrictDecimal = Decimal("0.001")
     margin_asset: str = "USDT"
@@ -158,6 +160,8 @@ class MarginPosition(BaseModel):
     realized_pnl: StrictDecimal = Decimal("0")
     funding_paid: StrictDecimal = Decimal("0")
     funding_received: StrictDecimal = Decimal("0")
+    contract_size: StrictDecimal = Decimal("1")
+    contract_multiplier: StrictDecimal = Decimal("1")
     ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -165,4 +169,13 @@ class MarginPosition(BaseModel):
         return self.side == PositionSide.FLAT or self.quantity == 0
 
     def notional(self) -> Decimal:
-        return abs(self.quantity) * self.avg_entry_price
+        return ExposureService.calculate(
+            quantity=self.quantity,
+            price=self.avg_entry_price,
+            spec=InstrumentExposureSpec(
+                instrument_type="LINEAR_PERP",
+                contract_size=self.contract_size,
+                contract_multiplier=self.contract_multiplier,
+            ),
+            side="LONG" if self.quantity >= 0 else "SHORT",
+        ).gross_notional

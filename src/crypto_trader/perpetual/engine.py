@@ -101,9 +101,19 @@ class PerpetualPaperEngine:
         entry = pos.avg_entry_price
         exit_px = D(exit_price)
         if pos.side == PositionSide.LONG:
-            realized = (exit_px - entry) * qty * self.contract.contract_size
+            realized = (
+                (exit_px - entry)
+                * qty
+                * self.contract.contract_size
+                * self.contract.contract_multiplier
+            )
         else:
-            realized = (entry - exit_px) * qty * self.contract.contract_size
+            realized = (
+                (entry - exit_px)
+                * qty
+                * self.contract.contract_size
+                * self.contract.contract_multiplier
+            )
         margin_release = (
             pos.initial_margin * qty / abs(pos.quantity) if pos.quantity else Decimal("0")
         )
@@ -131,6 +141,7 @@ class PerpetualPaperEngine:
             spec=InstrumentExposureSpec(
                 instrument_type="LINEAR_PERP",
                 contract_size=self.contract.contract_size,
+                contract_multiplier=self.contract.contract_multiplier,
             ),
             side="SHORT" if side == PositionSide.SHORT else "LONG",
         ).gross_notional
@@ -158,12 +169,14 @@ class PerpetualPaperEngine:
                 (D(mark_price) - pos.avg_entry_price)
                 * abs(pos.quantity)
                 * self.contract.contract_size
+                * self.contract.contract_multiplier
             )
         elif pos.side == PositionSide.SHORT:
             pos.unrealized_pnl = (
                 (pos.avg_entry_price - D(mark_price))
                 * abs(pos.quantity)
                 * self.contract.contract_size
+                * self.contract.contract_multiplier
             )
         else:
             pos.unrealized_pnl = Decimal("0")

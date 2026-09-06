@@ -54,6 +54,30 @@ async def test_perpetual_short_open_mark_funding_close(database):
     assert snap.funding_received > 0
 
 
+async def test_perpetual_pnl_margin_and_funding_share_contract_multiplier(database):
+    contract = make_contract().model_copy(
+        update={
+            "contract_size": Decimal("0.01"),
+            "contract_multiplier": Decimal("2"),
+        }
+    )
+    engine = PerpetualPaperEngine(database.session_factory, contract)
+    opened = await engine.open_position(
+        PositionSide.LONG, Decimal("2"), Decimal("50000"), Decimal("5")
+    )
+    assert opened.notional() == Decimal("2000.00")
+    assert opened.initial_margin == Decimal("400.00")
+    marked = await engine.mark_to_market(Decimal("51000"))
+    assert marked is not None and marked.unrealized_pnl == Decimal("40.00")
+    assert await engine.apply_funding(Decimal("0.0001"), Decimal("51000")) == Decimal(
+        "-0.204000"
+    )
+    await engine.close_position(PositionSide.LONG, Decimal("2"), Decimal("51000"))
+    async with database.session_factory() as session:
+        snap = await rebuild_futures_projection(session)
+    assert snap.realized_pnl == Decimal("40.00")
+
+
 async def test_perpetual_liquidation_long_and_short(database):
     contract = make_contract()
     engine = PerpetualPaperEngine(database.session_factory, contract)

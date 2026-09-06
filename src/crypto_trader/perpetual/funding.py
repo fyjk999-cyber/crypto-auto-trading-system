@@ -15,7 +15,8 @@ class FundingCalculator:
         position: MarginPosition,
         rate: Decimal,
         mark_price: Decimal,
-        contract_size: Decimal = Decimal("1"),
+        contract_size: Decimal | None = None,
+        contract_multiplier: Decimal | None = None,
     ) -> FundingPayment:
         if position.is_flat:
             return FundingPayment(
@@ -30,7 +31,10 @@ class FundingCalculator:
             price=mark_price,
             spec=InstrumentExposureSpec(
                 instrument_type="LINEAR_PERP",
-                contract_size=D(contract_size),
+                contract_size=D(contract_size or position.contract_size),
+                contract_multiplier=D(
+                    contract_multiplier or position.contract_multiplier
+                ),
             ),
             side=position.side.value,
         ).gross_notional

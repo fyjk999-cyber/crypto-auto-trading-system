@@ -42,7 +42,11 @@ class LiquidationCalculator:
                 margin_mode=position.margin_mode,
                 distance_pct=D("0"),
             )
-        qty = abs(position.quantity) * contract.contract_size
+        qty = (
+            abs(position.quantity)
+            * contract.contract_size
+            * contract.contract_multiplier
+        )
         if qty <= 0:
             return LiquidationPrice(
                 value=D("0"),
@@ -84,17 +88,22 @@ class LiquidationCalculator:
             spec=InstrumentExposureSpec(
                 instrument_type="LINEAR_PERP",
                 contract_size=contract.contract_size,
+                contract_multiplier=contract.contract_multiplier,
             ),
             side=position.side.value,
         ).gross_notional
         fee = notional * self.liquidation_fee_rate
         if position.side == PositionSide.LONG:
             bankruptcy = position.avg_entry_price - position.initial_margin / (
-                abs(position.quantity) * contract.contract_size
+                abs(position.quantity)
+                * contract.contract_size
+                * contract.contract_multiplier
             )
         else:
             bankruptcy = position.avg_entry_price + position.initial_margin / (
-                abs(position.quantity) * contract.contract_size
+                abs(position.quantity)
+                * contract.contract_size
+                * contract.contract_multiplier
             )
         remaining = max(position.initial_margin + position.unrealized_pnl - fee, D("0"))
         return LiquidationResult(
