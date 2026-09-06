@@ -105,6 +105,10 @@ class TradePlanService:
             or max_holding_time_seconds <= 0
         ):
             raise ValueError("TradePlan requires a directional positive-size proposal")
+        entry_conditions = list(entry_conditions or [])
+        invalidation_conditions = list(invalidation_conditions or [])
+        reduce_conditions = list(reduce_conditions or [])
+        exit_conditions = list(exit_conditions or [])
         async with self.session_factory() as session:
             existing = (
                 await session.execute(
@@ -112,6 +116,29 @@ class TradePlanService:
                 )
             ).scalar_one_or_none()
             if existing is not None:
+                immutable = {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "thesis": thesis,
+                    "requested_quantity": requested_quantity,
+                    "requested_leverage": requested_leverage,
+                    "requested_exposure": requested_exposure,
+                    "entry_conditions_json": entry_conditions,
+                    "invalidation_conditions_json": invalidation_conditions,
+                    "reduce_conditions_json": reduce_conditions,
+                    "exit_conditions_json": exit_conditions,
+                    "expected_holding_period": expected_holding_period,
+                    "max_holding_time_seconds": max_holding_time_seconds,
+                }
+                conflicts = [
+                    field
+                    for field, expected in immutable.items()
+                    if getattr(existing, field) != expected
+                ]
+                if conflicts:
+                    raise ValueError(
+                        "immutable TradePlan conflict: " + ",".join(conflicts)
+                    )
                 return self._to_domain(existing)
             row = TradePlanORM(
                 trade_plan_id=new_id("plan"),
@@ -123,10 +150,10 @@ class TradePlanService:
                 requested_quantity=requested_quantity,
                 requested_leverage=requested_leverage,
                 requested_exposure=requested_exposure,
-                entry_conditions_json=list(entry_conditions or []),
-                invalidation_conditions_json=list(invalidation_conditions or []),
-                reduce_conditions_json=list(reduce_conditions or []),
-                exit_conditions_json=list(exit_conditions or []),
+                entry_conditions_json=entry_conditions,
+                invalidation_conditions_json=invalidation_conditions,
+                reduce_conditions_json=reduce_conditions,
+                exit_conditions_json=exit_conditions,
                 expected_holding_period=expected_holding_period,
                 max_holding_time_seconds=max_holding_time_seconds,
             )

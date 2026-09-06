@@ -28,8 +28,16 @@ async def test_trade_plan_is_idempotent_by_decision_id_and_has_terminal_semantic
         decision_id="decision_1",
         symbol="BTCUSDT",
         direction="LONG",
-        thesis="ignored duplicate payload",
-        requested_quantity=Decimal("0.2"),
+        thesis="breakout structure remains valid",
+        requested_quantity=Decimal("0.1"),
+        requested_leverage=Decimal("2"),
+        requested_exposure=Decimal("500"),
+        entry_conditions=["breakout confirmed"],
+        invalidation_conditions=["close below support"],
+        reduce_conditions=["momentum weakens"],
+        exit_conditions=["thesis invalidated"],
+        expected_holding_period="4h",
+        max_holding_time_seconds=7200,
     )
 
     assert first.trade_plan_id == duplicate.trade_plan_id
@@ -37,6 +45,14 @@ async def test_trade_plan_is_idempotent_by_decision_id_and_has_terminal_semantic
     assert first.requested_exposure == Decimal("500")
     assert first.invalidation_conditions == ["close below support"]
     assert first.max_holding_time_seconds == 7200
+    with pytest.raises(ValueError, match="immutable TradePlan conflict"):
+        await plans.create(
+            decision_id="decision_1",
+            symbol="BTCUSDT",
+            direction="LONG",
+            thesis="conflicting retry",
+            requested_quantity=Decimal("0.2"),
+        )
     rejected = await plans.transition(first.trade_plan_id, TradePlanState.REJECTED, reason="risk")
     assert rejected.terminal_reason == "risk"
     with pytest.raises(ValueError):
