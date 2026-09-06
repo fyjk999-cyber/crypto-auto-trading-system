@@ -8,5 +8,13 @@ fi
 if [ -f alembic.ini ]; then
   .venv/bin/python -m alembic -c alembic.ini upgrade head
 fi
-echo "LIVE_TRADING_ENABLED=${LIVE_TRADING_ENABLED:-false}"
-.venv/bin/python -m uvicorn crypto_trader.api.app:app --host 127.0.0.1 --port 8000
+export TRADING_MODE=PAPER
+export PAPER_MODE=PAPER_REAL_MARKET
+export LIVE_TRADING_ENABLED=false
+export AUTO_START_RUNTIME=true
+export RUNNING_SHA="$(git rev-parse HEAD)"
+echo "Trading Mode: PAPER"
+echo "Market Provider: OKX_PUBLIC"
+echo "Execution: PAPER / LOCAL_SIMULATOR"
+echo "Live Trading: DISABLED"
+exec .venv/bin/python -m crypto_trader.runtime.local_runner --host 127.0.0.1 --port 8000

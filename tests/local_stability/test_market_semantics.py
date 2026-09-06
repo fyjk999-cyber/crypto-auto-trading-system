@@ -62,6 +62,19 @@ def test_start_script_sets_real_market():
     assert 'payload.get("live_trading_enabled") is False' in text
 
 
+def test_legacy_fund_manager_script_uses_canonical_paper_runner():
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parents[2] / "scripts" / "start-ai-fund-manager.sh"
+    ).read_text()
+    assert "TRADING_MODE=PAPER" in text
+    assert "PAPER_MODE=PAPER_REAL_MARKET" in text
+    assert "LIVE_TRADING_ENABLED=false" in text
+    assert "crypto_trader.runtime.local_runner" in text
+    assert "crypto_trader.api.app:app" not in text
+
+
 async def test_synthetic_requires_explicit_mode_and_never_reports_binance(database):
     client = TestClient(create_app(make_state(database, "PAPER_SYNTHETIC")))
     data = client.get("/market").json()
