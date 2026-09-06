@@ -328,7 +328,7 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
 
-    chief = SequencedChief([("HOLD", "0"), ("HOLD", "0")])
+    chief = SequencedChief([("HOLD", "0"), ("REDUCE", "0.01")])
     engine.position_manager = LiveLLMPositionManager(
         chief=chief,
         evidence_engine=Evidence(),

@@ -148,10 +148,11 @@ class LiveLLMPositionManager:
         max_hold_reached = (
             position_context["time_in_trade_seconds"] >= plan.max_holding_time_seconds
         )
-        time_stop = max_hold_reached and decision.action in {
-            OpenAction.HOLD,
-            OpenAction.FAIL_CLOSED,
-        }
+        # Once the factual maximum holding period is reached, only a normal
+        # full EXIT remains preferable. HOLD, fail-closed, or a partial REDUCE
+        # cannot satisfy the safety boundary and therefore becomes a full
+        # reduce-only TIME_STOP fallback.
+        time_stop = max_hold_reached and decision.action != OpenAction.EXIT
         await self.plans.link_position_decision(
             plan.trade_plan_id,
             decision.decision_id,
