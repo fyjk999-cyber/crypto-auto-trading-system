@@ -261,6 +261,37 @@ def test_chief_trader_engine_parse_decision():
     assert decision.decision_id.startswith("llm_")
 
 
+def test_chief_trader_owns_identity_timestamp_and_model_version():
+    engine = ChiefTraderEngine(model_version="canonical-live-v1")
+    ctx = ChiefTraderContext(
+        symbol="ETHUSDT",
+        market_snapshot={"price": "2000"},
+        regime="RANGE",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
+    decision = engine.parse_decision(
+        {
+            "decision_id": "model-controlled-id",
+            "symbol": "WRONGUSDT",
+            "position_state": "OPEN",
+            "action": "WAIT",
+            "created_at": "2000-01-01T00:00:00+00:00",
+            "model_version": "model-controlled-version",
+        },
+        ctx,
+        provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    assert decision.decision_id.startswith("llm_")
+    assert decision.decision_id != "model-controlled-id"
+    assert decision.symbol == "ETHUSDT"
+    assert decision.position_state == "FLAT"
+    assert decision.model_version == "canonical-live-v1"
+    assert decision.created_at != "2000-01-01T00:00:00+00:00"
+
+
 async def test_chief_trader_missing_action_is_durable_fail_closed_input():
     class MissingActionProvider:
         name = "deepseek"
