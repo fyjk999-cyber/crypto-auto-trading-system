@@ -160,6 +160,7 @@ class TradingEngine:
         await self._restore_paper_adapter_state()
         self.order_manager.settlement_callback = self._settle_fill
         await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
 
         self.state_machine.transition(RuntimeState.RUNNING)
@@ -597,6 +598,17 @@ class TradingEngine:
         )
         decision, notes = await self.authority.authorize(intent, auth_ctx)
         if decision != ExecutionDecision.APPROVE:
+            if trade_plan_id and is_entry:
+                target_state = (
+                    TradePlanState.EXPIRED
+                    if "ORDER_EXPIRED" in notes
+                    else TradePlanState.INVALIDATED
+                )
+                await self.trade_plans.transition(
+                    trade_plan_id,
+                    target_state,
+                    reason=notes[0] if notes else "EXECUTION_AUTHORITY_DENIED",
+                )
             await self.audit.log(
                 f"AUTHORITY_{decision.value}",
                 target=client_order_id,
@@ -645,6 +657,9 @@ class TradingEngine:
             await self.order_manager.reject(
                 order.internal_order_id, str(exc), event_id=new_id("evt")
             )
+            await self._sync_terminal_entry_plan(
+                order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
+            )
             await self.audit.log(
                 "ORDER_REJECTED",
                 target=client_order_id,
@@ -662,11 +677,17 @@ class TradingEngine:
             await self.order_manager.opened(order.internal_order_id, event_id=new_id("evt"))
         elif exchange_order.status == OrderStatus.CANCELLED:
             await self.order_manager.cancel_confirm(order.internal_order_id, event_id=new_id("evt"))
+            await self._sync_terminal_entry_plan(
+                order, TradePlanState.CANCELLED, "ORDER_CANCELLED"
+            )
         elif exchange_order.status == OrderStatus.REJECTED:
             await self.order_manager.reject(
                 order.internal_order_id,
                 exchange_order.rejection_reason or "rejected on exchange",
                 event_id=new_id("evt"),
+            )
+            await self._sync_terminal_entry_plan(
+                order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
             )
         # FILLED/PARTIALLY_FILLED are applied exclusively through the event
         # stream to guarantee fill_id uniqueness; recovery reconciles later.
@@ -747,11 +768,17 @@ class TradingEngine:
             await self.order_manager.apply_fill(fill)
         elif event.event_type == ExchangeEventType.ORDER_CANCELLED:
             await self.order_manager.cancel_confirm(local.internal_order_id, event_id=event_id)
+            await self._sync_terminal_entry_plan(
+                local, TradePlanState.CANCELLED, "ORDER_CANCELLED"
+            )
         elif event.event_type == ExchangeEventType.ORDER_REJECTED:
             await self.order_manager.reject(
                 local.internal_order_id,
                 payload.get("reason", "exchange rejection"),
                 event_id=event_id,
+            )
+            await self._sync_terminal_entry_plan(
+                local, TradePlanState.INVALIDATED, "ORDER_REJECTED"
             )
         elif event.event_type == ExchangeEventType.BALANCE_UPDATE:
             await self.portfolio.refresh(initial_balances=self._initial_balances)
@@ -896,6 +923,30 @@ class TradingEngine:
             before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
             after={"transaction_id": fill.fill_id},
         )
+
+    async def _sync_terminal_entry_plan(
+        self, order, state: TradePlanState, reason: str
+    ) -> None:
+        if order.strategy_id != "live_llm":
+            return
+        plan = await self.trade_plans.get_by_order(order.internal_order_id)
+        if plan is None or plan.state not in {
+            TradePlanState.PLANNED,
+            TradePlanState.APPROVED,
+        }:
+            return
+        await self.trade_plans.transition(plan.trade_plan_id, state, reason=reason)
+
+    async def _sync_terminal_entry_plans(self) -> None:
+        terminal_states = {
+            OrderStatus.CANCELLED: (TradePlanState.CANCELLED, "ORDER_CANCELLED"),
+            OrderStatus.EXPIRED: (TradePlanState.EXPIRED, "ORDER_EXPIRED"),
+            OrderStatus.REJECTED: (TradePlanState.INVALIDATED, "ORDER_REJECTED"),
+        }
+        for order in await self.order_manager.list_all():
+            target = terminal_states.get(order.status)
+            if target is not None:
+                await self._sync_terminal_entry_plan(order, *target)
 
     async def _seed_initial_balances(self) -> None:
         async with self.database.session_factory() as session:

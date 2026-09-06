@@ -406,6 +406,71 @@ async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database)
     await engine.stop()
 
 
+async def test_expired_entry_is_terminal_before_order_creation(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-expired-entry")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    plans = TradePlanService(database.session_factory)
+    decisions = LLMDecisionStore(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-expired",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="expired factual opportunity",
+        position_size_request=0.1,
+        leverage_request=1,
+        stop_loss=95,
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    signal = signal.model_copy(
+        update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
+    )
+    await engine.process_signal(signal)
+    expired = await plans.get(plan.trade_plan_id)
+    assert expired is not None and expired.state == TradePlanState.EXPIRED
+    assert expired.terminal_reason == "ORDER_EXPIRED"
+    assert engine.adapter.orders == {}
+    await engine.stop()
+
+
+async def test_cancelled_unfilled_entry_cancels_approved_trade_plan(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-cancelled-entry")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    plans = TradePlanService(database.session_factory)
+    decisions = LLMDecisionStore(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-cancelled",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="resting factual opportunity",
+        position_size_request=0.1,
+        leverage_request=1,
+        stop_loss=95,
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("99.5")
+    )
+    assert plan is not None and signal is not None
+    await engine.process_signal(signal)
+    approved = await plans.get(plan.trade_plan_id)
+    assert approved is not None and approved.state == TradePlanState.APPROVED
+    order = next(iter(engine.adapter.orders.values()))
+    await engine.adapter.cancel_order(order.symbol, order.exchange_order_id)
+    await engine.wait_for_event_queue()
+    cancelled = await plans.get(plan.trade_plan_id)
+    assert cancelled is not None and cancelled.state == TradePlanState.CANCELLED
+    assert cancelled.terminal_reason == "ORDER_CANCELLED"
+    await engine.stop()
+
+
 async def test_paper_restart_restores_active_position_without_fabricating_fill(database):
     first = make_paper_engine(database, engine_tick_seconds=3600)
     await first.start("run-before-restart")
