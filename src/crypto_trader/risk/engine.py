@@ -257,11 +257,12 @@ class RiskEngine:
         checks["max_leverage"] = True
 
         checks["notional"] = str(notional)
+        supporting_evidence = [
+            name for name, passed in checks.items() if passed is True
+        ]
         if adjustment_reasons:
-            checks["supporting_risk_evidence"] = adjustment_reasons
-            checks["contrary_risk_evidence"] = [
-                "requested execution parameters exceed deterministic risk bounds"
-            ]
+            checks["supporting_risk_evidence"] = supporting_evidence
+            checks["contrary_risk_evidence"] = adjustment_reasons
             checks["hard_limits_triggered"] = adjustment_reasons
             return RiskDecision(
                 risk_decision_id=new_id("risk"),
@@ -275,6 +276,9 @@ class RiskEngine:
                 timestamp=now,
                 run_id=run_id,
             )
+        checks["supporting_risk_evidence"] = supporting_evidence
+        checks["contrary_risk_evidence"] = []
+        checks["hard_limits_triggered"] = []
         return RiskDecision(
             risk_decision_id=new_id("risk"),
             order_id=order_id,

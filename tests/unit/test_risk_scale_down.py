@@ -68,6 +68,9 @@ def test_leverage_clamp_is_symmetric_and_preserves_quantity_and_direction():
         assert decision.checks["approved_quantity"] == "1"
         assert decision.checks["requested_leverage"] == "5"
         assert decision.checks["approved_leverage"] == "3"
+        assert "max_open_orders" in decision.checks["supporting_risk_evidence"]
+        assert decision.checks["contrary_risk_evidence"] == ["LEVERAGE_CLAMPED"]
+        assert decision.checks["hard_limits_triggered"] == ["LEVERAGE_CLAMPED"]
 
 
 def test_volatility_liquidity_missing_and_invalid_leverage_bounds():
@@ -182,3 +185,25 @@ def test_direction_metadata_mismatch_is_rejected_not_corrected_or_reversed():
     assert reduction.decision == ExecutionDecision.REJECT
     assert reduction.reason == "DIRECTION_METADATA_MISMATCH"
     assert reduction.side == OrderSide.SELL
+
+
+def test_approve_contract_records_supporting_and_empty_contrary_risk_evidence():
+    result = RiskEngine().check(
+        SignalIntent(
+            signal_id="approve-evidence",
+            strategy_id="live_llm",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            quantity=Decimal("1"),
+            limit_price=Decimal("100"),
+            metadata={"direction": "LONG", "requested_leverage": "1"},
+        ),
+        account=Account(equity=Decimal("10000")),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+    )
+    assert result.decision == ExecutionDecision.APPROVE
+    assert "max_leverage" in result.checks["supporting_risk_evidence"]
+    assert result.checks["contrary_risk_evidence"] == []
+    assert result.checks["hard_limits_triggered"] == []
