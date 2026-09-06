@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from crypto_trader.domain.clock import Clock
-from crypto_trader.domain.enums import ExecutionDecision
+from crypto_trader.domain.enums import ExecutionDecision, OrderStatus
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -299,6 +299,75 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
         assert episode.opened_quantity == Decimal("0.1")
         assert episode.closed_quantity == Decimal("0.1")
         assert episode.gross_pnl == Decimal("-0.01")
+    await engine.stop()
+
+
+async def test_partial_exit_fill_stays_active_until_factual_remaining_position_closes(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-partial-exit")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-partial-exit",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="factual partial-exit thesis",
+        position_size_request=0.1,
+        leverage_request=2,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    book = engine.adapter.books["BTCUSDT"]
+    book.apply_snapshot(
+        engine.adapter.sequence["BTCUSDT"] + 1,
+        [(Decimal("99.95"), Decimal("0.04"))],
+        [(Decimal("100.05"), Decimal("1"))],
+    )
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief([("EXIT", "0"), ("EXIT", "0")]),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    await engine.tick()
+    await engine.wait_for_event_queue()
+
+    partially_closed = await engine.portfolio.get_position("BTCUSDT")
+    partial_plan = await plans.get(plan.trade_plan_id)
+    partial_order = list(engine.adapter.orders.values())[-1]
+    assert partially_closed is not None and partially_closed.quantity == Decimal("0.06")
+    assert partial_plan is not None and partial_plan.state == TradePlanState.ACTIVE
+    assert partial_plan.exit_decision_id is None
+    assert partial_order.status == OrderStatus.PARTIALLY_FILLED
+
+    await engine.adapter.cancel_order("BTCUSDT", partial_order.exchange_order_id)
+    await engine.wait_for_event_queue()
+    engine.adapter.seed_book("BTCUSDT")
+    clock.advance()
+    await engine.tick()
+    await engine.wait_for_event_queue()
+
+    closed = await engine.portfolio.get_position("BTCUSDT")
+    closed_plan = await plans.get(plan.trade_plan_id)
+    assert closed is not None and closed.quantity == 0
+    assert closed_plan is not None and closed_plan.state == TradePlanState.CLOSED
+    assert closed_plan.exit_decision_id == "position-2-exit"
     await engine.stop()
 
 

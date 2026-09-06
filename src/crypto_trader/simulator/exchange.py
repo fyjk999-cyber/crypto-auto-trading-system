@@ -279,7 +279,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
     def _match_order(self, order: Order) -> list[ExchangeEvent]:
         """Match a resting/marketable order against the simulated book."""
-        book = self.books.setdefault(order.symbol, self.seed_book(order.symbol))
+        book = self.books.get(order.symbol)
+        if book is None:
+            book = self.seed_book(order.symbol)
         instrument = self.instruments.get(order.symbol, self.default_instrument)
         remaining = order.quantity
         fill_events: list[ExchangeEvent] = []
