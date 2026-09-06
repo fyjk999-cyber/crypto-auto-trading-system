@@ -179,6 +179,11 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         ]
         assert len(episode.order_ids_json) == 3
         assert len(episode.fill_ids_json) == 3
+        assert episode.risk_decision_ids_json == [
+            entry_risk_decision_id,
+            persisted_reduction.metadata["risk_decision_id"],
+            list(engine.adapter.orders.values())[-1].metadata["risk_decision_id"],
+        ]
         assert episode.opened_quantity == Decimal("0.1")
         assert episode.closed_quantity == Decimal("0.1")
         assert episode.factual is True

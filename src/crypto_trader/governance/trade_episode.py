@@ -28,6 +28,7 @@ class FactualTradeEpisode:
     entry_decision_id: str
     exit_decision_id: str | None
     position_decision_ids: list[str]
+    risk_decision_ids: list[str]
     order_ids: list[str]
     fill_ids: list[str]
     entry_price: Decimal
@@ -87,7 +88,9 @@ class TradeEpisodeStore:
 
             orders = (
                 await session.execute(
-                    select(OrderORM).where(OrderORM.symbol == plan.symbol)
+                    select(OrderORM)
+                    .where(OrderORM.symbol == plan.symbol)
+                    .order_by(OrderORM.created_at, OrderORM.internal_order_id)
                 )
             ).scalars().all()
             lifecycle_orders = [
@@ -114,6 +117,15 @@ class TradeEpisodeStore:
                 return None
 
             order_ids = [order.internal_order_id for order in lifecycle_orders]
+            risk_decision_ids = list(
+                dict.fromkeys(
+                    str(risk_id)
+                    for order in lifecycle_orders
+                    if (risk_id := (order.metadata_json or {}).get("risk_decision_id"))
+                )
+            )
+            if not risk_decision_ids or risk_decision_ids[0] != plan.risk_decision_id:
+                return None
             fills = (
                 await session.execute(
                     select(FillORM)
@@ -169,6 +181,7 @@ class TradeEpisodeStore:
                 entry_decision_id=plan.decision_id,
                 exit_decision_id=plan.exit_decision_id,
                 position_decision_ids_json=[decision.decision_id for decision in decisions],
+                risk_decision_ids_json=risk_decision_ids,
                 order_ids_json=order_ids,
                 fill_ids_json=[fill.fill_id for fill in fills],
                 entry_price=entry_price,
@@ -246,6 +259,7 @@ def _to_domain(row: TradeEpisodeORM) -> FactualTradeEpisode:
         entry_decision_id=row.entry_decision_id,
         exit_decision_id=row.exit_decision_id,
         position_decision_ids=list(row.position_decision_ids_json or []),
+        risk_decision_ids=list(row.risk_decision_ids_json or []),
         order_ids=list(row.order_ids_json or []),
         fill_ids=list(row.fill_ids_json or []),
         entry_price=row.entry_price,
