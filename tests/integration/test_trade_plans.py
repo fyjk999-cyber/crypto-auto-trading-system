@@ -90,5 +90,7 @@ async def test_trade_plan_transition_matrix_fails_closed_and_is_idempotent(datab
     assert approved.state == TradePlanState.APPROVED
     active = await plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
     assert active.state == TradePlanState.ACTIVE
+    with pytest.raises(ValueError):
+        await plans.transition(plan.trade_plan_id, TradePlanState.INVALIDATED)
     closed = await plans.transition(plan.trade_plan_id, TradePlanState.CLOSED)
     assert closed.state == TradePlanState.CLOSED

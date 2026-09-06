@@ -47,7 +47,7 @@ ALLOWED_TRANSITIONS = {
         TradePlanState.EXPIRED,
         TradePlanState.INVALIDATED,
     },
-    TradePlanState.ACTIVE: {TradePlanState.CLOSED, TradePlanState.INVALIDATED},
+    TradePlanState.ACTIVE: {TradePlanState.CLOSED},
 }
 
 
