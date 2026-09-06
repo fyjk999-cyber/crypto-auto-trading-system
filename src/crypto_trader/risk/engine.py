@@ -217,29 +217,37 @@ class RiskEngine:
             if reduce_only
             else current_symbol_notional + notional
         )
-
-        if symbol_notional > self.config.max_symbol_exposure:
-            return fail("MAX_SYMBOL_EXPOSURE")
-        checks["max_symbol_exposure"] = True
-
         projected_exposure = (
             max(existing_notional - notional, Decimal("0"))
             if reduce_only
             else existing_notional + notional
         )
-        if projected_exposure > self.config.max_account_exposure:
+        exposure_reducing = (
+            reduce_only
+            and symbol_notional < current_symbol_notional
+            and projected_exposure < existing_notional
+        )
+        if symbol_notional > self.config.max_symbol_exposure and not exposure_reducing:
+            return fail("MAX_SYMBOL_EXPOSURE")
+        checks["max_symbol_exposure"] = True
+
+        if projected_exposure > self.config.max_account_exposure and not exposure_reducing:
             return fail("MAX_ACCOUNT_EXPOSURE")
         checks["max_account_exposure"] = True
 
-        if existing_notional > self.config.max_exchange_exposure:
+        if projected_exposure > self.config.max_exchange_exposure and not exposure_reducing:
             return fail("MAX_EXCHANGE_EXPOSURE")
         checks["max_exchange_exposure"] = True
 
-        if projected_exposure > self.config.max_position_notional:
+        if projected_exposure > self.config.max_position_notional and not exposure_reducing:
             return fail("MAX_POSITION_NOTIONAL")
         checks["max_position_notional"] = True
 
-        if cash > 0 and (projected_exposure / cash) > self.config.max_leverage:
+        if (
+            cash > 0
+            and (projected_exposure / cash) > self.config.max_leverage
+            and not exposure_reducing
+        ):
             return fail("MAX_LEVERAGE")
         checks["max_leverage"] = True
 

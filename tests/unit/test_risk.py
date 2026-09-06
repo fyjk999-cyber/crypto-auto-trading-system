@@ -125,3 +125,80 @@ def test_consecutive_failures_rejects():
         consecutive_failures=5,
     )
     assert decision.reason == "MAX_CONSECUTIVE_FAILURES"
+
+
+def test_reduce_only_can_lower_existing_exposure_to_exchange_limit_for_both_sides():
+    engine = RiskEngine(RiskConfig(max_exchange_exposure=Decimal("100")))
+    for position_quantity, order_side, direction in (
+        (Decimal("2"), OrderSide.SELL, "LONG"),
+        (Decimal("-2"), OrderSide.BUY, "SHORT"),
+    ):
+        position = Position(
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            quantity=position_quantity,
+            avg_entry_price=Decimal("100"),
+            cost_basis=Decimal("200"),
+        )
+        decision = engine.check(
+            SignalIntent(
+                signal_id=f"reduce-over-limit-{direction}",
+                strategy_id="live_llm_position",
+                symbol="BTCUSDT",
+                side=order_side,
+                quantity=Decimal("1"),
+                limit_price=Decimal("100"),
+                metadata={"reduce_only": True, "direction": direction},
+            ),
+            account=make_account(),
+            positions={"BTCUSDT": position},
+            market_price=Decimal("100"),
+            open_order_count=0,
+        )
+        assert decision.decision == ExecutionDecision.APPROVE
+        assert decision.checks["max_exchange_exposure"] is True
+
+
+def test_reduce_only_can_decrease_risk_even_when_projected_exposure_remains_over_caps():
+    engine = RiskEngine(
+        RiskConfig(
+            max_symbol_exposure=Decimal("100"),
+            max_account_exposure=Decimal("100"),
+            max_exchange_exposure=Decimal("100"),
+            max_position_notional=Decimal("100"),
+            max_leverage=Decimal("2"),
+        )
+    )
+    position = Position(
+        symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        quantity=Decimal("4"),
+        avg_entry_price=Decimal("100"),
+        cost_basis=Decimal("400"),
+    )
+    decision = engine.check(
+        SignalIntent(
+            signal_id="reduce-still-over-limits",
+            strategy_id="live_llm_position",
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            quantity=Decimal("1"),
+            limit_price=Decimal("100"),
+            metadata={"reduce_only": True, "direction": "LONG"},
+        ),
+        account=make_account(equity="50"),
+        positions={"BTCUSDT": position},
+        market_price=Decimal("100"),
+        open_order_count=0,
+    )
+    assert decision.decision == ExecutionDecision.APPROVE
+    for check in (
+        "max_symbol_exposure",
+        "max_account_exposure",
+        "max_exchange_exposure",
+        "max_position_notional",
+        "max_leverage",
+    ):
+        assert decision.checks[check] is True
