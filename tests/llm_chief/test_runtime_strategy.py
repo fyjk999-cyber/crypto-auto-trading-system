@@ -25,9 +25,10 @@ class FakeEvidenceEngine:
 
 
 class FakeChief:
-    def __init__(self, action: str, size: float = 0.01):
+    def __init__(self, action: str, size: float = 0.01, stop_loss: float | None = None):
         self.action = action
         self.size = size
+        self.stop_loss = stop_loss
         self.calls = 0
 
     async def decide(self, ctx):
@@ -40,7 +41,15 @@ class FakeChief:
             thesis="factual LLM thesis" if self.action in {"LONG", "SHORT"} else "",
             position_size_request=self.size if self.action in {"LONG", "SHORT"} else 0.0,
             leverage_request=2.0 if self.action in {"LONG", "SHORT"} else 0.0,
-            stop_loss=99.0 if self.action in {"LONG", "SHORT"} else None,
+            stop_loss=(
+                self.stop_loss
+                if self.stop_loss is not None
+                else 99.0
+                if self.action == "LONG"
+                else 102.0
+                if self.action == "SHORT"
+                else None
+            ),
         )
 
 
@@ -211,3 +220,24 @@ async def test_live_entry_applies_risk_normalized_size_before_tradeplan(database
     assert planner.last_quantity == Decimal("6.66666")
     assert signals[0].quantity == Decimal("6.66666")
     assert planner.last_quantity != Decimal("0.001")
+
+
+async def test_live_entry_rejects_stop_on_the_wrong_side_without_tradeplan(database):
+    events = []
+    planner = FakePlanner(events)
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        chief=FakeChief("LONG", stop_loss=102),
+        planner=planner,
+        decisions=LLMDecisionStore(database.session_factory),
+        audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(),
+    )
+
+    assert await strategy.on_market_data(make_ctx()) == []
+    assert planner.calls == 0
+    assert any(
+        event[0:2] == ("audit", "LIVE_LLM_SIZING_REJECTED")
+        and event[2]["after"]["reason_codes"] == ["INVALID_DIRECTIONAL_STOP"]
+        for event in events
+    )

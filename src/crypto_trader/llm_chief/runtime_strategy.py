@@ -149,6 +149,19 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 run_id=ctx.run_id,
             )
             return []
+        stop_price = Decimal(str(decision.stop_loss))
+        stop_is_directional = (
+            decision.action == "LONG" and stop_price < mid
+        ) or (decision.action == "SHORT" and stop_price > mid)
+        if not stop_is_directional:
+            await self.audit.log(
+                "LIVE_LLM_SIZING_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"reason_codes": ["INVALID_DIRECTIONAL_STOP"]},
+            )
+            return []
         sized = self.sizer.size(
             side=decision.action.value,
             requested_quantity=Decimal(str(decision.position_size_request)),
@@ -162,7 +175,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             positions=ctx.positions,
             instrument=ctx.instrument.model_copy(update={"instrument_type": "LINEAR_PERP"}),
             price=mid,
-            stop_price=Decimal(str(decision.stop_loss)) if decision.stop_loss is not None else None,
+            stop_price=stop_price,
         )
         if sized.normalized_quantity <= 0:
             await self.audit.log(
