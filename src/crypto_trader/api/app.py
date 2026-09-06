@@ -498,6 +498,12 @@ def create_app(state: AppState) -> FastAPI:
                 "status": market_snapshot.get("status", "UNAVAILABLE"),
             },
             "execution": {
+                "provider": "LOCAL_PAPER_SIMULATOR",
+                "mode": state.settings.effective_mode().value,
+                "live_trading_enabled": state.settings.live_trading_enabled,
+                "status": "HEALTHY" if adapter_connected else "DISCONNECTED",
+            },
+            "okx_demo_credentials": {
                 "provider": "OKX",
                 **state.okx_connection.snapshot(),
                 "status": state.okx_connection.health,

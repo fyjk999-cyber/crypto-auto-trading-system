@@ -191,7 +191,7 @@ describe("中文加密交易终端 V2", () => {
       "/market/klines?symbol=BTCUSDT&interval=1m&limit=500": { symbol: "BTCUSDT", interval: "1m", source: "OKX", status: "HEALTHY", supported_intervals: ["1m"], candles: [candle()] },
     }));
     await waitFor(() => expect(screen.getByText("行情源：OKX · 实时")).toBeTruthy());
-    expect(screen.getByText("执行交易所：OKX 模拟盘 DEMO")).toBeTruthy();
+    expect(screen.getByText("执行：本地 PAPER 模拟器")).toBeTruthy();
     expect(screen.getByText("指数价格")).toBeTruthy();
     expect(screen.getByText("买一")).toBeTruthy();
   });

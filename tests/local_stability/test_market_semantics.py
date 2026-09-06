@@ -89,6 +89,13 @@ async def test_real_market_unavailable_reports_okx_not_synthetic(database):
     assert data["status"] == "UNAVAILABLE"
     health = client.get("/exchange-health").json()
     assert health["market_data"]["provider"] == "OKX_PUBLIC"
+    assert health["execution"] == {
+        "provider": "LOCAL_PAPER_SIMULATOR",
+        "mode": "PAPER",
+        "live_trading_enabled": False,
+        "status": "DISCONNECTED",
+    }
+    assert health["okx_demo_credentials"]["provider"] == "OKX"
 
 
 async def test_real_market_adapter_does_not_silent_fallback():
