@@ -25,6 +25,7 @@ from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.okx_vault.client import BrokerClient
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
@@ -109,6 +110,21 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/llm/health")
     async def llm_health():
         return state.llm_runtime.snapshot()
+
+    @app.get("/llm/decisions")
+    async def llm_decisions(limit: int = 100):
+        rows = await LLMDecisionStore(state.database.session_factory).list_recent(limit)
+        return {
+            "decisions": [
+                {
+                    **row.__dict__,
+                    "position_state": row.position_state.value,
+                    "created_at": row.created_at.isoformat(),
+                }
+                for row in rows
+            ],
+            "count": len(rows),
+        }
 
     @app.get("/ready")
     async def ready():

@@ -8,6 +8,8 @@ from crypto_trader.config import Settings
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType
 from crypto_trader.domain.models import Position
 from crypto_trader.ledger.service import LedgerPosting, LedgerService
+from crypto_trader.llm_chief.decision import ChiefTraderDecision
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -100,6 +102,32 @@ async def test_api_version_endpoint(database, monkeypatch):
     assert response.json()["api_version"] == "v1"
     assert response.json()["environment"] == "test"
     assert response.json()["git_sha"] == "canonical-running-sha"
+
+
+async def test_api_exposes_sanitized_durable_llm_decision_lineage(database):
+    state = make_state(database)
+    await LLMDecisionStore(database.session_factory).save(
+        ChiefTraderDecision(
+            decision_id="llm-api-wait",
+            symbol="BTCUSDT",
+            action="WAIT",
+            market_regime="RANGE",
+            thesis="wait for factual breakout",
+            model_provider="deepseek",
+            model="deepseek-v4-pro",
+        ),
+        run_id="run-api",
+        prompt_version="canonical-v1",
+    )
+    response = TestClient(create_app(state)).get("/llm/decisions")
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    decision = response.json()["decisions"][0]
+    assert decision["decision_id"] == "llm-api-wait"
+    assert decision["action"] == "WAIT"
+    assert decision["model_provider"] == "deepseek"
+    assert decision["trade_plan_id"] is None
+    assert "api_key" not in str(response.json()).lower()
 
 
 async def test_api_killswitch_route(database):

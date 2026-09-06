@@ -115,6 +115,17 @@ class LLMDecisionStore:
             ).scalars()
             return [self._record(row) for row in rows]
 
+    async def list_recent(self, limit: int = 100) -> list[LLMDecisionRecord]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LLMDecisionORM)
+                    .order_by(LLMDecisionORM.created_at.desc())
+                    .limit(max(1, min(limit, 500)))
+                )
+            ).scalars()
+            return [self._record(row) for row in rows]
+
     @staticmethod
     def _record(row: LLMDecisionORM) -> LLMDecisionRecord:
         created_at = row.created_at
