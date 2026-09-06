@@ -212,8 +212,13 @@ class DeepSeekProvider:
     def _record_operation(
         self, operation: str, response: LLMResponse, *, attempts: int
     ) -> None:
+        previous = self._operation_diagnostics.get(operation, {})
         self._operation_diagnostics[operation] = {
-            "last_success_ts": datetime.now(UTC).isoformat() if response.ok else None,
+            "last_success_ts": (
+                datetime.now(UTC).isoformat()
+                if response.ok
+                else previous.get("last_success_ts")
+            ),
             "last_error": response.error,
             "last_latency_ms": response.latency_ms,
             "last_token_usage": response.token_usage,

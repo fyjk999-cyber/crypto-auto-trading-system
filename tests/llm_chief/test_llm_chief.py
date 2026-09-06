@@ -195,6 +195,35 @@ async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatc
     assert after_decision["decision_last_attempt_count"] == 1
 
 
+async def test_trading_decision_health_preserves_last_success_across_failure():
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = '{"action":"WAIT"}' if calls == 1 else ""
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    await provider.complete_json(
+        prompt="first", retries=0, operation="trading_decision"
+    )
+    success_ts = provider.diagnostics()["operations"]["trading_decision"][
+        "last_success_ts"
+    ]
+    await provider.complete_json(
+        prompt="second", retries=0, operation="trading_decision"
+    )
+    decision_health = provider.diagnostics()["operations"]["trading_decision"]
+    assert decision_health["last_success_ts"] == success_ts
+    assert decision_health["last_error"] == "EMPTY_CONTENT"
+
+
 def test_chief_trader_decision_schema_and_fail_safe():
     decision = ChiefTraderDecision(
         decision_id="d1",
