@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from crypto_trader.domain.clock import Clock
+from crypto_trader.domain.enums import ExecutionDecision
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -390,3 +391,45 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     ]["ok"] is True
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     await recovered.stop()
+
+
+async def test_risk_scale_down_quantity_reaches_existing_order_path(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    engine.risk_engine.config.max_order_notional = Decimal("101")
+    await engine.start("run-risk-scale-down")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-risk-scale-down",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="direction remains long after magnitude clamp",
+        position_size_request=2,
+        leverage_request=2,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+
+    risk = await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    assert risk is not None and risk.decision == ExecutionDecision.SCALE_DOWN
+    assert risk.side.value == "BUY"
+    assert risk.checks["original_quantity"] == "2.0"
+    assert risk.checks["approved_quantity"] == "1"
+    order = list(engine.adapter.orders.values())[-1]
+    assert order.side.value == "BUY"
+    assert order.quantity == Decimal("1")
+    assert order.metadata["trade_plan_id"] == plan.trade_plan_id
+    assert order.metadata["decision_id"] == entry.decision_id
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await engine.stop()
