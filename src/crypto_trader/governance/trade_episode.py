@@ -26,6 +26,7 @@ class FactualTradeEpisode:
     symbol: str
     direction: str
     entry_decision_id: str
+    exit_decision_id: str | None
     position_decision_ids: list[str]
     order_ids: list[str]
     fill_ids: list[str]
@@ -70,6 +71,7 @@ class TradeEpisodeStore:
                 or plan.opened_at is None
                 or plan.closed_at is None
                 or plan.order_id is None
+                or plan.exit_decision_id is None
             ):
                 return None
 
@@ -104,6 +106,11 @@ class TradeEpisodeStore:
                 and (order.metadata_json or {}).get("reduce_only") is True
             ]
             if len(entry_orders) != 1 or not close_orders:
+                return None
+            if not any(
+                (order.metadata_json or {}).get("decision_id") == plan.exit_decision_id
+                for order in close_orders
+            ):
                 return None
 
             order_ids = [order.internal_order_id for order in lifecycle_orders]
@@ -160,6 +167,7 @@ class TradeEpisodeStore:
                 symbol=plan.symbol,
                 direction=plan.direction,
                 entry_decision_id=plan.decision_id,
+                exit_decision_id=plan.exit_decision_id,
                 position_decision_ids_json=[decision.decision_id for decision in decisions],
                 order_ids_json=order_ids,
                 fill_ids_json=[fill.fill_id for fill in fills],
@@ -236,6 +244,7 @@ def _to_domain(row: TradeEpisodeORM) -> FactualTradeEpisode:
         symbol=row.symbol,
         direction=row.direction,
         entry_decision_id=row.entry_decision_id,
+        exit_decision_id=row.exit_decision_id,
         position_decision_ids=list(row.position_decision_ids_json or []),
         order_ids=list(row.order_ids_json or []),
         fill_ids=list(row.fill_ids_json or []),

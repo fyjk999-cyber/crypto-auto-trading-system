@@ -368,6 +368,7 @@ class TradeEpisodeORM(Base):
     symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     direction: Mapped[str] = mapped_column(String(8), nullable=False)
     entry_decision_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    exit_decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
     position_decision_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
     order_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
     fill_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)

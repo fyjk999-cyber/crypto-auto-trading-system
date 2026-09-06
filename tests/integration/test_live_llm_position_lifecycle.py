@@ -167,6 +167,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         episode = episodes[0]
         assert episode.trade_plan_id == plan.trade_plan_id
         assert episode.entry_decision_id == "entry-long"
+        assert episode.exit_decision_id == "position-3-exit"
         assert episode.position_decision_ids_json == [
             "position-1-hold",
             "position-2-reduce",
