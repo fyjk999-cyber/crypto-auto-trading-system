@@ -63,10 +63,27 @@ class RiskEngine:
             or getattr(intent, "signal_id", None)
             or "unknown"
         )
-        checks: dict[str, Any] = {}
+        metadata = getattr(intent, "metadata", {})
+        original_direction = metadata.get(
+            "direction", "LONG" if intent.side.value == "BUY" else "SHORT"
+        )
+        checks: dict[str, Any] = {
+            "original_direction": original_direction,
+            "original_quantity": str(intent.quantity),
+            "requested_leverage": str(metadata.get("requested_leverage", "1")),
+        }
 
         def fail(reason: str) -> RiskDecision:
             checks[reason] = False
+            checks.setdefault("approved_quantity", "0")
+            checks.setdefault("original_notional", None)
+            checks.setdefault("approved_notional", "0")
+            checks.setdefault("approved_leverage", "0")
+            checks["supporting_risk_evidence"] = [
+                name for name, passed in checks.items() if passed is True
+            ]
+            checks["contrary_risk_evidence"] = [reason]
+            checks["hard_limits_triggered"] = [reason]
             return RiskDecision(
                 risk_decision_id=new_id("risk"),
                 order_id=order_id,
@@ -89,7 +106,6 @@ class RiskEngine:
             return fail("INVALID_QUANTITY")
         if price <= 0:
             return fail("INVALID_PRICE")
-        metadata = getattr(intent, "metadata", {})
         reduce_only = metadata.get("reduce_only") is True
         current_position = positions.get(intent.symbol)
         if reduce_only:
@@ -156,9 +172,7 @@ class RiskEngine:
             adjustment_reasons.append("LEVERAGE_CLAMPED")
         checks.update(
             {
-                "original_direction": metadata.get(
-                    "direction", "LONG" if intent.side.value == "BUY" else "SHORT"
-                ),
+                "original_direction": original_direction,
                 "original_quantity": str(qty),
                 "approved_quantity": format_decimal(approved_quantity),
                 "original_notional": str(original_notional),

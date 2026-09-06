@@ -104,3 +104,32 @@ def test_volatility_liquidity_missing_and_invalid_leverage_bounds():
     )
     assert invalid.decision == ExecutionDecision.REJECT
     assert invalid.reason == "INVALID_LEVERAGE"
+
+
+def test_reject_contract_is_explainable_and_never_reverses_direction():
+    engine = RiskEngine()
+    for side, direction in ((OrderSide.BUY, "LONG"), (OrderSide.SELL, "SHORT")):
+        result = engine.check(
+            SignalIntent(
+                signal_id=f"reject-{direction}",
+                strategy_id="live_llm",
+                symbol="BTCUSDT",
+                side=side,
+                quantity=Decimal("1"),
+                limit_price=Decimal("100"),
+                metadata={"direction": direction, "requested_leverage": "0.5"},
+            ),
+            account=Account(equity=Decimal("10000")),
+            positions={},
+            market_price=Decimal("100"),
+            open_order_count=0,
+        )
+        assert result.decision == ExecutionDecision.REJECT
+        assert result.side == side
+        assert result.checks["original_direction"] == direction
+        assert result.checks["original_quantity"] == "1"
+        assert result.checks["approved_quantity"] == "0"
+        assert result.checks["requested_leverage"] == "0.5"
+        assert result.checks["approved_leverage"] == "0"
+        assert result.checks["contrary_risk_evidence"] == ["INVALID_LEVERAGE"]
+        assert result.checks["hard_limits_triggered"] == ["INVALID_LEVERAGE"]
