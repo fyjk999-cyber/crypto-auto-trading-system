@@ -207,12 +207,20 @@ class TradePlanService:
             row = await session.get(TradePlanORM, trade_plan_id)
             if row is None:
                 raise KeyError(f"unknown TradePlan: {trade_plan_id}")
-            if signal_id is not None:
-                row.signal_id = signal_id
-            if risk_decision_id is not None:
-                row.risk_decision_id = risk_decision_id
-            if order_id is not None:
-                row.order_id = order_id
+            links = {
+                "signal_id": signal_id,
+                "risk_decision_id": risk_decision_id,
+                "order_id": order_id,
+            }
+            for field, value in links.items():
+                if value is None:
+                    continue
+                current = getattr(row, field)
+                if current is not None and current != value:
+                    raise ValueError(
+                        f"immutable TradePlan entry lineage conflict: {field}"
+                    )
+                setattr(row, field, value)
             row.updated_at = datetime.now(UTC)
             await session.commit()
         return self._to_domain(row)

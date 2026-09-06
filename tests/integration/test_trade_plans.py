@@ -94,3 +94,36 @@ async def test_trade_plan_transition_matrix_fails_closed_and_is_idempotent(datab
         await plans.transition(plan.trade_plan_id, TradePlanState.INVALIDATED)
     closed = await plans.transition(plan.trade_plan_id, TradePlanState.CLOSED)
     assert closed.state == TradePlanState.CLOSED
+
+
+async def test_trade_plan_entry_lineage_links_are_immutable_and_idempotent(database):
+    plans = TradePlanService(database.session_factory)
+    plan = await plans.create(
+        decision_id="decision_lineage",
+        symbol="ETHUSDT",
+        direction="SHORT",
+        thesis="factual entry lineage",
+        requested_quantity=Decimal("2"),
+    )
+    linked = await plans.link(
+        plan.trade_plan_id,
+        signal_id="signal-1",
+        risk_decision_id="risk-1",
+        order_id="order-1",
+    )
+    same = await plans.link(
+        plan.trade_plan_id,
+        signal_id="signal-1",
+        risk_decision_id="risk-1",
+        order_id="order-1",
+    )
+    assert same == linked
+
+    for field, replacement in (
+        ("signal_id", "signal-2"),
+        ("risk_decision_id", "risk-2"),
+        ("order_id", "order-2"),
+    ):
+        with pytest.raises(ValueError, match="immutable TradePlan entry lineage"):
+            await plans.link(plan.trade_plan_id, **{field: replacement})
+    assert await plans.get(plan.trade_plan_id) == linked
