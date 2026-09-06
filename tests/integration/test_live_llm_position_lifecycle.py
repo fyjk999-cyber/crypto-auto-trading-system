@@ -149,12 +149,14 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     submitted = await plans.get(plan.trade_plan_id)
     assert submitted is not None
     assert submitted.state == TradePlanState.ACTIVE
+    assert submitted.exit_decision_id is None
     await engine.wait_for_event_queue()
     closed_position = await engine.portfolio.get_position("BTCUSDT")
     closed_plan = await plans.get(plan.trade_plan_id)
     assert closed_position is not None and closed_position.quantity == 0
     assert closed_plan is not None and closed_plan.state == TradePlanState.CLOSED
     assert closed_plan.risk_decision_id == entry_risk_decision_id
+    assert closed_plan.exit_decision_id == "position-3-exit"
     assert closed_plan.terminal_reason == "EXIT"
     assert closed_plan.closed_at is not None
     assert chief.calls == 3
@@ -284,6 +286,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     final_plan = await plans.get(plan.trade_plan_id)
     assert closed is not None and closed.quantity == 0
     assert final_plan is not None and final_plan.state == TradePlanState.CLOSED
+    assert final_plan.exit_decision_id == "position-2-exit"
     assert all(order.side.value == "BUY" for order in list(engine.adapter.orders.values())[1:])
     async with database.session_factory() as session:
         episode = (await session.execute(select(TradeEpisodeORM))).scalar_one()
@@ -396,13 +399,17 @@ async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database)
     await engine.tick()
     assert len(engine.adapter.orders) == 2
     assert await engine.order_manager.has_pending_position_action(plan.trade_plan_id)
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    pending = await plans.get(plan.trade_plan_id)
+    assert pending is not None and pending.state == TradePlanState.ACTIVE
+    assert pending.exit_decision_id is None
 
     engine.adapter._match_order = match_order
     clock.advance()
     await engine.tick()
     assert len(engine.adapter.orders) == 2
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    pending = await plans.get(plan.trade_plan_id)
+    assert pending is not None and pending.state == TradePlanState.ACTIVE
+    assert pending.exit_decision_id is None
     await engine.stop()
 
 

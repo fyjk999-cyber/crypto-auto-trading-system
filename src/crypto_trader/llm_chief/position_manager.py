@@ -155,7 +155,6 @@ class LiveLLMPositionManager:
         await self.plans.link_position_decision(
             plan.trade_plan_id,
             decision.decision_id,
-            is_exit=decision.action == OpenAction.EXIT or time_stop,
         )
         await self.audit.log(
             "LIVE_LLM_POSITION_DECISION",

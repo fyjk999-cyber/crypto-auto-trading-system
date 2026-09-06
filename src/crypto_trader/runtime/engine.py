@@ -890,29 +890,43 @@ class TradingEngine:
             and order.metadata.get("reduce_only") is True
             and (position is None or position.quantity == 0)
         ):
-            closed_plan = await self.trade_plans.transition(
-                plan.trade_plan_id,
-                TradePlanState.CLOSED,
-                reason=str(order.metadata.get("lifecycle_action") or "POSITION_CLOSED"),
-            )
-            episode = await self.trade_episodes.build_for_closed_plan(closed_plan.trade_plan_id)
-            if episode is None:
-                self.health.set("trade_episode", False, "closed lifecycle lacks factual lineage")
+            exit_decision_id = str(order.metadata.get("decision_id") or "")
+            if not exit_decision_id:
+                self.health.set("trade_episode", False, "close lacks exit decision lineage")
                 await self.audit.log(
-                    "TRADE_EPISODE_INCOMPLETE",
-                    target=closed_plan.trade_plan_id,
+                    "TRADEPLAN_CLOSE_LINEAGE_MISSING",
+                    target=plan.trade_plan_id,
                     run_id=self.run_id,
                     order_id=order.internal_order_id,
                 )
             else:
-                self.health.set("trade_episode", True)
-                await self.audit.log(
-                    "TRADE_EPISODE_CREATED",
-                    target=episode.episode_id,
-                    run_id=self.run_id,
-                    order_id=order.internal_order_id,
-                    after={"trade_plan_id": closed_plan.trade_plan_id},
+                closed_plan = await self.trade_plans.close_from_factual_position(
+                    plan.trade_plan_id,
+                    exit_decision_id=exit_decision_id,
+                    reason=str(order.metadata.get("lifecycle_action") or "POSITION_CLOSED"),
                 )
+                episode = await self.trade_episodes.build_for_closed_plan(
+                    closed_plan.trade_plan_id
+                )
+                if episode is None:
+                    self.health.set(
+                        "trade_episode", False, "closed lifecycle lacks factual lineage"
+                    )
+                    await self.audit.log(
+                        "TRADE_EPISODE_INCOMPLETE",
+                        target=closed_plan.trade_plan_id,
+                        run_id=self.run_id,
+                        order_id=order.internal_order_id,
+                    )
+                else:
+                    self.health.set("trade_episode", True)
+                    await self.audit.log(
+                        "TRADE_EPISODE_CREATED",
+                        target=episode.episode_id,
+                        run_id=self.run_id,
+                        order_id=order.internal_order_id,
+                        after={"trade_plan_id": closed_plan.trade_plan_id},
+                    )
         await self.audit.log(
             "FILL_SETTLED",
             target=fill.fill_id,

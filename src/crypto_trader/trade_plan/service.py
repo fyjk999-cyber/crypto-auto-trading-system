@@ -229,8 +229,6 @@ class TradePlanService:
         self,
         trade_plan_id: str,
         decision_id: str,
-        *,
-        is_exit: bool = False,
     ) -> TradePlan:
         async with self.session_factory() as session:
             row = await session.get(TradePlanORM, trade_plan_id)
@@ -239,9 +237,35 @@ class TradePlanService:
             if TradePlanState(row.state) != TradePlanState.ACTIVE:
                 raise ValueError("position decisions require an ACTIVE TradePlan")
             row.latest_position_decision_id = decision_id
-            if is_exit:
-                row.exit_decision_id = decision_id
             row.updated_at = datetime.now(UTC)
+            await session.commit()
+            return self._to_domain(row)
+
+    async def close_from_factual_position(
+        self,
+        trade_plan_id: str,
+        *,
+        exit_decision_id: str,
+        reason: str,
+    ) -> TradePlan:
+        """Close an ACTIVE plan only at the factual zero-position boundary."""
+
+        async with self.session_factory() as session:
+            row = await session.get(TradePlanORM, trade_plan_id)
+            if row is None:
+                raise KeyError(f"unknown TradePlan: {trade_plan_id}")
+            current = TradePlanState(row.state)
+            if current == TradePlanState.CLOSED:
+                if row.exit_decision_id != exit_decision_id:
+                    raise ValueError("closed TradePlan exit lineage is immutable")
+                return self._to_domain(row)
+            if current != TradePlanState.ACTIVE:
+                raise ValueError("factual close requires an ACTIVE TradePlan")
+            row.exit_decision_id = exit_decision_id
+            row.state = TradePlanState.CLOSED.value
+            row.updated_at = datetime.now(UTC)
+            row.closed_at = row.updated_at
+            row.terminal_reason = reason
             await session.commit()
             return self._to_domain(row)
 
