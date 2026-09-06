@@ -7,7 +7,9 @@ from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import Account, Position
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+from crypto_trader.llm_chief.provider import LLMResponse
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.strategy.base import StrategyContext
@@ -42,6 +44,20 @@ class Chief:
             position_size_request=float(self.quantity),
             model_provider="deepseek",
             model="deepseek-v4-pro",
+        )
+
+
+class MalformedOpenProvider:
+    name = "deepseek"
+    model = "deepseek-v4-pro"
+
+    async def complete_json(self, **_kwargs):
+        return LLMResponse(
+            text='{"action":"REVERSE"}',
+            provider=self.name,
+            model=self.model,
+            latency_ms=1,
+            parsed_json={"action": "REVERSE"},
         )
 
 
@@ -180,3 +196,19 @@ async def test_open_context_uses_factual_market_and_contract_aware_pnl(database)
         "instrument": None,
     }
     assert captured.position_context["unrealized_pnl"] == "0.20"
+
+
+async def test_malformed_open_decision_is_durable_fail_closed_and_throttled(database):
+    await active_plan(database, "LONG")
+    ctx, position = context("2")
+    subject = manager(database, Chief("HOLD"))
+    subject.chief = ChiefTraderEngine(MalformedOpenProvider())
+
+    assert await subject.review(ctx, position) is None
+    assert await subject.review(ctx, position) is None
+
+    rows = await LLMDecisionStore(database.session_factory).list_for_symbol("ETHUSDT")
+    assert len(rows) == 1
+    assert rows[0].position_state == PositionState.OPEN
+    assert rows[0].action == "FAIL_CLOSED"
+    assert rows[0].trade_plan_id is not None
