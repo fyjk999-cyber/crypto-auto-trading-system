@@ -100,7 +100,9 @@ class LLMRuntimeStatus:
             return
         provider = self.provider_instance or DeepSeekProvider()
         result = await provider.complete_json(
-            prompt='Return only valid JSON: {"runtime_health":"ok"}', retries=0
+            prompt='Return only valid JSON: {"runtime_health":"ok"}',
+            retries=0,
+            operation="health_probe",
         )
         self.reachable = result.ok and result.parsed_json is not None
         if self.reachable:
@@ -120,12 +122,14 @@ class LLMRuntimeStatus:
         diagnostics = getattr(self.provider_instance, "diagnostics", None)
         if callable(diagnostics):
             actual = diagnostics()
+            decision = (actual.get("operations") or {}).get("trading_decision", {})
             snapshot.update(
                 {
-                    "decision_last_success_ts": actual.get("last_success_ts"),
-                    "decision_last_error": actual.get("last_error"),
-                    "decision_last_latency_ms": actual.get("last_latency_ms"),
-                    "decision_last_token_usage": actual.get("last_token_usage"),
+                    "decision_last_success_ts": decision.get("last_success_ts"),
+                    "decision_last_error": decision.get("last_error"),
+                    "decision_last_latency_ms": decision.get("last_latency_ms"),
+                    "decision_last_token_usage": decision.get("last_token_usage"),
+                    "decision_last_attempt_count": decision.get("last_attempt_count"),
                 }
             )
         return snapshot

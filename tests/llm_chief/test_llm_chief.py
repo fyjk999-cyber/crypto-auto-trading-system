@@ -165,6 +165,36 @@ async def test_llm_runtime_health_is_explicit_when_not_configured(monkeypatch):
     assert status.snapshot()["last_error"] == "NOT_CONFIGURED"
 
 
+async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatch):
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"status":"ok"}'}}]},
+        )
+
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    status = LLMRuntimeStatus(provider_instance=provider)
+    await status.probe()
+    after_probe = status.snapshot()
+    assert after_probe["reachable"] is True
+    assert after_probe["decision_last_success_ts"] is None
+
+    await provider.complete_json(
+        prompt="canonical final decision",
+        retries=0,
+        operation="trading_decision",
+    )
+    after_decision = status.snapshot()
+    assert after_decision["decision_last_success_ts"] is not None
+    assert after_decision["decision_last_error"] is None
+    assert after_decision["decision_last_attempt_count"] == 1
+
+
 def test_chief_trader_decision_schema_and_fail_safe():
     decision = ChiefTraderDecision(
         decision_id="d1",

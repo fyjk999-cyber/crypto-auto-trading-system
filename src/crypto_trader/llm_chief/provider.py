@@ -33,6 +33,7 @@ class LLMProvider(Protocol):
         max_tokens: int = 1200,
         thinking: bool = True,
         reasoning_effort: str = "low",
+        operation: str = "completion",
     ) -> LLMResponse: ...
 
     def healthy(self) -> bool: ...
@@ -57,6 +58,7 @@ class DeepSeekProvider:
         self.last_latency_ms: float | None = None
         self.last_token_usage: dict | None = None
         self.last_attempt_count: int | None = None
+        self._operation_diagnostics: dict[str, dict] = {}
 
     def healthy(self) -> bool:
         return bool(self.api_key)
@@ -71,12 +73,13 @@ class DeepSeekProvider:
         max_tokens: int = 1200,
         thinking: bool = True,
         reasoning_effort: str = "low",
+        operation: str = "completion",
     ) -> LLMResponse:
         import json
         import time
 
         if not self.api_key:
-            return LLMResponse(
+            result = LLMResponse(
                 text="",
                 provider=self.name,
                 model=self.model,
@@ -84,6 +87,8 @@ class DeepSeekProvider:
                 ok=False,
                 error="NO_API_KEY",
             )
+            self._record_operation(operation, result, attempts=0)
+            return result
         import httpx
 
         start = time.monotonic()
@@ -150,6 +155,7 @@ class DeepSeekProvider:
                         self.last_error = None
                         self.last_latency_ms = result.latency_ms
                         self.last_token_usage = result.token_usage
+                        self._record_operation(operation, result, attempts=attempt + 1)
                         return result
                     except json.JSONDecodeError:
                         self.last_error = (
@@ -177,6 +183,9 @@ class DeepSeekProvider:
                         # fail-closed and no TradePlan can be created.
                         if attempt < retries:
                             continue
+                        self._record_operation(
+                            operation, last_invalid_response, attempts=attempt + 1
+                        )
                         return last_invalid_response
                 except httpx.TimeoutException:
                     self.last_error = "LLM_TIMEOUT"
@@ -195,7 +204,21 @@ class DeepSeekProvider:
             error=self.last_error or "LLM_PROVIDER_ERROR",
         )
         self.last_latency_ms = result.latency_ms
+        self._record_operation(
+            operation, result, attempts=self.last_attempt_count or retries + 1
+        )
         return result
+
+    def _record_operation(
+        self, operation: str, response: LLMResponse, *, attempts: int
+    ) -> None:
+        self._operation_diagnostics[operation] = {
+            "last_success_ts": datetime.now(UTC).isoformat() if response.ok else None,
+            "last_error": response.error,
+            "last_latency_ms": response.latency_ms,
+            "last_token_usage": response.token_usage,
+            "last_attempt_count": attempts,
+        }
 
     def diagnostics(self) -> dict:
         """Return non-secret operational state for health reporting."""
@@ -209,4 +232,8 @@ class DeepSeekProvider:
             "last_latency_ms": self.last_latency_ms,
             "last_token_usage": self.last_token_usage,
             "last_attempt_count": self.last_attempt_count,
+            "operations": {
+                operation: dict(values)
+                for operation, values in self._operation_diagnostics.items()
+            },
         }

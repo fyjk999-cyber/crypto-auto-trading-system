@@ -47,6 +47,7 @@ class ChiefTraderEngine:
             retries=1,
             max_tokens=768,
             thinking=False,
+            operation="tool_selection",
         )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
@@ -71,6 +72,7 @@ class ChiefTraderEngine:
                 max_tokens=1200,
                 thinking=True,
                 reasoning_effort="low",
+                operation="trading_decision",
             )
             if self.provider
             else None
