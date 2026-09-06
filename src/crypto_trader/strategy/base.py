@@ -24,6 +24,7 @@ class StrategyContext:
     funding: Decimal | None = None
     oi: Decimal | None = None
     basis: Decimal | None = None
+    realized_volatility: Decimal | None = None
     instrument: Instrument | None = None
 
 

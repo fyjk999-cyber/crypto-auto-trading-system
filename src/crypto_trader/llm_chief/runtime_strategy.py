@@ -162,6 +162,15 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 after={"reason_codes": ["INVALID_DIRECTIONAL_STOP"]},
             )
             return []
+        volatility = ctx.realized_volatility or Decimal("0")
+        best_bid = ctx.book.best_bid()
+        best_ask = ctx.book.best_ask()
+        liquidity = Decimal("1") if (
+            best_bid is not None
+            and best_ask is not None
+            and best_bid.quantity > 0
+            and best_ask.quantity > 0
+        ) else Decimal("0")
         sized = self.sizer.size(
             side=decision.action.value,
             requested_quantity=Decimal(str(decision.position_size_request)),
@@ -176,6 +185,8 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             instrument=ctx.instrument.model_copy(update={"instrument_type": "LINEAR_PERP"}),
             price=mid,
             stop_price=stop_price,
+            volatility=volatility,
+            liquidity=liquidity,
         )
         if sized.normalized_quantity <= 0:
             await self.audit.log(
@@ -201,6 +212,8 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                     "risk_normalized_notional": str(sized.risk_normalized_notional),
                     "requested_leverage": str(sized.requested_leverage),
                     "sizing_approved_leverage": str(sized.risk_bounded_leverage),
+                    "volatility": str(volatility),
+                    "liquidity": str(liquidity),
                     "max_loss_estimate": str(sized.max_loss_estimate),
                     "portfolio_exposure_after_trade": str(
                         sized.portfolio_exposure_after_trade
@@ -254,6 +267,11 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             "funding": str(ctx.funding) if ctx.funding is not None else None,
             "open_interest": str(ctx.oi) if ctx.oi is not None else None,
             "basis": str(ctx.basis) if ctx.basis is not None else None,
+            "realized_volatility": (
+                str(ctx.realized_volatility)
+                if ctx.realized_volatility is not None
+                else None
+            ),
             "source": "OKX_PUBLIC",
             "instrument": (
                 {

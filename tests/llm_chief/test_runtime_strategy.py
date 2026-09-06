@@ -74,10 +74,12 @@ class FakePlanner:
         self.events = events
         self.calls = 0
         self.last_quantity = None
+        self.last_execution_metadata = None
 
     async def create_entry_signal(self, decision, **kwargs):
         self.calls += 1
         self.last_quantity = kwargs.get("quantity")
+        self.last_execution_metadata = kwargs.get("execution_metadata")
         self.events.append(("plan", decision.decision_id))
         signal = SignalIntent(
             signal_id=decision.decision_id,
@@ -227,6 +229,27 @@ async def test_live_entry_applies_risk_normalized_size_before_tradeplan(database
     assert planner.last_quantity == Decimal("6.66666")
     assert signals[0].quantity == Decimal("6.66666")
     assert planner.last_quantity != Decimal("0.001")
+
+
+async def test_live_entry_propagates_factual_volatility_to_sizing_and_risk(database):
+    events = []
+    planner = FakePlanner(events)
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        chief=FakeChief("LONG", size=10),
+        planner=planner,
+        decisions=LLMDecisionStore(database.session_factory),
+        audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(),
+    )
+    context = make_ctx()
+    context.realized_volatility = Decimal("0.10")
+
+    await strategy.on_market_data(context)
+
+    assert planner.last_execution_metadata["volatility"] == "0.10"
+    assert planner.last_execution_metadata["liquidity"] == "1"
+    assert planner.last_execution_metadata["sizing_approved_leverage"] == "1"
 
 
 async def test_live_entry_rejects_stop_on_the_wrong_side_without_tradeplan(database):

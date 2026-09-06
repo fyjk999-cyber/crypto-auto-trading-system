@@ -391,6 +391,9 @@ class TradingEngine:
             funding=market_state.funding_rate if market_state else None,
             oi=market_state.open_interest if market_state else None,
             basis=market_state.basis if market_state else None,
+            realized_volatility=(
+                market_state.realized_volatility if market_state else None
+            ),
             instrument=self._instruments.get(symbol),
         )
 
