@@ -92,6 +92,9 @@ def test_position_api_uses_canonical_contract_size_exposure():
     )
     assert payload["gross_notional"] == "1020.00"
     assert payload["signed_notional"] == "-1020.00"
+    assert payload["mark_price"] == "51000"
+    assert payload["unrealized_pnl"] == "-20.00"
+    assert payload["leverage"] == "1"
 
 
 async def test_api_version_endpoint(database, monkeypatch):

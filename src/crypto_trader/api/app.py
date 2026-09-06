@@ -58,6 +58,21 @@ def serialize_position(position, *, price: Decimal | None = None) -> dict:
     exposure = ExposureService.for_position(position, price=price)
     payload["gross_notional"] = str(exposure.gross_notional)
     payload["signed_notional"] = str(exposure.signed_notional)
+    payload["mark_price"] = str(price) if price is not None else None
+    if (
+        price is not None
+        and position.avg_entry_price is not None
+        and position.instrument_type.upper()
+        not in {"INVERSE", "INVERSE_PERP", "INVERSE_FUTURES"}
+    ):
+        payload["unrealized_pnl"] = str(
+            (price - position.avg_entry_price)
+            * position.quantity
+            * position.contract_size
+            * position.contract_multiplier
+        )
+    else:
+        payload["unrealized_pnl"] = None
     return payload
 
 

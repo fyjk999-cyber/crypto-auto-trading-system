@@ -111,6 +111,28 @@ describe("中文加密交易终端 V2", () => {
     expect(screen.getByText("量化证据（不可执行）")).toBeTruthy();
   });
 
+  it("持仓页显示后端事实标记价、未实现盈亏和批准杠杆", async () => {
+    window.location.hash = "#/positions";
+    setup(backend({
+      "/positions": {
+        BTCUSDT: {
+          symbol: "BTCUSDT",
+          base_asset: "BTC",
+          quantity: "0.1",
+          avg_entry_price: "50000",
+          mark_price: "51000",
+          unrealized_pnl: "100",
+          realized_pnl: "12.5",
+          cost_basis: "5000",
+          leverage: "3",
+        },
+      },
+    }));
+    await waitFor(() => expect(screen.getByText("3x")).toBeTruthy());
+    expect(screen.getByText("$100")).toBeTruthy();
+    expect(screen.getByText("$51,000")).toBeTruthy();
+  });
+
   it("Kline API 不存在时明确显示接口尚未开放", async () => {
     setup();
     await waitFor(() => expect(screen.getByText("K线接口尚未开放")).toBeTruthy());
