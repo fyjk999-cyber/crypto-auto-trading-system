@@ -33,17 +33,22 @@ def _tool(alpha: MultiStrategyAlpha, name: str):
         ctx = context.get("strategy_context")
         if not isinstance(ctx, StrategyContext) or ctx.symbol != symbol:
             raise ValueError("factual StrategyContext required")
-        analysis = alpha.analyze_evidence(ctx)
-        features = _finding(name, analysis, ctx)
+        analysis = alpha.analyze_tool(ctx, name)
+        features = analysis.get("features", {})
         sources = [str(ref) for ref in analysis.get("source_refs", [])]
-        sources.append(f"tool:{name}")
+        if f"tool:{name}" not in sources:
+            sources.append(f"tool:{name}")
         return ToolEvidence(
             tool_name=name,
             symbol=symbol,
             timestamp=ctx.clock_time,
             features=features,
-            supporting_evidence=_reasons(name, analysis),
-            contrary_evidence=[],
+            supporting_evidence=[
+                str(reason) for reason in analysis.get("supporting_evidence", [])
+            ],
+            contrary_evidence=[
+                str(reason) for reason in analysis.get("contrary_evidence", [])
+            ],
             confidence_of_measurement=float(
                 analysis.get("confidence_of_measurement", 0.0)
             ),
@@ -52,46 +57,3 @@ def _tool(alpha: MultiStrategyAlpha, name: str):
         )
 
     return execute
-
-
-def _finding(name: str, analysis: dict[str, Any], ctx: StrategyContext) -> dict[str, Any]:
-    if name in {"trend", "momentum", "breakout", "mean_reversion"}:
-        return {
-            "strategy_evidence": [
-                signal
-                for signal in analysis.get("signals", [])
-                if signal.get("strategy") == name
-            ]
-        }
-    if name == "market_regime":
-        return {"regime": analysis.get("regime", {})}
-    if name == "volatility":
-        features = analysis.get("features", {})
-        return {key: value for key, value in features.items() if "vol" in key.lower()}
-    if name == "funding":
-        return {"funding": str(ctx.funding) if ctx.funding is not None else None}
-    if name == "open_interest":
-        return {"open_interest": str(ctx.oi) if ctx.oi is not None else None}
-    if name == "basis":
-        return {"basis": str(ctx.basis) if ctx.basis is not None else None}
-    if name in {"orderbook", "liquidity"}:
-        bid, ask = ctx.book.best_bid(), ctx.book.best_ask()
-        return {
-            "best_bid": str(bid.price) if bid else None,
-            "best_ask": str(ask.price) if ask else None,
-            "bid_quantity": str(bid.quantity) if bid else None,
-            "ask_quantity": str(ask.quantity) if ask else None,
-            "spread": str(ask.price - bid.price) if bid and ask else None,
-        }
-    return {}
-
-
-def _reasons(name: str, analysis: dict[str, Any]) -> list[str]:
-    if name in {"trend", "momentum", "breakout", "mean_reversion"}:
-        return [
-            str(reason)
-            for signal in analysis.get("signals", [])
-            if signal.get("strategy") == name
-            for reason in signal.get("reason_codes", [])
-        ]
-    return [str(reason) for reason in analysis.get("supporting_evidence", [])]
