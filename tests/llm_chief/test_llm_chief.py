@@ -10,7 +10,7 @@ from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.knowledge import KnowledgeBase, StrategyCard, ToolRecord
 from crypto_trader.llm_chief.memory import ExperienceMemory, MarketPattern, TradeEpisode
-from crypto_trader.llm_chief.provider import DeepSeekProvider
+from crypto_trader.llm_chief.provider import DeepSeekProvider, LLMResponse
 
 
 async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
@@ -200,6 +200,33 @@ def test_chief_trader_engine_parse_decision():
     assert decision.action == "LONG"
     assert decision.symbol == "BTCUSDT"
     assert decision.decision_id.startswith("llm_")
+
+
+async def test_chief_trader_missing_action_is_durable_fail_closed_input():
+    class MissingActionProvider:
+        name = "deepseek"
+        model = "deepseek-v4-pro"
+
+        async def complete_json(self, **_kwargs):
+            return LLMResponse(
+                text='{"market_regime":"RANGE"}',
+                provider=self.name,
+                model=self.model,
+                latency_ms=1,
+                parsed_json={"market_regime": "RANGE"},
+            )
+
+    ctx = ChiefTraderContext(
+        symbol="BTCUSDT",
+        market_snapshot={"price": "100"},
+        regime="RANGE",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
+    decision = await ChiefTraderEngine(MissingActionProvider()).decide(ctx)
+    assert decision.action == "FAIL_CLOSED"
+    assert decision.reason_codes == ["INVALID_LLM_OUTPUT"]
 
 
 def test_knowledge_base_retrieval_versioned():

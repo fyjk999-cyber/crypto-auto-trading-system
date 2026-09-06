@@ -160,12 +160,6 @@ class ChiefTraderEngine:
         raw["symbol"] = ctx.symbol
         raw["position_state"] = ctx.position_state
         raw.setdefault("market_regime", ctx.regime)
-        raw.setdefault(
-            "action",
-            FlatAction.NO_TRADE
-            if ctx.position_state == PositionState.FLAT
-            else OpenAction.HOLD,
-        )
         raw.setdefault("created_at", datetime.now(UTC).isoformat())
         raw["model_provider"] = provider or getattr(self.provider, "name", "unknown")
         raw["model"] = model or getattr(self.provider, "model", "unknown")
