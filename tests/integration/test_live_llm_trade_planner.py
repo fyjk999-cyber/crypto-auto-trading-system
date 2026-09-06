@@ -18,6 +18,7 @@ def decision(action: str, *, size: float = 0.1) -> ChiefTraderDecision:
         thesis="factual market structure supports the proposal",
         position_size_request=size,
         leverage_request=2,
+        stop_loss=90,
         created_at=datetime.now(UTC).isoformat(),
     )
 

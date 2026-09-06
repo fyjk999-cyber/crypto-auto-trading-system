@@ -190,8 +190,10 @@ def test_chief_trader_engine_parse_decision():
         {
             "action": "LONG",
             "raw_llm_confidence": 0.8,
-            "position_size_request": 0.1,
-            "leverage_request": 3,
+                "position_size_request": 0.1,
+                "leverage_request": 3,
+                "thesis": "factual directional thesis",
+                "stop_loss": 90,
         },
         ctx,
     )

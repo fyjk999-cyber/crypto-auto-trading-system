@@ -116,6 +116,10 @@ class ChiefTraderEngine:
             '"supporting_evidence":["string"],"contradicting_evidence":["string"],'
             '"position_size_request":number,"requested_exposure":number|null,'
             '"leverage_request":number,"raw_llm_confidence":number,'
+            '"stop_loss":number,"take_profit":number|null,'
+            '"entry_plan":"string","expected_holding_period":"string",'
+            '"invalidation_conditions":["string"],'
+            '"reduce_conditions":["string"],"exit_conditions":["string"],'
             '"reason_codes":["string"]}'
             if ctx.position_state == PositionState.FLAT
             else '{"action":"HOLD|REDUCE|EXIT","market_regime":"string",'
@@ -136,6 +140,8 @@ class ChiefTraderEngine:
             f"FailureWarnings: {ctx.failure_warnings}\n"
             f"OutputContract: {action_contract}\n"
             "Do not add fields outside this contract. Numeric fields must be JSON numbers. "
+            "LONG/SHORT require a positive quantity or requested exposure, positive leverage, "
+            "and a positive stop_loss invalidation price. "
             "The application creates decision_id and binds symbol."
         )
 

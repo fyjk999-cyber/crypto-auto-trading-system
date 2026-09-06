@@ -84,6 +84,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         thesis="original long thesis",
         position_size_request=0.1,
         leverage_request=10,
+        stop_loss=95,
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -233,6 +234,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
         thesis="original short thesis",
         position_size_request=0.1,
         leverage_request=2,
+        stop_loss=105,
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -299,6 +301,7 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
         thesis="time bounded thesis",
         position_size_request=0.1,
         leverage_request=1,
+        stop_loss=95,
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -353,6 +356,7 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
         thesis="durable restart thesis",
         position_size_request=0.1,
         leverage_request=2,
+        stop_loss=95,
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )

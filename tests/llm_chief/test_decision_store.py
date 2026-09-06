@@ -13,6 +13,7 @@ from crypto_trader.llm_chief.provider import LLMResponse
 
 
 def decision(action: str, *, state: str = "FLAT") -> ChiefTraderDecision:
+    directional = action in {"LONG", "SHORT"}
     return ChiefTraderDecision(
         decision_id=f"decision-{state}-{action}",
         symbol="ETHUSDT",
@@ -22,7 +23,10 @@ def decision(action: str, *, state: str = "FLAT") -> ChiefTraderDecision:
         model_provider="deepseek",
         model="deepseek-v4-pro",
         model_version="live-v1",
-        position_size_request=0.5 if action == "REDUCE" else 0,
+        thesis="factual directional thesis" if directional else "",
+        position_size_request=0.5 if action == "REDUCE" or directional else 0,
+        leverage_request=2 if directional else 0,
+        stop_loss=90 if directional else None,
         created_at=datetime.now(UTC).isoformat(),
     )
 
@@ -35,6 +39,19 @@ def test_strict_flat_and_open_action_sets_reject_legacy_or_wrong_context():
     for action, state in (("ADD", "OPEN"), ("HEDGE", "OPEN"), ("EXIT", "FLAT"), ("LONG", "OPEN")):
         with pytest.raises(ValidationError):
             decision(action, state=state)
+
+
+def test_directional_entry_requires_risk_sizing_inputs():
+    baseline = decision("LONG").model_dump()
+    for missing in ("thesis", "leverage_request", "stop_loss"):
+        invalid = dict(baseline)
+        invalid[missing] = "" if missing == "thesis" else 0
+        with pytest.raises(ValidationError):
+            ChiefTraderDecision(**invalid)
+
+    invalid_size = dict(baseline, position_size_request=0, requested_exposure=None)
+    with pytest.raises(ValidationError):
+        ChiefTraderDecision(**invalid_size)
 
 
 async def test_store_persists_non_directional_and_open_decisions_idempotently(database):

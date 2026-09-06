@@ -25,8 +25,9 @@ class FakeEvidenceEngine:
 
 
 class FakeChief:
-    def __init__(self, action: str):
+    def __init__(self, action: str, size: float = 0.01):
         self.action = action
+        self.size = size
         self.calls = 0
 
     async def decide(self, ctx):
@@ -37,8 +38,9 @@ class FakeChief:
             action=self.action,
             market_regime=ctx.regime,
             thesis="factual LLM thesis" if self.action in {"LONG", "SHORT"} else "",
-            position_size_request=0.01 if self.action in {"LONG", "SHORT"} else 0.0,
+            position_size_request=self.size if self.action in {"LONG", "SHORT"} else 0.0,
             leverage_request=2.0 if self.action in {"LONG", "SHORT"} else 0.0,
+            stop_loss=99.0 if self.action in {"LONG", "SHORT"} else None,
         )
 
 
@@ -189,3 +191,23 @@ async def test_fail_closed_decision_is_throttled(database):
     stored = await LLMDecisionStore(database.session_factory).get("llm_runtime_test")
     assert stored is not None
     assert stored.action == "FAIL_CLOSED"
+
+
+async def test_live_entry_applies_risk_normalized_size_before_tradeplan(database):
+    events = []
+    planner = FakePlanner(events)
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        chief=FakeChief("LONG", size=10),
+        planner=planner,
+        decisions=LLMDecisionStore(database.session_factory),
+        audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(risk_fraction=Decimal("0.001")),
+    )
+
+    signals = await strategy.on_market_data(make_ctx())
+
+    assert len(signals) == 1
+    assert planner.last_quantity == Decimal("6.66666")
+    assert signals[0].quantity == Decimal("6.66666")
+    assert planner.last_quantity != Decimal("0.001")

@@ -82,4 +82,17 @@ class ChiefTraderDecision(BaseModel):
             )
         if self.action == OpenAction.REDUCE and self.position_size_request <= 0:
             raise ValueError("REDUCE requires a positive reduction quantity")
+        if self.action in {FlatAction.LONG, FlatAction.SHORT}:
+            if not self.thesis.strip():
+                raise ValueError("directional entry requires an explicit thesis")
+            if self.position_size_request <= 0 and not (
+                self.requested_exposure is not None and self.requested_exposure > 0
+            ):
+                raise ValueError(
+                    "directional entry requires positive quantity or requested exposure"
+                )
+            if self.leverage_request <= 0:
+                raise ValueError("directional entry requires positive requested leverage")
+            if self.stop_loss is None or self.stop_loss <= 0:
+                raise ValueError("directional entry requires a positive invalidation price")
         return self
