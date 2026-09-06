@@ -242,9 +242,10 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
       <aside className="decision-column">
         <Panel title="当前判断" source={snapshot.optional["/signals"]} className="decision-panel">
           <div className={`decision ${decision.tone}`}><strong>{decision.label}</strong><span>{decision.code}</span></div>
+          <p className="decision-authority">决策权威：{signal.authority === "CHIEF_TRADER_LLM" ? `DeepSeek ChiefTrader · ${text(signal.model)}` : "尚无 LLM 决策"}</p>
           <dl className="decision-facts"><div><dt>置信度</dt><dd>{percent(signal.confidence)}</dd></div><div><dt>市场状态</dt><dd>{regimeLabels[String(regime.regime ?? "").toUpperCase()] ?? "--"}</dd></div><div><dt>建议仓位</dt><dd>{text(pick(signal, "suggested_position", "position_size"))}</dd></div><div><dt>建议杠杆</dt><dd>{pick(signal, "leverage", "risk_capped_leverage") === undefined ? "--" : `${numberText(pick(signal, "leverage", "risk_capped_leverage"))}x`}</dd></div><div><dt>风险等级</dt><dd>{text(pick(signal, "risk_level"))}</dd></div></dl>
-          <h3>策略共识</h3><StrategyRows snapshot={snapshot} />
-          <h3>有效权重</h3><WeightRows snapshot={snapshot} />
+          <h3>量化证据（不可执行）</h3><StrategyRows snapshot={snapshot} />
+          <h3>证据权重</h3><WeightRows snapshot={snapshot} />
           <details className="why"><summary>为什么？</summary><dl><div><dt>市场阶段 Regime</dt><dd>{text(regime.regime)}</dd></div><div><dt>原因代码</dt><dd>{Array.isArray(signal.reasons) ? signal.reasons.join("、") || "--" : "--"}</dd></div><div><dt>原始置信度</dt><dd>{percent(pick(signal, "raw_confidence", "confidence"))}</dd></div><div><dt>校准置信度</dt><dd>{percent(signal.calibrated_confidence)}</dd></div><div><dt>风控后杠杆</dt><dd>{text(signal.risk_capped_leverage)}</dd></div><div><dt>复核结果</dt><dd>{text(signal.review_result)}</dd></div><div><dt>压力测试</dt><dd>{text(signal.stress_result)}</dd></div></dl></details>
         </Panel>
       </aside>

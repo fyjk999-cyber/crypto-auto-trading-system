@@ -100,6 +100,15 @@ describe("中文加密交易终端 V2", () => {
     await waitFor(() => expect(screen.getByText("$125.5")).toBeTruthy());
     expect(screen.getByRole("heading", { name: "BTCUSDT 行情" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "当前判断" })).toBeTruthy();
+    expect(screen.getByText("量化证据（不可执行）")).toBeTruthy();
+  });
+
+  it("当前判断明确来自 canonical DeepSeek 权威而非量化证据", async () => {
+    setup(backend({
+      "/signals": { signals: [{ decision_id: "llm-1", decision: "WAIT", side: "WAIT", authority: "CHIEF_TRADER_LLM", provider: "deepseek", model: "deepseek-v4-pro" }], quant_direct_trade_authority: 0 },
+    }));
+    await waitFor(() => expect(screen.getByText("决策权威：DeepSeek ChiefTrader · deepseek-v4-pro")).toBeTruthy());
+    expect(screen.getByText("量化证据（不可执行）")).toBeTruthy();
   });
 
   it("Kline API 不存在时明确显示接口尚未开放", async () => {

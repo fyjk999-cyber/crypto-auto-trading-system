@@ -104,6 +104,7 @@ footer { padding: 18px 28px 28px; color: #8a9691; border-top: 1px solid var(--li
 .decision strong { font-size: 32px; letter-spacing: -.05em; }
 .decision span { color: inherit; font-size: var(--font-sm); font-weight: 800; letter-spacing: .08em; }
 .decision-facts { margin-top: 0 !important; margin-bottom: 0; display: grid; grid-template-columns: 1fr 1fr; }
+.decision-authority { margin: 10px 16px 0 !important; color: #596762; font-size: var(--font-sm); }
 .decision-facts div { padding: 11px 0; border-bottom: 1px solid var(--line); }
 .decision-facts div:nth-child(odd) { padding-right: 10px; }
 .decision-facts div:nth-child(even) { padding-left: 10px; border-left: 1px solid var(--line); }
