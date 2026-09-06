@@ -46,9 +46,30 @@ for _ in $(seq 1 60); do
     echo "Sanitized diagnostics are available in $LOG_FILE" >&2
     exit 1
   fi
-  if curl -fsS --max-time 1 "http://$HOST:$PORT/ready" >/dev/null 2>&1; then
-    echo "PAPER RUNTIME READY: http://$HOST:$PORT (pid $PID)"
-    exit 0
+  if READY_PAYLOAD="$(curl -fsS --max-time 1 "http://$HOST:$PORT/ready" 2>/dev/null)"; then
+    if READY_PAYLOAD="$READY_PAYLOAD" python - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["READY_PAYLOAD"])
+runtime = payload.get("runtime") or {}
+lease = runtime.get("execution_lease") or {}
+kill_switch = runtime.get("kill_switch") or {}
+healthy = (
+    payload.get("ready") is True
+    and payload.get("mode") == "PAPER"
+    and payload.get("live_trading_enabled") is False
+    and runtime.get("state") == "RUNNING"
+    and lease.get("held") is True
+    and lease.get("single_writer") is True
+    and kill_switch.get("enabled") is False
+)
+raise SystemExit(0 if healthy else 1)
+PY
+    then
+      echo "PAPER RUNTIME READY: http://$HOST:$PORT (pid $PID)"
+      exit 0
+    fi
   fi
   sleep 0.5
 done

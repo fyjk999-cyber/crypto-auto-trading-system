@@ -57,6 +57,9 @@ def test_start_script_sets_real_market():
     assert "PAPER RUNTIME READY" in text
     assert 'curl -fsS --max-time 1 "http://$HOST:$PORT/ready"' in text
     assert 'kill -0 "$PID"' in text
+    assert 'runtime.get("state") == "RUNNING"' in text
+    assert 'lease.get("single_writer") is True' in text
+    assert 'payload.get("live_trading_enabled") is False' in text
 
 
 async def test_synthetic_requires_explicit_mode_and_never_reports_binance(database):
