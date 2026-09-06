@@ -239,6 +239,7 @@ class PositionProjectionORM(Base):
     contract_multiplier: Mapped[Decimal] = mapped_column(
         ExactDecimal(), default=Decimal("1")
     )
+    leverage: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("1"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

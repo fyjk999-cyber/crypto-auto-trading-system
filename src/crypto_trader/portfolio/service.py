@@ -55,6 +55,7 @@ class PortfolioService:
                     instrument_type=row.instrument_type,
                     contract_size=row.contract_size,
                     contract_multiplier=row.contract_multiplier,
+                    leverage=row.leverage,
                     updated_at=row.updated_at,
                 )
                 for row in rows
@@ -80,6 +81,7 @@ class PortfolioService:
                 instrument_type=row.instrument_type,
                 contract_size=row.contract_size,
                 contract_multiplier=row.contract_multiplier,
+                leverage=row.leverage,
                 updated_at=row.updated_at,
             )
 

@@ -865,6 +865,7 @@ class TradingEngine:
                 cost_released=cost_released,
             )
         metadata["base_asset"] = order.symbol.replace("USDT", "")
+        metadata["approved_leverage"] = str(order.metadata.get("approved_leverage", "1"))
         await self.ledger.record(
             LedgerEntryType.TRADE,
             postings,

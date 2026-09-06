@@ -105,6 +105,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     assert active.risk_decision_id is not None
     entry_risk_decision_id = active.risk_decision_id
     assert position is not None and position.quantity == Decimal("0.1")
+    assert position.leverage == Decimal("5")
     entry_order = list(engine.adapter.orders.values())[0]
     persisted_entry = await engine.order_manager.get_by_client(entry_order.client_order_id)
     assert persisted_entry is not None
@@ -133,6 +134,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     await engine.wait_for_event_queue()
     reduced = await engine.portfolio.get_position("BTCUSDT")
     assert reduced is not None and reduced.quantity == Decimal("0.06")
+    assert reduced.leverage == Decimal("5")
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     reduction_order = list(engine.adapter.orders.values())[-1]
     persisted_reduction = await engine.order_manager.get_by_client(
@@ -261,6 +263,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     opened = await engine.portfolio.get_position("BTCUSDT")
     assert opened is not None and opened.quantity == Decimal("-0.1")
     assert opened.instrument_type == "LINEAR_PERP"
+    assert opened.leverage == Decimal("2")
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
 
     chief = SequencedChief([("REDUCE", "0.04"), ("EXIT", "0")])

@@ -178,6 +178,7 @@ class Position(BaseModel):
     instrument_type: str = "SPOT"
     contract_size: QuantityValue = Decimal("1")
     contract_multiplier: Decimal = Decimal("1")
+    leverage: Decimal = Decimal("1")
     updated_at: datetime | None = None
 
 

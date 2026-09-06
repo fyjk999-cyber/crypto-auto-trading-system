@@ -36,6 +36,7 @@ class PositionView:
     instrument_type: str = "SPOT"
     contract_size: Decimal = Decimal("1")
     contract_multiplier: Decimal = Decimal("1")
+    leverage: Decimal = Decimal("1")
 
 
 @dataclass
@@ -71,6 +72,7 @@ class ProjectionSnapshot:
                     "instrument_type": v.instrument_type,
                     "contract_size": str(v.contract_size),
                     "contract_multiplier": str(v.contract_multiplier),
+                    "leverage": str(v.leverage),
                 }
                 for k, v in self.positions.items()
             },
@@ -150,6 +152,7 @@ class ProjectionBuilder:
                 instrument_type=metadata.get("instrument_type", "SPOT"),
                 contract_size=D(metadata.get("contract_size", "1")),
                 contract_multiplier=D(metadata.get("contract_multiplier", "1")),
+                leverage=D(metadata.get("approved_leverage", "1")),
             )
             self.snapshot.positions[symbol] = pos
         if metadata.get("instrument_type") == "LINEAR_PERP":
@@ -195,6 +198,7 @@ class ProjectionBuilder:
             raise ValueError("reduce_only derivative projection would reverse position")
         after = before + delta
         if before == 0 or before * delta > 0:
+            pos.leverage = D(metadata.get("approved_leverage", pos.leverage))
             previous_notional = abs(before) * (pos.avg_entry_price or Decimal("0"))
             added_notional = abs(delta) * price
             pos.avg_entry_price = (
@@ -202,6 +206,7 @@ class ProjectionBuilder:
             )
         elif after == 0:
             pos.avg_entry_price = None
+            pos.leverage = Decimal("0")
         elif before * after < 0:
             pos.avg_entry_price = price
         realized = D(metadata.get("realized_pnl", "0"))
@@ -280,6 +285,7 @@ async def rebuild_projections(
                 instrument_type=pos.instrument_type,
                 contract_size=pos.contract_size,
                 contract_multiplier=pos.contract_multiplier,
+                leverage=pos.leverage,
                 updated_at=now,
             )
         )
