@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from crypto_trader.domain.money import D
+from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.perpetual.domain import (
     MarginPosition,
@@ -75,7 +76,7 @@ class PerpetualPaperEngine:
         lev = self.margin.effective_leverage(leverage, contract.max_leverage)
         initial_margin = self.margin.initial_margin(contract, qty, price, lev)
         maintenance = self.margin.maintenance_margin(contract, qty, price)
-        fee = qty * price * contract.contract_size * contract.taker_fee_rate
+        fee = self._notional(side, qty, price) * contract.taker_fee_rate
         await self.futures_ledger.record_open(
             contract, side, qty, price, lev, initial_margin, fee, order_id=order_id
         )
@@ -106,7 +107,7 @@ class PerpetualPaperEngine:
         margin_release = (
             pos.initial_margin * qty / abs(pos.quantity) if pos.quantity else Decimal("0")
         )
-        fee = qty * exit_px * self.contract.contract_size * self.contract.taker_fee_rate
+        fee = self._notional(side, qty, exit_px) * self.contract.taker_fee_rate
         await self.futures_ledger.record_close(
             self.contract,
             side,
@@ -120,6 +121,19 @@ class PerpetualPaperEngine:
         )
         await self.load_state()
         return self._cache.positions.get(self.contract.symbol)
+
+    def _notional(
+        self, side: PositionSide, quantity: Decimal, price: Decimal
+    ) -> Decimal:
+        return ExposureService.calculate(
+            quantity=quantity,
+            price=price,
+            spec=InstrumentExposureSpec(
+                instrument_type="LINEAR_PERP",
+                contract_size=self.contract.contract_size,
+            ),
+            side="SHORT" if side == PositionSide.SHORT else "LONG",
+        ).gross_notional
 
     async def apply_funding(self, rate: Decimal, mark_price: Decimal) -> Decimal:
         state = await self.load_state()

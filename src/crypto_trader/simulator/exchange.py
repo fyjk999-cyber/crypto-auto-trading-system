@@ -439,12 +439,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         elif before * after < 0:
             pos.avg_entry_price = fill.price
         pos.quantity = after
-        pos.cost_basis = (
-            abs(after)
-            * (pos.avg_entry_price or Decimal("0"))
-            * pos.contract_size
-            * pos.contract_multiplier
-        )
+        pos.cost_basis = ExposureService.for_position(pos).gross_notional
         pos.realized_pnl += realized
         pos.updated_at = fill.timestamp
         self.balances[quote] = self.balances.get(quote, Decimal("0")) + realized - fill.fee
