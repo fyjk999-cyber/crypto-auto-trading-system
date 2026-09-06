@@ -101,6 +101,8 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     active = await plans.get(plan.trade_plan_id)
     position = await engine.portfolio.get_position("BTCUSDT")
     assert active is not None and active.state == TradePlanState.ACTIVE
+    assert active.risk_decision_id is not None
+    entry_risk_decision_id = active.risk_decision_id
     assert position is not None and position.quantity == Decimal("0.1")
     entry_order = list(engine.adapter.orders.values())[0]
     persisted_entry = await engine.order_manager.get_by_client(entry_order.client_order_id)
@@ -137,6 +139,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     )
     assert persisted_reduction is not None
     assert persisted_reduction.metadata["reduce_only"] is True
+    assert persisted_reduction.metadata["risk_decision_id"] != entry_risk_decision_id
     async with database.session_factory() as session:
         assert (await session.execute(select(TradeEpisodeORM))).scalars().all() == []
 
@@ -151,6 +154,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     closed_plan = await plans.get(plan.trade_plan_id)
     assert closed_position is not None and closed_position.quantity == 0
     assert closed_plan is not None and closed_plan.state == TradePlanState.CLOSED
+    assert closed_plan.risk_decision_id == entry_risk_decision_id
     assert closed_plan.terminal_reason == "EXIT"
     assert closed_plan.closed_at is not None
     assert chief.calls == 3

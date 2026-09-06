@@ -501,7 +501,7 @@ class TradingEngine:
             run_id=run_id,
         )
         await self._persist_risk(risk_decision)
-        if trade_plan_id:
+        if trade_plan_id and is_entry:
             await self.trade_plans.link(
                 trade_plan_id, risk_decision_id=risk_decision.risk_decision_id
             )
@@ -523,6 +523,7 @@ class TradingEngine:
 
         approved_metadata = {
             **signal.metadata,
+            "risk_decision_id": risk_decision.risk_decision_id,
             "approved_leverage": str(
                 risk_decision.checks.get(
                     "approved_leverage", signal.metadata.get("requested_leverage", "1")
