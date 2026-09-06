@@ -1,9 +1,13 @@
 import httpx
+import pytest
+from sqlalchemy import select
 
 from crypto_trader.api.app import create_app
 from crypto_trader.config import Settings
 from crypto_trader.domain.enums import OrderSide
+from crypto_trader.domain.errors import LeaseNotHeld
 from crypto_trader.domain.models import SignalIntent
+from crypto_trader.persistence.models import EngineRunORM
 from crypto_trader.runtime.bootstrap import build_system
 
 
@@ -66,4 +70,90 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     assert closed.status_code == 403
     assert closed.json()["detail"] == "POSITION_ACTION_REQUIRES_LIVE_LLM"
     await bundle.engine.stop()
+    await bundle.database.close()
+
+
+async def test_new_fenced_writer_closes_stale_unended_runtime_rows(database):
+    async with database.session_factory() as session:
+        session.add(
+            EngineRunORM(
+                run_id="stale-crashed-run",
+                state="RUNNING",
+                mode="PAPER",
+                strategy_id="live_llm",
+                metadata_json={"lease_key": "crypto_engine_execution"},
+            )
+        )
+        await session.commit()
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_SYNTHETIC",
+        engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600,
+        run_lease_renew_interval_seconds=3600,
+    )
+    bundle = await build_system(settings)
+    await bundle.engine.start("fresh-fenced-run")
+
+    async with database.session_factory() as session:
+        rows = (
+            await session.execute(select(EngineRunORM).order_by(EngineRunORM.run_id))
+        ).scalars().all()
+        active = [row for row in rows if row.ended_at is None]
+        stale = next(row for row in rows if row.run_id == "stale-crashed-run")
+    assert [row.run_id for row in active] == ["fresh-fenced-run"]
+    assert stale.state == "STOPPED"
+    assert stale.metadata_json["shutdown_reason"] == "STALE_RUN_RECONCILED"
+    assert stale.metadata_json["recovered_by"] == "fresh-fenced-run"
+
+    await bundle.engine.stop()
+    await bundle.database.close()
+
+
+async def test_failed_lease_acquisition_never_closes_other_runtime_row(database):
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_SYNTHETIC",
+    )
+    bundle = await build_system(settings)
+    held = await bundle.leases.acquire(
+        "crypto_engine_execution", "existing-writer", ttl_seconds=60
+    )
+    assert held is not None
+    async with database.session_factory() as session:
+        session.add(
+            EngineRunORM(
+                run_id="existing-runtime-row",
+                state="RUNNING",
+                mode="PAPER",
+                strategy_id="live_llm",
+                metadata_json={"lease_key": "crypto_engine_execution"},
+            )
+        )
+        await session.commit()
+
+    with pytest.raises(LeaseNotHeld):
+        await bundle.engine.start("denied-writer")
+
+    async with database.session_factory() as session:
+        existing = await session.get(EngineRunORM, "existing-runtime-row")
+    assert existing is not None and existing.ended_at is None
+    assert existing.state == "RUNNING"
+    await bundle.leases.release(
+        held.lease_key,
+        held.token,
+        owner_id=held.owner_id,
+        fence_generation=held.fence_generation,
+    )
     await bundle.database.close()

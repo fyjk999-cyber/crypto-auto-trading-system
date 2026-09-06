@@ -11,6 +11,8 @@ import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from crypto_trader.config import Settings
 from crypto_trader.domain.clock import Clock, SystemClock
 from crypto_trader.domain.enums import (
@@ -151,6 +153,14 @@ class TradingEngine:
                 self.state_machine.transition(RuntimeState.STOPPED)
                 raise LeaseNotHeld("another engine instance holds the execution lease")
             self._lease_valid = True
+            stale_runs = await self._reconcile_stale_runs()
+            if stale_runs:
+                await self.audit.log(
+                    "STALE_RUNTIME_ROWS_RECONCILED",
+                    target=self.run_id,
+                    run_id=self.run_id,
+                    after={"stale_run_ids": stale_runs},
+                )
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
 
         self.state_machine.transition(RuntimeState.RECOVERING)
@@ -229,6 +239,33 @@ class TradingEngine:
                 if state == RuntimeState.STOPPED:
                     row.ended_at = now
             await session.commit()
+
+    async def _reconcile_stale_runs(self) -> list[str]:
+        """Close abandoned rows only after this process owns the fenced lease."""
+
+        if self.lease is None or not self._lease_valid:
+            return []
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(EngineRunORM).where(
+                        EngineRunORM.run_id != self.run_id,
+                        EngineRunORM.ended_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            now = datetime.now(UTC)
+            for row in rows:
+                row.state = RuntimeState.STOPPED.value
+                row.ended_at = now
+                row.metadata_json = {
+                    **(row.metadata_json or {}),
+                    "shutdown_reason": "STALE_RUN_RECONCILED",
+                    "recovered_by": self.run_id,
+                    "recovery_fence_generation": self.lease.fence_generation,
+                }
+            await session.commit()
+            return sorted(row.run_id for row in rows)
 
     # ------------------------------------------------------------ event loop
     async def _enqueue_event(self, event: ExchangeEvent) -> None:
