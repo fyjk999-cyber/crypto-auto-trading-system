@@ -25,16 +25,23 @@ class FakeEvidenceEngine:
 
 
 class FakeChief:
-    def __init__(self, action: str, size: float = 0.01, stop_loss: float | None = None):
+    def __init__(
+        self,
+        action: str,
+        size: float = 0.01,
+        stop_loss: float | None = None,
+        decision_id: str = "llm_runtime_test",
+    ):
         self.action = action
         self.size = size
         self.stop_loss = stop_loss
+        self.decision_id = decision_id
         self.calls = 0
 
     async def decide(self, ctx):
         self.calls += 1
         return ChiefTraderDecision(
-            decision_id="llm_runtime_test",
+            decision_id=self.decision_id,
             symbol=ctx.symbol,
             action=self.action,
             market_regime=ctx.regime,
@@ -163,7 +170,7 @@ async def test_non_directional_llm_decision_fails_closed_without_tradeplan(datab
 async def test_every_decision_result_uses_the_same_attempt_cooldown(database):
     for action in ("NO_TRADE", "WAIT", "LONG", "SHORT"):
         events = []
-        chief = FakeChief(action)
+        chief = FakeChief(action, decision_id=f"cooldown-{action.lower()}")
         strategy = LiveLLMDecisionStrategy(
             evidence_engine=FakeEvidenceEngine(),
             chief=chief,

@@ -88,6 +88,31 @@ class LLMDecisionStore:
                 )
                 session.add(row)
                 await session.commit()
+            else:
+                immutable = {
+                    "run_id": run_id,
+                    "symbol": decision.symbol,
+                    "position_state": decision.position_state.value,
+                    "action": decision.action.value,
+                    "model_provider": decision.model_provider,
+                    "model": decision.model,
+                    "model_version": decision.model_version,
+                    "prompt_version": prompt_version,
+                    "market_regime": decision.market_regime,
+                    "thesis": decision.thesis,
+                    "parent_decision_id": parent_decision_id,
+                    "original_trade_plan_id": position.get("trade_plan_id"),
+                    "original_entry_decision_id": position.get("entry_decision_id"),
+                }
+                conflicts = [
+                    field
+                    for field, expected in immutable.items()
+                    if getattr(row, field) != expected
+                ]
+                if conflicts:
+                    raise ValueError(
+                        "immutable LLM decision conflict: " + ",".join(conflicts)
+                    )
             return self._record(row)
 
     async def link_trade_plan(self, decision_id: str, trade_plan_id: str) -> None:

@@ -78,6 +78,25 @@ async def test_store_persists_non_directional_and_open_decisions_idempotently(da
     ]
 
 
+async def test_store_rejects_conflicting_reuse_of_application_decision_id(database):
+    store = LLMDecisionStore(database.session_factory)
+    original = decision("NO_TRADE")
+    await store.save(original, run_id="run-1", prompt_version="prompt-v1")
+    conflicting = ChiefTraderDecision(
+        **{**original.model_dump(), "action": "WAIT", "thesis": "changed"}
+    )
+
+    with pytest.raises(ValueError, match="immutable LLM decision conflict"):
+        await store.save(conflicting, run_id="run-1", prompt_version="prompt-v1")
+    with pytest.raises(ValueError, match="immutable LLM decision conflict"):
+        await store.save(original, run_id="run-2", prompt_version="prompt-v1")
+
+    persisted = await store.get(original.decision_id)
+    assert persisted is not None
+    assert persisted.action == "NO_TRADE"
+    assert persisted.run_id == "run-1"
+
+
 class InvalidProvider:
     name = "deepseek"
     model = "deepseek-v4-pro"
