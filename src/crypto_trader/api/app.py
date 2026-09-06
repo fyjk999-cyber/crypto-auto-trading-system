@@ -198,6 +198,8 @@ def create_app(state: AppState) -> FastAPI:
         "/paper/perpetual/open", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def paper_perpetual_open(body: dict):
+        if state.engine is not None and state.engine.enforce_llm_entry_authority:
+            raise HTTPException(status_code=403, detail="NEW_DIRECTION_REQUIRES_LIVE_LLM")
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
         pos = await engine.open_position(
@@ -212,6 +214,8 @@ def create_app(state: AppState) -> FastAPI:
         "/paper/perpetual/close", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def paper_perpetual_close(body: dict):
+        if state.engine is not None and state.engine.enforce_llm_entry_authority:
+            raise HTTPException(status_code=403, detail="POSITION_ACTION_REQUIRES_LIVE_LLM")
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
         pos = await engine.close_position(

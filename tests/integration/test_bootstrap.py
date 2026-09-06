@@ -1,3 +1,6 @@
+import httpx
+
+from crypto_trader.api.app import create_app
 from crypto_trader.config import Settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
@@ -46,5 +49,21 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     )
     assert result is None
     assert await bundle.order_manager.count_open() == 0
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=create_app(bundle.app_state)),
+        base_url="http://test",
+    ) as client:
+        opened = await client.post(
+            "/paper/perpetual/open",
+            json={"side": "LONG", "quantity": "1", "price": "100"},
+        )
+        closed = await client.post(
+            "/paper/perpetual/close",
+            json={"side": "LONG", "quantity": "1", "price": "100"},
+        )
+    assert opened.status_code == 403
+    assert opened.json()["detail"] == "NEW_DIRECTION_REQUIRES_LIVE_LLM"
+    assert closed.status_code == 403
+    assert closed.json()["detail"] == "POSITION_ACTION_REQUIRES_LIVE_LLM"
     await bundle.engine.stop()
     await bundle.database.close()
