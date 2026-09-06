@@ -433,11 +433,13 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             )
         after = before + delta
         if before == 0 or before * delta > 0:
+            pos.leverage = D(metadata.get("approved_leverage", pos.leverage))
             previous = abs(before) * (pos.avg_entry_price or Decimal("0"))
             added = abs(delta) * fill.price
             pos.avg_entry_price = (previous + added) / abs(after) if after else None
         elif after == 0:
             pos.avg_entry_price = None
+            pos.leverage = Decimal("0")
         elif before * after < 0:
             pos.avg_entry_price = fill.price
         pos.quantity = after

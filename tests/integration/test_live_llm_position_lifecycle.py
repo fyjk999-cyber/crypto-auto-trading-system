@@ -106,6 +106,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     entry_risk_decision_id = active.risk_decision_id
     assert position is not None and position.quantity == Decimal("0.1")
     assert position.leverage == Decimal("5")
+    assert engine.adapter.positions["BTCUSDT"].leverage == Decimal("5")
     entry_order = list(engine.adapter.orders.values())[0]
     persisted_entry = await engine.order_manager.get_by_client(entry_order.client_order_id)
     assert persisted_entry is not None
@@ -590,6 +591,7 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     assert restored[0].quantity == expected.quantity
     assert restored[0].avg_entry_price == expected.avg_entry_price
     assert restored[0].contract_size == expected.contract_size
+    assert restored[0].leverage == expected.leverage
     assert recovered.adapter.event_log == []
     assert fills_before > 0
     report = await recovered.reconciliation.reconcile(recovered.adapter)
