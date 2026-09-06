@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -28,6 +29,7 @@ class OKXPublicMarketFeed:
         self.client = client or OKXAdapter(demo=False)
         self.states: dict[str, MarketState] = {}
         self._oi_previous: dict[str, Decimal] = {}
+        self._price_history: dict[str, deque[Decimal]] = {}
         self.min_refresh_interval = timedelta(
             seconds=max(0.0, min_refresh_interval_seconds)
         )
@@ -113,6 +115,7 @@ class OKXPublicMarketFeed:
         try:
             ticker = await self.client.get_ticker(symbol)
             state.price = _positive(ticker.get("last"), "last price")
+            self._update_realized_volatility(state)
             state.trade_volume = D(ticker.get("volume_24h", "0"))
             state.volume = state.trade_volume
             state.exchange_timestamp = _timestamp(ticker.get("source_timestamp"), now)
@@ -122,6 +125,27 @@ class OKXPublicMarketFeed:
             state.trade_volume = Decimal("0")
             state.volume = Decimal("0")
             self._status(state, "ticker", now, DataHealth.UNAVAILABLE, exc)
+
+    def _update_realized_volatility(self, state: MarketState) -> None:
+        prices = self._price_history.setdefault(state.symbol, deque(maxlen=61))
+        prices.append(state.price)
+        if len(prices) < 3:
+            state.realized_volatility = None
+            return
+        observations = list(prices)
+        returns = [
+            current / previous - Decimal("1")
+            for previous, current in zip(observations, observations[1:], strict=False)
+            if previous > 0
+        ]
+        if len(returns) < 2:
+            state.realized_volatility = None
+            return
+        mean = sum(returns, Decimal("0")) / Decimal(len(returns))
+        variance = sum(((value - mean) ** 2 for value in returns), Decimal("0")) / Decimal(
+            len(returns)
+        )
+        state.realized_volatility = variance.sqrt()
 
     async def _refresh_book(self, state: MarketState, symbol: str, now: datetime) -> None:
         try:

@@ -203,6 +203,52 @@ async def test_real_market_adapter_exposes_complete_factual_okx_state():
     assert instruments[0].step_size == Decimal("1")
 
 
+async def test_okx_feed_derives_realized_volatility_from_factual_ticker_history():
+    class MovingOKX:
+        def __init__(self):
+            self.prices = iter(("100", "110", "99"))
+
+        async def get_ticker(self, _symbol):
+            return {
+                "last": next(self.prices),
+                "volume_24h": "2000",
+                "source_timestamp": "1722470400000",
+            }
+
+        async def get_orderbook(self, _symbol):
+            return {
+                "data": [
+                    {
+                        "ts": "1722470400000",
+                        "bids": [["98", "10"]],
+                        "asks": [["100", "8"]],
+                    }
+                ]
+            }
+
+        async def get_mark_price(self, _symbol):
+            return {"mark_price": "99"}
+
+        async def get_index_price(self, _symbol):
+            return {"index_price": "99"}
+
+        async def get_funding_rate(self, _symbol):
+            return {"funding_rate": "0", "next_funding_time": None}
+
+        async def get_open_interest(self, _symbol):
+            return {"open_interest": "100"}
+
+        async def disconnect(self):
+            return None
+
+    feed = OKXPublicMarketFeed(client=MovingOKX(), min_refresh_interval_seconds=0)
+    assert (await feed.refresh()).realized_volatility is None
+    assert (await feed.refresh()).realized_volatility is None
+    state = await feed.refresh()
+    assert state.realized_volatility == Decimal("0.1")
+    assert state.provider == "OKX_PUBLIC"
+
+
 async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):
     async def candles(self, inst_id, bar, limit=500):
         assert inst_id == "BTC-USDT-SWAP"
