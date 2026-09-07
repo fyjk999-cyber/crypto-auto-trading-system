@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import httpx
@@ -166,7 +167,12 @@ async def test_llm_runtime_health_is_explicit_when_not_configured(monkeypatch):
 
 
 async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatch):
-    async def handler(_request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload["messages"][0]["content"].startswith("Return only valid JSON"):
+            assert payload["thinking"] == {"type": "disabled"}
+            assert payload["max_tokens"] == 64
+            assert "reasoning_effort" not in payload
         return httpx.Response(
             200,
             json={"choices": [{"message": {"content": '{"status":"ok"}'}}]},

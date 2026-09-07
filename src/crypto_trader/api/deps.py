@@ -101,7 +101,11 @@ class LLMRuntimeStatus:
         provider = self.provider_instance or DeepSeekProvider()
         result = await provider.complete_json(
             prompt='Return only valid JSON: {"runtime_health":"ok"}',
+            temperature=0.0,
+            timeout_seconds=10.0,
             retries=0,
+            max_tokens=64,
+            thinking=False,
             operation="health_probe",
         )
         self.reachable = result.ok and result.parsed_json is not None
