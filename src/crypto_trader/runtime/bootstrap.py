@@ -101,6 +101,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_position_notional="5000",
         max_leverage="3",
     )
+    if isinstance(adapter, PaperRealMarketAdapter):
+        # Quant remains evidence-only. Seed it with bounded, factual, closed
+        # OKX candles so a process restart does not erase indicator context.
+        # Failure is explicit on the feed and never replaced with fake data.
+        await adapter.feed.warmup(alpha.mde, alpha.symbol)
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)

@@ -6,6 +6,7 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from crypto_trader.alpha.market_data_engine import MarketDataEngine
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.okx import OKXAdapter
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
@@ -30,6 +31,9 @@ class OKXPublicMarketFeed:
         self.states: dict[str, MarketState] = {}
         self._oi_previous: dict[str, Decimal] = {}
         self._price_history: dict[str, deque[Decimal]] = {}
+        self.warmup_status = "NOT_ATTEMPTED"
+        self.warmup_loaded = 0
+        self.warmup_error: str | None = None
         self.min_refresh_interval = timedelta(
             seconds=max(0.0, min_refresh_interval_seconds)
         )
@@ -50,6 +54,55 @@ class OKXPublicMarketFeed:
                 exchange="OKX",
             ),
         )
+
+    async def warmup(
+        self,
+        mde: MarketDataEngine,
+        symbol: str | None = None,
+        *,
+        bars: int = 300,
+        interval: str = "1m",
+    ) -> int:
+        """Seed quant history from factual, closed OKX candles only.
+
+        Warm-up is evidence preparation, not a market fallback. Provider
+        failure leaves the engine empty (or preserves its existing bars) and
+        is reported without returning provider exception text.
+        """
+
+        symbol = symbol or self.symbol
+        try:
+            raw = await self.client.get_candles(
+                self.provider_symbol(symbol), interval, bars
+            )
+            closed: dict[int, list] = {}
+            for row in raw:
+                if not isinstance(row, list) or len(row) < 9 or str(row[8]) != "1":
+                    continue
+                closed[int(row[0])] = row
+
+            latest = mde.latest()
+            latest_ms = int(latest.ts.timestamp() * 1000) if latest else -1
+            loaded = 0
+            for timestamp_ms, row in sorted(closed.items()):
+                if timestamp_ms <= latest_ms:
+                    continue
+                mde.ingest(
+                    datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC),
+                    D(row[4]),
+                    D(row[5]),
+                )
+                loaded += 1
+
+            self.warmup_loaded = loaded
+            self.warmup_status = "HEALTHY" if loaded else "UNAVAILABLE"
+            self.warmup_error = None
+            return loaded
+        except Exception as exc:
+            self.warmup_loaded = 0
+            self.warmup_status = "UNAVAILABLE"
+            self.warmup_error = type(exc).__name__
+            return 0
 
     def _status(
         self,

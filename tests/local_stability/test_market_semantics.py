@@ -1,8 +1,10 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 
+from crypto_trader.alpha.market_data_engine import MarketDataEngine
 from crypto_trader.api.app import create_app
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import Settings
@@ -247,6 +249,58 @@ async def test_okx_feed_derives_realized_volatility_from_factual_ticker_history(
     state = await feed.refresh()
     assert state.realized_volatility == Decimal("0.1")
     assert state.provider == "OKX_PUBLIC"
+
+
+async def test_okx_feed_warms_quant_history_from_closed_factual_candles_only():
+    class HistoricalOKX:
+        async def get_candles(self, symbol, bar, limit):
+            assert (symbol, bar, limit) == ("ETH-USDT-SWAP", "1m", 300)
+            return [
+                ["1722470460000", "2", "3", "1", "2.5", "11", "0", "0", "0"],
+                ["1722470400000", "1", "2", "0.5", "1.5", "10", "0", "0", "1"],
+                ["1722470520000", "3", "4", "2", "3.5", "12", "0", "0", "1"],
+            ]
+
+    history = MarketDataEngine("ETHUSDT")
+    feed = OKXPublicMarketFeed(client=HistoricalOKX())
+
+    loaded = await feed.warmup(history, "ETHUSDT")
+
+    assert loaded == 2
+    assert history.closes() == [Decimal("1.5"), Decimal("3.5")]
+    assert feed.warmup_status == "HEALTHY"
+
+
+async def test_okx_feed_warmup_failure_is_fail_closed_and_sanitized():
+    class UnavailableOKX:
+        async def get_candles(self, symbol, bar, limit):
+            raise RuntimeError("provider response contains secret-like diagnostic")
+
+    history = MarketDataEngine("BTCUSDT")
+    feed = OKXPublicMarketFeed(client=UnavailableOKX())
+
+    assert await feed.warmup(history) == 0
+    assert history.closes() == []
+    assert feed.warmup_status == "UNAVAILABLE"
+    assert feed.warmup_error == "RuntimeError"
+
+
+async def test_okx_feed_warmup_does_not_duplicate_existing_history():
+    class RepeatedOKX:
+        async def get_candles(self, symbol, bar, limit):
+            return [
+                ["1722470400000", "1", "2", "0.5", "1.5", "10", "0", "0", "1"],
+                ["1722470460000", "2", "3", "1", "2.5", "11", "0", "0", "1"],
+            ]
+
+    history = MarketDataEngine("BTCUSDT")
+    history.ingest(
+        datetime.fromtimestamp(1722470400, tz=UTC), Decimal("1.5"), Decimal("10")
+    )
+    feed = OKXPublicMarketFeed(client=RepeatedOKX())
+
+    assert await feed.warmup(history) == 1
+    assert history.closes() == [Decimal("1.5"), Decimal("2.5")]
 
 
 async def test_klines_use_okx_public_data_in_chronological_order(database, monkeypatch):
