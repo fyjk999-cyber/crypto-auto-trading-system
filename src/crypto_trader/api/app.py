@@ -262,21 +262,32 @@ def create_app(state: AppState) -> FastAPI:
         return {"positions": {k: v.model_dump(mode="json") for k, v in state.positions.items()}}
 
     @app.get("/market")
-    async def market():
+    async def market(symbol: str = "BTCUSDT"):
+        symbol = symbol.upper()
+        try:
+            SymbolMapper().to_okx(symbol)
+        except ValueError:
+            return {
+                "symbol": symbol,
+                "provider": "OKX_PUBLIC",
+                "source": "OKX_PUBLIC",
+                "status": "INVALID_SYMBOL",
+                "data_source": "REAL",
+            }
         adapter = getattr(state.engine, "adapter", None) if state.engine else None
         get_market_state = getattr(adapter, "get_market_state", None)
         if get_market_state is not None:
             try:
-                ms = await get_market_state("BTCUSDT")
+                ms = await get_market_state(symbol)
                 return ms.model_dump(mode="json")
             except Exception as exc:
-                detail = str(exc)
                 return {
+                    "symbol": symbol,
                     "provider": "OKX_PUBLIC",
                     "source": "OKX_PUBLIC",
                     "status": "UNAVAILABLE",
                     "data_source": "REAL",
-                    "last_error": detail,
+                    "last_error": type(exc).__name__,
                 }
         if state.settings.paper_mode == "PAPER_SYNTHETIC":
             return {
@@ -284,14 +295,14 @@ def create_app(state: AppState) -> FastAPI:
                 "source": "SYNTHETIC",
                 "status": "SYNTHETIC",
                 "data_source": "SYNTHETIC",
-                "symbol": "BTCUSDT",
+                "symbol": symbol,
             }
         return {
             "provider": "OKX_PUBLIC",
             "source": "OKX_PUBLIC",
             "status": "UNAVAILABLE",
             "data_source": "REAL",
-            "symbol": "BTCUSDT",
+            "symbol": symbol,
         }
 
     @app.get("/market/klines")
@@ -367,20 +378,32 @@ def create_app(state: AppState) -> FastAPI:
         }
 
     @app.get("/market/sources")
-    async def market_sources():
+    async def market_sources(symbol: str = "BTCUSDT"):
+        symbol = symbol.upper()
+        try:
+            SymbolMapper().to_okx(symbol)
+        except ValueError:
+            return {
+                "symbol": symbol,
+                "provider": "OKX_PUBLIC",
+                "source": "OKX_PUBLIC",
+                "status": "INVALID_SYMBOL",
+                "data_source": "REAL",
+            }
         adapter = getattr(state.engine, "adapter", None) if state.engine else None
         get_market_state = getattr(adapter, "get_market_state", None)
         if get_market_state is not None:
             try:
-                ms = await get_market_state("BTCUSDT")
+                ms = await get_market_state(symbol)
                 return {k: v.model_dump(mode="json") for k, v in ms.sources.items()}
             except Exception as exc:
                 return {
+                    "symbol": symbol,
                     "provider": "OKX_PUBLIC",
                     "source": "OKX_PUBLIC",
                     "status": "UNAVAILABLE",
                     "data_source": "REAL",
-                    "last_error": str(exc),
+                    "last_error": type(exc).__name__,
                 }
         if state.settings.paper_mode == "PAPER_SYNTHETIC":
             return {

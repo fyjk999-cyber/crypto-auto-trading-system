@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,7 @@ from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.service import MarketDataService
+from crypto_trader.market_data.state import MarketState
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
 from crypto_trader.portfolio.service import PortfolioService
@@ -98,6 +100,34 @@ async def test_real_market_unavailable_reports_okx_not_synthetic(database):
         "status": "DISCONNECTED",
     }
     assert health["okx_demo_credentials"]["provider"] == "OKX"
+
+
+def test_market_endpoints_honor_requested_canonical_symbol(database):
+    requested: list[str] = []
+
+    class SymbolAwareAdapter:
+        connected = True
+
+        async def get_market_state(self, symbol):
+            requested.append(symbol)
+            return MarketState(
+                symbol=symbol,
+                provider="OKX_PUBLIC",
+                source="OKX_PUBLIC",
+                data_source="REAL",
+                instrument_id=f"{symbol[:-4]}-USDT-SWAP",
+            )
+
+    state = make_state(database, "PAPER_REAL_MARKET")
+    state.engine = SimpleNamespace(adapter=SymbolAwareAdapter())
+    client = TestClient(create_app(state))
+
+    market = client.get("/market?symbol=ETHUSDT").json()
+    sources = client.get("/market/sources?symbol=SOLUSDT").json()
+
+    assert market["symbol"] == "ETHUSDT"
+    assert requested == ["ETHUSDT", "SOLUSDT"]
+    assert sources == {}
 
 
 async def test_real_market_adapter_does_not_silent_fallback():
