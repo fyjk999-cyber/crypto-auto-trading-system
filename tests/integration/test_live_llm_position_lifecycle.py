@@ -383,6 +383,65 @@ async def test_partial_exit_fill_stays_active_until_factual_remaining_position_c
     await engine.stop()
 
 
+async def test_position_action_waits_until_partially_filled_entry_order_is_terminal(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-entry-fill-race")
+    assert await engine._strategy_context("BTCUSDT") is not None
+
+    book = engine.adapter.books["BTCUSDT"]
+    book.apply_snapshot(
+        engine.adapter.sequence["BTCUSDT"] + 1,
+        [(Decimal("99.95"), Decimal("1"))],
+        [(Decimal("100.05"), Decimal("0.04"))],
+    )
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-fill-race",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="partial entry must settle before exit",
+        position_size_request=0.1,
+        leverage_request=2,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    entry_order = list(engine.adapter.orders.values())[0]
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert entry_order.status == OrderStatus.PARTIALLY_FILLED
+    assert position is not None and position.quantity == Decimal("0.04")
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief([("EXIT", "0")]),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    result = await engine.tick()
+
+    assert result == []
+    assert len(engine.adapter.orders) == 1
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.04")
+    await engine.stop()
+
+
 async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     clock = MutableClock()

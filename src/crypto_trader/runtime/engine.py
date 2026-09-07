@@ -16,6 +16,7 @@ from sqlalchemy import select
 from crypto_trader.config import Settings
 from crypto_trader.domain.clock import Clock, SystemClock
 from crypto_trader.domain.enums import (
+    TERMINAL_ORDER_STATUSES,
     ExchangeEventType,
     ExecutionDecision,
     LedgerDirection,
@@ -498,6 +499,19 @@ class TradingEngine:
             plan = await self.trade_plans.get(trade_plan_id)
             position = positions.get(signal.symbol)
             action = signal.metadata.get("lifecycle_action")
+            entry_order = (
+                await self.order_manager.get(plan.order_id)
+                if plan is not None and plan.order_id is not None
+                else None
+            )
+            if entry_order is None or entry_order.status not in TERMINAL_ORDER_STATUSES:
+                await self.audit.log(
+                    "POSITION_ACTION_BLOCKED_ENTRY_UNSETTLED",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"trade_plan_id": trade_plan_id},
+                )
+                return None
             expected_side = (
                 OrderSide.SELL if plan is not None and plan.direction == "LONG" else OrderSide.BUY
             )
