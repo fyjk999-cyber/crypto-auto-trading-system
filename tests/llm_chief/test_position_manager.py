@@ -61,11 +61,11 @@ class MalformedOpenProvider:
         )
 
 
-async def active_plan(database, direction: str):
+async def active_plan(database, direction: str, symbol: str = "ETHUSDT"):
     plans = TradePlanService(database.session_factory)
     plan = await plans.create(
         decision_id=f"entry-{direction.lower()}",
-        symbol="ETHUSDT",
+        symbol=symbol,
         direction=direction,
         thesis="original factual thesis",
         requested_quantity=Decimal("2"),
@@ -74,9 +74,9 @@ async def active_plan(database, direction: str):
     return await plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
 
 
-def context(quantity: str) -> tuple[StrategyContext, Position]:
+def context(quantity: str, symbol: str = "ETHUSDT") -> tuple[StrategyContext, Position]:
     now = datetime.now(UTC)
-    book = OrderBook(symbol="ETHUSDT", exchange="OKX")
+    book = OrderBook(symbol=symbol, exchange="OKX")
     book.apply_snapshot(
         1,
         [(Decimal("99"), Decimal("10"))],
@@ -84,8 +84,8 @@ def context(quantity: str) -> tuple[StrategyContext, Position]:
         now=now,
     )
     position = Position(
-        symbol="ETHUSDT",
-        base_asset="ETH",
+        symbol=symbol,
+        base_asset=symbol.replace("USDT", ""),
         quote_asset="USDT",
         quantity=Decimal(quantity),
         avg_entry_price=Decimal("95"),
@@ -94,10 +94,10 @@ def context(quantity: str) -> tuple[StrategyContext, Position]:
     )
     return (
         StrategyContext(
-            symbol="ETHUSDT",
+            symbol=symbol,
             book=book,
             account=Account(equity=Decimal("1000")),
-            positions={"ETHUSDT": position},
+            positions={symbol: position},
             clock_time=now,
             run_id="run-open",
             mark_price=Decimal("100"),
@@ -140,12 +140,8 @@ async def test_reduce_and_exit_are_reduce_only_and_side_symmetric(database):
     assert reduce_signal.metadata["reduce_only"] is True
 
     database2 = database
-    plans = TradePlanService(database2.session_factory)
-    current = await plans.get_active_for_symbol("ETHUSDT")
-    assert current is not None
-    await plans.transition(current.trade_plan_id, TradePlanState.CLOSED, reason="test-boundary")
-    await active_plan(database2, "SHORT")
-    short_ctx, short_position = context("-2")
+    await active_plan(database2, "SHORT", symbol="BTCUSDT")
+    short_ctx, short_position = context("-2", symbol="BTCUSDT")
     exit_signal = await manager(database2, Chief("EXIT")).review(short_ctx, short_position)
     assert exit_signal is not None
     assert exit_signal.side == OrderSide.BUY

@@ -4,6 +4,9 @@ from decimal import Decimal
 
 import pytest
 
+from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.persistence.models import PositionProjectionORM
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 
 
@@ -108,7 +111,54 @@ async def test_trade_plan_transition_matrix_fails_closed_and_is_idempotent(datab
     assert active.state == TradePlanState.ACTIVE
     with pytest.raises(ValueError):
         await plans.transition(plan.trade_plan_id, TradePlanState.INVALIDATED)
-    closed = await plans.transition(plan.trade_plan_id, TradePlanState.CLOSED)
+    with pytest.raises(ValueError, match="factual close method"):
+        await plans.transition(plan.trade_plan_id, TradePlanState.CLOSED)
+    exit_decision = ChiefTraderDecision(
+        decision_id="position-exit",
+        symbol="BTCUSDT",
+        position_state=PositionState.OPEN,
+        action="EXIT",
+        market_regime="TREND",
+    )
+    decisions = LLMDecisionStore(database.session_factory)
+    await decisions.save(
+        exit_decision,
+        run_id="run-matrix",
+        prompt_version="open-v1",
+        parent_decision_id="decision_matrix",
+        position_context={
+            "trade_plan_id": plan.trade_plan_id,
+            "entry_decision_id": "decision_matrix",
+        },
+    )
+    async with database.session_factory() as session:
+        session.add(
+            PositionProjectionORM(
+                symbol="BTCUSDT",
+                base_asset="BTC",
+                quote_asset="USDT",
+                quantity=Decimal("1"),
+            )
+        )
+        await session.commit()
+    with pytest.raises(ValueError, match="non-zero factual position"):
+        await plans.close_from_factual_position(
+            plan.trade_plan_id,
+            exit_decision_id=exit_decision.decision_id,
+            reason="EXIT",
+        )
+    async with database.session_factory() as session:
+        position = (
+            await session.get(PositionProjectionORM, 1)
+        )
+        assert position is not None
+        position.quantity = Decimal("0")
+        await session.commit()
+    closed = await plans.close_from_factual_position(
+        plan.trade_plan_id,
+        exit_decision_id=exit_decision.decision_id,
+        reason="EXIT",
+    )
     assert closed.state == TradePlanState.CLOSED
 
 

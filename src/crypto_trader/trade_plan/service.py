@@ -11,7 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.identifiers import new_id
-from crypto_trader.persistence.models import TradePlanORM
+from crypto_trader.persistence.models import (
+    LLMDecisionORM,
+    PositionProjectionORM,
+    TradePlanORM,
+)
 
 
 class TradePlanState(StrEnum):
@@ -208,6 +212,10 @@ class TradePlanService:
             current = TradePlanState(row.state)
             if current == state:
                 return self._to_domain(row)
+            if state == TradePlanState.CLOSED:
+                raise ValueError(
+                    "CLOSED requires the factual close method and zero position evidence"
+                )
             if state not in ALLOWED_TRANSITIONS.get(current, set()):
                 raise ValueError(f"invalid TradePlan transition: {current} -> {state}")
             row.state = state.value
@@ -288,6 +296,23 @@ class TradePlanService:
                 return self._to_domain(row)
             if current != TradePlanState.ACTIVE:
                 raise ValueError("factual close requires an ACTIVE TradePlan")
+            position = (
+                await session.execute(
+                    select(PositionProjectionORM).where(
+                        PositionProjectionORM.symbol == row.symbol
+                    )
+                )
+            ).scalar_one_or_none()
+            if position is None or position.quantity != 0:
+                raise ValueError("cannot close TradePlan with non-zero factual position")
+            exit_decision = await session.get(LLMDecisionORM, exit_decision_id)
+            if (
+                exit_decision is None
+                or exit_decision.position_state != "OPEN"
+                or exit_decision.original_trade_plan_id != trade_plan_id
+                or exit_decision.original_entry_decision_id != row.decision_id
+            ):
+                raise ValueError("factual close requires canonical OPEN decision lineage")
             row.exit_decision_id = exit_decision_id
             row.state = TradePlanState.CLOSED.value
             row.updated_at = datetime.now(UTC)
