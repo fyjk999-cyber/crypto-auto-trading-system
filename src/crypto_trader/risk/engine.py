@@ -51,6 +51,7 @@ class RiskEngine:
         positions: dict[str, Position],
         market_price: Decimal,
         open_order_count: int,
+        market_prices: dict[str, Decimal] | None = None,
         daily_pnl: Decimal = Decimal("0"),
         drawdown: Decimal = Decimal("0"),
         consecutive_failures: int = 0,
@@ -204,14 +205,19 @@ class RiskEngine:
         checks["max_drawdown"] = True
 
         cash = account.equity
+        valuation_prices = dict(market_prices or {})
+        valuation_prices[intent.symbol] = market_price
         portfolio_exposure = ExposureService.for_portfolio(
             positions,
-            prices={intent.symbol: market_price},
+            prices=valuation_prices,
         )
         existing_notional = portfolio_exposure.gross_notional
         current_symbol = positions.get(intent.symbol)
         current_symbol_notional = (
-            ExposureService.for_position(current_symbol, price=market_price).gross_notional
+            ExposureService.for_position(
+                current_symbol,
+                price=valuation_prices.get(intent.symbol),
+            ).gross_notional
             if current_symbol
             else Decimal("0")
         )

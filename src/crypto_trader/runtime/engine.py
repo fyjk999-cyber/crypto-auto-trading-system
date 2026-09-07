@@ -541,12 +541,23 @@ class TradingEngine:
             mid = book.mid_price()
             if mid is not None:
                 market_price = mid
+        market_prices: dict[str, Decimal] = {}
+        for position_symbol in positions:
+            position_book = self.market_data.books.get(position_symbol)
+            if position_book is None:
+                continue
+            position_mid = position_book.mid_price()
+            if position_mid is not None and position_mid > 0:
+                market_prices[position_symbol] = position_mid
+        if market_price > 0:
+            market_prices[symbol] = market_price
         open_orders = await self.order_manager.count_open()
         risk_decision = self.risk_engine.check(
             signal,
             account=account,
             positions=positions,
             market_price=market_price,
+            market_prices=market_prices,
             open_order_count=open_orders,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,

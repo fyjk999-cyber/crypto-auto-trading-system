@@ -224,3 +224,38 @@ def test_existing_symbol_exposure_is_valued_at_current_market_price():
     assert decision.decision == ExecutionDecision.REJECT
     assert decision.reason == "MAX_SYMBOL_EXPOSURE"
     assert decision.checks["existing_notional"] == "240"
+
+
+def test_portfolio_exposure_uses_factual_prices_for_every_held_symbol():
+    engine = RiskEngine(RiskConfig(max_account_exposure=Decimal("250")))
+    positions = {
+        "BTCUSDT": Position(
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            quantity=Decimal("1"),
+            avg_entry_price=Decimal("100"),
+            cost_basis=Decimal("100"),
+        ),
+        "ETHUSDT": Position(
+            symbol="ETHUSDT",
+            base_asset="ETH",
+            quote_asset="USDT",
+            quantity=Decimal("1"),
+            avg_entry_price=Decimal("100"),
+            cost_basis=Decimal("100"),
+        ),
+    }
+
+    decision = engine.check(
+        make_signal(qty="0.1"),
+        account=make_account(),
+        positions=positions,
+        market_price=Decimal("100"),
+        market_prices={"BTCUSDT": Decimal("100"), "ETHUSDT": Decimal("200")},
+        open_order_count=0,
+    )
+
+    assert decision.decision == ExecutionDecision.REJECT
+    assert decision.reason == "MAX_ACCOUNT_EXPOSURE"
+    assert decision.checks["existing_notional"] == "300"
