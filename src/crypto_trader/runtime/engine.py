@@ -339,9 +339,11 @@ class TradingEngine:
                 continue
             try:
                 signals = await strategy.on_market_data(ctx)
-            except Exception:
+            except Exception as exc:
                 self.consecutive_failures += 1
-                self.health.set(f"strategy:{strategy.name}", False)
+                self.health.set(
+                    f"strategy:{strategy.name}", False, type(exc).__name__
+                )
                 continue
             self.consecutive_failures = 0
             self.health.set(f"strategy:{strategy.name}", True)
@@ -359,9 +361,9 @@ class TradingEngine:
                     continue
                 try:
                     signal = await self.position_manager.review(ctx, position)
-                except Exception:
+                except Exception as exc:
                     self.consecutive_failures += 1
-                    self.health.set("position_manager", False)
+                    self.health.set("position_manager", False, type(exc).__name__)
                     continue
                 self.health.set("position_manager", True)
                 if signal is not None:
