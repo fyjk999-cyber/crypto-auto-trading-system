@@ -8,6 +8,7 @@ Market Event -> StrategyPlugin -> SignalIntent -> PreTrade Risk
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -71,6 +72,8 @@ from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
+
+logger = logging.getLogger("crypto_trader.engine")
 
 
 class TradingEngine:
@@ -438,6 +441,41 @@ class TradingEngine:
         )
 
     # --------------------------------------------------------------- signals
+    async def _cancel_unsettled_entry_order(self, entry_order) -> None:
+        """Cancel a non-terminal entry order before a later EXIT/REDUCE.
+
+        Uses OrderManager + adapter cancel path. No direct DB mutation and no
+        new exit order. If cancellation fails, the runtime stays fail-closed:
+        the exception propagates to the caller and the position action is not
+        submitted.
+        """
+        try:
+            await self.order_manager.cancel_pending(
+                entry_order.internal_order_id,
+                reason="POSITION_ACTION_ENTRY_UNSETTLED",
+            )
+            await self.adapter.cancel_order(
+                entry_order.symbol, entry_order.exchange_order_id
+            )
+            await self.audit.log(
+                "POSITION_ACTION_CANCEL_ENTRY",
+                target=entry_order.client_order_id,
+                run_id=self.run_id,
+                client_order_id=entry_order.client_order_id,
+                order_id=entry_order.internal_order_id,
+                after={
+                    "status": "CANCEL_PENDING",
+                    "reason": "entry order not terminal",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "POSITION_ACTION_CANCEL_ENTRY_FAILED order_id=%s symbol=%s",
+                entry_order.internal_order_id,
+                entry_order.symbol,
+            )
+            raise
+
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
         run_id = self.run_id
         symbol = signal.symbol
@@ -509,8 +547,23 @@ class TradingEngine:
                     "POSITION_ACTION_BLOCKED_ENTRY_UNSETTLED",
                     target=client_order_id,
                     run_id=run_id,
-                    after={"trade_plan_id": trade_plan_id},
+                    after={
+                        "trade_plan_id": trade_plan_id,
+                        "order_id": entry_order.internal_order_id
+                        if entry_order is not None
+                        else None,
+                        "entry_order_status": entry_order.status.value
+                        if entry_order is not None
+                        else None,
+                    },
                 )
+                # P0/P1 lifecycle race: do NOT submit the EXIT/REDUCE while the
+                # original entry order is still non-terminal. First cancel the
+                # remaining entry quantity through the canonical adapter so the
+                # order reaches a factual terminal state. A later review can
+                # act on the settled position.
+                if entry_order is not None and entry_order.status not in TERMINAL_ORDER_STATUSES:
+                    await self._cancel_unsettled_entry_order(entry_order)
                 return None
             expected_side = (
                 OrderSide.SELL if plan is not None and plan.direction == "LONG" else OrderSide.BUY

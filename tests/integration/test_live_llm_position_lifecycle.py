@@ -426,7 +426,7 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
 
     engine.position_manager = LiveLLMPositionManager(
-        chief=SequencedChief([("EXIT", "0")]),
+        chief=SequencedChief([("EXIT", "0"), ("EXIT", "0")]),
         evidence_engine=Evidence(),
         decisions=decisions,
         plans=plans,
@@ -434,11 +434,24 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
         review_cooldown_seconds=30,
     )
     result = await engine.tick()
+    await engine.wait_for_event_queue()
 
     assert result == []
     assert len(engine.adapter.orders) == 1
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.04")
+    assert (await engine.order_manager.get(entry_order.internal_order_id)).status == (
+        OrderStatus.CANCELLED
+    )
+
+    engine.adapter.seed_book("BTCUSDT")
+    clock.advance()
+    await engine.tick()
+    await engine.wait_for_event_queue()
+
+    assert len(engine.adapter.orders) == 2
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == 0
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.CLOSED
     await engine.stop()
 
 
