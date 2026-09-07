@@ -100,6 +100,11 @@ class DeepSeekProvider:
             last_invalid_response: LLMResponse | None = None
             for attempt in range(retries + 1):
                 self.last_attempt_count = attempt + 1
+                # If a reasoning response spends its output budget without a
+                # JSON body, the single bounded recovery attempt asks the same
+                # provider for JSON without hidden reasoning. It remains a
+                # real provider response and still fails closed if malformed.
+                attempt_thinking = thinking and last_invalid_response is None
                 try:
                     response = await client.post(
                         "/chat/completions",
@@ -110,11 +115,11 @@ class DeepSeekProvider:
                             "temperature": temperature,
                             "max_tokens": max_tokens,
                             "thinking": {
-                                "type": "enabled" if thinking else "disabled"
+                                "type": "enabled" if attempt_thinking else "disabled"
                             },
                             **(
                                 {"reasoning_effort": reasoning_effort}
-                                if thinking
+                                if attempt_thinking
                                 else {}
                             ),
                             "response_format": {"type": "json_object"},

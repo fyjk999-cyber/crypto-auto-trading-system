@@ -87,10 +87,12 @@ async def test_deepseek_provider_classifies_prose_contamination_without_parsing_
 
 async def test_deepseek_provider_retries_invalid_json_then_accepts_valid_json():
     calls = 0
+    requests = []
 
-    async def handler(_request: httpx.Request) -> httpx.Response:
+    async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
+        requests.append(json.loads(request.content))
         content = "" if calls == 1 else '{"action":"WAIT"}'
         return httpx.Response(
             200,
@@ -107,6 +109,9 @@ async def test_deepseek_provider_retries_invalid_json_then_accepts_valid_json():
     assert result.ok is True
     assert result.parsed_json == {"action": "WAIT"}
     assert calls == 2
+    assert requests[0]["thinking"] == {"type": "enabled"}
+    assert requests[1]["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in requests[1]
     assert provider.diagnostics()["last_attempt_count"] == 2
 
 
