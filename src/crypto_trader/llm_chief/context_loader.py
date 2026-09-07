@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 from sqlalchemy import case, select
 
+from crypto_trader.llm.tools.registry import ToolEvidence
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.persistence.models import (
     AICoinProfileORM,
@@ -143,3 +145,192 @@ class ChiefContextLoader:
             episode_refs=episode_ids,
             pattern_refs=[row.pattern_id for row in patterns],
         )
+
+    async def load_tool(
+        self, name: str, context: ChiefTraderContext
+    ) -> ToolEvidence:
+        """Load only the learned evidence explicitly selected by ChiefTrader."""
+
+        loaders = {
+            "memory_search": self._memory_evidence,
+            "episode_search": self._episode_evidence,
+            "research_retrieval": self._research_evidence,
+            "coin_profile": self._coin_profile_evidence,
+            "factor_intelligence": self._pattern_evidence,
+        }
+        loader = loaders.get(name)
+        if loader is None:
+            raise ValueError(f"unknown learned-context tool: {name}")
+        finding, refs, timestamp = await loader(context)
+        return ToolEvidence(
+            tool_name=name,
+            symbol=context.symbol,
+            timestamp=timestamp or datetime.now(UTC),
+            features=finding,
+            supporting_evidence=[],
+            contrary_evidence=[],
+            confidence_of_measurement=1.0 if finding else 0.0,
+            data_quality="FACTUAL_REVIEWED" if finding else "NO_MATCHES",
+            source_refs=refs,
+        )
+
+    async def _episode_evidence(self, context: ChiefTraderContext):
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradeEpisodeORM)
+                    .where(
+                        TradeEpisodeORM.factual.is_(True),
+                        TradeEpisodeORM.review_status == "REVIEWED",
+                    )
+                    .order_by(
+                        case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
+                        case(
+                            (TradeEpisodeORM.entry_market_regime == context.regime, 0),
+                            else_=1,
+                        ),
+                        TradeEpisodeORM.closed_at.desc(),
+                    )
+                    .limit(self.limit)
+                )
+            ).scalars().all()
+        finding = {
+            "episodes": [
+                {
+                    "episode_id": row.episode_id,
+                    "symbol": row.symbol,
+                    "direction": row.direction,
+                    "regime": row.entry_market_regime,
+                    "net_pnl": str(row.net_pnl),
+                    "holding_time_seconds": row.holding_time_seconds,
+                }
+                for row in rows
+            ]
+        } if rows else {}
+        return finding, [f"episode:{row.episode_id}" for row in rows], _latest(rows, "closed_at")
+
+    async def _memory_evidence(self, context: ChiefTraderContext):
+        async with self.session_factory() as session:
+            reviews = (
+                await session.execute(
+                    select(AITradeReviewORM)
+                    .join(
+                        TradeEpisodeORM,
+                        TradeEpisodeORM.episode_id == AITradeReviewORM.episode_id,
+                    )
+                    .where(TradeEpisodeORM.symbol == context.symbol)
+                    .order_by(AITradeReviewORM.created_at.desc())
+                    .limit(self.limit)
+                )
+            ).scalars().all()
+            compressed = (
+                await session.execute(
+                    select(AICompressedExperienceORM)
+                    .order_by(AICompressedExperienceORM.created_at.desc())
+                    .limit(self.limit)
+                )
+            ).scalars().all()
+        finding = {}
+        if reviews:
+            finding["reviews"] = [
+                {
+                    "episode_id": row.episode_id,
+                    "success_factors": list(row.success_factors_json or []),
+                    "failure_factors": list(row.failure_factors_json or []),
+                    "lessons": list(row.lessons_json or []),
+                    "future_rules": list(row.future_rules_json or []),
+                }
+                for row in reviews
+            ]
+        if compressed:
+            finding["compressed_experience"] = [
+                {"rule_id": row.rule_id, "title": row.title, "content": row.content}
+                for row in compressed
+            ]
+        refs = [f"memory:review:{row.episode_id}" for row in reviews]
+        refs.extend(f"memory:rule:{row.rule_id}" for row in compressed)
+        timestamp = max(
+            [row.created_at for row in reviews] + [row.created_at for row in compressed],
+            default=None,
+        )
+        return finding, refs, timestamp
+
+    async def _research_evidence(self, _context: ChiefTraderContext):
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(ResearchReportORM)
+                    .order_by(ResearchReportORM.created_at.desc())
+                    .limit(self.limit)
+                )
+            ).scalars().all()
+        finding = {
+            "research": [
+                {
+                    "research_id": row.research_id,
+                    "summary": row.summary,
+                    "conclusion": row.conclusion,
+                    "confidence": row.confidence,
+                }
+                for row in rows
+            ]
+        } if rows else {}
+        return finding, [f"research:{row.research_id}" for row in rows], _latest(rows, "created_at")
+
+    async def _coin_profile_evidence(self, context: ChiefTraderContext):
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(AICoinProfileORM).where(AICoinProfileORM.symbol == context.symbol)
+                )
+            ).scalar_one_or_none()
+        finding = (
+            {
+                "profile": {
+                    "symbol": row.symbol,
+                    "sample_count": row.sample_count,
+                    "summary": row.profile_summary,
+                    "tags": list(row.behavior_tags_json or []),
+                    "best_setups": list(row.best_setups_json or []),
+                    "worst_setups": list(row.worst_setups_json or []),
+                }
+            }
+            if row is not None
+            else {}
+        )
+        return (
+            finding,
+            [f"profile:{row.symbol}:v{row.version}"] if row else [],
+            row.updated_at if row else None,
+        )
+
+    async def _pattern_evidence(self, context: ChiefTraderContext):
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(AIMarketPatternORM)
+                    .where(AIMarketPatternORM.regime == context.regime)
+                    .order_by(AIMarketPatternORM.sample_count.desc())
+                    .limit(self.limit)
+                )
+            ).scalars().all()
+        finding = {
+            "patterns": [
+                {
+                    "pattern_id": row.pattern_id,
+                    "regime": row.regime,
+                    "direction": row.strategy,
+                    "sample_count": row.sample_count,
+                    "win_rate": str(row.win_rate),
+                    "profit_factor": str(row.profit_factor),
+                    "success_drivers": list(row.success_drivers_json or []),
+                    "failure_drivers": list(row.failure_drivers_json or []),
+                }
+                for row in rows
+            ]
+        } if rows else {}
+        return finding, [f"pattern:{row.pattern_id}" for row in rows], _latest(rows, "created_at")
+
+
+def _latest(rows, field: str):
+    return max((getattr(row, field) for row in rows), default=None)

@@ -119,6 +119,9 @@ class LiveLLMPositionManager:
         )
         if self.context_loader is not None:
             chief_ctx = await self.context_loader.enrich(chief_ctx)
+        memory_refs = list(chief_ctx.memory_refs)
+        research_refs = list(chief_ctx.research_refs)
+        episode_refs = list(chief_ctx.episode_refs)
         self._last_review_attempt[position.symbol] = now
         if self.tool_chief is None:
             decision = await self.chief.decide(chief_ctx)
@@ -133,14 +136,17 @@ class LiveLLMPositionManager:
                     "source_refs": package.source_refs,
                     "selected_tools": package.selected_tools,
                 }
+                memory_refs = package.refs_with_prefix("memory:")
+                research_refs = package.refs_with_prefix("research:")
+                episode_refs = package.refs_with_prefix("episode:")
         await self.decisions.save(
             decision,
             run_id=ctx.run_id,
             prompt_version=self.version,
             tool_refs=[str(ref) for ref in evidence.get("source_refs", [])],
-            memory_refs=chief_ctx.memory_refs,
-            research_refs=chief_ctx.research_refs,
-            episode_refs=chief_ctx.episode_refs,
+            memory_refs=memory_refs,
+            research_refs=research_refs,
+            episode_refs=episode_refs,
             parent_decision_id=plan.decision_id,
             position_context=position_context,
         )

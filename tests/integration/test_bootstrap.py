@@ -34,6 +34,13 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     assert bundle.position_manager.chief is bundle.engine.strategies[0].chief
     assert bundle.position_manager.tool_chief is bundle.engine.strategies[0].tool_chief
     assert bundle.position_manager.tool_chief.chief is bundle.position_manager.chief
+    assert {
+        "memory_search",
+        "episode_search",
+        "research_retrieval",
+        "coin_profile",
+        "factor_intelligence",
+    }.issubset(bundle.position_manager.tool_chief.tools.available())
     assert bundle.position_manager.__class__.__name__ == "LiveLLMPositionManager"
     assert not hasattr(bundle, "ai_position_bridge")
     assert bundle.engine.enforce_llm_entry_authority is True

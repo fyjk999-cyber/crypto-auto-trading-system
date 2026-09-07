@@ -19,6 +19,7 @@ from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
+from crypto_trader.llm.tools.context import register_context_tools
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
@@ -106,7 +107,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     chief_context = ChiefContextLoader(database.session_factory)
     llm_provider = DeepSeekProvider()
     chief = ChiefTraderEngine(provider=llm_provider)
-    tool_chief = ToolDrivenChiefTrader(chief, build_canonical_tool_registry(alpha))
+    tools = build_canonical_tool_registry(alpha)
+    register_context_tools(tools, chief_context)
+    tool_chief = ToolDrivenChiefTrader(chief, tools)
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
         max_order_notional=risk.config.max_order_notional,
@@ -124,7 +127,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         risk_summary=risk.config.model_dump(mode="json"),
         tool_chief=tool_chief,
         sizer=sizer,
-        context_loader=chief_context,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (
@@ -136,7 +138,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             audit=audit,
             risk_summary=risk.config.model_dump(mode="json"),
             tool_chief=tool_chief,
-            context_loader=chief_context,
         )
         if settings.auto_start_runtime
         else None

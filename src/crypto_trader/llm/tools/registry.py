@@ -50,6 +50,9 @@ class DynamicEvidencePackage(BaseModel):
     def source_refs(self) -> list[str]:
         return sorted({ref for item in self.items for ref in item.source_refs})
 
+    def refs_with_prefix(self, prefix: str) -> list[str]:
+        return sorted(ref for ref in self.source_refs if ref.startswith(prefix))
+
 
 EvidenceTool = Callable[[str, dict[str, Any]], Awaitable[ToolEvidence]]
 

@@ -137,3 +137,39 @@ async def test_stale_evidence_is_marked_and_unknown_tool_fails_closed():
     assert decision.action == "FAIL_CLOSED"
     assert package is None
     assert invalid_provider.calls == 1
+
+
+async def test_tool_context_receives_canonical_chief_context_and_categorizes_refs():
+    seen = []
+
+    async def memory(symbol, payload):
+        seen.append(payload["chief_context"])
+        return ToolEvidence(
+            tool_name="memory_search",
+            symbol=symbol,
+            timestamp=datetime.now(UTC),
+            features={"lessons": ["wait for confirmation"]},
+            supporting_evidence=[],
+            contrary_evidence=[],
+            confidence_of_measurement=1,
+            data_quality="FACTUAL_REVIEWED",
+            source_refs=["memory:review:episode_1", "episode:episode_1"],
+        )
+
+    registry = LLMToolRegistry()
+    registry.register("memory_search", memory)
+    provider = Provider(
+        [
+            {"tools": ["memory_search"]},
+            {"action": "WAIT", "market_regime": "UNKNOWN"},
+        ]
+    )
+    chief_context = context()
+    _, package = await ToolDrivenChiefTrader(
+        ChiefTraderEngine(provider=provider), registry
+    ).decide(chief_context, tool_context={}, now=datetime.now(UTC))
+
+    assert seen == [chief_context]
+    assert package is not None
+    assert package.refs_with_prefix("memory:") == ["memory:review:episode_1"]
+    assert package.refs_with_prefix("episode:") == ["episode:episode_1"]

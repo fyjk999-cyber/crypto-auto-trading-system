@@ -33,7 +33,7 @@ class ToolDrivenChiefTrader:
             package = await self.tools.build_package(
                 selected,
                 ctx.symbol,
-                tool_context,
+                {**tool_context, "chief_context": ctx},
                 now=now,
             )
         except (KeyError, TypeError, ValueError):

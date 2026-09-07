@@ -211,8 +211,8 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         assert len(patterns) == 1
         assert patterns[0].sample_count == 1
 
-    enriched = await ChiefContextLoader(database.session_factory).enrich(
-        ChiefTraderContext(
+    loader = ChiefContextLoader(database.session_factory)
+    chief_context = ChiefTraderContext(
             symbol="BTCUSDT",
             market_snapshot={},
             regime="TREND",
@@ -220,9 +220,15 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
             portfolio_state={},
             risk_summary={},
         )
-    )
+    enriched = await loader.enrich(chief_context)
     assert enriched.episode_refs == [episode.episode_id]
     assert enriched.memory_refs == [f"review:{episode.episode_id}"]
+    episode_evidence = await loader.load_tool("episode_search", chief_context)
+    memory_evidence = await loader.load_tool("memory_search", chief_context)
+    pattern_evidence = await loader.load_tool("factor_intelligence", chief_context)
+    assert episode_evidence.source_refs == [f"episode:{episode.episode_id}"]
+    assert memory_evidence.source_refs == [f"memory:review:{episode.episode_id}"]
+    assert pattern_evidence.source_refs == [f"pattern:{patterns[0].pattern_id}"]
     assert enriched.similar_episodes[0]["net_pnl"] == str(episode.net_pnl)
     assert enriched.pattern_refs == [patterns[0].pattern_id]
     async with database.session_factory() as session:
