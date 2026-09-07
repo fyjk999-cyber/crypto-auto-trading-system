@@ -191,6 +191,32 @@ async def test_every_decision_result_uses_the_same_attempt_cooldown(database):
         assert chief.calls == 2
 
 
+async def test_cooldown_starts_when_slow_provider_attempt_finishes(database):
+    first = make_ctx()
+    provider_finished_at = first.clock_time + timedelta(seconds=20)
+    chief = FakeChief("NO_TRADE", decision_id="slow-provider-no-trade")
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        chief=chief,
+        planner=FakePlanner([]),
+        decisions=LLMDecisionStore(database.session_factory),
+        audit=FakeAudit([]),
+        sizer=LiveEntrySizingService(),
+        attempt_clock=lambda: provider_finished_at,
+    )
+
+    await strategy.on_market_data(first)
+    inside_completion_cooldown = make_ctx()
+    inside_completion_cooldown.clock_time = first.clock_time + timedelta(seconds=31)
+    await strategy.on_market_data(inside_completion_cooldown)
+    assert chief.calls == 1
+
+    after_completion_cooldown = make_ctx()
+    after_completion_cooldown.clock_time = first.clock_time + timedelta(seconds=51)
+    await strategy.on_market_data(after_completion_cooldown)
+    assert chief.calls == 2
+
+
 async def test_fail_closed_decision_is_throttled(database):
     events = []
     chief = FakeChief("FAIL_CLOSED")

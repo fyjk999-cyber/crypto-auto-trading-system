@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderSide
@@ -161,6 +161,30 @@ async def test_reduce_cannot_cross_zero_and_cooldown_applies_to_hold(database):
     await subject.review(ctx, position)
     await subject.review(ctx, position)
     assert chief.calls == 1
+
+
+async def test_open_review_cooldown_starts_after_provider_finishes(database):
+    await active_plan(database, "LONG")
+    ctx, position = context("2")
+    provider_finished_at = ctx.clock_time + timedelta(seconds=20)
+    chief = Chief("HOLD")
+    subject = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=LLMDecisionStore(database.session_factory),
+        plans=TradePlanService(database.session_factory),
+        audit=AuditService(database.session_factory),
+        attempt_clock=lambda: provider_finished_at,
+    )
+
+    await subject.review(ctx, position)
+    ctx.clock_time += timedelta(seconds=31)
+    await subject.review(ctx, position)
+    assert chief.calls == 1
+
+    ctx.clock_time += timedelta(seconds=20)
+    await subject.review(ctx, position)
+    assert chief.calls == 2
 
 
 async def test_open_context_uses_factual_market_and_contract_aware_pnl(database):

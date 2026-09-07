@@ -9,6 +9,7 @@ returning a signal to the existing Risk -> ExecutionAuthority pipeline.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -48,6 +49,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         tool_chief: ToolDrivenChiefTrader | None = None,
         sizer: LiveEntrySizingService | None = None,
         context_loader: ChiefContextLoader | None = None,
+        attempt_clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -60,6 +62,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.tool_chief = tool_chief
         self.sizer = sizer
         self.context_loader = context_loader
+        self.attempt_clock = attempt_clock or (lambda: datetime.now(UTC))
         # This is an attempt cooldown, not an entry cooldown.  Every provider
         # call consumes the interval, including NO_TRADE and fail-closed output.
         self._last_decision_attempt: datetime | None = None
@@ -96,23 +99,30 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         memory_refs = list(chief_ctx.memory_refs)
         research_refs = list(chief_ctx.research_refs)
         episode_refs = list(chief_ctx.episode_refs)
-        self._last_decision_attempt = now
-        if self.tool_chief is None:
-            decision = await self.chief.decide(chief_ctx)
-        else:
-            decision, package = await self.tool_chief.decide(
-                chief_ctx,
-                tool_context={"strategy_context": ctx},
-                now=now,
-            )
-            if package is not None:
-                evidence = {
-                    "source_refs": package.source_refs,
-                    "selected_tools": package.selected_tools,
-                }
-                memory_refs = package.refs_with_prefix("memory:")
-                research_refs = package.refs_with_prefix("research:")
-                episode_refs = package.refs_with_prefix("episode:")
+        try:
+            if self.tool_chief is None:
+                decision = await self.chief.decide(chief_ctx)
+            else:
+                decision, package = await self.tool_chief.decide(
+                    chief_ctx,
+                    tool_context={"strategy_context": ctx},
+                    now=now,
+                )
+                if package is not None:
+                    evidence = {
+                        "source_refs": package.source_refs,
+                        "selected_tools": package.selected_tools,
+                    }
+                    memory_refs = package.refs_with_prefix("memory:")
+                    research_refs = package.refs_with_prefix("research:")
+                    episode_refs = package.refs_with_prefix("episode:")
+        finally:
+            completed_at = self.attempt_clock()
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=UTC)
+            else:
+                completed_at = completed_at.astimezone(UTC)
+            self._last_decision_attempt = max(now, completed_at)
 
         evidence_refs = [
             str(ref)
