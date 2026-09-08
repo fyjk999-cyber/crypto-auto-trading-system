@@ -414,6 +414,7 @@ class TradingEngine:
                 asks,
             )
             book = self.market_data.books[symbol]
+            self.health.set("market_data", True)
         except Exception:
             # P0: never let a stale cached orderbook authorize new risk.
             if book is not None:
