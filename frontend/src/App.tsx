@@ -317,11 +317,35 @@ function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
   };
 
   const ready = state.status === "ready" && decisions.length > 0;
+  const oppState = snapshot.optional["/opportunity/stats"] ?? { status: "loading" as const };
+  const opp = record(oppState.data);
+  const oppStats = record(opp.stats);
+  const oppScan = record(opp.scan_stats);
+  const candidates = list(opp.candidates);
   return <div className="system-grid">
+    <Panel title="市场机会 · 全市场因子扫描（仅证据，无方向权限）" source={oppState} className="span-2">
+      <div className="review-metrics">
+        <Metric label="全市场 Universe" value={numberText(opp.universe_size, 0)} />
+        <Metric label="可观察交易对" value={numberText(opp.eligible_count, 0)} />
+        <Metric label="本轮扫描" value={numberText(oppScan.symbols_scanned, 0)} />
+        <Metric label="因子候选" value={numberText(opp.candidate_count, 0)} />
+        <Metric label="轮换覆盖" value={numberText(list(opp.rotation_symbols).length, 0)} />
+        <Metric label="DeepSeek 无因子决策" value={numberText(oppStats.directional_without_factor_evidence, 0)} />
+      </div>
+      <p className="muted-line">因子触发 ≠ 交易信号：候选仅代表 DeepSeek 优先复核的事实证据排序；DeepSeek 可在有/无因子证据的情况下自由决策方向（FACTOR_REQUIRED_FOR_TRADE = FALSE）。</p>
+      {candidates.length === 0
+        ? <p className="muted-line">暂无因子候选（轮换扫描持续覆盖非候选交易对）。</p>
+        : <div className="table-wrap"><table><thead><tr><th>交易对</th><th>候选来源</th><th>因子触发</th><th>最强因子强度</th><th>提名理由</th></tr></thead><tbody>{candidates.slice(0, 12).map((c) => {
+          const triggered = list(c.triggered);
+          const strongest = triggered.length ? Math.max(...triggered.map((o) => Number(o.strength ?? 0))) : 0;
+          const names = triggered.map((o) => text(o.factor)).join("、");
+          return <tr key={String(c.symbol)}><td><strong>{text(c.symbol)}</strong></td><td>{text(c.source)}</td><td>{names || "--"}</td><td>{numberText(strongest, 3)}</td><td>{text(c.nominated_reason)}</td></tr>;
+        })}</tbody></table></div>}
+    </Panel>
     <Panel title="AI 交易决策流" source={state} className="span-2">
-      {ready === false ? <EmptyBlock source={state} /> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>交易对</th><th>状态</th><th>决策</th><th>理由摘要</th><th>TradePlan</th></tr></thead><tbody>{decisions.slice(0, 50).map((row) => {
+      {ready === false ? <EmptyBlock source={state} /> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>交易对</th><th>状态</th><th>决策</th><th>理由摘要</th><th>因子证据</th><th>TradePlan</th></tr></thead><tbody>{decisions.slice(0, 50).map((row) => {
         const action = direction(pick(row, "action", "decision"));
-        return <tr key={String(row.decision_id)}><td>{row.created_at ? new Date(String(row.created_at)).toLocaleString("zh-CN") : "--"}</td><td><strong>{text(row.symbol)}</strong></td><td>{text(row.position_state)}</td><td><span className={action.tone}>{text(pick(row, "action"))}</span></td><td>{text(row.thesis)}</td><td><button className="text-button" type="button" onClick={() => openDetail(String(row.decision_id))}>{text(row.trade_plan_id, "查看详情")}</button></td></tr>;
+        return <tr key={String(row.decision_id)}><td>{row.created_at ? new Date(String(row.created_at)).toLocaleString("zh-CN") : "--"}</td><td><strong>{text(row.symbol)}</strong></td><td>{text(row.position_state)}</td><td><span className={action.tone}>{text(pick(row, "action"))}</span></td><td>{text(row.thesis)}</td><td><span className={row.factor_evidence_present === true ? "ok" : ""}>{row.factor_evidence_present === true ? `YES (${numberText(row.factor_trigger_count ?? 0, 0)})` : "NO"}</span></td><td><button className="text-button" type="button" onClick={() => openDetail(String(row.decision_id))}>{text(row.trade_plan_id, "查看详情")}</button></td></tr>;
       })}</tbody></table></div>}
     </Panel>
     {detail !== null && <Panel title="决策详情" className="span-2">
