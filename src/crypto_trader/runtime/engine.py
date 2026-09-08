@@ -150,6 +150,21 @@ class TradingEngine:
         await self.adapter.connect()
         self.health.set("adapter_connection", True)
 
+        # NOTE: the execution lease is acquired AFTER recovery, immediately
+        # before the trading loops start. Acquiring earlier (right after
+        # connect) lets the slow startup path (recovery, warmup, subscribe)
+        # outlive the lease TTL, so the first renewal finds expires_at in the
+        # past and the engine fails safe without a lease forever.
+        self.state_machine.transition(RuntimeState.RECOVERING)
+        await self._persist_run(RuntimeState.RECOVERING)
+        await self._seed_initial_balances()
+        await self._load_instruments()
+        await self._restore_paper_adapter_state()
+        self.order_manager.settlement_callback = self._settle_fill
+        await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        await self._sync_terminal_entry_plans()
+        self.health.set("recovery", True)
+
         if self.require_lease:
             self.lease = await self.lease_manager.acquire(
                 self.lease_key, f"engine_{self.run_id}", self.settings.run_lease_ttl_seconds
@@ -168,16 +183,6 @@ class TradingEngine:
                     after={"stale_run_ids": stale_runs},
                 )
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
-
-        self.state_machine.transition(RuntimeState.RECOVERING)
-        await self._persist_run(RuntimeState.RECOVERING)
-        await self._seed_initial_balances()
-        await self._load_instruments()
-        await self._restore_paper_adapter_state()
-        self.order_manager.settlement_callback = self._settle_fill
-        await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
-        await self._sync_terminal_entry_plans()
-        self.health.set("recovery", True)
 
         self.state_machine.transition(RuntimeState.RUNNING)
         await self._persist_run(RuntimeState.RUNNING)
@@ -314,8 +319,9 @@ class TradingEngine:
                 )
 
     async def _lease_loop(self) -> None:
+        # Renew immediately (t=0) and then on the configured cadence so the
+        # lease is refreshed as soon as the trading loops start.
         while True:
-            await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
             if self.lease is not None:
                 try:
                     ok = await self.lease_manager.renew(
@@ -336,7 +342,7 @@ class TradingEngine:
                         target=self.lease_key,
                         run_id=self.run_id,
                     )
-                    return
+            await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
 
     async def _reconciliation_loop(self) -> None:
         while True:
