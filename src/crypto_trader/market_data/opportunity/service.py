@@ -104,11 +104,24 @@ class OpportunityScannerService:
                 continue
             last = _f(row.get("last"))
             open24h = _f(row.get("open24h"))
-            vol_usd = _f(row.get("volUsd24h"))
+            # OKX SWAP tickers report volume in contracts (vol24h) and base
+            # currency (volCcy24h) — there is no USD turnover field. Derive
+            # USD turnover factually: base volume x last price.
+            vol_base = _f(row.get("volCcy24h"))
+            vol_contracts = _f(row.get("vol24h"))
+            if vol_base in (None, 0.0) and vol_contracts and inst.ct_val:
+                vol_base = vol_contracts * float(inst.ct_val)
+            vol_usd = vol_base * last if (vol_base is not None and last) else None
             bid, ask = _f(row.get("bidPx")), _f(row.get("askPx"))
             funding = _f((funding_by_inst.get(inst.inst_id) or {}).get("fundingRate"))
             oi = _f((oi_by_inst.get(inst.inst_id) or {}).get("oi"))
             change_pct = (last - open24h) / open24h * 100.0 if last and open24h else None
+            ts_ms = _f(row.get("ts"))
+            ticker_age = (
+                max(0.0, now.timestamp() * 1000.0 - ts_ms) / 1000.0
+                if ts_ms is not None
+                else None
+            )
             facts_rows.append(
                 {
                     "symbol": symbol,
@@ -121,6 +134,7 @@ class OpportunityScannerService:
                     "price_change_24h_pct": change_pct,
                     "funding_rate": funding,
                     "open_interest": oi,
+                    "ticker_age_seconds": ticker_age,
                     "ts_ms": row.get("ts"),
                 }
             )
@@ -137,7 +151,7 @@ class OpportunityScannerService:
                 bid=row["bid"],
                 ask=row["ask"],
                 volume_24h_usd=row["vol_usd_24h"],
-                ticker_age_seconds=None,
+                ticker_age_seconds=row["ticker_age_seconds"],
                 candle_count=self.candle_limit,  # history presence checked at fetch
             )
             row["eligible"] = result.eligible

@@ -536,3 +536,62 @@ async def test_per_symbol_attempt_cooldown_is_independent(database):
     later.clock_time = ctx_a.clock_time + timedelta(seconds=31)
     await strategy.on_market_data(later)
     assert strategy._last_attempt_by_symbol["BTCUSDT"] == later.clock_time
+
+
+def test_okx_ticker_volume_is_derived_to_usd_turnover():
+    """Live-verified field mapping: OKX SWAP tickers have no volUsd24h.
+
+    USD turnover must be derived factually from volCcy24h (base volume) x
+    last, falling back to contracts x ctVal. Guards against a silent
+    eligible_count=0 whole-universe exclusion.
+    """
+    import asyncio
+
+    from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
+    from crypto_trader.market_data.opportunity.factors import DEFAULT_FACTORS
+    from crypto_trader.market_data.opportunity.scanner import FactorScanner
+    from crypto_trader.market_data.opportunity.service import OpportunityScannerService
+    from crypto_trader.market_data.opportunity.universe import Instrument
+
+    class FakeUniverse:
+        class _Snap:
+            instruments = {
+                "BTCUSDT": Instrument(
+                    symbol="BTCUSDT", inst_id="BTC-USDT-SWAP", state="live",
+                    settle_ccy="USDT", ct_val="0.01", list_time=None, raw={},
+                )
+            }
+            size = 1
+        async def refresh(self, force=False):
+            return self._Snap()
+
+    class FakeClient:
+        async def get_tickers(self, inst_type):
+            return [{
+                "instId": "BTC-USDT-SWAP", "last": "50000", "open24h": "49000",
+                "bidPx": "49999", "askPx": "50001",
+                "vol24h": "1000", "volCcy24h": "50",  # 50 BTC x 50000 = 2.5M USD
+                "ts": str(int(__import__("time").time() * 1000)),
+            }]
+        async def get_open_interests(self, inst_type):
+            return [{"instId": "BTC-USDT-SWAP", "oi": "70000"}]
+        async def get_funding_rates(self, inst_type):
+            return [{"instId": "BTC-USDT-SWAP", "fundingRate": "0.0001"}]
+        async def get_candles(self, inst_id, bar, limit):
+            return []
+
+    board = OpportunityBoard()
+    service = OpportunityScannerService(
+        universe=FakeUniverse(),
+        okx_client=FakeClient(),
+        board=board,
+        scanner=FactorScanner(factors=DEFAULT_FACTORS),
+        eligibility=EligibilityFilter(),
+        candle_limit=120,
+    )
+    summary = asyncio.run(service.scan_once())
+    snap = board.snapshot()
+    assert summary["eligible"] == 1, snap["broad_market"]
+    assert summary["scanned"] == 1
+    candidate_row = snap["broad_market"]
+    assert snap["universe_size"] == 1
