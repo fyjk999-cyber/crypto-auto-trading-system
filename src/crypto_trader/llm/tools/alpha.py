@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.llm.tools.registry import LLMToolRegistry, ToolEvidence
 from crypto_trader.strategy.base import StrategyContext
 
 
-def build_canonical_tool_registry(alpha: MultiStrategyAlpha) -> LLMToolRegistry:
+def build_canonical_tool_registry(evidence) -> LLMToolRegistry:
+    """Canonical quant evidence tools.
+
+    ``evidence`` is either a single MultiStrategyAlpha (legacy BTC-only
+    wiring) or a PerSymbolEvidenceRouter (MASTER DIRECTIVE §26): per-symbol
+    factual evidence with no cross-symbol reuse. When the router cannot
+    resolve an engine for the requested symbol, the tool reports
+    data_quality=UNAVAILABLE instead of failing the decision cycle (§28).
+    """
     registry = LLMToolRegistry()
     for name in (
         "trend",
@@ -24,16 +31,33 @@ def build_canonical_tool_registry(alpha: MultiStrategyAlpha) -> LLMToolRegistry:
         "orderbook",
         "liquidity",
     ):
-        registry.register(name, _tool(alpha, name))
+        registry.register(name, _tool(evidence, name))
     return registry
 
 
-def _tool(alpha: MultiStrategyAlpha, name: str):
+def _tool(evidence, name: str):
     async def execute(symbol: str, context: dict[str, Any]) -> ToolEvidence:
         ctx = context.get("strategy_context")
         if not isinstance(ctx, StrategyContext) or ctx.symbol != symbol:
             raise ValueError("factual StrategyContext required")
-        analysis = alpha.analyze_tool(ctx, name)
+        resolve = getattr(evidence, "resolve", None)
+        if resolve is not None:
+            engine = await resolve(symbol)
+            if engine is None:
+                return ToolEvidence(
+                    tool_name=name,
+                    symbol=symbol,
+                    timestamp=ctx.clock_time,
+                    features={},
+                    supporting_evidence=[],
+                    contrary_evidence=[],
+                    confidence_of_measurement=0.0,
+                    data_quality="UNAVAILABLE",
+                    source_refs=[f"tool:{name}", "evidence:UNAVAILABLE"],
+                )
+            analysis = engine.analyze_tool(ctx, name)
+        else:
+            analysis = evidence.analyze_tool(ctx, name)
         features = analysis.get("features", {})
         sources = [str(ref) for ref in analysis.get("source_refs", [])]
         if f"tool:{name}" not in sources:

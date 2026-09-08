@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import Header, HTTPException
 
@@ -153,6 +154,8 @@ class AppState:
     reconciliation: ReconciliationService
     engine: TradingEngine | None = None
     supervisor: TradingRuntimeSupervisor | None = None
+    # MASTER DIRECTIVE §29: evidence-only opportunity snapshot (no authority).
+    opportunity_board: Any | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
     llm_runtime: LLMRuntimeStatus = field(default_factory=LLMRuntimeStatus)
 

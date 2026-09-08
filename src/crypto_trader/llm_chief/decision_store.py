@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -29,6 +30,9 @@ class LLMDecisionRecord:
     reason_codes: list[str]
     trade_plan_id: str | None
     created_at: datetime
+    opportunity_source: str | None = None
+    factor_evidence_present: bool | None = None
+    triggered_factors: list[Any] = dataclass_field(default_factory=list)
 
 
 class LLMDecisionStore:
@@ -47,7 +51,9 @@ class LLMDecisionStore:
         episode_refs: list[str] | None = None,
         parent_decision_id: str | None = None,
         position_context: dict[str, Any] | None = None,
+        opportunity_lineage: dict[str, Any] | None = None,
     ) -> LLMDecisionRecord:
+        lineage = opportunity_lineage or {}
         position = position_context or {}
         async with self.session_factory() as session:
             row = await session.get(LLMDecisionORM, decision.decision_id)
@@ -84,6 +90,10 @@ class LLMDecisionStore:
                     time_in_trade_seconds=_float_or_none(position.get("time_in_trade_seconds")),
                     original_trade_plan_id=position.get("trade_plan_id"),
                     original_entry_decision_id=position.get("entry_decision_id"),
+                    opportunity_source=lineage.get("candidate_source"),
+                    triggered_factors_json=lineage.get("triggered_factors"),
+                    factor_evidence_present=lineage.get("factor_evidence_present"),
+                    nominated_reason=lineage.get("nominated_reason"),
                     created_at=_created_at(decision.created_at),
                 )
                 session.add(row)
@@ -172,6 +182,9 @@ class LLMDecisionStore:
             reason_codes=list(row.reason_codes_json or []),
             trade_plan_id=row.trade_plan_id,
             created_at=created_at,
+            opportunity_source=row.opportunity_source,
+            factor_evidence_present=row.factor_evidence_present,
+            triggered_factors=list(row.triggered_factors_json or []),
         )
 
 

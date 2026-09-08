@@ -362,6 +362,40 @@ class OKXAdapter(ExchangeAdapter):
         raw = data["data"][0]
         return {"open_interest": raw.get("oi", "0"), "open_interest_ccy": raw.get("oiCcy", "0")}
 
+    async def get_tickers(self, inst_type: str = "SWAP") -> list[dict]:
+        """Batch factual tickers for a whole instrument type (one cheap call).
+
+        Used by the full-market observer / factor scanner for low-cost broad
+        market scans. Returns raw OKX rows; no synthetic values are added.
+        """
+        data = await self._public_request(
+            "GET", "/api/v5/market/tickers", params={"instType": inst_type}
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX tickers response is invalid")
+        return rows
+
+    async def get_open_interests(self, inst_type: str = "SWAP") -> list[dict]:
+        """Batch factual open interest for a whole instrument type."""
+        data = await self._public_request(
+            "GET", "/api/v5/public/open-interests", params={"instType": inst_type}
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX open-interests response is invalid")
+        return rows
+
+    async def get_funding_rates(self, inst_type: str = "SWAP") -> list[dict]:
+        """Batch factual current funding rates for a whole instrument type."""
+        data = await self._public_request(
+            "GET", "/api/v5/public/funding-rate", params={"instType": inst_type}
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX funding rates response is invalid")
+        return rows
+
     async def get_instruments(self, instrument_type: str) -> list[dict]:
         """Return factual public instrument metadata without execution credentials."""
         data = await self._public_request(

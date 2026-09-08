@@ -12,6 +12,7 @@ from decimal import Decimal
 from sqlalchemy import text
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
+from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
@@ -28,6 +29,12 @@ from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
+from crypto_trader.market_data.opportunity.board import OpportunityBoard
+from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
+from crypto_trader.market_data.opportunity.factors import DEFAULT_FACTORS
+from crypto_trader.market_data.opportunity.scanner import FactorScanner
+from crypto_trader.market_data.opportunity.service import OpportunityScannerService
+from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -106,13 +113,44 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         # OKX candles so a process restart does not erase indicator context.
         # Failure is explicit on the feed and never replaced with fake data.
         await adapter.feed.warmup(alpha.mde, alpha.symbol)
+
+    # MASTER DIRECTIVE §26/§27: per-symbol factual evidence. Every symbol's
+    # quant tools run on that symbol's own engine warmed from factual closed
+    # OKX candles; BTC history is never reused as another symbol's evidence.
+    evidence_router = PerSymbolEvidenceRouter(
+        feed=getattr(adapter, "feed", None),
+        alpha_params={
+            "risk_per_trade": "0.0005",
+            "max_position_notional": "5000",
+            "max_leverage": "3",
+        },
+    )
+    evidence_router.register_existing(alpha.symbol, alpha)
+
+    # MASTER DIRECTIVE §8-§15: dynamic full-market universe + factor scanner
+    # + opportunity board. Evidence-only: none of this can trade, gate, or
+    # assign direction; DeepSeek alone holds NEW_DIRECTION_DECISION_AUTHORITY.
+    opportunity_board = OpportunityBoard()
+    feed_client = getattr(getattr(adapter, "feed", None), "client", None)
+    opportunity_service = None
+    if feed_client is not None and settings.opportunity_scan_enabled:
+        opportunity_service = OpportunityScannerService(
+            universe=OkxUniverseManager(feed_client),
+            okx_client=feed_client,
+            board=opportunity_board,
+            scanner=FactorScanner(factors=DEFAULT_FACTORS),
+            eligibility=EligibilityFilter(),
+            scan_interval_seconds=settings.opportunity_scan_interval_seconds,
+            active_set_size=settings.opportunity_active_set_size,
+            rotation_size=settings.opportunity_rotation_size,
+        )
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief_context = ChiefContextLoader(database.session_factory)
     llm_provider = DeepSeekProvider()
     chief = ChiefTraderEngine(provider=llm_provider)
-    tools = build_canonical_tool_registry(alpha)
+    tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)
     tool_chief = ToolDrivenChiefTrader(chief, tools)
     sizer = LiveEntrySizingService(
@@ -132,12 +170,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         risk_summary=risk.config.model_dump(mode="json"),
         tool_chief=tool_chief,
         sizer=sizer,
+        opportunity_board=opportunity_board,
+        evidence_router=evidence_router,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (
         LiveLLMPositionManager(
             chief=chief,
-            evidence_engine=alpha,
+            evidence_engine=evidence_router,
             decisions=llm_decisions,
             plans=trade_plans,
             audit=audit,
@@ -177,6 +217,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             else None
         ),
         enforce_llm_entry_authority=settings.auto_start_runtime,
+        opportunity_service=opportunity_service,
     )
 
     app_state = AppState(
@@ -192,6 +233,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         reconciliation=reconciliation,
         engine=engine,
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
+        opportunity_board=opportunity_board,
     )
     return RuntimeBundle(
         settings=settings,

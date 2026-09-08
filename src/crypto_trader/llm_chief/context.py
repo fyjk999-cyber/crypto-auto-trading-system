@@ -27,6 +27,10 @@ class ChiefTraderContext:
     research_refs: list[str] = field(default_factory=list)
     episode_refs: list[str] = field(default_factory=list)
     pattern_refs: list[str] = field(default_factory=list)
+    # MASTER DIRECTIVE §16: bounded optional-evidence context for the symbol
+    # under review (candidate source, triggered factors, nominated reason).
+    # Evidence only — never a gate, never a direction.
+    opportunity_context: dict | None = None
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def estimate_tokens(self) -> int:
@@ -47,6 +51,7 @@ class ChiefTraderContext:
                         "episodes": self.similar_episodes,
                         "coin": self.coin_profile,
                         "experience": self.compressed_experience,
+                        "opportunity": self.opportunity_context or {},
                     }
                 )
             )

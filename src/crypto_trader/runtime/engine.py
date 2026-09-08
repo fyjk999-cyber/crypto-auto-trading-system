@@ -101,6 +101,7 @@ class TradingEngine:
         trade_episodes: TradeEpisodeStore | None = None,
         daily_review_scheduler: DailyReviewScheduler | None = None,
         enforce_llm_entry_authority: bool = False,
+        opportunity_service=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -123,6 +124,7 @@ class TradingEngine:
         self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
         self.daily_review_scheduler = daily_review_scheduler
         self.enforce_llm_entry_authority = enforce_llm_entry_authority
+        self.opportunity_service = opportunity_service
         self.event_bus = EventBus()
         self.health = HealthRegistry()
         self.state_machine = RuntimeStateMachine()
@@ -193,6 +195,15 @@ class TradingEngine:
         if self.daily_review_scheduler is not None:
             self._tasks.append(
                 asyncio.create_task(self.daily_review_scheduler.loop(), name="daily-review")
+            )
+        if self.opportunity_service is not None:
+            # Full-market opportunity discovery runs as an independent
+            # evidence-only task (MASTER DIRECTIVE §11/§24). It never trades,
+            # never gates, and cannot bypass the live-LLM entry authority.
+            self._tasks.append(
+                asyncio.create_task(
+                    self.opportunity_service.run_forever(), name="opportunity-scanner"
+                )
             )
         await self.audit.log("ENGINE_STARTED", target=self.run_id, run_id=self.run_id)
         return self.run_id
@@ -338,7 +349,14 @@ class TradingEngine:
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
         for strategy in self.strategies:
-            ctx = await self._strategy_context()
+            desired_symbol = None
+            desired_getter = getattr(strategy, "desired_symbol", None)
+            if callable(desired_getter):
+                try:
+                    desired_symbol = desired_getter()
+                except Exception:
+                    desired_symbol = None  # scheduling failure never gates trading
+            ctx = await self._strategy_context(desired_symbol)
             if ctx is None:
                 continue
             try:

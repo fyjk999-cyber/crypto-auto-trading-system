@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -344,6 +345,12 @@ class LLMDecisionORM(Base):
     memory_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
     research_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
     episode_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    # MASTER DIRECTIVE §30: opportunity-discovery audit lineage (recorded
+    # server-side from the scanner/agenda; never alters decision authority).
+    opportunity_source: Mapped[str | None] = mapped_column(String(40))
+    triggered_factors_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    factor_evidence_present: Mapped[bool | None] = mapped_column(Boolean)
+    nominated_reason: Mapped[str | None] = mapped_column(String(255))
     requested_exposure: Mapped[Decimal | None] = mapped_column(ExactDecimal())
     requested_quantity: Mapped[Decimal | None] = mapped_column(ExactDecimal())
     requested_leverage: Mapped[Decimal | None] = mapped_column(ExactDecimal())

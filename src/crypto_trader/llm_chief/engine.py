@@ -15,6 +15,9 @@ from crypto_trader.llm_chief.decision import (
     PositionState,
 )
 from crypto_trader.llm_chief.provider import LLMProvider
+from crypto_trader.market_data.opportunity.context import (
+    render_opportunity_context_block,
+)
 
 
 class ToolSelection(BaseModel):
@@ -140,7 +143,12 @@ class ChiefTraderEngine:
             f"Knowledge: {ctx.knowledge}\nSimilarEpisodes: {ctx.similar_episodes}\n"
             f"CoinProfile: {ctx.coin_profile}\nExperience: {ctx.compressed_experience}\n"
             f"FailureWarnings: {ctx.failure_warnings}\n"
-            f"OutputContract: {action_contract}\n"
+            + (
+                render_opportunity_context_block(ctx.opportunity_context) + "\n"
+                if ctx.opportunity_context
+                else ""
+            )
+            + f"OutputContract: {action_contract}\n"
             "Do not add fields outside this contract. Numeric fields must be JSON numbers. "
             "LONG/SHORT require a positive quantity or requested exposure, positive leverage, "
             "and a positive stop_loss invalidation price. "

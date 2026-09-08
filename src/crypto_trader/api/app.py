@@ -118,6 +118,50 @@ def create_app(state: AppState) -> FastAPI:
     def ctx() -> AppState:
         return state
 
+    @app.get("/opportunity/board")
+    async def opportunity_board():
+        """Evidence-only full-market opportunity snapshot (MASTER DIRECTIVE §29).
+
+        Read-only: proves candidates, factor evidence presence, and whether
+        DeepSeek traded with vs without factor evidence. No authority surface.
+        """
+        board = state.opportunity_board
+        if board is None:
+            return {"enabled": False}
+        return board.snapshot()
+
+    @app.get("/opportunity/candidates")
+    async def opportunity_candidates():
+        """Current factor-nominated candidates (evidence only, never signals)."""
+        board = state.opportunity_board
+        if board is None:
+            return {"enabled": False, "candidates": []}
+        snap = board.snapshot()
+        return {
+            "enabled": True,
+            "candidate_count": snap["candidate_count"],
+            "candidates": snap["candidates"],
+            "updated_at": snap["updated_at"],
+        }
+
+    @app.get("/opportunity/stats")
+    async def opportunity_stats():
+        """Counters proving factor-optional behavior (§29)."""
+        board = state.opportunity_board
+        if board is None:
+            return {"enabled": False}
+        snap = board.snapshot()
+        return {
+            "enabled": True,
+            "universe_size": snap["universe_size"],
+            "eligible_count": snap["eligible_count"],
+            "candidate_count": snap["candidate_count"],
+            "scan_stats": snap["scan_stats"],
+            "stats": snap["stats"],
+            "recent_decisions": snap["recent_decisions"],
+            "rotation_symbols": snap.get("rotation_symbols", []),
+        }
+
     @app.get("/health")
     async def health():
         snapshot = (

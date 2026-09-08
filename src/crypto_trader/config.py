@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     daily_review_time_utc: str = "00:05"
     max_holding_time_seconds: int = 86400
 
+    # Full-market opportunity discovery (evidence-only; §8-§15). The scanner
+    # nominates candidates for DeepSeek review; it never trades or gates.
+    opportunity_scan_enabled: bool = True
+    opportunity_scan_interval_seconds: float = 90.0
+    opportunity_active_set_size: int = 40
+    opportunity_rotation_size: int = 10
+
     # Runtime
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3
