@@ -67,6 +67,10 @@ function backend(overrides: Record<string, unknown | Response> = {}) {
     if (path === "/reviews") return json({ reviews: [], count: 0 });
     if (path === "/exchange-health") return json({ adapter: "connected", mode: "PAPER" });
     if (path === "/version") return json({ git_sha: "abc123", environment: "local" });
+    if (path === "/llm/decisions") return json({ decisions: [], count: 0 });
+    if (path === "/trade-plans") return json({ trade_plans: [], count: 0 });
+    if (path === "/trade-episodes") return json({ trade_episodes: [], count: 0 });
+    if (path === "/llm/health") return json({ provider: "deepseek", configured: true, health: "HEALTHY" });
     return json({ detail: "not found" }, 404);
   });
 }
@@ -311,4 +315,34 @@ describe("中文加密交易终端 V2", () => {
     expect(screen.getByText(/内部订单 ID：o-1/)).toBeTruthy();
     expect(screen.getByRole("heading", { name: "订单记录" })).toBeTruthy();
   });
+
+  it("AI 交易页展示 NO_TRADE / WAIT 事实决策与 Chief 工具引用", async () => {
+    window.location.hash = "#/ai";
+    setup(backend({
+      "/llm/decisions": { decisions: [
+        { decision_id: "llm-no", symbol: "BTCUSDT", position_state: "FLAT", action: "NO_TRADE", thesis: "no edge", created_at: "2026-09-08T00:00:00Z" },
+        { decision_id: "llm-wait", symbol: "BTCUSDT", position_state: "FLAT", action: "WAIT", thesis: "wait for breakout", created_at: "2026-09-08T00:01:00Z" },
+      ], count: 2 },
+      "/llm/decisions/llm-no": { decision_id: "llm-no", tool_refs: ["funding", "orderbook"], thesis: "no edge", model_provider: "deepseek", model: "deepseek-v4-pro", requested_quantity: null, requested_leverage: null, trade_plan_id: null, action: "NO_TRADE", market_regime: "RANGE" },
+    }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "AI 交易决策流" })).toBeTruthy());
+    expect(screen.getByText("NO_TRADE")).toBeTruthy();
+    expect(screen.getByText("WAIT")).toBeTruthy();
+  });
+
+  it("计划页显示事实 TradePlan，复盘记录页在零 Episode 时诚实为空", async () => {
+    window.location.hash = "#/plans";
+    setup(backend({
+      "/trade-plans": { trade_plans: [{ trade_plan_id: "plan-1", decision_id: "llm-1", symbol: "BTCUSDT", direction: "SHORT", state: "REJECTED", requested_quantity: "0.1", risk_decision_id: "risk-1", order_id: null, created_at: "2026-09-08T00:00:00Z" }], count: 1 },
+    }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "TradePlans（事实持久化计划）" })).toBeTruthy());
+    expect(screen.getByText("plan-1")).toBeTruthy();
+    expect(screen.getByText("REJECTED")).toBeTruthy();
+
+    window.location.hash = "#/episodes";
+    fireEvent(window, new Event("hashchange"));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "已关闭 TradeEpisodes（事实记录）" })).toBeTruthy());
+    expect(screen.getByText("暂无数据")).toBeTruthy();
+  });
+
 });

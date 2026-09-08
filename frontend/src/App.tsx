@@ -321,7 +321,7 @@ function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
     <Panel title="AI 交易决策流" source={state} className="span-2">
       {ready === false ? <EmptyBlock source={state} /> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>交易对</th><th>状态</th><th>决策</th><th>理由摘要</th><th>TradePlan</th></tr></thead><tbody>{decisions.slice(0, 50).map((row) => {
         const action = direction(pick(row, "action", "decision"));
-        return <tr key={String(row.decision_id)}><td>{row.created_at ? new Date(String(row.created_at)).toLocaleString("zh-CN") : "--"}</td><td><strong>{text(row.symbol)}</strong></td><td>{text(row.position_state)}</td><td><span className={action.tone}>{action.code}</span></td><td>{text(row.thesis)}</td><td><button className="text-button" type="button" onClick={() => openDetail(String(row.decision_id))}>{text(row.trade_plan_id, "查看详情")}</button></td></tr>;
+        return <tr key={String(row.decision_id)}><td>{row.created_at ? new Date(String(row.created_at)).toLocaleString("zh-CN") : "--"}</td><td><strong>{text(row.symbol)}</strong></td><td>{text(row.position_state)}</td><td><span className={action.tone}>{text(pick(row, "action"))}</span></td><td>{text(row.thesis)}</td><td><button className="text-button" type="button" onClick={() => openDetail(String(row.decision_id))}>{text(row.trade_plan_id, "查看详情")}</button></td></tr>;
       })}</tbody></table></div>}
     </Panel>
     {detail !== null && <Panel title="决策详情" className="span-2">
