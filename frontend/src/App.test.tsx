@@ -92,11 +92,14 @@ function setup(fetchMock = backend()) {
 }
 
 describe("中文加密交易终端 V2", () => {
-  it("默认进入交易页，并且只有五个中文一级导航", async () => {
+  it("默认进入交易页，并且保留完整 observability 一级导航", async () => {
     setup();
     const nav = screen.getByRole("navigation", { name: "主导航" });
-    expect(within(nav).getAllByRole("link")).toHaveLength(5);
+    expect(within(nav).getAllByRole("link")).toHaveLength(9);
     expect(within(nav).getByRole("link", { name: "交易" }).getAttribute("aria-current")).toBe("page");
+    expect(within(nav).getByRole("link", { name: "AI 交易" })).toBeTruthy();
+    expect(within(nav).getByRole("link", { name: "计划" })).toBeTruthy();
+    expect(within(nav).getByRole("link", { name: "风控" })).toBeTruthy();
     await waitFor(() => expect(screen.getByText("$125.5")).toBeTruthy());
     expect(screen.getByRole("heading", { name: "BTCUSDT 行情" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "当前判断" })).toBeTruthy();

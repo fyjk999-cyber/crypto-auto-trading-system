@@ -5,11 +5,12 @@ import { useKlines } from "./hooks/useKlines";
 import { useTradingSnapshot } from "./hooks/useTradingSnapshot";
 import type { ApiState, KlineInterval, Order, Position, TradingSnapshot } from "./types/api";
 
-type Page = "trade" | "positions" | "orders" | "review" | "system";
+type Page = "trade" | "ai" | "plans" | "risk" | "execution" | "orders" | "positions" | "episodes" | "review" | "system";
 type JsonRecord = Record<string, unknown>;
 
 const pages: Array<[Page, string]> = [
-  ["trade", "交易"], ["positions", "持仓"], ["orders", "订单"], ["review", "复盘"], ["system", "系统"],
+  ["trade", "交易"], ["ai", "AI 交易"], ["plans", "计划"], ["risk", "风控"], ["execution", "执行"],
+  ["positions", "持仓"], ["episodes", "复盘记录"], ["review", "每日复盘"], ["system", "系统"],
 ];
 
 const statusLabels: Record<ApiState<unknown>["status"], string> = {
@@ -39,7 +40,8 @@ const okxValidationLabels: Record<string, string> = {
 
 function resolvePage(hash: string): Page {
   const value = hash.replace(/^#\/?/, "") as Page;
-  return pages.some(([page]) => page === value) ? value : "trade";
+  const hidden: Page[] = ["orders"];
+  return pages.some(([page]) => page === value) || hidden.includes(value) ? value : "trade";
 }
 
 function record(value: unknown): JsonRecord {
@@ -292,10 +294,100 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>K线行情</dt><dd>{source === "HEALTHY" ? "OKX 实时" : sourceLabels[source] ?? "状态未知"}</dd></div><div><dt>OKX 公开行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">{okxOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
+function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
+  const state = snapshot.optional["/llm/decisions"] ?? { status: "loading" as const };
+  const decisions = list(record(state.data).decisions);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<JsonRecord | null>(null);
+
+  useEffect(() => {
+    if (detailId === null) { setDetail(null); return; }
+    let active = true;
+    void getJson<JsonRecord>(`/llm/decisions/${encodeURIComponent(detailId)}`).then((response) => {
+      if (active && response.status === "ready" && response.data) setDetail(response.data);
+    });
+    return () => { active = false; };
+  }, [detailId]);
+
+  const openDetail = (decisionId: string) => {
+    setDetailId(decisionId);
+    void getJson<JsonRecord>(`/llm/decisions/${encodeURIComponent(decisionId)}`).then((response) => {
+      if (response.status === "ready" && response.data) setDetail(response.data);
+    });
+  };
+
+  const ready = state.status === "ready" && decisions.length > 0;
+  return <div className="system-grid">
+    <Panel title="AI 交易决策流" source={state} className="span-2">
+      {ready === false ? <EmptyBlock source={state} /> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>交易对</th><th>状态</th><th>决策</th><th>理由摘要</th><th>TradePlan</th></tr></thead><tbody>{decisions.slice(0, 50).map((row) => {
+        const action = direction(pick(row, "action", "decision"));
+        return <tr key={String(row.decision_id)}><td>{row.created_at ? new Date(String(row.created_at)).toLocaleString("zh-CN") : "--"}</td><td><strong>{text(row.symbol)}</strong></td><td>{text(row.position_state)}</td><td><span className={action.tone}>{action.code}</span></td><td>{text(row.thesis)}</td><td><button className="text-button" type="button" onClick={() => openDetail(String(row.decision_id))}>{text(row.trade_plan_id, "查看详情")}</button></td></tr>;
+      })}</tbody></table></div>}
+    </Panel>
+    {detail !== null && <Panel title="决策详情" className="span-2">
+      <dl className="system-list"><div><dt>Decision ID</dt><dd>{text(detail.decision_id)}</dd></div><div><dt>模型</dt><dd>{text(detail.model_provider)} · {text(detail.model)}</dd></div><div><dt>方向</dt><dd>{text(detail.action)}</dd></div><div><dt>Market Regime</dt><dd>{text(detail.market_regime)}</dd></div><div><dt>请求数量</dt><dd>{text(detail.requested_quantity)}</dd></div><div><dt>请求杠杆</dt><dd>{text(detail.requested_leverage)}</dd></div><div><dt>TradePlan</dt><dd>{text(detail.trade_plan_id)}</dd></div></dl>
+      <h3>工具调用（Chief 选择）</h3><div className="tag-list">{(Array.isArray(detail.tool_refs) ? detail.tool_refs : []).map((tool) => <span key={String(tool)}>{String(tool)}</span>)}</div>
+      <h3>理由摘要</h3><p className="muted-line">{text(detail.thesis)}</p>
+    </Panel>}
+  </div>;
+}
+
+function PlansPage({ snapshot }: { snapshot: TradingSnapshot }) {
+  const state = snapshot.optional["/trade-plans"] ?? { status: "loading" as const };
+  const plans = list(record(state.data).trade_plans);
+  const ready = state.status === "ready" && plans.length > 0;
+  return <Panel title="TradePlans（事实持久化计划）" source={state} className="full-panel">
+    {ready === false ? <EmptyBlock source={state} /> : <div className="table-wrap"><table><thead><tr><th>TradePlan ID</th><th>Decision ID</th><th>交易对</th><th>方向</th><th>状态</th><th>数量</th><th>Risk ID</th><th>Order ID</th><th>创建时间</th></tr></thead><tbody>{plans.map((plan) => {
+      const side = direction(pick(plan, "direction"));
+      return <tr key={String(plan.trade_plan_id)}><td>{text(plan.trade_plan_id)}</td><td>{text(plan.decision_id)}</td><td>{text(plan.symbol)}</td><td><span className={side.tone}>{side.code}</span></td><td>{text(plan.state)}</td><td>{numberText(plan.requested_quantity, 8)}</td><td>{text(plan.risk_decision_id)}</td><td>{text(plan.order_id)}</td><td>{plan.created_at ? new Date(String(plan.created_at)).toLocaleString("zh-CN") : "--"}</td></tr>;
+    })}</tbody></table></div>}
+  </Panel>;
+}
+
+function EpisodesPage({ snapshot }: { snapshot: TradingSnapshot }) {
+  const state = snapshot.optional["/trade-episodes"] ?? { status: "loading" as const };
+  const episodes = list(record(state.data).trade_episodes);
+  const ready = state.status === "ready" && episodes.length > 0;
+  return <Panel title="已关闭 TradeEpisodes（事实记录）" source={state} className="full-panel">
+    {ready === false ? <EmptyBlock source={state} /> : <div className="table-wrap"><table><thead><tr><th>Episode ID</th><th>交易对</th><th>方向</th><th>TradePlan</th><th>入场决策</th><th>出场决策</th><th>净 PnL</th><th>时长</th><th>关闭原因</th></tr></thead><tbody>{episodes.map((ep) => (
+      <tr key={String(ep.episode_id)}><td>{text(ep.episode_id)}</td><td>{text(ep.symbol)}</td><td>{text(ep.direction)}</td><td>{text(ep.trade_plan_id)}</td><td>{text(ep.entry_decision_id)}</td><td>{text(ep.exit_decision_id)}</td><td>{money(ep.net_pnl)}</td><td>{text(ep.holding_time_seconds)}</td><td>{text(ep.terminal_reason)}</td></tr>
+    ))}</tbody></table></div>}
+  </Panel>;
+}
+
+function RiskPage({ snapshot }: { snapshot: TradingSnapshot }) {
+  const riskState = snapshot.optional["/risk"] ?? { status: "loading" as const };
+  const risk = record(riskState.data);
+  const kill = record(risk.kill_switch);
+  const enabled = Boolean(kill.enabled ?? snapshot.killswitch.data?.enabled);
+  const positions = Object.values(snapshot.positions.data ?? {}) as Position[];
+  return <div className="system-grid">
+    <Panel title="Risk 独立安全层" source={riskState}>
+      <p className="risk-note">Risk 不选择方向，只输出 APPROVE / SCALE_DOWN / REJECT。</p>
+      <dl className="system-list"><div><dt>Kill Switch</dt><dd className={enabled ? "danger" : "safe"}>{enabled ? "已启用" : "关闭"}</dd></div><div><dt>原因</dt><dd>{text(kill.reason)}</dd></div><div><dt>当前回撤</dt><dd>{percent(pick(risk, "current_drawdown", "drawdown"))}</dd></div><div><dt>有效杠杆</dt><dd>{text(risk.effective_leverage)}</dd></div><div><dt>风险乘数</dt><dd>{numberText(risk.risk_multiplier)}</dd></div></dl>
+    </Panel>
+    <Panel title="组合持仓敞口" source={snapshot.positions}>
+      {positions.length === 0 ? <EmptyBlock source={snapshot.positions} /> : <dl className="system-list">{positions.map((p) => <div key={p.symbol}><dt>{p.symbol}</dt><dd>{numberText(p.quantity, 6)} @ {money(p.avg_entry_price)}</dd></div>)}</dl>}
+    </Panel>
+  </div>;
+}
+
+function ExecutionPage({ snapshot }: { snapshot: TradingSnapshot }) {
+  const rows = snapshot.orders.data ?? [];
+  return <Panel title="执行链路（Order → Fill → Ledger → Portfolio）" source={snapshot.orders} className="full-panel">
+    {snapshot.orders.status !== "ready" || rows.length === 0 ? <EmptyBlock source={snapshot.orders} /> : <div className="order-list"><div className="order-head"><span>时间</span><span>交易对</span><span>方向</span><span>类型</span><span>数量 / 成交</span><span>价格</span><span>状态</span><span>Reduce Only</span></div>{rows.map((order: Order) => <details className={`order-row ${order.status === "UNKNOWN" ? "unknown" : ""}`} key={order.internal_order_id}><summary><time>{new Date(order.updated_at).toLocaleString("zh-CN")}</time><strong>{order.symbol}</strong><span className={direction(order.side).tone}>{direction(order.side).code}</span><span>{order.order_type}</span><span>{numberText(order.quantity, 8)} / {numberText(order.filled_quantity, 8)}</span><span>{money(order.price)}</span><b>{orderStatus[order.status] ?? order.status}</b><span>{(order as unknown as JsonRecord).reduce_only === true ? "是" : "否"}</span></summary><div><span>内部订单 ID：{order.internal_order_id}</span><span>客户端订单 ID：{order.client_order_id}</span></div></details>)}</div>}</Panel>;
+}
+
+
 function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot }) {
   if (page === "trade") return <TradePage snapshot={snapshot} />;
-  if (page === "positions") return <PositionsPage snapshot={snapshot} />;
+  if (page === "ai") return <AiTraderPage snapshot={snapshot} />;
+  if (page === "plans") return <PlansPage snapshot={snapshot} />;
   if (page === "orders") return <OrdersPage snapshot={snapshot} />;
+  if (page === "risk") return <RiskPage snapshot={snapshot} />;
+  if (page === "execution") return <ExecutionPage snapshot={snapshot} />;
+  if (page === "positions") return <PositionsPage snapshot={snapshot} />;
+  if (page === "episodes") return <EpisodesPage snapshot={snapshot} />;
   if (page === "review") return <ReviewPage snapshot={snapshot} />;
   return <SystemPage snapshot={snapshot} />;
 }

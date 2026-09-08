@@ -151,3 +151,42 @@ async def test_api_killswitch_route(database):
     assert response.status_code == 200
     assert response.json()["enabled"] is True
     assert state.risk.kill_switch.enabled is True
+
+
+
+async def test_api_read_only_trade_plan_episode_and_decision_detail_endpoints(database):
+    state = make_state(database)
+    client = TestClient(create_app(state))
+    plans = client.get("/trade-plans")
+    assert plans.status_code == 200
+    body = plans.json()
+    assert body["trade_plans"] == []
+    assert body["count"] == 0
+
+    episodes = client.get("/trade-episodes")
+    assert episodes.status_code == 200
+    body = episodes.json()
+    assert body["trade_episodes"] == []
+    assert body["count"] == 0
+
+    missing = client.get("/llm/decisions/llm-does-not-exist")
+    assert missing.status_code == 404
+
+    await LLMDecisionStore(database.session_factory).save(
+        ChiefTraderDecision(
+            decision_id="llm-detail",
+            symbol="BTCUSDT",
+            action="NO_TRADE",
+            market_regime="RANGE",
+            thesis="detail endpoint",
+            model_provider="deepseek",
+            model="deepseek-v4-pro",
+        ),
+        run_id="run-api-detail",
+        prompt_version="detail-v1",
+        tool_refs=["funding", "orderbook"],
+    )
+    detail = TestClient(create_app(state)).get("/llm/decisions/llm-detail")
+    assert detail.status_code == 200
+    assert detail.json()["tool_refs"] == ["funding", "orderbook"]
+    assert detail.json()["model_provider"] == "deepseek"

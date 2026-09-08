@@ -10,7 +10,7 @@ from decimal import Decimal
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import select, text
 from starlette.websockets import WebSocketDisconnect
 
 from crypto_trader.api.deps import AppState
@@ -30,6 +30,11 @@ from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.okx_vault.client import BrokerClient
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
+from crypto_trader.persistence.models import (
+    LLMDecisionORM,
+    TradeEpisodeORM,
+    TradePlanORM,
+)
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.security.auth import Role, require_role_dependency
 
@@ -45,6 +50,10 @@ class ManualOrderBody(BaseModel):
     side: OrderSide
     quantity: str
     price: str | None = None
+
+
+def _num_or_none(value) -> str | None:
+    return str(value) if value is not None else None
 
 
 def serialize_order(order) -> dict:
@@ -141,6 +150,136 @@ def create_app(state: AppState) -> FastAPI:
             ],
             "count": len(rows),
         }
+
+    @app.get("/llm/decisions/{decision_id}")
+    async def llm_decision_detail(decision_id: str):
+        async with state.database.session_factory() as session:
+            row = await session.get(LLMDecisionORM, decision_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="decision not found")
+            return {
+                "decision_id": row.decision_id,
+                "run_id": row.run_id,
+                "symbol": row.symbol,
+                "position_state": row.position_state,
+                "action": row.action,
+                "model_provider": row.model_provider,
+                "model": row.model,
+                "model_version": row.model_version,
+                "prompt_version": row.prompt_version,
+                "market_regime": row.market_regime,
+                "thesis": row.thesis,
+                "reason_codes": row.reason_codes_json or [],
+                "supporting_evidence": row.supporting_evidence_json or [],
+                "contradicting_evidence": row.contradicting_evidence_json or [],
+                "tool_refs": row.tool_refs_json or [],
+                "memory_refs": row.memory_refs_json or [],
+                "research_refs": row.research_refs_json or [],
+                "episode_refs": row.episode_refs_json or [],
+                "requested_exposure": _num_or_none(row.requested_exposure),
+                "requested_quantity": _num_or_none(row.requested_quantity),
+                "requested_leverage": _num_or_none(row.requested_leverage),
+                "parent_decision_id": row.parent_decision_id,
+                "trade_plan_id": row.trade_plan_id,
+                "position_quantity_before": _num_or_none(
+                    row.position_quantity_before
+                ),
+                "entry_price": _num_or_none(row.entry_price),
+                "mark_price": _num_or_none(row.mark_price),
+                "unrealized_pnl": _num_or_none(row.unrealized_pnl),
+                "time_in_trade_seconds": row.time_in_trade_seconds,
+                "original_trade_plan_id": row.original_trade_plan_id,
+                "original_entry_decision_id": row.original_entry_decision_id,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+
+    @app.get("/trade-plans")
+    async def trade_plans(limit: int = 100):
+        async with state.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradePlanORM)
+                    .order_by(TradePlanORM.created_at.desc())
+                    .limit(max(1, min(limit, 500)))
+                )
+            ).scalars().all()
+            return {
+                "trade_plans": [
+                    {
+                        "trade_plan_id": r.trade_plan_id,
+                        "decision_id": r.decision_id,
+                        "symbol": r.symbol,
+                        "direction": r.direction,
+                        "state": r.state.value if hasattr(r.state, "value") else str(r.state),
+                        "thesis": r.thesis,
+                        "requested_quantity": _num_or_none(r.requested_quantity),
+                        "requested_leverage": _num_or_none(r.requested_leverage),
+                        "requested_exposure": _num_or_none(r.requested_exposure),
+                        "entry_conditions": r.entry_conditions_json or [],
+                        "invalidation_conditions": r.invalidation_conditions_json or [],
+                        "reduce_conditions": r.reduce_conditions_json or [],
+                        "exit_conditions": r.exit_conditions_json or [],
+                        "expected_holding_period": r.expected_holding_period,
+                        "max_holding_time_seconds": r.max_holding_time_seconds,
+                        "signal_id": r.signal_id,
+                        "risk_decision_id": r.risk_decision_id,
+                        "order_id": r.order_id,
+                        "latest_position_decision_id": r.latest_position_decision_id,
+                        "exit_decision_id": r.exit_decision_id,
+                        "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                        "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                        "terminal_reason": r.terminal_reason,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    }
+                    for r in rows
+                ],
+                "count": len(rows),
+            }
+
+    @app.get("/trade-episodes")
+    async def trade_episodes(limit: int = 100):
+        async with state.database.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradeEpisodeORM)
+                    .order_by(TradeEpisodeORM.closed_at.desc())
+                    .limit(max(1, min(limit, 500)))
+                )
+            ).scalars().all()
+            return {
+                "trade_episodes": [
+                    {
+                        "episode_id": r.episode_id,
+                        "trade_plan_id": r.trade_plan_id,
+                        "symbol": r.symbol,
+                        "direction": r.direction,
+                        "entry_decision_id": r.entry_decision_id,
+                        "exit_decision_id": r.exit_decision_id,
+                        "position_decision_ids": r.position_decision_ids_json or [],
+                        "risk_decision_ids": r.risk_decision_ids_json or [],
+                        "order_ids": r.order_ids_json or [],
+                        "fill_ids": r.fill_ids_json or [],
+                        "entry_price": str(r.entry_price),
+                        "exit_price": str(r.exit_price),
+                        "opened_quantity": str(r.opened_quantity),
+                        "closed_quantity": str(r.closed_quantity),
+                        "leverage": str(r.leverage),
+                        "fees": str(r.fees),
+                        "funding_pnl": str(r.funding_pnl),
+                        "gross_pnl": str(r.gross_pnl),
+                        "net_pnl": str(r.net_pnl),
+                        "holding_time_seconds": r.holding_time_seconds,
+                        "entry_market_regime": r.entry_market_regime,
+                        "terminal_reason": r.terminal_reason,
+                        "factual": bool(r.factual),
+                        "review_status": r.review_status,
+                        "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                        "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                    }
+                    for r in rows
+                ],
+                "count": len(rows),
+            }
 
     @app.get("/ready")
     async def ready():

@@ -306,3 +306,10 @@ td, .order-row summary { font-size: var(--font-md); }
   .market-panel { min-height: 700px; }
   .chart-stage, .chart-fallback { height: 340px; }
 }
+
+
+.full-panel { grid-column: 1 / -1; }
+.span-2 { grid-column: span 2; }
+.system-grid > .full-panel { grid-column: 1 / -1; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.tag-list span { padding: 4px 8px; border-radius: 8px; color: #203d34; background: #eef5f2; font-size: var(--font-sm); }
