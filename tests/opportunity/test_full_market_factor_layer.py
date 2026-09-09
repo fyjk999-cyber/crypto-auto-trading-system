@@ -594,6 +594,10 @@ def test_okx_ticker_volume_is_derived_to_usd_turnover():
     assert summary["eligible"] == 1, snap["broad_market"]
     assert summary["scanned"] == 1
     assert snap["universe_size"] == 1
+    assert summary["market_sets"]["all_market_count"] == 1
+    assert summary["market_sets"]["observable_count"] == 1
+    assert summary["market_sets"]["analysis_count"] == 1
+    assert summary["market_sets"]["executable_count"] == 1
 
 
 async def test_lease_renews_after_ttl_gap_via_same_owner_recovery(database):

@@ -225,6 +225,12 @@ class OpportunityScannerService:
             "scanned": len(facts_by_symbol),
             "candidates": [c.symbol for c in candidates],
             "rotation": rotation_rows,
+            "market_sets": {
+                "all_market_count": snapshot.size,
+                "observable_count": len(facts_rows),
+                "analysis_count": len(scan_rows),
+                "executable_count": len(eligible),
+            },
         }
 
     # -------------------------------------------------------------- internals
