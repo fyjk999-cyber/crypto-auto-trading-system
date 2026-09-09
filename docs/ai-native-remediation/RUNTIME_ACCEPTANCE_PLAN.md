@@ -1,6 +1,6 @@
 # RUNTIME ACCEPTANCE PLAN (Chapter 15 preparation)
 
-Candidate SHA: 9f07723 (update when changed)
+Candidate SHA: e037d6c (update when changed)
 Branch: codex/full-market-factor-layer
 Mode: PAPER_REAL_MARKET / LIVE_TRADING_ENABLED=false
 Runtime: exactly one execution writer via lease/fencing
