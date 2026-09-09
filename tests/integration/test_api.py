@@ -10,6 +10,7 @@ from crypto_trader.domain.models import Position
 from crypto_trader.ledger.service import LedgerPosting, LedgerService
 from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.market_data.opportunity.board import OpportunityBoard
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -190,3 +191,24 @@ async def test_api_read_only_trade_plan_episode_and_decision_detail_endpoints(da
     assert detail.status_code == 200
     assert detail.json()["tool_refs"] == ["funding", "orderbook"]
     assert detail.json()["model_provider"] == "deepseek"
+
+
+async def test_api_opportunity_stats_exposes_market_layer_sets(database):
+    state = make_state(database)
+    board = OpportunityBoard()
+    board.universe_size = 100
+    board.eligible_count = 40
+    board.observable_count = 80
+    board.analysis_count = 12
+    board.executable_count = 40
+    state.opportunity_board = board
+    client = TestClient(create_app(state))
+    response = client.get("/opportunity/stats")
+    assert response.status_code == 200
+    assert response.json()["market_sets"] == {
+        "all_market_count": 100,
+        "observable_count": 80,
+        "analysis_count": 12,
+        "executable_count": 40,
+    }
+
