@@ -45,4 +45,12 @@ class SymbolMapper:
             base = normalized.removesuffix("-USDT-SWAP")
             if base and base.replace("-", "").isalnum():
                 return f"{base.replace('-', '')}USDT"
+        if normalized.endswith("-USDT"):
+            base = normalized.removesuffix("-USDT")
+            if base and base.replace("-", "").isalnum():
+                return f"{base.replace('-', '')}USDT"
+        if "-USDT-" in normalized:
+            base = normalized.split("-USDT-", 1)[0]
+            if base and base.replace("-", "").isalnum():
+                return f"{base.replace('-', '')}USDT"
         raise ValueError(f"unknown exchange symbol: {raw}")

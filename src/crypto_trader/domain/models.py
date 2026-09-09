@@ -61,6 +61,19 @@ class Instrument(BaseModel):
     instrument_type: str = "SPOT"
     contract_size: QuantityValue = Decimal("1")
     contract_multiplier: Decimal = Decimal("1")
+    # Venue-native factual instrument identity (OKX fields are preserved raw).
+    inst_id: str = ""
+    inst_type: str = ""
+    ct_type: str | None = None
+    ct_val: str | None = None
+    ct_mult: str | None = None
+    ct_val_ccy: str | None = None
+    settle_ccy: str | None = None
+    state: str = "TRADING"
+    list_time: str | None = None
+    expiry_time: str | None = None
+    lot_size: str | None = None
+    min_size: str | None = None
 
 
 class TradingPair(Instrument):

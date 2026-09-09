@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from crypto_trader.exchange.okx import OKXAdapter
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
 
@@ -98,3 +100,86 @@ def test_symbol_mapping_supports_dynamic_usdt_swap_universe():
     mapper = SymbolMapper()
     assert mapper.to_okx("DOGEUSDT") == "DOGE-USDT-SWAP"
     assert mapper.to_canonical("DOGE-USDT-SWAP") == "DOGEUSDT"
+
+
+
+async def test_okx_exchange_info_preserves_venue_instrument_identity(monkeypatch):
+    adapter = OKXAdapter(demo=True)
+    rows_by_type = {
+        "SPOT": [
+            {
+                "instId": "BTC-USDT",
+                "instType": "SPOT",
+                "state": "live",
+                "baseCcy": "BTC",
+                "quoteCcy": "USDT",
+                "tickSz": "0.1",
+                "lotSz": "0.00001",
+                "minSz": "0.00001",
+                "ctVal": "",
+                "ctValCcy": "",
+                "settleCcy": "",
+                "listTime": "1",
+                "expTime": "",
+            }
+        ],
+        "SWAP": [
+            {
+                "instId": "ETH-USDT-SWAP",
+                "instType": "SWAP",
+                "state": "live",
+                "uly": "ETH-USDT",
+                "ctType": "linear",
+                "ctVal": "0.1",
+                "ctMult": "1",
+                "ctValCcy": "USDT",
+                "settleCcy": "USDT",
+                "tickSz": "0.01",
+                "lotSz": "1",
+                "minSz": "1",
+                "listTime": "1",
+                "expTime": "",
+            }
+        ],
+        "FUTURES": [],
+    }
+
+    async def fake_get_instruments(inst_type: str):
+        return rows_by_type[inst_type]
+
+    monkeypatch.setattr(adapter, "get_instruments", fake_get_instruments)
+    instruments = await adapter.get_exchange_info()
+    assert len(instruments) == 2
+    spot = next(i for i in instruments if i.inst_type == "SPOT")
+    assert spot.inst_id == "BTC-USDT"
+    assert spot.symbol == "BTCUSDT"
+    assert spot.status == "TRADING"
+    assert spot.quote_asset == "USDT"
+    swap = next(i for i in instruments if i.inst_type == "SWAP")
+    assert swap.inst_id == "ETH-USDT-SWAP"
+    assert swap.ct_type == "linear"
+    assert swap.ct_val == "0.1"
+    assert swap.settle_ccy == "USDT"
+    assert swap.contract_size == Decimal("0.1")
+
+
+async def test_okx_exchange_info_maps_expired_state(monkeypatch):
+    adapter = OKXAdapter(demo=True)
+
+    async def fake_get_instruments(inst_type: str):
+        return [
+            {
+                "instId": "BTC-USDT-SWAP",
+                "instType": inst_type,
+                "state": "expired",
+                "baseCcy": "BTC",
+                "quoteCcy": "USDT",
+                "tickSz": "0.1",
+                "lotSz": "1",
+                "minSz": "1",
+            }
+        ]
+
+    monkeypatch.setattr(adapter, "get_instruments", fake_get_instruments)
+    instruments = await adapter.get_exchange_info()
+    assert instruments and instruments[0].status == "EXPIRED"

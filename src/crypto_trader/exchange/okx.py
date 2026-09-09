@@ -25,9 +25,24 @@ from crypto_trader.domain.errors import (
     OrderNotFound,
     OrderRejected,
 )
-from crypto_trader.domain.models import Balance, ExchangeEvent, Fill, Order, Position
+from crypto_trader.domain.models import (
+    Balance,
+    ExchangeEvent,
+    Fill,
+    Instrument,
+    Order,
+    Position,
+)
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exchange.base import ExchangeAdapter
+
+
+def _decimal_places(value: str) -> int:
+    s = str(value).rstrip("0")
+    return len(s.split(".")[-1]) if "." in s else 0
+
+
+
 
 
 class OKXDiagnosticError(ExchangeUnavailable):
@@ -255,8 +270,87 @@ class OKXAdapter(ExchangeAdapter):
             self.auth_status = "AUTH_FAILED"
             return {"status": "AUTH_FAILED"}
 
-    async def get_exchange_info(self, symbol: str | None = None):
-        return []
+    async def get_exchange_info(self, symbol: str | None = None) -> list[Instrument]:
+        """Fetch SPOT/SWAP/FUTURES instrument metadata from OKX public API.
+
+        The returned Instruments preserve OKX instId/instType/ctType/ctVal/
+        ctValCcy/settleCcy/state/tick/lot fields. Internal canonical symbols
+        remain display-compatible; the venue inst-id is the identity source.
+        """
+        from crypto_trader.exchange.symbol_mapper import SymbolMapper
+
+        mapper = SymbolMapper()
+        instruments: list[Instrument] = []
+        for inst_type in ("SPOT", "SWAP", "FUTURES"):
+            try:
+                rows = await self.get_instruments(inst_type)
+            except OKXDiagnosticError:
+                continue
+            for raw in rows:
+                inst_id = str(raw.get("instId") or "")
+                if not inst_id:
+                    continue
+                if symbol and inst_id != symbol:
+                    continue
+                try:
+                    canonical = mapper.to_canonical(inst_id)
+                except ValueError:
+                    # Non-USDT pairs or unknown quoting are not executable in
+                    # the current PAPER layer; keep them out rather than guess.
+                    continue
+                if not canonical:
+                    continue
+                state = str(raw.get("state") or "").lower()
+                status = (
+                    "TRADING"
+                    if state == "live"
+                    else "EXPIRED"
+                    if state == "expired"
+                    else "SUSPENDED"
+                    if state in {"suspend", "halt"}
+                    else "PENDING"
+                )
+                tick_sz = str(raw.get("tickSz") or "0.00000001")
+                lot_sz = str(raw.get("lotSz") or "0.00000001")
+                min_sz = str(raw.get("minSz") or lot_sz)
+                ct_val = str(raw.get("ctVal") or "1")
+                ct_mult = str(raw.get("ctMult") or "1")
+                base = str(raw.get("baseCcy") or "")
+                quote = str(raw.get("quoteCcy") or "")
+                if not base and canonical.endswith("USDT"):
+                    base = canonical.removesuffix("USDT")
+                    quote = "USDT"
+                instrument_type = inst_type
+                instruments.append(
+                    Instrument(
+                        symbol=canonical,
+                        base_asset=base,
+                        quote_asset=quote,
+                        status=status,
+                        exchange="OKX",
+                        instrument_type=instrument_type,
+                        contract_size=D(ct_val),
+                        contract_multiplier=D(ct_mult),
+                        inst_id=inst_id,
+                        inst_type=inst_type,
+                        ct_type=str(raw.get("ctType") or "") or None,
+                        ct_val=ct_val,
+                        ct_mult=ct_mult,
+                        ct_val_ccy=str(raw.get("ctValCcy") or "") or None,
+                        settle_ccy=str(raw.get("settleCcy") or "") or None,
+                        state=str(raw.get("state") or "") or "live",
+                        list_time=str(raw.get("listTime") or "") or None,
+                        expiry_time=str(raw.get("expTime") or "") or None,
+                        lot_size=lot_sz,
+                        min_size=min_sz,
+                        tick_size=D(tick_sz),
+                        step_size=D(lot_sz),
+                        min_qty=D(min_sz),
+                        quantity_precision=_decimal_places(lot_sz),
+                        price_precision=_decimal_places(tick_sz),
+                    )
+                )
+        return instruments
 
     async def get_balances(self):
         data = await self._request("GET", "/api/v5/account/balance", signed=True)
