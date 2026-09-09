@@ -137,8 +137,9 @@ class LeaseManager:
                 statement
                 .values(expires_at=expires_at, renewed_at=now, version=RuntimeLeaseORM.version + 1)
             )
+            matched = result.rowcount
             await session.commit()
-            return result.rowcount == 1
+            return matched == 1
 
     async def release(
         self,
@@ -169,8 +170,9 @@ class LeaseManager:
                     version=RuntimeLeaseORM.version + 1,
                 )
             )
+            matched = result.rowcount
             await session.commit()
-            return result.rowcount == 1
+            return matched == 1
 
     async def is_held(self, lease_key: str, token: str | None = None) -> bool:
         if token is None:
