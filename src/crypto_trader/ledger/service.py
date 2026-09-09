@@ -345,6 +345,27 @@ class LedgerService:
         )
         return list(result.scalars().all())
 
+    async def realized_pnl_since(self, start: datetime) -> Decimal:
+        """Sum realized PnL postings since a UTC boundary (losses are negative)."""
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LedgerEntryORM).where(
+                        LedgerEntryORM.account == "REALIZED_PNL",
+                        LedgerEntryORM.created_at >= start,
+                    )
+                )
+            ).scalars().all()
+        total = sum(
+            (
+                row.amount
+                if row.direction == LedgerDirection.CREDIT.value
+                else -row.amount
+            )
+            for row in rows
+        )
+        return total
+
 
 async def _txn_to_domain(txn: LedgerTransactionORM) -> LedgerTransaction:
     entries = [

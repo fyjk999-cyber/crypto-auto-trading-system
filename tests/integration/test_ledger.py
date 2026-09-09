@@ -170,3 +170,29 @@ async def test_replay_is_deterministic_and_rebuild_matches(ledger, database):
         after = await replay_projections(s, initial_balances={"USDT": Decimal("0")})
     assert before.as_plain() == after.as_plain()
     assert rebuilt.as_plain() == after.as_plain()
+
+
+
+async def test_ledger_realized_pnl_since_utc_boundary(ledger, database):
+    from datetime import UTC, datetime, timedelta
+
+    await ledger.record(
+        LedgerEntryType.TRADE,
+        [
+            LedgerPosting("CASH", LedgerDirection.DEBIT, Decimal("10")),
+            LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, Decimal("10")),
+        ],
+        transaction_id="pnl_profit",
+    )
+    await ledger.record(
+        LedgerEntryType.TRADE,
+        [
+            LedgerPosting("REALIZED_PNL", LedgerDirection.DEBIT, Decimal("4")),
+            LedgerPosting("CASH", LedgerDirection.CREDIT, Decimal("4")),
+        ],
+        transaction_id="pnl_loss",
+    )
+    start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    assert await ledger.realized_pnl_since(start) == Decimal("6")
+    # Future start returns zero
+    assert await ledger.realized_pnl_since(start + timedelta(days=1)) == Decimal("0")
