@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.config import Settings
 from crypto_trader.domain.clock import Clock, SystemClock
@@ -29,6 +30,7 @@ from crypto_trader.domain.enums import (
 )
 from crypto_trader.domain.errors import (
     ExchangeError,
+    InvalidStateTransition,
     LeaseNotHeld,
     MarketDataUnhealthy,
     OrderRejected,
@@ -858,24 +860,43 @@ class TradingEngine:
             )
             return risk_decision
 
-        await self.order_manager.ack(
-            order.internal_order_id, exchange_order.exchange_order_id, event_id=new_id("evt")
-        )
-        if exchange_order.status == OrderStatus.OPEN:
-            await self.order_manager.opened(order.internal_order_id, event_id=new_id("evt"))
-        elif exchange_order.status == OrderStatus.CANCELLED:
-            await self.order_manager.cancel_confirm(order.internal_order_id, event_id=new_id("evt"))
-            await self._sync_terminal_entry_plan(
-                order, TradePlanState.CANCELLED, "ORDER_CANCELLED"
-            )
-        elif exchange_order.status == OrderStatus.REJECTED:
-            await self.order_manager.reject(
+        # The event stream may already have applied ack/open/fills while
+        # submit_order was in flight (the simulator emits inline). State
+        # synchronization here is therefore best-effort: the event stream is
+        # the authoritative applier, and duplicate transitions must not kill
+        # the tick after the exchange has already mutated its book.
+        try:
+            await self.order_manager.ack(
                 order.internal_order_id,
-                exchange_order.rejection_reason or "rejected on exchange",
+                exchange_order.exchange_order_id,
                 event_id=new_id("evt"),
             )
-            await self._sync_terminal_entry_plan(
-                order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
+            if exchange_order.status == OrderStatus.OPEN:
+                await self.order_manager.opened(order.internal_order_id, event_id=new_id("evt"))
+            elif exchange_order.status == OrderStatus.CANCELLED:
+                await self.order_manager.cancel_confirm(
+                    order.internal_order_id, event_id=new_id("evt")
+                )
+                await self._sync_terminal_entry_plan(
+                    order, TradePlanState.CANCELLED, "ORDER_CANCELLED"
+                )
+            elif exchange_order.status == OrderStatus.REJECTED:
+                await self.order_manager.reject(
+                    order.internal_order_id,
+                    exchange_order.rejection_reason or "rejected on exchange",
+                    event_id=new_id("evt"),
+                )
+                await self._sync_terminal_entry_plan(
+                    order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
+                )
+        except (InvalidStateTransition, IntegrityError) as exc:
+            await self.audit.log(
+                "ORDER_STATE_SYNC_SKIPPED",
+                target=client_order_id,
+                run_id=run_id,
+                order_id=order.internal_order_id,
+                exchange_order_id=exchange_order.exchange_order_id,
+                after={"reason": str(exc), "exchange_status": exchange_order.status.value},
             )
         # FILLED/PARTIALLY_FILLED are applied exclusively through the event
         # stream to guarantee fill_id uniqueness; recovery reconciles later.
