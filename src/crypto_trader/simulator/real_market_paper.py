@@ -92,7 +92,8 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         rejected instead of matching against stale or synthetic prices.
         """
         try:
-            payload = await self.feed.client.get_orderbook(order.symbol)
+            inst_id = self.feed.provider_symbol(order.symbol)
+            payload = await self.feed.client.get_orderbook(inst_id)
             rows = payload.get("data") if isinstance(payload, dict) else None
             raw = rows[0] if isinstance(rows, list) and rows else None
             if not isinstance(raw, dict):
