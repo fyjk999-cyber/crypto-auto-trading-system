@@ -85,8 +85,8 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             book = OrderBook(symbol=symbol, exchange="OKX")
             book.apply_snapshot(
                 int(datetime.now(UTC).timestamp() * 1000),
-                [(state.best_bid, Decimal("1"))],
-                [(state.best_ask, Decimal("1"))],
+                [(state.best_bid, state.best_bid_size or Decimal("1"))],
+                [(state.best_ask, state.best_ask_size or Decimal("1"))],
                 now=datetime.now(UTC),
             )
             return book
@@ -100,8 +100,8 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             book = OrderBook(symbol=symbol, exchange="OKX")
             book.apply_snapshot(
                 int(datetime.now(UTC).timestamp()),
-                [(state.best_bid, Decimal("1"))],
-                [(state.best_ask, Decimal("1"))],
+                [(state.best_bid, state.best_bid_size or Decimal("1"))],
+                [(state.best_ask, state.best_ask_size or Decimal("1"))],
             )
             self.books[symbol] = book
             self.sequence[symbol] = book.sequence or 0

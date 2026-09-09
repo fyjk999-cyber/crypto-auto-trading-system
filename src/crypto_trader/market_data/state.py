@@ -44,6 +44,8 @@ class MarketState(BaseModel):
     index_price: StrictDecimal = Decimal("0")
     best_bid: StrictDecimal = Decimal("0")
     best_ask: StrictDecimal = Decimal("0")
+    best_bid_size: StrictDecimal = Decimal("0")
+    best_ask_size: StrictDecimal = Decimal("0")
     spread: StrictDecimal = Decimal("0")
     depth: Decimal = Decimal("0")
     imbalance: Decimal = Decimal("0")

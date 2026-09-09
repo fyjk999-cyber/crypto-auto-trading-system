@@ -218,6 +218,8 @@ class OKXPublicMarketFeed:
             if bid is None or ask is None:
                 raise ValueError("OKX orderbook has no bid or ask")
             state.best_bid, state.best_ask = bid.price, ask.price
+            state.best_bid_size = bid.quantity
+            state.best_ask_size = ask.quantity
             state.spread = ask.price - bid.price
             state.depth = sum((level.quantity for level in book.bids.values()), Decimal("0")) + sum(
                 (level.quantity for level in book.asks.values()), Decimal("0")

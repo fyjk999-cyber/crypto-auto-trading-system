@@ -1,11 +1,14 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
 from crypto_trader.domain.enums import MarketDataStatus
 from crypto_trader.domain.errors import MarketDataUnhealthy, SequenceGap
+from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.service import MarketDataService
+from crypto_trader.market_data.state import MarketState
 from crypto_trader.market_data.websocket import WebSocketReconnectPolicy
 
 
@@ -80,3 +83,31 @@ def test_websocket_reconnect_policy():
     policy.on_disconnected()
     assert policy.exhausted() is True
     assert policy.should_reconnect() is False
+
+
+async def test_okx_feed_preserves_best_bid_ask_sizes():
+    class FakeClient:
+        async def get_orderbook(self, symbol):
+            return {
+                "data": [
+                    {
+                        "ts": "1700000000000",
+                        "bids": [["100", "2.5"], ["99", "10"]],
+                        "asks": [["101", "3.5"], ["102", "20"]],
+                    }
+                ]
+            }
+
+    feed = OKXPublicMarketFeed(client=FakeClient(), min_refresh_interval_seconds=0)
+    state = MarketState(
+        symbol="BTCUSDT",
+        provider="OKX_PUBLIC",
+        data_source="REAL",
+        instrument_id="BTC-USDT-SWAP",
+        instrument_type="SWAP",
+        source="OKX_PUBLIC",
+        exchange="OKX",
+    )
+    await feed._refresh_book(state, "BTC-USDT-SWAP", datetime.now(UTC))
+    assert state.best_bid_size == Decimal("2.5")
+    assert state.best_ask_size == Decimal("3.5")

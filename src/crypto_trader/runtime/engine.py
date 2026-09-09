@@ -420,8 +420,20 @@ class TradingEngine:
                 ):
                     raise ValueError("factual market state is not healthy")
                 sequence = market_state.generation
-                bids = [(market_state.best_bid, Decimal("1"))]
-                asks = [(market_state.best_ask, Decimal("1"))]
+                bids = [
+                    (
+                        market_state.best_bid,
+                        getattr(market_state, "best_bid_size", Decimal("0"))
+                        or Decimal("1"),
+                    )
+                ]
+                asks = [
+                    (
+                        market_state.best_ask,
+                        getattr(market_state, "best_ask_size", Decimal("0"))
+                        or Decimal("1"),
+                    )
+                ]
             else:
                 fetched = await self.adapter.get_orderbook(symbol)
                 sequence = fetched.sequence
