@@ -3,7 +3,9 @@
 This file records Harness self-verified chapter progress on
 `codex/full-market-factor-layer`. It is NOT Codex approval.
 
-Last update: 2026-09-09.
+Last update: 2026-09-09 (later rounds).
+
+Latest HEAD at update: f840b68
 
 ## Test baseline
 ```text
@@ -28,9 +30,9 @@ frontend npm run build               -> PASS
 | 08 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
 | 09 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
 | 10 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
-| 11 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
+| 11 | f840b68 | PASS | NOT_REVIEWED | SELF_VERIFIED_COMPLETE |
 | 12 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
-| 13 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
+| 13 | 0135e80 | PASS | NOT_REVIEWED | SELF_VERIFIED_COMPLETE |
 | 14 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
 | 15 | c06aec2 | PASS | NOT_REVIEWED | SELF_VERIFIED_VIA_EXISTING_TESTS |
 
