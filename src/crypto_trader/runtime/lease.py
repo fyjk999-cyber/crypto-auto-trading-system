@@ -122,6 +122,7 @@ class LeaseManager:
         now = _epoch()
         expires_at = now + ttl_seconds
         async with self.session_factory() as session:
+            # Strict renewal first: only an ACTIVE lease owned by us.
             statement = update(RuntimeLeaseORM).where(
                 RuntimeLeaseORM.lease_key == lease_key,
                 RuntimeLeaseORM.token == token,
@@ -138,6 +139,30 @@ class LeaseManager:
                 .values(expires_at=expires_at, renewed_at=now, version=RuntimeLeaseORM.version + 1)
             )
             matched = result.rowcount
+            if matched == 0:
+                # Recovery: a sleep/stall longer than the TTL expired our own
+                # lease. Recover ONLY if the row still belongs to us (owner +
+                # token + fence) — never steal a lease another engine may have
+                # CAS'd since. This keeps fencing intact while making the
+                # lease resilient to wall-clock gaps.
+                recovery = update(RuntimeLeaseORM).where(
+                    RuntimeLeaseORM.lease_key == lease_key,
+                    RuntimeLeaseORM.token == token,
+                )
+                if owner_id is not None:
+                    recovery = recovery.where(RuntimeLeaseORM.owner_id == owner_id)
+                if fence_generation is not None:
+                    recovery = recovery.where(
+                        RuntimeLeaseORM.fence_generation == int(fence_generation)
+                    )
+                result = await session.execute(
+                    recovery.values(
+                        expires_at=expires_at,
+                        renewed_at=now,
+                        version=RuntimeLeaseORM.version + 1,
+                    )
+                )
+                matched = result.rowcount
             await session.commit()
             return matched == 1
 

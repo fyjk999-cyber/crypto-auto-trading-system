@@ -595,3 +595,41 @@ def test_okx_ticker_volume_is_derived_to_usd_turnover():
     assert summary["scanned"] == 1
     candidate_row = snap["broad_market"]
     assert snap["universe_size"] == 1
+
+
+async def test_lease_renews_after_ttl_gap_via_same_owner_recovery(database):
+    """§40 regression: a sleep/stall longer than the TTL must not permanently
+    lose the lease. Same owner+token+token may recover the expired row; a
+    DIFFERENT owner never may (fencing preserved)."""
+    from crypto_trader.runtime.lease import LeaseManager
+
+    lm = LeaseManager(database.session_factory)
+    lease = await lm.acquire("lease_recovery_key", "owner_a", 10)
+    assert lease is not None
+    # simulate a wall-clock gap > TTL: expire the row in place
+    from sqlalchemy import update as sa_update
+
+    from crypto_trader.persistence.models import RuntimeLeaseORM
+
+    async with database.session_factory() as s:
+        await s.execute(
+            sa_update(RuntimeLeaseORM)
+            .where(RuntimeLeaseORM.lease_key == "lease_recovery_key")
+            .values(expires_at=1.0)
+        )
+        await s.commit()
+    # different owner cannot recover
+    stolen = await lm.renew(
+        "lease_recovery_key", lease.token, 10, owner_id="owner_b",
+        fence_generation=lease.fence_generation,
+    )
+    assert stolen is False
+    # same owner recovers
+    ok = await lm.renew(
+        "lease_recovery_key", lease.token, 10, owner_id="owner_a",
+        fence_generation=lease.fence_generation,
+    )
+    assert ok is True
+    held = await lm.is_held("lease_recovery_key", lease.token)
+    assert held is True
+    await lm.release("lease_recovery_key", lease.token, owner_id="owner_a", fence_generation=lease.fence_generation)
