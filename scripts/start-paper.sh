@@ -14,14 +14,23 @@ if command -v lsof >/dev/null 2>&1; then
     exit 1
   fi
 fi
-if [ ! -d .venv ]; then
-  python3.12 -m venv .venv 2>/dev/null || python3 -m venv .venv
+if [ -n "${PAPER_RUNTIME_PYTHON:-}" ]; then
+  PYTHON_BIN="$PAPER_RUNTIME_PYTHON"
+elif [ ! -d .venv ]; then
+  if command -v python3.12 >/dev/null 2>&1; then
+    python3.12 -m venv .venv 2>/dev/null || python3 -m venv .venv
+  else
+    python3 -m venv .venv
+  fi
+  PYTHON_BIN=.venv/bin/python
+else
+  PYTHON_BIN=.venv/bin/python
 fi
-. .venv/bin/activate
-python -m ensurepip --upgrade 2>/dev/null || true
-python -m pip install -e '.[dev]' -q
+if [ "$PYTHON_BIN" != "$PAPER_RUNTIME_PYTHON" ]; then
+  "$PYTHON_BIN" -m pip install -e '.[dev]' -q
+fi
 mkdir -p data
-if ! alembic upgrade head; then
+if ! "$PYTHON_BIN" -m alembic upgrade head; then
   echo "PAPER_RUNTIME_START_FAILED: database migration failed" >&2
   exit 1
 fi
@@ -35,7 +44,7 @@ echo "Market Provider: OKX_PUBLIC"
 echo "Execution: PAPER / LOCAL_SIMULATOR"
 echo "Live Trading: DISABLED"
 export AUTO_START_RUNTIME=true
-nohup python -m crypto_trader.runtime.local_runner --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
+nohup "$PYTHON_BIN" -m crypto_trader.runtime.local_runner --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
 PID=$!
 printf '%s\n' "$PID" > "$PID_FILE"
 
@@ -47,7 +56,7 @@ for _ in $(seq 1 60); do
     exit 1
   fi
   if READY_PAYLOAD="$(curl -fsS --max-time 1 "http://$HOST:$PORT/ready" 2>/dev/null)"; then
-    if READY_PAYLOAD="$READY_PAYLOAD" python - <<'PY'
+    if READY_PAYLOAD="$READY_PAYLOAD" "$PYTHON_BIN" - <<'PY'
 import json
 import os
 
