@@ -477,6 +477,58 @@ class TradingEngine:
             instrument=self._instruments.get(symbol),
         )
 
+    async def _refresh_execution_market(self, symbol: str) -> bool:
+        """Refresh the same-symbol market book immediately before Risk/Execution.
+
+        A long LLM decision can make the book captured before the decision
+        stale. Re-fetching from the factual adapter prevents AUTHORITY_HOLD
+        caused by MARKET_DATA_STALE when current data is actually available.
+        """
+        get_market_state = getattr(self.adapter, "get_market_state", None)
+        try:
+            if get_market_state is not None:
+                market_state = await get_market_state(symbol)
+                if (
+                    market_state.health.value != "HEALTHY"
+                    or market_state.best_bid <= 0
+                    or market_state.best_ask <= 0
+                ):
+                    raise ValueError("factual market state is not healthy")
+                bids = [
+                    (
+                        market_state.best_bid,
+                        getattr(market_state, "best_bid_size", Decimal("0"))
+                        or Decimal("1"),
+                    )
+                ]
+                asks = [
+                    (
+                        market_state.best_ask,
+                        getattr(market_state, "best_ask_size", Decimal("0"))
+                        or Decimal("1"),
+                    )
+                ]
+                await self.market_data.ingest_snapshot(
+                    symbol,
+                    market_state.generation,
+                    bids,
+                    asks,
+                )
+                self.health.set("market_data", True)
+                return True
+            fetched = await self.adapter.get_orderbook(symbol)
+            await self.market_data.ingest_snapshot(
+                symbol,
+                fetched.sequence,
+                [(level.price, level.quantity) for level in fetched.bids.values()],
+                [(level.price, level.quantity) for level in fetched.asks.values()],
+            )
+            self.health.set("market_data", True)
+            return True
+        except Exception:
+            self.health.set("market_data", False, f"{symbol} refresh failed")
+            return False
+
     # --------------------------------------------------------------- signals
     async def _cancel_unsettled_entry_order(self, entry_order) -> None:
         """Cancel a non-terminal entry order before a later EXIT/REDUCE.
@@ -638,6 +690,7 @@ class TradingEngine:
                 )
                 return None
 
+        await self._refresh_execution_market(symbol)
         account = await self.portfolio.get_account(self.settings.effective_mode())
         book = self.market_data.books.get(symbol)
         market_price = D("0")
