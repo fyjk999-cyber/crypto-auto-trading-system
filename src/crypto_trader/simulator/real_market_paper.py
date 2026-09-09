@@ -32,33 +32,38 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         return await self.feed.refresh(symbol)
 
     async def get_exchange_info(self, symbol: str | None = None) -> list[Instrument]:
-        """Load the bounded execution symbol's factual OKX linear-SWAP contract."""
+        """Load factual OKX linear-SWAP contract specs from public data.
 
-        canonical = (symbol or self.feed.symbol).upper()
-        provider_symbol = SymbolMapper().to_okx(canonical)
+        With an explicit symbol this returns that single bounded execution
+        symbol's contract. Without one it returns the full factual OKX USDT
+        linear-SWAP universe so the full-market DeepSeek entry path can size
+        any reviewed symbol. No synthetic rows and no cross-symbol reuse:
+        every entry is parsed from the same public OKX instruments response.
+        """
         try:
             rows = await self.feed.client.get_instruments("SWAP")
         except Exception:
             return []
-        matches = [
-            row
-            for row in rows
-            if row.get("instId") == provider_symbol
-            and row.get("state") == "live"
-            and row.get("ctType", "linear") == "linear"
-        ]
-        if len(matches) != 1:
-            return []
-        raw = matches[0]
-        tick_size = D(raw.get("tickSz", "0"))
-        lot_size = D(raw.get("lotSz", "0"))
-        min_size = D(raw.get("minSz", "0"))
-        contract_size = D(raw.get("ctVal", "0"))
-        contract_multiplier = D(raw.get("ctMult") or "1")
-        if min(tick_size, lot_size, min_size, contract_size, contract_multiplier) <= 0:
-            return []
-        base, quote, *_ = provider_symbol.split("-")
-        instrument = Instrument(
+        wanted = SymbolMapper().to_okx(symbol.upper()) if symbol else None
+        instruments: list[Instrument] = []
+        for raw in rows:
+            if raw.get("state") != "live" or raw.get("ctType", "linear") != "linear":
+                continue
+            inst_id = raw.get("instId", "")
+            if not inst_id.endswith("-USDT-SWAP"):
+                continue
+            if wanted is not None and inst_id != wanted:
+                continue
+            tick_size = D(raw.get("tickSz", "0"))
+            lot_size = D(raw.get("lotSz", "0"))
+            min_size = D(raw.get("minSz", "0"))
+            contract_size = D(raw.get("ctVal", "0"))
+            contract_multiplier = D(raw.get("ctMult") or "1")
+            if min(tick_size, lot_size, min_size, contract_size, contract_multiplier) <= 0:
+                continue
+            canonical = SymbolMapper().to_canonical(inst_id)
+            base, quote, *_ = inst_id.split("-")
+            instrument = Instrument(
                 symbol=canonical,
                 base_asset=base,
                 quote_asset=quote,
@@ -74,8 +79,9 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
                 contract_size=contract_size,
                 contract_multiplier=contract_multiplier,
             )
-        self.instruments[canonical] = instrument
-        return [instrument]
+            self.instruments[canonical] = instrument
+            instruments.append(instrument)
+        return instruments
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:
