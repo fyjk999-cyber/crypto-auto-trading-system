@@ -13,7 +13,9 @@ from crypto_trader.domain.enums import (
 )
 from crypto_trader.domain.errors import OrderRejected, RateLimited, UnknownExecutionState
 from crypto_trader.domain.models import Instrument, Order
+from crypto_trader.market_data.state import DataHealth, MarketState
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
+from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 
 
 def make_order(cid="c1", qty="0.1", price="100"):
@@ -191,6 +193,36 @@ async def test_market_delta_sequence_gap_visible_to_core():
     sim.sequence_gap_next_delta = True
     await sim.emit_market_delta("BTCUSDT", [("99", "1")], [("101", "1")])
     assert events[-1].payload["sequence"] > expected_next + 1
+
+
+async def test_paper_real_market_uses_real_best_sizes():
+    class FakeFeed:
+        async def close(self):
+            return None
+
+        async def refresh(self, symbol):
+            return MarketState(
+                symbol=symbol,
+                provider="OKX_PUBLIC",
+                data_source="REAL",
+                instrument_id="BTC-USDT-SWAP",
+                instrument_type="SWAP",
+                source="OKX_PUBLIC",
+                exchange="OKX",
+                health=DataHealth.HEALTHY,
+                best_bid=Decimal("100"),
+                best_ask=Decimal("101"),
+                best_bid_size=Decimal("2.5"),
+                best_ask_size=Decimal("3.5"),
+            )
+
+    adapter = PaperRealMarketAdapter(feed=FakeFeed())  # type: ignore[arg-type]
+    await adapter.connect()
+    book = await adapter.get_orderbook("BTCUSDT")
+    assert book.best_bid().quantity == Decimal("2.5")
+    assert book.best_ask().quantity == Decimal("3.5")
+    await adapter.disconnect()
+
 
 
 async def _noop():
