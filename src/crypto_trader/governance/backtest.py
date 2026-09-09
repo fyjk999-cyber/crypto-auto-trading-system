@@ -68,32 +68,38 @@ class BacktestEngine:
             if signal.side.value == "LONG" and position_side != "LONG":
                 if position_side is not None:
                     pnl = (price * (D("1") - self.slippage) - entry_price) * D("1")
-                    equity += pnl
-                    pnl_list.append(pnl)
+                    fee = price * self.fee_rate
+                    equity += pnl - fee
+                    pnl_list.append(pnl - fee)
                     if position_side == "LONG":
                         long_pnl += pnl
                     else:
                         short_pnl += pnl
-                    fees += price * self.fee_rate
+                    fees += fee
                     turnover += 1
                 entry_price = price * (D("1") + self.slippage)
                 position_side = "LONG"
-                fees += entry_price * self.fee_rate
+                fee = entry_price * self.fee_rate
+                equity -= fee
+                fees += fee
                 turnover += 1
             elif signal.side.value == "SHORT" and position_side != "SHORT":
                 if position_side is not None:
                     pnl = (entry_price - price * (D("1") + self.slippage)) * D("1")
-                    equity += pnl
-                    pnl_list.append(pnl)
+                    fee = price * self.fee_rate
+                    equity += pnl - fee
+                    pnl_list.append(pnl - fee)
                     if position_side == "LONG":
                         long_pnl += pnl
                     else:
                         short_pnl += pnl
-                    fees += price * self.fee_rate
+                    fees += fee
                     turnover += 1
                 entry_price = price * (D("1") - self.slippage)
                 position_side = "SHORT"
-                fees += entry_price * self.fee_rate
+                fee = entry_price * self.fee_rate
+                equity -= fee
+                fees += fee
                 turnover += 1
             if position_side is not None:
                 mark = (price - entry_price) if position_side == "LONG" else (entry_price - price)
@@ -107,13 +113,14 @@ class BacktestEngine:
         if position_side is not None:
             price = prices[-1]
             pnl = (price - entry_price) if position_side == "LONG" else (entry_price - price)
-            equity += pnl
-            pnl_list.append(pnl)
+            fee = price * self.fee_rate
+            equity += pnl - fee
+            pnl_list.append(pnl - fee)
             if position_side == "LONG":
                 long_pnl += pnl
             else:
                 short_pnl += pnl
-            fees += price * self.fee_rate
+            fees += fee
             turnover += 1
         wins = [p for p in pnl_list if p > 0]
         losses = [-p for p in pnl_list if p < 0]
