@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
+from crypto_trader.domain.money import round_tick
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
@@ -288,9 +289,28 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             )
             return []
         try:
+            # The authority requires tick-aligned prices. The raw mid only
+            # sometimes lands on the instrument tick grid, so derive the entry
+            # limit from the factual touch price of the trade side (the same
+            # price DeepSeek's entry_plan references) and fall back to a
+            # directionally tick-aligned mid when the touch is unavailable.
+            if decision.action.value == "LONG":
+                touch = ctx.book.best_ask()
+                entry_limit = (
+                    touch.price
+                    if touch is not None
+                    else round_tick(mid, ctx.instrument.tick_size, ROUND_CEILING)
+                )
+            else:
+                touch = ctx.book.best_bid()
+                entry_limit = (
+                    touch.price
+                    if touch is not None
+                    else round_tick(mid, ctx.instrument.tick_size, ROUND_FLOOR)
+                )
             plan, signal = await self.planner.create_entry_signal(
                 decision,
-                limit_price=mid,
+                limit_price=entry_limit,
                 quantity=sized.normalized_quantity,
                 execution_metadata={
                     "instrument_type": "LINEAR_PERP",
