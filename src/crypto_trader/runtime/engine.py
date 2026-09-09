@@ -626,6 +626,33 @@ class TradingEngine:
                 )
                 return None
 
+        # Refresh the factual per-symbol book immediately before authorization.
+        # The multi-second LLM review can outlive the freshness windows, and a
+        # stale cached book must never authorize new risk (P0). Refresh uses
+        # the same real per-symbol OKX source as the review context; a refresh
+        # failure leaves the existing book untouched so the execution
+        # authority still decides on the real (possibly stale) state.
+        get_fresh_market_state = getattr(self.adapter, "get_market_state", None)
+        if get_fresh_market_state is not None:
+            try:
+                refreshed_state = await get_fresh_market_state(symbol)
+                if (
+                    refreshed_state.health.value == "HEALTHY"
+                    and refreshed_state.best_bid > 0
+                    and refreshed_state.best_ask > 0
+                ):
+                    await self.market_data.ingest_snapshot(
+                        symbol,
+                        refreshed_state.generation,
+                        [(refreshed_state.best_bid, Decimal("1"))],
+                        [(refreshed_state.best_ask, Decimal("1"))],
+                    )
+                    self.health.set("market_data", True)
+            except Exception:
+                self.health.set(
+                    "market_data", False, f"{symbol} pre-submit refresh failed"
+                )
+
         account = await self.portfolio.get_account(self.settings.effective_mode())
         book = self.market_data.books.get(symbol)
         market_price = D("0")
