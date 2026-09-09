@@ -322,11 +322,14 @@ function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const oppStats = record(opp.stats);
   const oppScan = record(opp.scan_stats);
   const candidates = list(opp.candidates);
+  const oppMarket = record(opp.market_sets);
   return <div className="system-grid">
     <Panel title="市场机会 · 全市场因子扫描（仅证据，无方向权限）" source={oppState} className="span-2">
       <div className="review-metrics">
         <Metric label="全市场 Universe" value={numberText(opp.universe_size, 0)} />
-        <Metric label="可观察交易对" value={numberText(opp.eligible_count, 0)} />
+        <Metric label="可观察交易对" value={numberText(oppMarket.observable_count, 0)} />
+        <Metric label="深度分析" value={numberText(oppMarket.analysis_count, 0)} />
+        <Metric label="可执行" value={numberText(oppMarket.executable_count, 0)} />
         <Metric label="本轮扫描" value={numberText(oppScan.symbols_scanned, 0)} />
         <Metric label="因子候选" value={numberText(opp.candidate_count, 0)} />
         <Metric label="轮换覆盖" value={numberText(list(opp.rotation_symbols).length, 0)} />
