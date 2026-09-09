@@ -140,14 +140,17 @@ class LeaseManager:
             )
             matched = result.rowcount
             if matched == 0:
-                # Recovery: a sleep/stall longer than the TTL expired our own
-                # lease. Recover ONLY if the row still belongs to us (owner +
-                # token + fence) — never steal a lease another engine may have
-                # CAS'd since. This keeps fencing intact while making the
-                # lease resilient to wall-clock gaps.
+                # Recovery: a sleep/stall longer than the TTL naturally expired
+                # our own lease. Recover ONLY if the row still belongs to us
+                # (owner + token + fence) AND it is a NATURAL expiry, not a
+                # deliberate release tombstone (release() zeroes expires_at —
+                # an intentional fencing action that must keep the engine
+                # fail-closed until a restart). Never steal a lease another
+                # engine may have CAS'd since.
                 recovery = update(RuntimeLeaseORM).where(
                     RuntimeLeaseORM.lease_key == lease_key,
                     RuntimeLeaseORM.token == token,
+                    RuntimeLeaseORM.expires_at > 0,  # not a release tombstone
                 )
                 if owner_id is not None:
                     recovery = recovery.where(RuntimeLeaseORM.owner_id == owner_id)

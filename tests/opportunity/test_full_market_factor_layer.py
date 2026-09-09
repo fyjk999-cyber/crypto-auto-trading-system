@@ -593,7 +593,6 @@ def test_okx_ticker_volume_is_derived_to_usd_turnover():
     snap = board.snapshot()
     assert summary["eligible"] == 1, snap["broad_market"]
     assert summary["scanned"] == 1
-    candidate_row = snap["broad_market"]
     assert snap["universe_size"] == 1
 
 
@@ -632,4 +631,9 @@ async def test_lease_renews_after_ttl_gap_via_same_owner_recovery(database):
     assert ok is True
     held = await lm.is_held("lease_recovery_key", lease.token)
     assert held is True
-    await lm.release("lease_recovery_key", lease.token, owner_id="owner_a", fence_generation=lease.fence_generation)
+    await lm.release(
+        "lease_recovery_key",
+        lease.token,
+        owner_id="owner_a",
+        fence_generation=lease.fence_generation,
+    )
