@@ -64,6 +64,25 @@ class DailyReviewScheduler:
             "profit_factor": str(stats.profit_factor),
         }
 
+
+    async def run_missed_days(self, since_date: str, end_date: str | None = None) -> list[dict]:
+        """Run one review per UTC day from since_date through yesterday."""
+        results: list[dict] = []
+        current = datetime.strptime(since_date, "%Y-%m-%d").date()
+        end = (
+            datetime.strptime(end_date, "%Y-%m-%d").date()
+            if end_date
+            else (datetime.now(UTC) - timedelta(days=1)).date()
+        )
+        while current <= end:
+            try:
+                results.append(await self.run_once(current.isoformat()))
+            except Exception:
+                # Preserve retryability: failures are not fatal to other dates.
+                results.append({"date": current.isoformat(), "failed": True})
+            current += timedelta(days=1)
+        return results
+
     async def loop(self) -> None:
         hour, minute = (int(part) for part in self.review_time_utc.split(":"))
         while True:
