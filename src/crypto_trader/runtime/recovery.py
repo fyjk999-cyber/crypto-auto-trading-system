@@ -47,12 +47,17 @@ class RecoveryService:
         *,
         positions_provider: Callable[[], Awaitable[dict[str, Any]]] | None = None,
         plans: Any | None = None,
+        ledger_state_provider: Callable[
+            [], Awaitable[tuple[dict[str, Any], dict[str, Any]]]
+        ]
+        | None = None,
     ) -> None:
         self.order_manager = order_manager
         self.adapter = adapter
         self.audit = audit
         self.positions_provider = positions_provider
         self.plans = plans
+        self.ledger_state_provider = ledger_state_provider
 
     async def recover(self, run_id: str | None = None) -> list[str]:
         actions: list[str] = []
@@ -158,7 +163,29 @@ class RecoveryService:
                     after={"status": status.value},
                 )
         await self._close_orphan_positions(run_id, actions)
+        await self._resync_sim_from_ledger(actions)
         return actions
+
+    async def _resync_sim_from_ledger(self, actions: list[str]) -> None:
+        """Mirror the durable ledger into the paper adapter after restoration.
+
+        Recovery mutates the ledger (orphan closes); the volatile simulator
+        must end up an exact mirror of the ledger or the next reconciliation
+        pass reports a BALANCE_MISMATCH and halts trading.
+        """
+        restore = getattr(self.adapter, "restore_from_canonical_state", None)
+        if restore is None or self.ledger_state_provider is None:
+            return
+        try:
+            balances, positions = await self.ledger_state_provider()
+        except Exception as exc:  # noqa: BLE001 - recovery must not crash startup
+            actions.append(f"sim resync skipped (ledger unavailable: {exc})")
+            return
+        await restore(
+            balances={c: b.total for c, b in balances.items()},
+            positions=positions,
+        )
+        actions.append("sim resynced from ledger")
 
     async def _close_orphan_positions(self, run_id: str | None, actions: list[str]) -> None:
         """Restore the open-position <-> active-trade-plan invariant.

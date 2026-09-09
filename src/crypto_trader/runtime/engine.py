@@ -268,7 +268,13 @@ class TradingEngine:
             self.audit,
             positions_provider=self.portfolio.get_positions,
             plans=self.trade_plans,
+            ledger_state_provider=self._ledger_state,
         ).recover(run_id)
+
+    async def _ledger_state(self) -> tuple[dict, dict]:
+        account = await self.portfolio.get_account(self.settings.effective_mode())
+        positions = await self.portfolio.get_positions()
+        return account.balances, positions
 
     async def _reconcile_stale_runs(self) -> list[str]:
         """Close abandoned rows only after this process owns the fenced lease."""
