@@ -330,6 +330,29 @@ describe("中文加密交易终端 V2", () => {
     expect(screen.getByText("WAIT")).toBeTruthy();
   });
 
+  it("AI 页展示 market layer sets observable/analysis/executable", async () => {
+    window.location.hash = "#/ai";
+    setup(backend({
+      "/llm/decisions": { decisions: [], count: 0 },
+      "/opportunity/stats": {
+        enabled: true,
+        universe_size: 100,
+        eligible_count: 40,
+        market_sets: { all_market_count: 100, observable_count: 80, analysis_count: 12, executable_count: 40 },
+        candidate_count: 0,
+        scan_stats: {},
+        stats: {},
+        recent_decisions: [],
+        rotation_symbols: [],
+      },
+    }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "市场机会 · 全市场因子扫描（仅证据，无方向权限）" })).toBeTruthy());
+    expect(screen.getByText("80")).toBeTruthy();
+    expect(screen.getByText("12")).toBeTruthy();
+    expect(screen.getByText("40")).toBeTruthy();
+  });
+
+
   it("计划页显示事实 TradePlan，复盘记录页在零 Episode 时诚实为空", async () => {
     window.location.hash = "#/plans";
     setup(backend({
