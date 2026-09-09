@@ -1,0 +1,220 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project": {
+      "const": "fyjk999-cyber/crypto-auto-trading-system"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "chapter_id": {
+      "type": "string",
+      "pattern": "^(0[0-9]|1[0-5])$"
+    },
+    "base_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "candidate_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "project_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^codex/"
+    },
+    "pre_existing_dirty": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "status": {
+            "enum": [
+              "modified",
+              "untracked",
+              "deleted",
+              "renamed"
+            ]
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "sha256"
+        ]
+      }
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000
+      }
+    },
+    "finding_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command_redacted": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "environment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^\\.ops/ai-native-remediation/[A-Za-z0-9_/-]+\\.[A-Za-z0-9]+$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "complete": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "complete"
+            ]
+          }
+        },
+        "required": [
+          "command_redacted",
+          "environment",
+          "exit_code",
+          "evidence"
+        ]
+      },
+      "minItems": 1
+    },
+    "migration_validation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "rollback": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "unverified_items": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000
+      }
+    },
+    "prior_approval": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+            },
+            "turn_or_message_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+            },
+            "output_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "thread_id",
+            "turn_or_message_id",
+            "output_sha256"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "const": "SUBMITTED"
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "request_id",
+    "chapter_id",
+    "base_sha",
+    "candidate_sha",
+    "created_at",
+    "project_path",
+    "branch",
+    "pre_existing_dirty",
+    "changed_files",
+    "finding_ids",
+    "tests",
+    "migration_validation",
+    "rollback",
+    "unverified_items",
+    "prior_approval",
+    "state"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "review-request",
+  "description": "Format only; does not authenticate approval, control processes or sanitize secrets."
+}

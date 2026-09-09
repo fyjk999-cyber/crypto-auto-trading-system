@@ -1,0 +1,267 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "chapter_id": {
+      "type": "string",
+      "pattern": "^(0[0-9]|1[0-5])$"
+    },
+    "reviewed_sha": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "reviewed_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "reviewer": {
+      "const": "CODEX"
+    },
+    "reviewer_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "thread_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+        },
+        "turn_or_message_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+        },
+        "output_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "thread_id",
+        "turn_or_message_id",
+        "output_sha256"
+      ]
+    },
+    "source_verified": {
+      "type": "boolean"
+    },
+    "decision": {
+      "enum": [
+        "APPROVED",
+        "CHANGES_REQUIRED",
+        "BLOCKED"
+      ]
+    },
+    "independent_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command_redacted": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "environment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^\\.ops/ai-native-remediation/[A-Za-z0-9_/-]+\\.[A-Za-z0-9]+$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "complete": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "complete"
+            ]
+          }
+        },
+        "required": [
+          "command_redacted",
+          "environment",
+          "exit_code",
+          "evidence"
+        ]
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+          },
+          "severity": {
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "blocking",
+          "detail"
+        ]
+      }
+    },
+    "missing_evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4000
+      }
+    },
+    "next_chapter_allowed": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^(0[0-9]|1[0-5])$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runtime_authorized": {
+      "const": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "chapter_id",
+    "reviewed_sha",
+    "reviewed_at",
+    "reviewer",
+    "reviewer_source",
+    "source_verified",
+    "decision",
+    "independent_tests",
+    "findings",
+    "missing_evidence",
+    "next_chapter_allowed",
+    "runtime_authorized"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "APPROVED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "source_verified": {
+            "const": true
+          },
+          "missing_evidence": {
+            "maxItems": 0
+          },
+          "independent_tests": {
+            "minItems": 1,
+            "items": {
+              "properties": {
+                "exit_code": {
+                  "const": 0
+                },
+                "evidence": {
+                  "properties": {
+                    "complete": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "findings": {
+            "items": {
+              "properties": {
+                "blocking": {
+                  "const": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "CHANGES_REQUIRED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "next_chapter_allowed": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "BLOCKED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "next_chapter_allowed": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "review-result",
+  "description": "Format only; does not authenticate approval, control processes or sanitize secrets."
+}

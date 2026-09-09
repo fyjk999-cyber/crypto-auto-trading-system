@@ -1,0 +1,12 @@
+# Codex 整改单
+DIRECTIVE_ID / REQUEST_ID / REVIEWED_SHA:
+FINDING_ID / SEVERITY:
+FACTUAL_EVIDENCE:
+VIOLATED_CONTRACT:
+ALLOWED_SCOPE:
+FORBIDDEN_FIX:
+REQUIRED_TESTS:
+STOP_OR_CONTINUE_BOUNDARY:
+ACCEPTANCE:
+
+Harness响应：root cause / changed files / tests / evidence / remaining risk。逐条闭环，不换题。

@@ -1,0 +1,224 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "checkpoint_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "harness_session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "process_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "executable_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "project_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "pid",
+        "started_at",
+        "executable_path",
+        "project_path"
+      ]
+    },
+    "project_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "chapter_id": {
+      "type": "string",
+      "pattern": "^(0[0-9]|1[0-5])$"
+    },
+    "head": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "dirty_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "status": {
+            "enum": [
+              "modified",
+              "untracked",
+              "deleted",
+              "renamed"
+            ]
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "sha256"
+        ]
+      }
+    },
+    "work_state": {
+      "enum": [
+        "RUNNING",
+        "WAITING_FOR_REVIEW",
+        "WAITING_FOR_USER",
+        "BACKING_OFF",
+        "SUSPECTED_STALL",
+        "RECOVERING",
+        "RECOVERY_FAILED",
+        "PAUSED_BY_USER",
+        "PENDING_NATURAL_EVIDENCE",
+        "COMPLETE"
+      ]
+    },
+    "active_operation": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operation_deadline": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operation_may_have_completed": {
+      "type": "boolean"
+    },
+    "last_confirmed_action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "test_progress": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "review_request_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_verified_approval": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "thread_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+            },
+            "turn_or_message_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+            },
+            "output_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "thread_id",
+            "turn_or_message_id",
+            "output_sha256"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "resume_step": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    }
+  },
+  "required": [
+    "schema_version",
+    "checkpoint_id",
+    "harness_session_id",
+    "process_identity",
+    "project_path",
+    "chapter_id",
+    "head",
+    "recorded_at",
+    "dirty_files",
+    "work_state",
+    "active_operation",
+    "operation_deadline",
+    "operation_may_have_completed",
+    "last_confirmed_action",
+    "test_progress",
+    "review_request_id",
+    "last_verified_approval",
+    "resume_step"
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "harness-checkpoint",
+  "description": "Format only; does not authenticate approval, control processes or sanitize secrets."
+}

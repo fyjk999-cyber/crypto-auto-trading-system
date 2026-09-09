@@ -1,0 +1,284 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "attempt_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "harness_session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "project_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "old_process_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "executable_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "project_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "pid",
+        "started_at",
+        "executable_path",
+        "project_path"
+      ]
+    },
+    "new_process_identity": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            "executable_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "project_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            }
+          },
+          "required": [
+            "pid",
+            "started_at",
+            "executable_path",
+            "project_path"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason_code": {
+      "enum": [
+        "MODEL_TIMEOUT",
+        "TRANSPORT_ERROR",
+        "SESSION_TERMINATED",
+        "CONFIRMED_STALL",
+        "CONTEXT_OVERFLOW",
+        "PROVIDER_UNAVAILABLE"
+      ]
+    },
+    "checkpoint_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "finished_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "attempts_1h": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "attempts_24h": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "safe_stop_verified": {
+      "type": "boolean"
+    },
+    "old_writer_exited": {
+      "type": "boolean"
+    },
+    "entrypoint_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "progress_evidence": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string",
+              "pattern": "^\\.ops/ai-native-remediation/[A-Za-z0-9_/-]+\\.[A-Za-z0-9]+$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path",
+            "sha256",
+            "complete"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "trading_runtime_untouched": {
+      "const": true
+    },
+    "result": {
+      "enum": [
+        "RECOVERING",
+        "RECOVERED",
+        "FAILED",
+        "DEFERRED",
+        "BLOCKED"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "attempt_id",
+    "harness_session_id",
+    "project_path",
+    "old_process_identity",
+    "new_process_identity",
+    "reason_code",
+    "checkpoint_id",
+    "started_at",
+    "finished_at",
+    "attempts_1h",
+    "attempts_24h",
+    "safe_stop_verified",
+    "old_writer_exited",
+    "entrypoint_reference",
+    "progress_evidence",
+    "trading_runtime_untouched",
+    "result"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "result": {
+            "const": "RECOVERED"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "safe_stop_verified": {
+            "const": true
+          },
+          "old_writer_exited": {
+            "const": true
+          },
+          "new_process_identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "Z$"
+              },
+              "executable_path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "project_path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "pid",
+              "started_at",
+              "executable_path",
+              "project_path"
+            ]
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          },
+          "progress_evidence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^\\.ops/ai-native-remediation/[A-Za-z0-9_/-]+\\.[A-Za-z0-9]+$"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "complete": {
+                "const": true
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "complete"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "recovery-event",
+  "description": "Format only; does not authenticate approval, control processes or sanitize secrets."
+}

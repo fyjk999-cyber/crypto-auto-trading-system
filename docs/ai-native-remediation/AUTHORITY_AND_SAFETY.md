@@ -1,0 +1,11 @@
+# 权限与安全边界
+- NEW_DIRECTION_DECISION_AUTHORITY=ChiefTraderEngine/DeepSeekProvider ONLY；Quant/Factor/Strategy/Research/Memory只读证据。
+- Risk仅APPROVE/SCALE_DOWN/REJECT；方向不得反转；Execution不能造thesis。
+- PAPER ONLY，LIVE_TRADING_ENABLED=false；真实OKX public source；不触发真实交易订单或操作私有OKX密钥。
+- NO_SYNTHETIC_FALLBACK / NO_CROSS_SYMBOL_FALLBACK / NO_FORCED_TRADES / NO_FAKE_EPISODES / NO_RISK_BYPASS / NO_EXECUTION_BYPASS。
+- 测试使用明确标注隔离fixture；真实PAPER fill须本地模拟撮合事实证据，不把构造测试写进生产DB。
+- 交易writer与Harness工程writer是两个独立锁域；Harness恢复不得操作交易lease，不得影响交易服务。
+- 只对精确已绑定会话做恢复；不要pkill、killall、按端口杀、reset/clean或删锁文件“解卡”。
+- 不记录环境原值、原始秘密、供应商鉴权头、完整异常payload；公共工具不能返回凭据。
+- 保留pre-existing dirty、用户暂停、预算、模型配置及审批关卡。
+- 无自然交易=PENDING_NATURAL_EVIDENCE，不是放宽约束的理由。

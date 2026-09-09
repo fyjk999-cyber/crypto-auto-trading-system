@@ -1,0 +1,273 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "harness_session_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "process_identity": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pid": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "started_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            },
+            "executable_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "project_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            }
+          },
+          "required": [
+            "pid",
+            "started_at",
+            "executable_path",
+            "project_path"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "chapter_id": {
+      "type": "string",
+      "pattern": "^(0[0-9]|1[0-5])$"
+    },
+    "work_state": {
+      "enum": [
+        "RUNNING",
+        "WAITING_FOR_REVIEW",
+        "WAITING_FOR_USER",
+        "BACKING_OFF",
+        "SUSPECTED_STALL",
+        "RECOVERING",
+        "RECOVERY_FAILED",
+        "PAUSED_BY_USER",
+        "PENDING_NATURAL_EVIDENCE",
+        "COMPLETE"
+      ]
+    },
+    "last_model_event_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_progress_at": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "active_operation": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "operation_deadline": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "review_request_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "last_supervision_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "recovery_attempt_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery_count_1h": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "recovery_count_24h": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_recovery_result": {
+      "anyOf": [
+        {
+          "enum": [
+            "RECOVERED",
+            "FAILED",
+            "DEFERRED",
+            "BLOCKED"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "binding_verified": {
+      "type": "boolean"
+    },
+    "recovery_enabled": {
+      "type": "boolean"
+    },
+    "retry_after": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "observations_without_progress": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "harness_session_id",
+    "process_identity",
+    "chapter_id",
+    "work_state",
+    "last_model_event_at",
+    "last_progress_at",
+    "active_operation",
+    "operation_deadline",
+    "review_request_id",
+    "last_supervision_at",
+    "recovery_attempt_id",
+    "recovery_count_1h",
+    "recovery_count_24h",
+    "last_recovery_result",
+    "binding_verified",
+    "recovery_enabled",
+    "retry_after",
+    "observations_without_progress"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "recovery_enabled": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "binding_verified": {
+            "const": true
+          },
+          "harness_session_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$"
+          },
+          "process_identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "started_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "Z$"
+              },
+              "executable_path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "project_path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "pid",
+              "started_at",
+              "executable_path",
+              "project_path"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "harness-status",
+  "description": "Format only; does not authenticate approval, control processes or sanitize secrets."
+}

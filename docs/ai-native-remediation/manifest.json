@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "project": "fyjk999-cyber/crypto-auto-trading-system",
+  "snapshot_sha": "fc244d470cad1536085834c4f77ae47b2688cb6a",
+  "chapters": [
+    {
+      "id": "00",
+      "title": "监督、自动审核与版本基线",
+      "file": "chapters/00-supervision-review-and-baseline.md",
+      "requires": []
+    },
+    {
+      "id": "01",
+      "title": "执行、撤单与租约安全",
+      "file": "chapters/01-execution-and-lease-safety.md",
+      "requires": [
+        "00"
+      ]
+    },
+    {
+      "id": "02",
+      "title": "品种身份与多资产账户契约",
+      "file": "chapters/02-instrument-and-account-contracts.md",
+      "requires": [
+        "01"
+      ]
+    },
+    {
+      "id": "03",
+      "title": "真实行情与PAPER撮合输入",
+      "file": "chapters/03-factual-market-data.md",
+      "requires": [
+        "02"
+      ]
+    },
+    {
+      "id": "04",
+      "title": "指标、固定周期与市场状态",
+      "file": "chapters/04-indicators-and-regimes.md",
+      "requires": [
+        "03"
+      ]
+    },
+    {
+      "id": "05",
+      "title": "全市场发现、事实历史与覆盖",
+      "file": "chapters/05-universe-and-history.md",
+      "requires": [
+        "04"
+      ]
+    },
+    {
+      "id": "06",
+      "title": "统一计量、账本及真实风控",
+      "file": "chapters/06-exposure-ledger-and-risk.md",
+      "requires": [
+        "05"
+      ]
+    },
+    {
+      "id": "07",
+      "title": "仓位归一化、杠杆与成本",
+      "file": "chapters/07-sizing-leverage-and-cost.md",
+      "requires": [
+        "06"
+      ]
+    },
+    {
+      "id": "08",
+      "title": "工具驱动证据与策略质量",
+      "file": "chapters/08-tool-evidence-and-strategies.md",
+      "requires": [
+        "07"
+      ]
+    },
+    {
+      "id": "09",
+      "title": "决策真相、调用节流与证据持久化",
+      "file": "chapters/09-decision-truth-store.md",
+      "requires": [
+        "08"
+      ]
+    },
+    {
+      "id": "10",
+      "title": "同Chief持仓管理与事实关闭",
+      "file": "chapters/10-position-lifecycle.md",
+      "requires": [
+        "09"
+      ]
+    },
+    {
+      "id": "11",
+      "title": "回测数值与事实回放修复",
+      "file": "chapters/11-backtest-and-replay.md",
+      "requires": [
+        "10"
+      ]
+    },
+    {
+      "id": "12",
+      "title": "样本外验证与策略研究审批",
+      "file": "chapters/12-strategy-validation.md",
+      "requires": [
+        "11"
+      ]
+    },
+    {
+      "id": "13",
+      "title": "事实Episode、UTC复盘与记忆回流",
+      "file": "chapters/13-episodes-and-learning.md",
+      "requires": [
+        "12"
+      ]
+    },
+    {
+      "id": "14",
+      "title": "前端、接口与事实可解释性",
+      "file": "chapters/14-frontend-and-observability.md",
+      "requires": [
+        "13"
+      ]
+    },
+    {
+      "id": "15",
+      "title": "发布、持续健康与自然验收",
+      "file": "chapters/15-release-and-natural-acceptance.md",
+      "requires": [
+        "14"
+      ]
+    }
+  ]
+}

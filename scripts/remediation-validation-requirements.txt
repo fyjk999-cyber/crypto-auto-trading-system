@@ -1,0 +1,2 @@
+# Isolated documentation schema checks only; not runtime trading dependencies.
+jsonschema>=4,<5
