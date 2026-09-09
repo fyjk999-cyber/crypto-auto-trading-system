@@ -148,3 +148,41 @@ async def test_real_alpha_selective_strategy_does_not_evaluate_unselected_strate
 
     assert calls == ["trend_following"]
     assert result.features["strategy_evidence"][0]["strategy"] == "trend_following"
+
+async def test_tool_timeout_returns_unavailable_and_does_not_fabricate():
+    import asyncio
+
+    async def slow(symbol: str, context: dict) -> ToolEvidence:
+        await asyncio.sleep(1.0)
+        return ToolEvidence(
+            tool_name="slow", symbol=symbol, timestamp=datetime.now(UTC), features={},
+            supporting_evidence=[], contrary_evidence=[], confidence_of_measurement=1.0,
+            data_quality="HEALTHY", source_refs=[],
+        )
+
+    tools = LLMToolRegistry()
+    tools.register("slow", slow)
+    result = await tools.call("slow", "BTCUSDT", {}, timeout_seconds=0.01)
+    assert result.data_quality == "UNAVAILABLE"
+    assert result.contrary_evidence == ["tool timeout"]
+
+
+async def test_tool_budget_rejects_excess_selection():
+    async def tool(symbol: str, context: dict) -> ToolEvidence:
+        return ToolEvidence(
+            tool_name="x", symbol=symbol, timestamp=datetime.now(UTC), features={},
+            supporting_evidence=[], contrary_evidence=[], confidence_of_measurement=1.0,
+            data_quality="HEALTHY", source_refs=[],
+        )
+
+    tools = LLMToolRegistry()
+    for name in ("a", "b", "c", "d"):
+        tools.register(name, tool)
+    try:
+        await tools.build_package(
+            ["a", "b", "c", "d"], "BTCUSDT", {}, now=datetime.now(UTC), max_tools=2
+        )
+    except ValueError:
+        return
+    raise AssertionError("budget should reject excess tool selection")
+

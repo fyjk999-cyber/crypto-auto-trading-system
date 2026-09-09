@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -71,11 +72,33 @@ class LLMToolRegistry:
     def available(self) -> list[str]:
         return sorted(self._tools)
 
-    async def call(self, name: str, symbol: str, context: dict[str, Any]) -> ToolEvidence:
+    async def call(
+        self,
+        name: str,
+        symbol: str,
+        context: dict[str, Any],
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> ToolEvidence:
         if name not in self._tools:
             raise KeyError(f"unknown LLM evidence tool: {name}")
         try:
-            return await self._tools[name](symbol, context)
+            return await asyncio.wait_for(
+                self._tools[name](symbol, context),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError:
+            return ToolEvidence(
+                tool_name=name,
+                symbol=symbol,
+                timestamp=datetime.now(UTC),
+                features={},
+                supporting_evidence=[],
+                contrary_evidence=["tool timeout"],
+                confidence_of_measurement=0.0,
+                data_quality="UNAVAILABLE",
+                source_refs=[],
+            )
         except Exception as exc:
             return ToolEvidence(
                 tool_name=name,
@@ -97,12 +120,18 @@ class LLMToolRegistry:
         *,
         now: datetime,
         max_age_seconds: float = 30.0,
+        timeout_seconds: float = 10.0,
+        max_tools: int = 8,
     ) -> DynamicEvidencePackage:
         if len(names) != len(set(names)) or any(name not in self._tools for name in names):
             raise ValueError("tool selection contains unknown or duplicate tools")
+        if len(names) > max_tools:
+            raise ValueError("tool budget exceeded")
         items: list[EvidenceItem] = []
         for name in names:
-            evidence = await self.call(name, symbol, context)
+            evidence = await self.call(
+                name, symbol, context, timeout_seconds=timeout_seconds
+            )
             timestamp = (
                 evidence.timestamp.astimezone(UTC)
                 if evidence.timestamp.tzinfo is not None
