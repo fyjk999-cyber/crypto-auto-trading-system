@@ -72,7 +72,7 @@ class MarketDataEngine:
         return ema
 
     def realized_vol(self, n: int = 30) -> Decimal | None:
-        rets = self.returns(1)[-n:]
+        rets = self.returns(n + 1)[-n:]
         if len(rets) < 2:
             return None
         mean = sum(rets, Decimal("0")) / Decimal(len(rets))

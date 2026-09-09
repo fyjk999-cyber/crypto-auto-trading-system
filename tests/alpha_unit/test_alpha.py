@@ -118,6 +118,33 @@ def test_no_trade_is_first_class_for_flat_market():
         assert signal.side == AlphaSide.NO_TRADE, strat.name
 
 
+
+def test_market_data_engine_realized_vol_hand_calculated():
+    mde = MarketDataEngine("BTCUSDT")
+    ts = TS
+    # Prices 100,101,99 -> returns +0.01, -0.01980198...
+    for price in (100, 101, 99):
+        ts += timedelta(minutes=1)
+        mde.ingest(ts, Decimal(price), Decimal("10"))
+    rets = mde.returns(3)
+    assert len(rets) == 2
+    assert rets[0] == Decimal("0.01")
+    # Sample stddev of two returns around mean > 0
+    assert mde.realized_vol(2) is not None
+    assert mde.realized_vol(2) > 0
+
+
+def test_market_data_engine_zero_vol_is_not_none_and_duplicate_rejected():
+    mde = MarketDataEngine("BTCUSDT")
+    ts = TS
+    for _ in range(10):
+        ts += timedelta(minutes=1)
+        mde.ingest(ts, Decimal("100"), Decimal("10"))
+    assert mde.realized_vol(10) == Decimal("0")
+    with pytest.raises(ValueError):
+        mde.ingest(ts, Decimal("101"), Decimal("10"))
+
+
 def test_ml_meta_not_a_directional_sub_strategy():
     assert "ml_meta" not in BASE_WEIGHTS
     assert sum(BASE_WEIGHTS.values()) == Decimal("1.00")
