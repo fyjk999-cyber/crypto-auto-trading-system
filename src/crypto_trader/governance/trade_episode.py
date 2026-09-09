@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -213,20 +213,30 @@ class TradeEpisodeStore:
         limit: int = 1000,
         timezone: tzinfo = UTC,
     ) -> list[FactualTradeEpisode]:
+        """Return factual episodes closed in [start, next_day) in timezone.
+
+        SQL date filtering is applied before the page limit so >1000 rows on
+        other dates cannot crowd out the requested review day.
+        """
+        parsed = datetime.strptime(date, "%Y-%m-%d").date()
+        start = datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone)
+        end = start + timedelta(days=1)
+        start_utc = start.astimezone(UTC)
+        end_utc = end.astimezone(UTC)
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(TradeEpisodeORM)
-                    .where(TradeEpisodeORM.factual.is_(True))
+                    .where(
+                        TradeEpisodeORM.factual.is_(True),
+                        TradeEpisodeORM.closed_at >= start_utc,
+                        TradeEpisodeORM.closed_at < end_utc,
+                    )
                     .order_by(TradeEpisodeORM.closed_at.desc())
-                    .limit(limit)
+                    .limit(max(1, min(limit, 5000)))
                 )
             ).scalars().all()
-            return [
-                _to_domain(row)
-                for row in rows
-                if _as_utc(row.closed_at).astimezone(timezone).date().isoformat() == date
-            ]
+            return [_to_domain(row) for row in rows]
 
     async def mark_reviewed(self, episode_ids: list[str]) -> None:
         if not episode_ids:

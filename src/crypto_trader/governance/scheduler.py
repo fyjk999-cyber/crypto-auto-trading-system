@@ -32,7 +32,10 @@ class DailyReviewScheduler:
 
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
-        date = date or now.date().isoformat()
+        # Review the previous complete UTC/local day when no explicit date is
+        # supplied. A 00:05 scheduler call must cover [yesterday 00:00,
+        # today 00:00), not the still-incomplete current day.
+        date = date or (now - timedelta(days=1)).date().isoformat()
         episodes = await self.episodes.load_closed_on(
             date,
             limit=1000,
