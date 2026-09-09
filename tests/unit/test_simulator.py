@@ -151,9 +151,10 @@ async def test_submit_timeout_but_order_created():
     sim.timeout_but_created = True
     with pytest.raises(UnknownExecutionState):
         await sim.submit_order(make_order())
-    # order exists at exchange and can be recovered
-    recovered = await sim.get_order("BTCUSDT", "sim_1000")
-    assert recovered.exchange_order_id == "sim_1000"
+    # order exists at exchange and can be recovered by its exchange id
+    (local_only,) = list(sim.orders.values())
+    recovered = await sim.get_order("BTCUSDT", local_only.exchange_order_id)
+    assert recovered.exchange_order_id == local_only.exchange_order_id
     assert recovered.status == OrderStatus.ACKNOWLEDGED
 
 

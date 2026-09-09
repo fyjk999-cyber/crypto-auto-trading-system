@@ -211,7 +211,8 @@ async def test_submit_timeout_but_order_created_test():
     )
     with pytest.raises(UnknownExecutionState):
         await sim.submit_order(order)
-    recovered = await sim.get_order("BTCUSDT", "sim_1000")
+    (local_only,) = list(sim.orders.values())
+    recovered = await sim.get_order("BTCUSDT", local_only.exchange_order_id)
     assert recovered.client_order_id == "c_timeout"
 
 

@@ -189,7 +189,11 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         return Order(
             internal_order_id=raw.internal_order_id,
             client_order_id=raw.client_order_id,
-            exchange_order_id=f"sim_{self.next_exchange_order_id}",
+            # Exchange ids must be unique for the lifetime of the durable
+            # ledger. A per-process counter restarts at sim_1000 on every
+            # restart and collides with historical rows (UNIQUE constraint on
+            # orders.exchange_order_id), so use a globally unique id.
+            exchange_order_id=new_id("sim"),
             symbol=raw.symbol,
             side=raw.side,
             order_type=raw.order_type,
