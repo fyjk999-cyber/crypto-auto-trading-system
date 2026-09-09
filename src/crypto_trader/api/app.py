@@ -155,6 +155,7 @@ def create_app(state: AppState) -> FastAPI:
             "enabled": True,
             "universe_size": snap["universe_size"],
             "eligible_count": snap["eligible_count"],
+            "market_sets": snap.get("market_sets"),
             "candidate_count": snap["candidate_count"],
             "scan_stats": snap["scan_stats"],
             "stats": snap["stats"],

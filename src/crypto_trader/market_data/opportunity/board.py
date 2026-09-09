@@ -70,6 +70,9 @@ class OpportunityBoard:
     rotation_symbols: list[str] = field(default_factory=list)
     universe_size: int = 0
     eligible_count: int = 0
+    observable_count: int = 0
+    analysis_count: int = 0
+    executable_count: int = 0
     updated_at: float = 0.0
     stats: BoardStats = field(default_factory=BoardStats)
     # RLock: snapshot() re-enters recent_decisions() under the same lock.
@@ -87,6 +90,9 @@ class OpportunityBoard:
         scan_stats: dict,
         universe_size: int,
         eligible_count: int,
+        observable_count: int = 0,
+        analysis_count: int = 0,
+        executable_count: int = 0,
         rotation_symbols: list[str] | None = None,
     ) -> None:
         with self._lock:
@@ -98,6 +104,9 @@ class OpportunityBoard:
                 self.rotation_symbols = list(rotation_symbols)
             self.universe_size = universe_size
             self.eligible_count = eligible_count
+            self.observable_count = observable_count
+            self.analysis_count = analysis_count
+            self.executable_count = executable_count
             self.updated_at = time.time()
 
     # ------------------------------------------------------------------ read
@@ -213,6 +222,12 @@ class OpportunityBoard:
             return {
                 "universe_size": self.universe_size,
                 "eligible_count": self.eligible_count,
+                "market_sets": {
+                    "all_market_count": self.universe_size,
+                    "observable_count": self.observable_count,
+                    "analysis_count": self.analysis_count,
+                    "executable_count": self.executable_count,
+                },
                 "candidate_count": len(self.candidates),
                 "candidates": [c.as_dict() for c in self.candidates],
                 "broad_market": self.broad_market,

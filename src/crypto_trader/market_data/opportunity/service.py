@@ -216,6 +216,9 @@ class OpportunityScannerService:
             },
             universe_size=snapshot.size,
             eligible_count=len(eligible),
+            observable_count=len(facts_rows),
+            analysis_count=len(scan_rows),
+            executable_count=len(eligible),
             rotation_symbols=rotation_rows,
         )
         self.cycles_completed += 0  # maintained by run_forever
