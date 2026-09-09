@@ -341,3 +341,20 @@ def test_drawdown_policy_50_pct_kill_switch():
     assert policy.allow_action(d50, "INCREASE_SHORT") is False
     assert policy.allow_action(d50, "REDUCE") is True
     assert policy.allow_action(d50, "CLOSE") is True
+
+
+
+async def test_daily_review_scheduler_run_missed_days_iterates_in_order():
+    from crypto_trader.governance.scheduler import DailyReviewScheduler
+
+    sched = object.__new__(DailyReviewScheduler)
+    calls: list[str] = []
+
+    async def fake_run_once(date: str) -> dict:
+        calls.append(date)
+        return {"date": date, "trade_count": 0}
+
+    sched.run_once = fake_run_once  # type: ignore[method-assign]
+    results = await sched.run_missed_days("2026-09-01", "2026-09-02")
+    assert calls == ["2026-09-01", "2026-09-02"]
+    assert len(results) == 2
