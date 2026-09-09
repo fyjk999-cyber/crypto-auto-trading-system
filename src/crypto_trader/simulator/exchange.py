@@ -286,6 +286,12 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             # seed), so an order for a symbol without a real synced book is
             # rejected instead of matched.
             raise OrderRejected(f"no market data book for {order.symbol}")
+        if book.symbol != order.symbol:
+            # Cross-symbol fill pollution guard: a book stored under the wrong
+            # key would fabricate fill prices from another instrument's market.
+            raise OrderRejected(
+                f"book symbol mismatch for {order.symbol}: book is {book.symbol}"
+            )
         instrument = self.instruments.get(order.symbol, self.default_instrument)
         remaining = order.quantity
         fill_events: list[ExchangeEvent] = []
