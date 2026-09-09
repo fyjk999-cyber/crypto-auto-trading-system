@@ -562,6 +562,33 @@ class TradingEngine:
             plan = await self.trade_plans.get(trade_plan_id)
             position = positions.get(signal.symbol)
             action = signal.metadata.get("lifecycle_action")
+            expected_side = (
+                OrderSide.SELL if plan is not None and plan.direction == "LONG" else OrderSide.BUY
+            )
+            valid_reduction = (
+                plan is not None
+                and plan.symbol == signal.symbol
+                and plan.state == TradePlanState.ACTIVE
+                and plan.latest_position_decision_id == signal.metadata.get("decision_id")
+                and action in {"REDUCE", "EXIT", "TIME_STOP_SAFETY_FALLBACK"}
+                and signal.metadata.get("reduce_only") is True
+                and position is not None
+                and position.quantity != 0
+                and signal.side == expected_side
+                and signal.quantity <= abs(position.quantity)
+                and (
+                    (plan.direction == "LONG" and position.quantity > 0)
+                    or (plan.direction == "SHORT" and position.quantity < 0)
+                )
+            )
+            if not valid_reduction:
+                await self.audit.log(
+                    "POSITION_REDUCTION_INVALID",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"trade_plan_id": trade_plan_id},
+                )
+                return None
             entry_order = (
                 await self.order_manager.get(plan.order_id)
                 if plan is not None and plan.order_id is not None
@@ -589,33 +616,6 @@ class TradingEngine:
                 # act on the settled position.
                 if entry_order is not None and entry_order.status not in TERMINAL_ORDER_STATUSES:
                     await self._cancel_unsettled_entry_order(entry_order)
-                return None
-            expected_side = (
-                OrderSide.SELL if plan is not None and plan.direction == "LONG" else OrderSide.BUY
-            )
-            valid_reduction = (
-                plan is not None
-                and plan.symbol == signal.symbol
-                and plan.state == TradePlanState.ACTIVE
-                and plan.latest_position_decision_id == signal.metadata.get("decision_id")
-                and action in {"REDUCE", "EXIT", "TIME_STOP_SAFETY_FALLBACK"}
-                and signal.metadata.get("reduce_only") is True
-                and position is not None
-                and position.quantity != 0
-                and signal.side == expected_side
-                and signal.quantity <= abs(position.quantity)
-                and (
-                    (plan.direction == "LONG" and position.quantity > 0)
-                    or (plan.direction == "SHORT" and position.quantity < 0)
-                )
-            )
-            if not valid_reduction:
-                await self.audit.log(
-                    "POSITION_REDUCTION_INVALID",
-                    target=client_order_id,
-                    run_id=run_id,
-                    after={"trade_plan_id": trade_plan_id},
-                )
                 return None
             if await self.order_manager.has_pending_position_action(trade_plan_id):
                 await self.audit.log(
