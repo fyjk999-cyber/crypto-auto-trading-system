@@ -107,6 +107,7 @@ async def test_partial_fill_test(database):
 async def test_fill_before_ack_test():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.fill_before_ack = True
     events = []
     await sim.subscribe_order_updates(lambda e: events.append(e.event_type) or asyncio.sleep(0))
@@ -163,6 +164,7 @@ async def test_duplicate_fill_event_test(database):
 async def test_cancel_fill_race_test():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.cancel_fill_race = True
     now = datetime.now(UTC)
     from crypto_trader.domain.models import Order

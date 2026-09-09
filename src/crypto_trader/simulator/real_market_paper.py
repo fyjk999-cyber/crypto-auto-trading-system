@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from crypto_trader.domain.errors import MarketDataUnhealthy
-from crypto_trader.domain.models import Instrument
+from crypto_trader.domain.errors import MarketDataUnhealthy, OrderRejected
+from crypto_trader.domain.models import Instrument, Order
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
@@ -82,6 +82,51 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             self.instruments[canonical] = instrument
             instruments.append(instrument)
         return instruments
+
+    async def submit_order(self, order: Order) -> Order:
+        """Sync the real per-symbol book depth into the matcher, then submit.
+
+        Fills must be market-derived: the matching book for the order symbol
+        always reflects the latest real OKX order book at submit time. If the
+        real feed is unavailable the book is not faked - the order is
+        rejected instead of matching against stale or synthetic prices.
+        """
+        try:
+            payload = await self.feed.client.get_orderbook(order.symbol)
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            raw = rows[0] if isinstance(rows, list) and rows else None
+            if not isinstance(raw, dict):
+                raise OrderRejected(f"empty orderbook response for {order.symbol}")
+
+            def _levels(side_rows):
+                levels = []
+                for lv in side_rows:
+                    if len(lv) < 2:
+                        continue
+                    price, quantity = D(lv[0]), D(lv[1])
+                    if price > 0 and quantity > 0:
+                        levels.append((price, quantity))
+                return levels
+
+            bids = _levels(raw.get("bids", []))
+            asks = _levels(raw.get("asks", []))
+            if not bids or not asks:
+                raise OrderRejected(f"no two-sided market for {order.symbol}")
+            book = OrderBook(symbol=order.symbol, exchange="OKX")
+            book.apply_snapshot(
+                int(raw.get("ts", "0")) or int(datetime.now(UTC).timestamp() * 1000),
+                bids,
+                asks,
+                now=datetime.now(UTC),
+            )
+            self.books[order.symbol] = book
+        except OrderRejected:
+            raise
+        except Exception as exc:
+            raise OrderRejected(
+                f"real market data unavailable for {order.symbol}: {exc}"
+            ) from exc
+        return await super().submit_order(order)
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:

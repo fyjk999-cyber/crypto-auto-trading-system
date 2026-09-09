@@ -8,7 +8,10 @@ factual full-market behavior: every returned instrument is parsed from the
 public OKX instruments response, filtered to live USDT linear swaps.
 """
 
+from datetime import UTC, datetime
 from decimal import Decimal
+
+import pytest
 
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
@@ -68,6 +71,29 @@ class FullMarketOKX:
             "ts": "1700000000000",
         }
 
+    async def get_orderbook(self, _symbol):
+        return {
+            "data": [
+                {
+                    "ts": "1700000000000",
+                    "bids": [["25.99", "5"]],
+                    "asks": [["26.01", "5"]],
+                }
+            ]
+        }
+
+    async def get_mark_price(self, _symbol):
+        return {"mark_price": "26.00"}
+
+    async def get_index_price(self, _symbol):
+        return {"index_price": "26.00"}
+
+    async def get_funding_rate(self, _symbol):
+        return {"funding_rate": "0.0001", "next_funding_time": None}
+
+    async def get_open_interest(self, _symbol):
+        return {"open_interest": "12345"}
+
     async def disconnect(self):
         return None
 
@@ -116,3 +142,100 @@ async def test_engine_registry_would_resolve_reviewed_symbols():
         assert registry[symbol].status == "TRADING"
     # The registry is built only from the factual OKX response.
     assert client.calls == 1
+
+
+def _make_order(symbol, side, qty, price):
+    from uuid import uuid4
+
+    from crypto_trader.domain.enums import (
+        OrderStatus,
+        OrderType,
+        TimeInForce,
+        TradingMode,
+    )
+    from crypto_trader.domain.models import Order
+
+    now = datetime.now(UTC)
+    return Order(
+        internal_order_id=f"ord_{uuid4().hex[:8]}",
+        client_order_id=f"c_{uuid4().hex[:8]}",
+        symbol=symbol,
+        side=side,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price=price,
+        quantity=qty,
+        status=OrderStatus.SUBMITTING,
+        trading_mode=TradingMode.PAPER,
+        strategy_id="test",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+async def test_paper_submit_fills_at_real_fetched_price_not_synthetic_seed():
+    from crypto_trader.domain.enums import OrderSide, OrderStatus
+
+    # Real VVV-style market: bid/ask ~26. A SELL limit below the real bid must
+    # fill at the REAL touch (25.99), never at a synthetic mid=100 seed book.
+    client = FullMarketOKX()
+    client.get_ticker = _ticker_at("25.99", "26.01")  # type: ignore[method-assign]
+    client.get_orderbook = _book_at("25.99", "26.01")  # type: ignore[method-assign]
+    adapter = _adapter(client)
+    await adapter.connect()
+    order = _make_order("VVVUSDT", OrderSide.SELL, "2", "25.50")
+    result = await adapter.submit_order(order)
+    assert result.status == OrderStatus.FILLED
+    assert result.filled_quantity == Decimal("2")
+    # Fill price comes from the real fetched bid (25.99), not the 100 seed.
+    assert result.avg_fill_price == Decimal("25.99")
+
+
+def _ticker_at(bid: str, ask: str):
+    async def get_ticker(_symbol):
+        return {
+            "last": bid,
+            "askPx": ask,
+            "bidPx": bid,
+            "open24h": bid,
+            "high24h": ask,
+            "low24h": bid,
+            "volCcy24h": "1000",
+            "vol24h": "10",
+            "ts": "1700000000000",
+        }
+
+    return get_ticker
+
+
+def _book_at(bid: str, ask: str):
+    async def get_orderbook(_symbol):
+        return {
+            "data": [
+                {
+                    "ts": "1700000000000",
+                    "bids": [[bid, "5"]],
+                    "asks": [[ask, "5"]],
+                }
+            ]
+        }
+
+    return get_orderbook
+
+
+async def test_paper_submit_fails_closed_when_real_feed_unavailable():
+    from crypto_trader.domain.enums import OrderSide
+    from crypto_trader.domain.errors import OrderRejected
+
+    client = FullMarketOKX()
+
+    async def broken_orderbook(_symbol):
+        raise RuntimeError("okx feed down")
+
+    client.get_orderbook = broken_orderbook  # type: ignore[method-assign]
+    adapter = _adapter(client)
+    await adapter.connect()
+    with pytest.raises(OrderRejected):
+        await adapter.submit_order(
+            _make_order("VVVUSDT", OrderSide.SELL, "1", "26.003")
+        )

@@ -281,7 +281,11 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         """Match a resting/marketable order against the simulated book."""
         book = self.books.get(order.symbol)
         if book is None:
-            book = self.seed_book(order.symbol)
+            # Fail closed: fills must be market-derived. A synthetic placeholder
+            # book would fabricate fill prices (e.g. the historical mid=100
+            # seed), so an order for a symbol without a real synced book is
+            # rejected instead of matched.
+            raise OrderRejected(f"no market data book for {order.symbol}")
         instrument = self.instruments.get(order.symbol, self.default_instrument)
         remaining = order.quantity
         fill_events: list[ExchangeEvent] = []

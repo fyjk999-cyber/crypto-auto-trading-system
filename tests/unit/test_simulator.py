@@ -38,6 +38,7 @@ def make_order(cid="c1", qty="0.1", price="100"):
 async def test_simulator_connects_and_implements_contract():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     book = await sim.get_orderbook("BTCUSDT")
     assert book.sequence is not None
     ticker = await sim.get_ticker("BTCUSDT")
@@ -47,6 +48,7 @@ async def test_simulator_connects_and_implements_contract():
 async def test_non_marketable_limit_rests_open():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     events = []
     await sim.subscribe_order_updates(lambda e: events.append(e) or _noop())
     order = await sim.submit_order(make_order(price="1"))
@@ -60,6 +62,7 @@ async def test_non_marketable_limit_rests_open():
 async def test_marketable_limit_fills_and_updates_balance():
     sim = SimulatedExchangeAdapter(initial_balances={"USDT": Decimal("10000")})
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     order = await sim.submit_order(make_order(qty="0.5", price="101"))
     assert order.status == OrderStatus.FILLED
     balances = {b.currency: b.total for b in await sim.get_balances()}
@@ -90,6 +93,7 @@ async def test_linear_perp_fee_uses_canonical_contract_notional():
         initial_balances={"USDT": Decimal("1000")}, instruments=[instrument]
     )
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     events = []
     await sim.subscribe_order_updates(lambda event: events.append(event) or _noop())
     order = make_order(qty="2", price="101").model_copy(
@@ -119,6 +123,7 @@ async def test_linear_perp_fee_uses_canonical_contract_notional():
 async def test_fill_before_ack_ordering():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.fill_before_ack = True
     events = []
     await sim.subscribe_order_updates(lambda e: events.append(e.event_type) or _noop())
@@ -130,6 +135,7 @@ async def test_fill_before_ack_ordering():
 async def test_duplicate_fill_emitted():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.duplicate_fill = True
     events = []
     await sim.subscribe_order_updates(lambda e: events.append(e) or _noop())
@@ -141,6 +147,7 @@ async def test_duplicate_fill_emitted():
 async def test_submit_timeout_but_order_created():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.timeout_but_created = True
     with pytest.raises(UnknownExecutionState):
         await sim.submit_order(make_order())
@@ -153,6 +160,7 @@ async def test_submit_timeout_but_order_created():
 async def test_cancel_fill_race_fill_wins():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.cancel_fill_race = True
     order = await sim.submit_order(make_order(price="1"))
     order = await sim.cancel_order("BTCUSDT", order.exchange_order_id)
@@ -163,6 +171,7 @@ async def test_cancel_fill_race_fill_wins():
 async def test_normal_cancel():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     order = await sim.submit_order(make_order(price="1"))
     canceled = await sim.cancel_order("BTCUSDT", order.exchange_order_id)
     assert canceled.status == OrderStatus.CANCELLED
@@ -171,6 +180,7 @@ async def test_normal_cancel():
 async def test_fault_injection_reject_and_rate_limit():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     sim.rate_limit_next = True
     with pytest.raises(RateLimited):
         await sim.submit_order(make_order())
@@ -182,6 +192,7 @@ async def test_fault_injection_reject_and_rate_limit():
 async def test_market_delta_sequence_gap_visible_to_core():
     sim = SimulatedExchangeAdapter()
     await sim.connect()
+    sim.seed_book("BTCUSDT")
     events = []
     await sim.subscribe_market_data("BTCUSDT", lambda e: events.append(e) or _noop())
     book = await sim.get_orderbook("BTCUSDT")
