@@ -161,7 +161,7 @@ class TradingEngine:
         await self._load_instruments()
         await self._restore_paper_adapter_state()
         self.order_manager.settlement_callback = self._settle_fill
-        await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        await self._run_recovery(self.run_id)
         await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
 
@@ -259,6 +259,16 @@ class TradingEngine:
                 if state == RuntimeState.STOPPED:
                     row.ended_at = now
             await session.commit()
+
+    async def _run_recovery(self, run_id: str | None) -> list[str]:
+        """Run crash recovery, including orphan-position restoration."""
+        return await RecoveryService(
+            self.order_manager,
+            self.adapter,
+            self.audit,
+            positions_provider=self.portfolio.get_positions,
+            plans=self.trade_plans,
+        ).recover(run_id)
 
     async def _reconcile_stale_runs(self) -> list[str]:
         """Close abandoned rows only after this process owns the fenced lease."""
@@ -812,7 +822,7 @@ class TradingEngine:
                 order_id=order.internal_order_id,
                 after={"error": str(exc)},
             )
-            await RecoveryService(self.order_manager, self.adapter, self.audit).recover(run_id)
+            await self._run_recovery(run_id)
             return risk_decision
         except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
             await self.order_manager.mark_unknown(order.internal_order_id, str(exc))

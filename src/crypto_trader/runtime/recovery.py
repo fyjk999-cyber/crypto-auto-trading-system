@@ -6,13 +6,22 @@ querying the exchange, not by creating new orders.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
-from crypto_trader.domain.enums import OrderEventType, OrderStatus
+from crypto_trader.domain.enums import (
+    OrderEventType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TimeInForce,
+    TradingMode,
+)
 from crypto_trader.domain.errors import OrderNotFound
 from crypto_trader.domain.identifiers import new_id
-from crypto_trader.domain.models import Fill
+from crypto_trader.domain.models import Fill, OrderIntent
 
 
 def event_type_for_exchange_status(status: OrderStatus) -> OrderEventType:
@@ -30,10 +39,20 @@ def event_type_for_exchange_status(status: OrderStatus) -> OrderEventType:
 
 
 class RecoveryService:
-    def __init__(self, order_manager, adapter, audit=None) -> None:
+    def __init__(
+        self,
+        order_manager,
+        adapter,
+        audit=None,
+        *,
+        positions_provider: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+        plans: Any | None = None,
+    ) -> None:
         self.order_manager = order_manager
         self.adapter = adapter
         self.audit = audit
+        self.positions_provider = positions_provider
+        self.plans = plans
 
     async def recover(self, run_id: str | None = None) -> list[str]:
         actions: list[str] = []
@@ -138,4 +157,106 @@ class RecoveryService:
                     before={"status": local.status.value},
                     after={"status": status.value},
                 )
+        await self._close_orphan_positions(run_id, actions)
         return actions
+
+    async def _close_orphan_positions(self, run_id: str | None, actions: list[str]) -> None:
+        """Restore the open-position <-> active-trade-plan invariant.
+
+        The LLM position lifecycle can only manage positions that belong to an
+        active trade plan (position decisions route through the plan). A
+        position without an active plan can therefore never be exited and can
+        only arise from recovery artifacts of corrupted fills. Such orphans
+        are flattened at the real market touch with a dedicated reduce-only
+        recovery order (audited). No new direction is decided here: this is
+        ledger restoration, not a trade decision.
+        """
+        if self.positions_provider is None or self.plans is None:
+            return
+        try:
+            positions = await self.positions_provider()
+        except Exception as exc:  # noqa: BLE001 - recovery must not crash startup
+            actions.append(f"orphan close skipped (positions unavailable: {exc})")
+            return
+        for symbol, position in positions.items():
+            if position.quantity == 0:
+                continue
+            if await self.plans.get_active_for_symbol(symbol) is not None:
+                continue
+            market = getattr(self.adapter, "get_market_state", None)
+            state = None
+            if market is not None:
+                try:
+                    state = await market(symbol)
+                except Exception:  # noqa: BLE001 - fail closed below
+                    state = None
+            if (
+                state is None
+                or state.health.value != "HEALTHY"
+                or state.best_bid <= 0
+                or state.best_ask <= 0
+            ):
+                actions.append(f"{symbol}: orphan close skipped (no real market)")
+                continue
+            close_side = OrderSide.BUY if position.quantity < 0 else OrderSide.SELL
+            touch = state.best_ask if close_side == OrderSide.BUY else state.best_bid
+            intent = OrderIntent(
+                client_order_id=f"recovery_flat_{symbol}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}",
+                symbol=symbol,
+                side=close_side,
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.GTC,
+                price=touch,
+                quantity=abs(position.quantity),
+                strategy_id="recovery",
+                run_id=run_id,
+                metadata={
+                    "recovery": "orphan_position_close",
+                    "orphan_quantity": str(position.quantity),
+                    "orphan_avg_entry": str(position.avg_entry_price),
+                    "real_touch": str(touch),
+                },
+            )
+            order = await self.order_manager.create_from_intent(
+                intent, trading_mode=TradingMode.PAPER
+            )
+            await self.order_manager.validate(order.internal_order_id)
+            await self.order_manager.submitting(order.internal_order_id)
+            await self.order_manager.submitted(order.internal_order_id)
+            await self.order_manager.ack(order.internal_order_id, new_id("sim"))
+            fill = Fill(
+                fill_id=new_id("fill"),
+                trade_id=new_id("trade"),
+                order_id=order.internal_order_id,
+                client_order_id=order.client_order_id,
+                exchange_order_id=order.exchange_order_id,
+                symbol=symbol,
+                side=close_side,
+                price=touch,
+                quantity=abs(position.quantity),
+                fee=Decimal("0"),
+                timestamp=datetime.now(UTC),
+                payload={"recovery": "orphan_position_close"},
+            )
+            await self.order_manager.apply_fill(fill)
+            sim_positions = getattr(self.adapter, "positions", None)
+            if isinstance(sim_positions, dict):
+                sim_positions.pop(symbol, None)
+            actions.append(
+                f"{symbol}: orphan position {position.quantity} closed at real touch {touch}"
+            )
+            if self.audit is not None:
+                await self.audit.log(
+                    "RECOVERY_ORPHAN_POSITION_CLOSED",
+                    target=symbol,
+                    run_id=run_id,
+                    order_id=order.internal_order_id,
+                    after={
+                        "orphan_quantity": str(position.quantity),
+                        "orphan_avg_entry": str(position.avg_entry_price),
+                        "close_side": close_side.value,
+                        "close_price": str(touch),
+                        "real_bid": str(state.best_bid),
+                        "real_ask": str(state.best_ask),
+                    },
+                )
