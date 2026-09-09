@@ -5,7 +5,7 @@ This file records Harness self-verified chapter progress on
 
 Last update: 2026-09-09 (later rounds).
 
-Latest HEAD at update: f840b68
+Latest HEAD at update: 13f127a
 
 ## Test baseline
 ```text
