@@ -62,6 +62,7 @@ class RiskEngine:
         valuation_currency: str = "USDT",
         valuation_source: str = "UNSPECIFIED",
         valuation_id: str | None = None,
+        risk_equity: Decimal | None = None,
         consecutive_failures: int = 0,
         run_id: str | None = None,
         order_id: str | None = None,
@@ -203,6 +204,7 @@ class RiskEngine:
                 "valuation_currency": valuation_currency,
                 "valuation_source": valuation_source,
                 "valuation_id": valuation_id,
+                "risk_equity": str(risk_equity if risk_equity is not None else account.equity),
             }
         )
 
@@ -226,7 +228,9 @@ class RiskEngine:
             return fail("MAX_DRAWDOWN")
         checks["max_drawdown"] = True
 
-        cash = account.equity
+        cash = risk_equity if risk_equity is not None else account.equity
+        if cash <= 0:
+            return fail("NON_POSITIVE_EQUITY")
         valuation_prices = dict(market_prices or {})
         valuation_prices[intent.symbol] = market_price
         portfolio_exposure = ExposureService.for_portfolio(

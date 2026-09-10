@@ -274,3 +274,16 @@ def test_risk_rejects_unknown_drawdown_instead_of_treating_it_as_zero():
     assert "DRAWDOWN_UNAVAILABLE" in str(decision.checks) or (
         "DRAWDOWN_UNAVAILABLE" in str(decision.reason)
     )
+
+
+def test_risk_rejects_non_positive_mtm_equity():
+    decision = RiskEngine().check(
+        make_signal(),
+        account=make_account("100000"),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        risk_equity=Decimal("0"),
+    )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert "NON_POSITIVE_EQUITY" in str(decision.checks)

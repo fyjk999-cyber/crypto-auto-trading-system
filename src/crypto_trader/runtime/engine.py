@@ -838,6 +838,7 @@ class TradingEngine:
             valuation_currency="USDT",
             valuation_source=drawdown_source,
             valuation_id=valuation_id,
+            risk_equity=mtm_equity if valuation_available else account.equity,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
         )
