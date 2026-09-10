@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -22,6 +24,11 @@ class FundingCoverage:
     event_manifest_hash: str | None
     gaps: list[str]
     rule_version: str
+    # P3 audit split: what the exchange returned, what falls inside the
+    # requested window, and whether a raw page proved the lower bound.
+    fetched_count: int = 0
+    window_event_count: int = 0
+    boundary_proof: bool = False
 
 
 class FundingCoverageService:
@@ -41,6 +48,9 @@ class FundingCoverageService:
         source: str = "OKX_PUBLIC",
         rule_version: str = "v1",
         fetched_at: datetime | None = None,
+        fetched_count: int = 0,
+        window_event_count: int = 0,
+        boundary_proof: bool = False,
     ) -> FundingCoverage:
         async with self.session_factory() as session:
             existing = (
@@ -67,6 +77,9 @@ class FundingCoverageService:
             existing.event_manifest_hash = event_manifest_hash
             existing.gaps_json = gaps or []
             existing.coverage_status = coverage_status
+            existing.fetched_count = fetched_count
+            existing.window_event_count = window_event_count
+            existing.boundary_proof = boundary_proof
             await session.commit()
             return FundingCoverage(
                 instrument_id=instrument_id,
@@ -77,6 +90,9 @@ class FundingCoverageService:
                 event_manifest_hash=event_manifest_hash,
                 gaps=list(gaps or []),
                 rule_version=rule_version,
+                fetched_count=fetched_count,
+                window_event_count=window_event_count,
+                boundary_proof=boundary_proof,
             )
 
     async def status_for(
@@ -119,41 +135,73 @@ class FundingHistoryIngestor:
     ) -> FundingCoverage:
         start_ms = int(window_start.timestamp() * 1000)
         end_ms = int(window_end.timestamp() * 1000)
-        rows: list[dict] = []
+        # Distinguish raw fetched history from the requested window and the
+        # lower-bound proof, exactly as required by P3.
+        fetched_history: list[dict] = []
+        window_events: list[dict] = []
         complete = False
+        boundary_proof = False
         cursor_ms = end_ms
         missing_rates = False
+        malformed = False
         for _ in range(max_pages):
             # OKX `after` returns records older than the cursor; `before`
             # returns newer records and cannot page backwards safely.
-            page = await adapter.get_funding_rate_history(
-                instrument_id, after=str(cursor_ms), limit=100
+            raw_page = list(
+                await adapter.get_funding_rate_history(
+                    instrument_id, after=str(cursor_ms), limit=100
+                )
+                or []
             )
-            page = [
+            fetched_history.extend(raw_page)
+            if not raw_page:
+                # No older records at all. The lower bound is only considered
+                # covered once the cursor has reached it; otherwise an empty
+                # truncated page cannot be promoted to factual zero.
+                complete = cursor_ms <= start_ms
+                boundary_proof = complete
+                break
+            try:
+                raw_times = [int(row.get("fundingTime", -1)) for row in raw_page]
+            except (TypeError, ValueError):
+                malformed = True
+                break
+            if any(timestamp < 0 for timestamp in raw_times):
+                malformed = True
+                break
+            oldest_raw_ms = min(raw_times)
+            page_window = [
                 row
-                for row in page
+                for row in raw_page
                 if start_ms <= int(row.get("fundingTime", -1)) < end_ms
             ]
-            if not page:
-                # Only an empty response at/below the lower bound proves that
-                # no earlier record exists inside the requested window.
-                complete = cursor_ms <= start_ms
-                break
-            for row in page:
+            for row in page_window:
                 if not row.get("realizedRate"):
                     missing_rates = True
-            rows.extend(page)
-            oldest_ms = min(int(row["fundingTime"]) for row in page)
-            if oldest_ms <= start_ms:
+            window_events.extend(page_window)
+            # Boundary proof is evaluated on the RAW page BEFORE window
+            # filtering. A page whose oldest record is at/below window_start
+            # proves pagination crossed the lower bound even when that record
+            # itself lies outside the requested window.
+            if oldest_raw_ms <= start_ms:
+                boundary_proof = True
                 complete = True
                 break
-            cursor_ms = oldest_ms
-        rows = [row for row in rows if start_ms <= int(row["fundingTime"]) < end_ms]
-        rows.sort(key=lambda row: int(row["fundingTime"]))
-        gaps = self._detect_gaps(rows)
-        if not complete or gaps or missing_rates:
+            cursor_ms = oldest_raw_ms
+        else:
+            # max_pages exhausted before reaching the lower bound.
+            complete = False
+
+        window_events.sort(key=lambda row: int(row["fundingTime"]))
+        gaps = self._detect_gaps(window_events)
+        manifest = hashlib.sha256(
+            json.dumps(fetched_history, sort_keys=True, default=str).encode()
+        ).hexdigest()
+        if not complete or not boundary_proof or gaps or missing_rates or malformed:
             status = "UNKNOWN"
-        elif rows and any(D(row["realizedRate"]) != 0 for row in rows):
+        elif window_events and any(
+            D(row["realizedRate"]) != 0 for row in window_events
+        ):
             status = "KNOWN_VALUE"
         else:
             status = "KNOWN_ZERO"
@@ -163,7 +211,11 @@ class FundingHistoryIngestor:
             window_end=window_end,
             coverage_status=status,
             pagination_complete=complete,
+            event_manifest_hash=f"sha256:{manifest}",
             gaps=gaps,
+            fetched_count=len(fetched_history),
+            window_event_count=len(window_events),
+            boundary_proof=boundary_proof,
         )
 
     @staticmethod

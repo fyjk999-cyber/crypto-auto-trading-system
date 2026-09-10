@@ -284,6 +284,9 @@ class FundingCoverageORM(Base):
     gaps_json: Mapped[list[Any] | None] = mapped_column(JSON)
     rule_version: Mapped[str] = mapped_column(String(32), default="v1")
     coverage_status: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+    fetched_count: Mapped[int] = mapped_column(Integer, default=0)
+    window_event_count: Mapped[int] = mapped_column(Integer, default=0)
+    boundary_proof: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class EquitySnapshotORM(Base):
