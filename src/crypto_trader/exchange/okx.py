@@ -490,6 +490,30 @@ class OKXAdapter(ExchangeAdapter):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX funding rates response is invalid")
         return rows
 
+    async def get_funding_rate_history(
+        self,
+        symbol: str,
+        *,
+        before: str | None = None,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Factual historical settled funding rates for one instrument."""
+        params: dict[str, object] = {"instId": symbol, "limit": min(max(limit, 1), 100)}
+        if before is not None:
+            params["before"] = before
+        if after is not None:
+            params["after"] = after
+        data = await self._public_request(
+            "GET", "/api/v5/public/funding-rate-history", params=params
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX funding history response is invalid"
+            )
+        return rows
+
     async def get_instruments(self, instrument_type: str) -> list[dict]:
         """Return factual public instrument metadata without execution credentials."""
         data = await self._public_request(
