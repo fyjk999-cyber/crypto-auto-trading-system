@@ -7,7 +7,7 @@ URL: http://127.0.0.1:8001
 Status: RUNNING / lease held / single_writer true / kill off / health OK
 
 Lifecycle counts:
-- llm_decisions: 2978
+- llm_decisions: 2981
 - trade_plans: 6
 - orders: 0
 - fills: 0
