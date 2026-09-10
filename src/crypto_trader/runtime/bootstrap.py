@@ -211,7 +211,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 database.session_factory,
                 review_time_utc="00:00",
                 canonical_only=True,
-                use_local_time=True,
+                use_local_time=False,
             )
             if settings.auto_start_runtime
             else None
