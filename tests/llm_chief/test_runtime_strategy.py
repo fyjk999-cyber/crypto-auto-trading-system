@@ -110,6 +110,7 @@ def make_ctx():
         clock_time=now,
         run_id="run_1",
         mark_price=Decimal("100.5"),
+        realized_volatility=Decimal("0.01"),
         instrument=Instrument(
             symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", step_size="0.00001"
         ),

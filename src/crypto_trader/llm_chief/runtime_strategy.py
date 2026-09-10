@@ -252,15 +252,33 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 after={"reason_codes": ["INVALID_DIRECTIONAL_STOP"]},
             )
             return []
-        volatility = ctx.realized_volatility or Decimal("0")
+        if ctx.realized_volatility is None:
+            await self.audit.log(
+                "LIVE_LLM_SIZING_UNAVAILABLE",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"reason": "VOLATILITY_UNAVAILABLE"},
+            )
+            return []
+        volatility = ctx.realized_volatility
         best_bid = ctx.book.best_bid()
         best_ask = ctx.book.best_ask()
-        liquidity = Decimal("1") if (
-            best_bid is not None
-            and best_ask is not None
-            and best_bid.quantity > 0
-            and best_ask.quantity > 0
-        ) else Decimal("0")
+        if (
+            best_bid is None
+            or best_ask is None
+            or best_bid.quantity <= 0
+            or best_ask.quantity <= 0
+        ):
+            await self.audit.log(
+                "LIVE_LLM_SIZING_UNAVAILABLE",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"reason": "LIQUIDITY_UNAVAILABLE"},
+            )
+            return []
+        liquidity = min(best_bid.quantity, best_ask.quantity)
         if ctx.instrument is None:
             await self.audit.log(
                 "LIVE_LLM_INSTRUMENT_UNAVAILABLE",
