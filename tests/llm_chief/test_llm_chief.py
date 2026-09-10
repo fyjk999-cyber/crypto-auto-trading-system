@@ -136,6 +136,25 @@ async def test_deepseek_provider_exhausts_invalid_json_fail_closed():
     assert provider.diagnostics()["last_attempt_count"] == 2
 
 
+
+async def test_deepseek_provider_timeout_fails_closed_after_bounded_retries():
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.TimeoutException("slow provider")
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=1)
+    assert result.ok is False
+    assert result.error == "LLM_TIMEOUT"
+    assert calls == 2
+    assert provider.diagnostics()["last_attempt_count"] == 2
+
+
 async def test_deepseek_provider_malformed_payload_fails_closed():
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": []})
