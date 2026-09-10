@@ -1418,8 +1418,16 @@ class TradingEngine:
                 fee=fill.fee,
                 position_quantity_before=position.quantity if position else Decimal("0"),
                 average_entry_price=position.avg_entry_price if position else None,
-                contract_size=D(order.metadata.get("contract_size", "1")),
-                contract_multiplier=D(order.metadata.get("contract_multiplier", "1")),
+                contract_size=D(
+                    order.metadata.get("contract_size")
+                    if order.metadata.get("contract_size") is not None
+                    else _raise_missing_contract_spec(order.symbol)
+                ),
+                contract_multiplier=D(
+                    order.metadata.get("contract_multiplier")
+                    if order.metadata.get("contract_multiplier") is not None
+                    else _raise_missing_contract_spec(order.symbol)
+                ),
                 reduce_only=order.metadata.get("reduce_only") is True,
             )
         else:
@@ -1619,3 +1627,9 @@ class TradingEngine:
 
     async def wait_for_event_queue(self) -> None:
         await self._event_queue.join()
+
+
+def _raise_missing_contract_spec(symbol: str):
+    raise ValueError(
+        f"LINEAR_PERP fill missing proven contract spec for {symbol}"
+    )

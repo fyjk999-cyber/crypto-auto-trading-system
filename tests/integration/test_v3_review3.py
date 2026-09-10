@@ -97,10 +97,12 @@ class EmptyPortfolio:
 
 
 class FakeCandleAdapter:
+    expects_canonical_symbols = True
+
     def __init__(self, candles: dict[str, list[list[str]]]):
         self.candles = candles
 
-    async def get_candles(self, symbol, bar="1H", limit=100):
+    async def get_mark_price_candles(self, symbol, bar="1H", limit=100):
         return self.candles.get(symbol, [])
 
 
@@ -111,6 +113,10 @@ def _candle(hour: int, close: str) -> list[str]:
         "1",
         "1",
         close,
+        "0",
+        "0",
+        "0",
+        "1",
     ]
 
 
@@ -330,7 +336,14 @@ def _closed_lifecycle_supervisor(
         ledger=ledger,
         order_manager=OrderManager(database.session_factory),
         trade_episodes=TradeEpisodeStore(database.session_factory),
-        instruments_provider=lambda: {},
+        instruments_provider=lambda: {
+            "BTC-USDT-SWAP": {
+                "symbol": "BTC-USDT-SWAP",
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": Decimal("0.01"),
+                "contract_multiplier": Decimal("1"),
+            }
+        },
         lookback_hours=240,
     )
     return supervisor, coverage_service, ledger

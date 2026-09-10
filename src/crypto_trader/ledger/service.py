@@ -118,11 +118,15 @@ def build_derivative_trade_entries(
     fee: Decimal,
     position_quantity_before: Decimal,
     average_entry_price: Decimal | None,
-    contract_size: Decimal = Decimal("1"),
-    contract_multiplier: Decimal = Decimal("1"),
+    contract_size: Decimal | None = None,
+    contract_multiplier: Decimal | None = None,
     reduce_only: bool = False,
 ) -> tuple[list[LedgerPosting], dict]:
     """Balanced PAPER linear-contract journal with signed-position metadata."""
+    if contract_size is None or contract_multiplier is None:
+        raise ValueError(
+            "LINEAR_PERP journal requires proven contract_size/contract_multiplier"
+        )
     price, quantity, fee = D(price), D(quantity), D(fee)
     before = D(position_quantity_before)
     contract_size, contract_multiplier = D(contract_size), D(contract_multiplier)

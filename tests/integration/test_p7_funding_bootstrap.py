@@ -83,7 +83,20 @@ class FakePortfolio:
         }
 
 
+def _funding_instruments() -> dict:
+    return {
+        "BTC-USDT-SWAP": {
+            "symbol": "BTC-USDT-SWAP",
+            "instrument_type": "LINEAR_PERP",
+            "contract_size": Decimal("0.01"),
+            "contract_multiplier": Decimal("1"),
+        }
+    }
+
+
 class PublicFactualAdapter:
+    expects_canonical_symbols = True
+
     def __init__(self):
         self.events = [
             self._event(8, "0.001"),
@@ -105,7 +118,7 @@ class PublicFactualAdapter:
         # Same factual page on every run, like a real exchange feed.
         return list(self.events)
 
-    async def get_candles(self, symbol, bar="1H", limit=100):
+    async def get_mark_price_candles(self, symbol, bar="1H", limit=100):
         return [
             [
                 str(int(datetime(2026, 9, 10, hour, tzinfo=UTC).timestamp() * 1000)),
@@ -113,10 +126,51 @@ class PublicFactualAdapter:
                 "1",
                 "1",
                 close,
+                "0",
+                "0",
+                "0",
+                "1",
             ]
             # 07:00 closes at 08:00; 09:00 closes at 10:00 (no lookahead).
             for hour, close in ((7, "100"), (9, "110"))
         ]
+
+
+async def test_bootstrap_wraps_funding_adapter_in_okx_boundary(
+    database, monkeypatch
+):
+    class FakeFeed:
+        def __init__(self):
+            self.client = PublicFactualAdapter()
+
+        async def warmup(self, *args, **kwargs):
+            return None
+
+    class FakePaperAdapter:
+        def __init__(self, initial_balances):
+            self.feed = FakeFeed()
+
+    import crypto_trader.runtime.bootstrap as bootstrap
+
+    monkeypatch.setattr(bootstrap, "PaperRealMarketAdapter", FakePaperAdapter)
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_REAL_MARKET",
+        opportunity_scan_enabled=False,
+    )
+    bundle = await build_system(settings)
+    try:
+        supervisor = bundle.engine.funding_supervisor
+        assert supervisor is not None and supervisor.public_data is not None
+        assert supervisor.public_data.venue_symbol("BTCUSDT") == "BTC-USDT-SWAP"
+        assert supervisor.public_data.venue_symbol("SOLUSDT") == "SOL-USDT-SWAP"
+    finally:
+        await bundle.database.close()
 
 
 async def test_build_system_wires_formal_funding_and_valuation_services(database):
@@ -158,7 +212,7 @@ async def test_supervisor_real_chain_settles_once_and_marks_paper_derived(databa
         trade_plans=FakePlans(),
         ledger=ledger,
         order_manager=FakeOrderManager(),
-        instruments_provider=lambda: {},
+        instruments_provider=lambda: _funding_instruments(),
         lookback_hours=24,
     )
     first = await supervisor.run_once(now=NOW)
@@ -305,6 +359,9 @@ async def test_supervisor_uses_historical_fill_quantity_per_settlement(database)
         )
 
     class CaptureIngestor:
+        def __init__(self, coverage_service):
+            self.coverage_service = coverage_service
+
         async def ingest(self, adapter, **kwargs):
             return FundingCoverage(
                 instrument_id=kwargs["instrument_id"],
@@ -335,7 +392,9 @@ async def test_supervisor_uses_historical_fill_quantity_per_settlement(database)
     settlement = CaptureSettlement()
     supervisor = FundingAccountingSupervisor(
         adapter=PublicFactualAdapter(),
-        ingestor=CaptureIngestor(),
+        ingestor=CaptureIngestor(
+            FundingCoverageService(database.session_factory)
+        ),
         settlement_service=settlement,
         portfolio=FakePortfolio(),
         trade_plans=FakePlans(
@@ -343,7 +402,7 @@ async def test_supervisor_uses_historical_fill_quantity_per_settlement(database)
         ),
         ledger=ledger,
         order_manager=order_manager,
-        instruments_provider=lambda: {},
+        instruments_provider=lambda: _funding_instruments(),
         lookback_hours=24,
     )
     report = await supervisor.run_once(now=NOW)

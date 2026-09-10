@@ -17,7 +17,17 @@ from decimal import Decimal
 from typing import Any
 
 from crypto_trader.domain.money import D
+from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.order.provenance import HistoricalQuantityStatus
+from crypto_trader.perpetual.contract_spec import (
+    ContractSpecProvenance,
+    spec_from_instrument,
+    spec_from_order_metadata,
+)
+from crypto_trader.perpetual.funding_boundary import (
+    FundingPublicDataBoundary,
+    FundingSymbolMappingError,
+)
 from crypto_trader.perpetual.funding_coverage import FundingHistoryIngestor
 from crypto_trader.perpetual.funding_settlement import (
     FundingSettlementService,
@@ -56,8 +66,14 @@ class FundingAccountingSupervisor:
         account_id: str = "default",
         currency: str = "USDT",
         lookback_hours: int = 24,
+        symbol_mapper: SymbolMapper | None = None,
     ) -> None:
         self.adapter = adapter
+        self.public_data = (
+            FundingPublicDataBoundary(adapter, symbol_mapper=symbol_mapper)
+            if adapter is not None
+            else None
+        )
         self.ingestor = ingestor
         self.settlement_service = settlement_service
         self.portfolio = portfolio
@@ -72,7 +88,7 @@ class FundingAccountingSupervisor:
 
     async def run_once(self, *, now: datetime | None = None) -> FundingRunReport:
         report = FundingRunReport()
-        if self.adapter is None:
+        if self.public_data is None:
             report.errors.append("NO_PUBLIC_FUNDING_ADAPTER")
             return report
         now = now or datetime.now(UTC)
@@ -80,7 +96,7 @@ class FundingAccountingSupervisor:
         positions = await self.portfolio.get_positions()
         instruments = self.instruments_provider() or {}
         coverage_service = getattr(self.ingestor, "coverage_service", None)
-        existing_resolutions: dict[datetime, str] = {}
+
         lifecycle_specs: list[tuple[object, str, datetime, datetime]] = []
         if self.trade_plans is not None:
             plans = await self.trade_plans.lifecycles_overlapping(
@@ -98,16 +114,13 @@ class FundingAccountingSupervisor:
                 if closed_at is None:
                     window_end = now
                 else:
-                    # Include a funding event exactly at the factual close.
                     window_end = min(now, closed_at + timedelta(microseconds=1))
                 if window_end <= window_start:
                     continue
                 lifecycle_specs.append(
                     (plan, str(getattr(plan, "symbol", "")), window_start, window_end)
                 )
-        # Open positions without a durable plan still need coverage, but their
-        # events cannot be attributed to a lifecycle and settlement stays
-        # blocked until lineage exists.
+
         planned_symbols = {
             symbol for plan, symbol, *_ in lifecycle_specs if plan is not None
         }
@@ -136,12 +149,19 @@ class FundingAccountingSupervisor:
             ):
                 lifecycle_specs.append((None, symbol, lookback_start, now))
 
+        existing_resolutions: dict[datetime, str] = {}
         for plan, symbol, window_start, window_end in lifecycle_specs:
             plan_id = getattr(plan, "trade_plan_id", None)
             report.evaluated_instruments.append(symbol)
             try:
+                self.public_data.venue_symbol(symbol)
+            except FundingSymbolMappingError as exc:
+                report.errors.append(f"{symbol}:SYMBOL_MAPPING_FAILED")
+                report.skipped.append(f"{symbol}:SYMBOL_MAPPING_FAILED:{type(exc).__name__}")
+                continue
+            try:
                 coverage = await self.ingestor.ingest(
-                    self.adapter,
+                    self.public_data,
                     instrument_id=symbol,
                     window_start=window_start,
                     window_end=window_end,
@@ -161,14 +181,9 @@ class FundingAccountingSupervisor:
             opened_at = _as_utc(getattr(plan, "opened_at", None))
             closed_at = _as_utc(getattr(plan, "closed_at", None))
             if coverage_service is not None:
-                existing_resolutions = {
-                    resolution.settlement_timestamp: resolution.status
-                    for resolution in await coverage_service.event_resolutions(
-                        account_id=self.account_id,
-                        instrument_id=symbol,
-                        currency=self.currency,
-                    )
-                }
+                existing_resolutions = await self._resolution_status_map(
+                    coverage_service, symbol
+                )
             for event in coverage.window_events:
                 settlement_time = _event_time(event)
                 if settlement_time is None:
@@ -178,129 +193,28 @@ class FundingAccountingSupervisor:
                     continue
                 if closed_at is not None and settlement_time > closed_at:
                     continue
-                if self.order_manager is None:
-                    report.skipped.append(
-                        f"{symbol}:POSITION_QUANTITY_AT_SETTLEMENT_UNPROVEN"
-                    )
-                    continue
-                provenance = await self.order_manager.historical_quantity_at(
-                    account_id=self.account_id,
+                await self._resolve_event(
+                    report=report,
+                    coverage_service=coverage_service,
+                    plan=plan,
                     symbol=symbol,
-                    at=settlement_time,
-                    currency=self.currency,
+                    settlement_time=settlement_time,
+                    rate=_event_rate(event),
+                    instruments=instruments,
+                    existing_resolutions=existing_resolutions,
                 )
-                if provenance.status == HistoricalQuantityStatus.UNPROVEN:
-                    if coverage_service is not None:
-                        await coverage_service.record_event_resolution(
-                            account_id=self.account_id,
-                            instrument_id=symbol,
-                            settlement_timestamp=settlement_time,
-                            currency=self.currency,
-                            status="UNPROVEN",
-                            funding_rate=_event_rate(event),
-                            reason=provenance.reason or "UNPROVEN",
-                        )
-                    report.skipped.append(
-                        f"{symbol}:POSITION_QUANTITY_AT_SETTLEMENT_UNPROVEN"
-                    )
-                    continue
-                if provenance.status == HistoricalQuantityStatus.PROVEN_ZERO:
-                    if coverage_service is not None:
-                        await coverage_service.record_event_resolution(
-                            account_id=self.account_id,
-                            instrument_id=symbol,
-                            settlement_timestamp=settlement_time,
-                            currency=self.currency,
-                            status="NO_OP",
-                            quantity=Decimal("0"),
-                            funding_rate=_event_rate(event),
-                            reason="QUANTITY_ZERO",
-                        )
-                    report.no_op += 1
-                    continue
-                if existing_resolutions.get(settlement_time) in {"SETTLED", "NO_OP"}:
-                    continue
-                quantity = provenance.quantity or Decimal("0")
-                rate = _event_rate(event)
-                if rate == 0 or quantity == 0:
-                    if coverage_service is not None:
-                        await coverage_service.record_event_resolution(
-                            account_id=self.account_id,
-                            instrument_id=symbol,
-                            settlement_timestamp=settlement_time,
-                            currency=self.currency,
-                            status="NO_OP",
-                            quantity=quantity,
-                            funding_rate=rate,
-                            reason="ZERO_AMOUNT",
-                        )
-                    report.no_op += 1
-                    continue
-                mark_price = await self._factual_settlement_mark(
-                    symbol, settlement_time
+
+        # Durable recovery: rolling lookback only discovers recent lifecycles;
+        # unresolved events older than the lookback are recovered from the
+        # resolution table itself.
+        if coverage_service is not None:
+            try:
+                await self._recover_unresolved(
+                    report, coverage_service, instruments
                 )
-                if mark_price is None:
-                    if coverage_service is not None:
-                        await coverage_service.record_event_resolution(
-                            account_id=self.account_id,
-                            instrument_id=symbol,
-                            settlement_timestamp=settlement_time,
-                            currency=self.currency,
-                            status="MARK_UNAVAILABLE",
-                            quantity=quantity,
-                            funding_rate=rate,
-                            reason="NO_CLOSED_CANDLE",
-                        )
-                    report.skipped.append(f"{symbol}:SETTLEMENT_MARK_UNAVAILABLE")
-                    continue
-                instrument = instruments.get(symbol)
-                position = positions.get(symbol)
-                contract_size = (
-                    instrument.contract_size
-                    if instrument is not None
-                    else getattr(position, "contract_size", Decimal("1"))
-                )
-                contract_multiplier = (
-                    instrument.contract_multiplier
-                    if instrument is not None
-                    else getattr(position, "contract_multiplier", Decimal("1"))
-                )
-                try:
-                    await self.settlement_service.settle(
-                        account_id=self.account_id,
-                        instrument_id=symbol,
-                        settlement_timestamp=settlement_time,
-                        signed_quantity=quantity,
-                        mark_price=mark_price,
-                        funding_rate=rate,
-                        contract_size=D(contract_size),
-                        contract_multiplier=D(contract_multiplier),
-                        currency=self.currency,
-                    )
-                except Exception as exc:
-                    report.errors.append(f"{symbol}:{type(exc).__name__}")
-                    continue
-                transaction_id = None
-                if self.ledger is not None:
-                    transaction_id = await self.ledger.transaction_id_for_event(
-                        _canonical_event_id(
-                            self.account_id, symbol, settlement_time
-                        )
-                    )
-                if coverage_service is not None:
-                    await coverage_service.record_event_resolution(
-                        account_id=self.account_id,
-                        instrument_id=symbol,
-                        settlement_timestamp=settlement_time,
-                        currency=self.currency,
-                        status="SETTLED",
-                        quantity=quantity,
-                        mark_price=mark_price,
-                        funding_rate=rate,
-                        ledger_transaction_id=transaction_id,
-                        reason=None,
-                    )
-                report.settled += 1
+            except Exception as exc:
+                report.errors.append(f"RECOVERY:{type(exc).__name__}")
+
         if self.trade_episodes is not None:
             try:
                 await self.trade_episodes.materialize_pending_closed()
@@ -308,25 +222,287 @@ class FundingAccountingSupervisor:
                 report.errors.append(f"EPISODE_RECOVERY:{type(exc).__name__}")
         return report
 
+    async def _resolution_status_map(self, coverage_service, symbol: str):
+        resolutions = await coverage_service.event_resolutions(
+            account_id=self.account_id,
+            instrument_id=symbol,
+            currency=self.currency,
+        )
+        return {
+            resolution.settlement_timestamp: resolution.status
+            for resolution in resolutions
+        }
+
+    async def _recover_unresolved(
+        self, report, coverage_service, instruments
+    ) -> None:
+        queue = await coverage_service.retryable_unresolved()
+        for resolution in queue:
+            if resolution.account_id != self.account_id:
+                continue
+            if resolution.currency != self.currency:
+                continue
+            symbol = resolution.instrument_id
+            settlement_time = _as_utc(resolution.settlement_timestamp)
+            rate = resolution.funding_rate
+            plan = None
+            if self.trade_plans is not None:
+                if resolution.trade_plan_id:
+                    plan = await self.trade_plans.get(resolution.trade_plan_id)
+                if plan is None and hasattr(self.trade_plans, "plan_covering"):
+                    plan = await self.trade_plans.plan_covering(
+                        symbol, settlement_time
+                    )
+            if rate is None:
+                rate = await self._funding_rate_at(symbol, settlement_time)
+            if rate is None:
+                await coverage_service.record_event_resolution(
+                    account_id=self.account_id,
+                    instrument_id=symbol,
+                    settlement_timestamp=settlement_time,
+                    currency=self.currency,
+                    status="UNPROVEN",
+                    trade_plan_id=resolution.trade_plan_id,
+                    reason="FUNDING_RATE_UNAVAILABLE",
+                )
+                report.skipped.append(f"{symbol}:FUNDING_RATE_UNAVAILABLE")
+                continue
+            existing = await self._resolution_status_map(coverage_service, symbol)
+            await self._resolve_event(
+                report=report,
+                coverage_service=coverage_service,
+                plan=plan,
+                symbol=symbol,
+                settlement_time=settlement_time,
+                rate=rate,
+                instruments=instruments,
+                existing_resolutions=existing,
+                recovery=True,
+            )
+
+    async def _funding_rate_at(
+        self, symbol: str, settlement_time: datetime
+    ) -> Decimal | None:
+        try:
+            target_ms = int(settlement_time.timestamp() * 1000)
+            rows = await self.public_data.get_funding_rate_history(
+                symbol,
+                before=str(target_ms + 1),
+                after=str(target_ms - 1000),
+                limit=10,
+            )
+        except Exception:
+            return None
+        for row in rows or []:
+            try:
+                if int(row["fundingTime"]) == target_ms:
+                    raw = row.get("realizedRate")
+                    if raw in (None, ""):
+                        return None
+                    return D(raw)
+            except (KeyError, TypeError, ValueError):
+                continue
+        return None
+
+    async def _resolve_event(
+        self,
+        *,
+        report: FundingRunReport,
+        coverage_service,
+        plan,
+        symbol: str,
+        settlement_time: datetime,
+        rate: Decimal,
+        instruments: Mapping[str, Any],
+        existing_resolutions: Mapping[datetime, str],
+        recovery: bool = False,
+    ) -> None:
+        if existing_resolutions.get(settlement_time) in {"SETTLED", "NO_OP"}:
+            return
+        plan_id = getattr(plan, "trade_plan_id", None)
+        if self.order_manager is None:
+            await self._record_unresolved(
+                coverage_service,
+                symbol,
+                settlement_time,
+                rate,
+                plan_id,
+                "ORDER_MANAGER_UNAVAILABLE",
+            )
+            report.skipped.append(
+                f"{symbol}:POSITION_QUANTITY_AT_SETTLEMENT_UNPROVEN"
+            )
+            return
+        provenance = await self.order_manager.historical_quantity_at(
+            account_id=self.account_id,
+            symbol=symbol,
+            at=settlement_time,
+            currency=self.currency,
+        )
+        if provenance.status == HistoricalQuantityStatus.UNPROVEN:
+            await self._record_unresolved(
+                coverage_service,
+                symbol,
+                settlement_time,
+                rate,
+                plan_id,
+                provenance.reason or "QUANTITY_UNPROVEN",
+            )
+            report.skipped.append(
+                f"{symbol}:POSITION_QUANTITY_AT_SETTLEMENT_UNPROVEN"
+            )
+            return
+        quantity = provenance.quantity or Decimal("0")
+        if provenance.status == HistoricalQuantityStatus.PROVEN_ZERO:
+            await coverage_service.record_event_resolution(
+                account_id=self.account_id,
+                instrument_id=symbol,
+                settlement_timestamp=settlement_time,
+                currency=self.currency,
+                status="NO_OP",
+                quantity=Decimal("0"),
+                funding_rate=rate,
+                trade_plan_id=plan_id,
+                reason="QUANTITY_ZERO",
+            )
+            report.no_op += 1
+            return
+        if rate == 0 or quantity == 0:
+            await coverage_service.record_event_resolution(
+                account_id=self.account_id,
+                instrument_id=symbol,
+                settlement_timestamp=settlement_time,
+                currency=self.currency,
+                status="NO_OP",
+                quantity=quantity,
+                funding_rate=rate,
+                trade_plan_id=plan_id,
+                reason="ZERO_AMOUNT",
+            )
+            report.no_op += 1
+            return
+        spec = await self._contract_spec(symbol, plan, instruments)
+        if spec.status.value != "PROVEN":
+            await self._record_unresolved(
+                coverage_service,
+                symbol,
+                settlement_time,
+                rate,
+                plan_id,
+                f"INSTRUMENT_CONTRACT_SPEC_UNPROVEN:{spec.reason or 'UNPROVEN'}",
+            )
+            report.skipped.append(f"{symbol}:INSTRUMENT_CONTRACT_SPEC_UNPROVEN")
+            return
+        mark_price = await self._factual_settlement_mark(symbol, settlement_time)
+        if mark_price is None:
+            await coverage_service.record_event_resolution(
+                account_id=self.account_id,
+                instrument_id=symbol,
+                settlement_timestamp=settlement_time,
+                currency=self.currency,
+                status="MARK_UNAVAILABLE",
+                quantity=quantity,
+                funding_rate=rate,
+                trade_plan_id=plan_id,
+                reason="NO_CLOSED_MARK_PRICE_CANDLE",
+            )
+            report.skipped.append(f"{symbol}:SETTLEMENT_MARK_UNAVAILABLE")
+            return
+        try:
+            await self.settlement_service.settle(
+                account_id=self.account_id,
+                instrument_id=symbol,
+                settlement_timestamp=settlement_time,
+                signed_quantity=quantity,
+                mark_price=mark_price,
+                funding_rate=rate,
+                contract_size=spec.contract_size,
+                contract_multiplier=spec.contract_multiplier,
+                currency=self.currency,
+            )
+        except Exception as exc:
+            report.errors.append(f"{symbol}:{type(exc).__name__}")
+            await self._record_unresolved(
+                coverage_service,
+                symbol,
+                settlement_time,
+                rate,
+                plan_id,
+                f"SETTLEMENT_FAILED:{type(exc).__name__}",
+            )
+            return
+        transaction_id = None
+        if self.ledger is not None:
+            transaction_id = await self.ledger.transaction_id_for_event(
+                _canonical_event_id(self.account_id, symbol, settlement_time)
+            )
+        await coverage_service.record_event_resolution(
+            account_id=self.account_id,
+            instrument_id=symbol,
+            settlement_timestamp=settlement_time,
+            currency=self.currency,
+            status="SETTLED",
+            quantity=quantity,
+            mark_price=mark_price,
+            funding_rate=rate,
+            trade_plan_id=plan_id,
+            ledger_transaction_id=transaction_id,
+            reason=None,
+        )
+        report.settled += 1
+
+    async def _record_unresolved(
+        self,
+        coverage_service,
+        symbol: str,
+        settlement_time: datetime,
+        rate: Decimal,
+        plan_id: str | None,
+        reason: str,
+    ) -> None:
+        await coverage_service.record_event_resolution(
+            account_id=self.account_id,
+            instrument_id=symbol,
+            settlement_timestamp=settlement_time,
+            currency=self.currency,
+            status="UNPROVEN",
+            funding_rate=rate,
+            trade_plan_id=plan_id,
+            reason=reason[:120],
+        )
+
+    async def _contract_spec(self, symbol: str, plan, instruments) -> ContractSpecProvenance:
+        spec = spec_from_instrument(symbol, instruments.get(symbol))
+        if spec.proven:
+            return spec
+        if plan is None or self.order_manager is None:
+            return spec
+        order_id = getattr(plan, "order_id", None)
+        if not order_id:
+            return spec
+        try:
+            order = await self.order_manager.get(order_id)
+        except Exception:
+            return spec
+        return spec_from_order_metadata(symbol, order)
+
     async def _factual_settlement_mark(
         self, symbol: str, settlement_time: datetime
     ) -> Decimal | None:
-        """Use the close of a candle already CLOSED at settlement.
+        """Use only OKX historical mark-price candles closed at settlement.
 
-        A candle whose close is later than the settlement instant is lookahead
-        and must never be used. Try 1-minute candles first for recent
-        settlements, then 1-hour candles for older ones.
+        A candle must be confirmed, close no later than the settlement instant,
+        and close above zero. Ordinary candles are never a fallback.
         """
-        get_candles = getattr(self.adapter, "get_candles", None)
-        if not callable(get_candles):
-            return None
         target_ms = int(settlement_time.timestamp() * 1000)
         for bar, interval_ms, tolerance_ms in (
             ("1m", 60_000, 60_000),
             ("1H", 3_600_000, 3_600_000),
         ):
             try:
-                rows = await get_candles(symbol, bar=bar, limit=100)
+                rows = await self.public_data.get_mark_price_candles(
+                    symbol, bar=bar, limit=100
+                )
             except Exception:
                 continue
             best: tuple[int, Decimal] | None = None
@@ -334,7 +510,12 @@ class FundingAccountingSupervisor:
                 try:
                     open_time_ms = int(row[0])
                     close = D(row[4])
+                    confirm = str(row[8])
                 except (IndexError, TypeError, ValueError):
+                    continue
+                if confirm != "1":
+                    continue
+                if close <= 0:
                     continue
                 close_time_ms = open_time_ms + interval_ms
                 if close_time_ms > target_ms:
@@ -347,7 +528,6 @@ class FundingAccountingSupervisor:
                 continue
             return best[1]
         return None
-
 
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:

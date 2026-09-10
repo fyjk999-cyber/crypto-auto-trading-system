@@ -514,6 +514,33 @@ class OKXAdapter(ExchangeAdapter):
             )
         return rows
 
+    async def get_mark_price_candles(
+        self, inst_id: str, bar: str, limit: int = 100
+    ) -> list[list[str]]:
+        """OKX public historical mark-price candles, never ordinary candles.
+
+        Row layout is OKX candle layout with ``confirm`` at index 8; funding
+        settlement only consumes rows whose confirm flag is "1".
+        """
+        data = await self._public_request(
+            "GET",
+            "/api/v5/public/mark-price-candles",
+            params={"instId": inst_id, "bar": bar, "limit": limit},
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX mark-price candle response is invalid"
+            )
+        if not all(
+            isinstance(row, list) and len(row) >= 9 for row in rows
+        ):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE",
+                "OKX mark-price candle response contains invalid rows",
+            )
+        return rows
+
     async def get_instruments(self, instrument_type: str) -> list[dict]:
         """Return factual public instrument metadata without execution credentials."""
         data = await self._public_request(

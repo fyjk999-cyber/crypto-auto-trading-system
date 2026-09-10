@@ -56,6 +56,24 @@ class LiveLLMTradePlanner:
             expected_holding_period=decision.expected_holding_period,
             max_holding_time_seconds=self.max_holding_time_seconds,
         )
+        metadata = {
+            "trade_plan_id": plan.trade_plan_id,
+            "decision_id": decision.decision_id,
+            "direction": decision.action.value,
+            "requested_leverage": str(decision.leverage_request),
+            # Factual execution metadata must be supplied by the caller;
+            # UNKNOWN prevents pretending a generic signal is a perp.
+            "instrument_type": "UNKNOWN",
+            **(execution_metadata or {}),
+        }
+        if metadata.get("instrument_type") == "LINEAR_PERP":
+            if metadata.get("contract_size") in (None, "") or metadata.get(
+                "contract_multiplier"
+            ) in (None, ""):
+                raise ValueError(
+                    "LINEAR_PERP execution metadata requires proven "
+                    "contract_size and contract_multiplier"
+                )
         signal = SignalIntent(
             signal_id=decision.decision_id,
             strategy_id="live_llm",
@@ -64,18 +82,7 @@ class LiveLLMTradePlanner:
             quantity=quantity,
             limit_price=limit_price,
             reason=decision.thesis,
-            metadata={
-                "trade_plan_id": plan.trade_plan_id,
-                "decision_id": decision.decision_id,
-                "direction": decision.action.value,
-                "requested_leverage": str(decision.leverage_request),
-                # Factual execution metadata must be supplied by the caller;
-                # UNKNOWN prevents pretending a generic signal is a perp.
-                "instrument_type": "UNKNOWN",
-                "contract_size": "1",
-                "contract_multiplier": "1",
-                **(execution_metadata or {}),
-            },
+            metadata=metadata,
         )
         await self.plans.link(plan.trade_plan_id, signal_id=signal.signal_id)
         return plan, signal

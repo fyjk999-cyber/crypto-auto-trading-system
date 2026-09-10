@@ -57,6 +57,13 @@ class FakePlans:
         plan = self._plan()
         return [plan] if plan is not None else []
 
+    async def plan_covering(self, symbol, instant):
+        plan = self._plan()
+        return plan if plan is not None and plan.symbol == symbol else None
+
+    async def get(self, trade_plan_id):
+        return self._plan() if self._plan() is not None else None
+
 
 class FakeOrderManager:
     def __init__(self, quantity_at=None):
@@ -93,11 +100,27 @@ class FakePortfolio:
         return {"BTC-USDT-SWAP": self.position}
 
 
+class FakeCoverageService:
+    def __init__(self):
+        self.resolution_calls = []
+
+    async def record_event_resolution(self, **kwargs):
+        self.resolution_calls.append(kwargs)
+        return kwargs
+
+    async def event_resolutions(self, **kwargs):
+        return []
+
+    async def retryable_unresolved(self):
+        return []
+
+
 class FakeIngestor:
     def __init__(self, events, status="KNOWN_VALUE"):
         self.events = events
         self.status = status
         self.calls = []
+        self.coverage_service = FakeCoverageService()
 
     async def ingest(self, adapter, **kwargs):
         self.calls.append(kwargs)
@@ -127,11 +150,13 @@ class FakeSettlement:
 
 
 class FakeAdapter:
+    expects_canonical_symbols = True
+
     def __init__(self, candles):
         self.candles = candles
         self.candle_calls = []
 
-    async def get_candles(self, symbol, bar="1H", limit=100):
+    async def get_mark_price_candles(self, symbol, bar="1H", limit=100):
         self.candle_calls.append((symbol, bar, limit))
         return self.candles
 
@@ -172,7 +197,14 @@ def _supervisor(
         portfolio=FakePortfolio(_position()),
         trade_plans=FakePlans(opened_at),
         order_manager=order_manager,
-        instruments_provider=lambda: {},
+        instruments_provider=lambda: {
+            "BTC-USDT-SWAP": {
+                "symbol": "BTC-USDT-SWAP",
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": Decimal("0.01"),
+                "contract_multiplier": Decimal("1"),
+            }
+        },
         lookback_hours=24,
     )
     return supervisor, ingestor, settlement, adapter
@@ -186,6 +218,10 @@ async def test_supervisor_settles_only_post_open_events_with_factual_mark():
             "1",
             "1",
             close,
+            "0",
+            "0",
+            "0",
+            "1",
         ]
 
     # The candle opening at 09:00 closes exactly at the 10:00 settlement.
@@ -215,6 +251,10 @@ async def test_historical_quantity_is_used_for_each_settlement():
             "1",
             "1",
             close,
+            "0",
+            "0",
+            "0",
+            "1",
         ]
 
     def quantity_at(_symbol, at):
@@ -245,6 +285,10 @@ async def test_settlement_never_uses_lookahead_candle():
             "1",
             "1",
             close,
+            "0",
+            "0",
+            "0",
+            "1",
         ]
 
     # Only a candle still open at 10:00 is available; it must not be used.
@@ -312,7 +356,14 @@ async def test_closed_activity_instrument_receives_coverage_without_settlement()
             closed_at=datetime(2026, 9, 10, 11, tzinfo=UTC),
         ),
         order_manager=FakeOrderManager(),
-        instruments_provider=lambda: {},
+        instruments_provider=lambda: {
+            "SOL-USDT-SWAP": {
+                "symbol": "SOL-USDT-SWAP",
+                "instrument_type": "LINEAR_PERP",
+                "contract_size": Decimal("0.01"),
+                "contract_multiplier": Decimal("1"),
+            }
+        },
         lookback_hours=24,
     )
     report = await supervisor.run_once(now=NOW)

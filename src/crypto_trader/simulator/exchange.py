@@ -402,14 +402,21 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
     ) -> None:
         quote = instrument.quote_asset
         pos = self.positions.get(fill.symbol)
+        if metadata.get("contract_size") in (None, "") or metadata.get(
+            "contract_multiplier"
+        ) in (None, ""):
+            raise InvalidOrder(
+                f"LINEAR_PERP simulated fill missing proven contract spec "
+                f"for {fill.symbol}"
+            )
         if pos is None:
             pos = Position(
                 symbol=fill.symbol,
                 base_asset=instrument.base_asset,
                 quote_asset=quote,
                 instrument_type="LINEAR_PERP",
-                contract_size=D(metadata.get("contract_size", "1")),
-                contract_multiplier=D(metadata.get("contract_multiplier", "1")),
+                contract_size=D(metadata.get("contract_size")),
+                contract_multiplier=D(metadata.get("contract_multiplier")),
             )
             self.positions[fill.symbol] = pos
         delta = fill.quantity if fill.side == OrderSide.BUY else -fill.quantity

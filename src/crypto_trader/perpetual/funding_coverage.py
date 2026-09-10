@@ -58,6 +58,7 @@ class FundingEventResolution:
     quantity: Decimal | None
     mark_price: Decimal | None
     funding_rate: Decimal | None
+    trade_plan_id: str | None
     ledger_transaction_id: str | None
     reason: str | None
 
@@ -207,6 +208,7 @@ class FundingCoverageService:
         quantity: Decimal | None = None,
         mark_price: Decimal | None = None,
         funding_rate: Decimal | None = None,
+        trade_plan_id: str | None = None,
         ledger_transaction_id: str | None = None,
         reason: str | None = None,
     ) -> FundingEventResolution:
@@ -251,6 +253,7 @@ class FundingCoverageService:
                     quantity=existing.quantity,
                     mark_price=existing.mark_price,
                     funding_rate=existing.funding_rate,
+                    trade_plan_id=existing.trade_plan_id,
                     ledger_transaction_id=existing.ledger_transaction_id,
                     reason=existing.reason,
                 )
@@ -259,6 +262,7 @@ class FundingCoverageService:
             existing.quantity = quantity
             existing.mark_price = mark_price
             existing.funding_rate = funding_rate
+            existing.trade_plan_id = trade_plan_id
             existing.ledger_transaction_id = ledger_transaction_id
             existing.reason = reason
             existing.updated_at = datetime.now(UTC)
@@ -272,6 +276,7 @@ class FundingCoverageService:
                 quantity=quantity,
                 mark_price=mark_price,
                 funding_rate=funding_rate,
+                trade_plan_id=trade_plan_id,
                 ledger_transaction_id=ledger_transaction_id,
                 reason=reason,
             )
@@ -303,6 +308,41 @@ class FundingCoverageService:
                 quantity=row.quantity,
                 mark_price=row.mark_price,
                 funding_rate=row.funding_rate,
+                trade_plan_id=row.trade_plan_id,
+                ledger_transaction_id=row.ledger_transaction_id,
+                reason=row.reason,
+            )
+            for row in rows
+        ]
+
+    async def retryable_unresolved(self) -> list[FundingEventResolution]:
+        """Durable recovery queue; SETTLED/NO_OP and permanent states excluded."""
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FundingEventResolutionORM)
+                    .where(
+                        FundingEventResolutionORM.status.in_(
+                            ("UNPROVEN", "MARK_UNAVAILABLE")
+                        )
+                    )
+                    .order_by(
+                        FundingEventResolutionORM.updated_at,
+                        FundingEventResolutionORM.settlement_timestamp,
+                    )
+                )
+            ).scalars().all()
+        return [
+            FundingEventResolution(
+                account_id=row.account_id,
+                instrument_id=row.instrument_id,
+                settlement_timestamp=_utc(row.settlement_timestamp),
+                currency=row.currency,
+                status=row.status,
+                quantity=row.quantity,
+                mark_price=row.mark_price,
+                funding_rate=row.funding_rate,
+                trade_plan_id=row.trade_plan_id,
                 ledger_transaction_id=row.ledger_transaction_id,
                 reason=row.reason,
             )

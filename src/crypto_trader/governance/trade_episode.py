@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from crypto_trader.domain.money import D
+from crypto_trader.perpetual.contract_spec import spec_from_order_metadata
 from crypto_trader.persistence.models import (
     DailyReviewRunORM,
     FillORM,
@@ -178,8 +179,15 @@ class TradeEpisodeStore:
             instrument_type = str(metadata.get("instrument_type") or "SPOT")
             if instrument_type not in {"SPOT", "LINEAR_PERP"}:
                 return None
-            contract_size = D(metadata.get("contract_size", "1"))
-            multiplier = D(metadata.get("contract_multiplier", "1"))
+            if instrument_type == "LINEAR_PERP":
+                contract_spec = spec_from_order_metadata(plan.symbol, entry_order)
+                if not contract_spec.proven:
+                    return None
+                contract_size = contract_spec.contract_size
+                multiplier = contract_spec.contract_multiplier
+            else:
+                contract_size = Decimal("1")
+                multiplier = Decimal("1")
             pnl_factor = opened_quantity * contract_size * multiplier
             price_delta = exit_price - entry_price
             gross_pnl = price_delta * pnl_factor * (1 if plan.direction == "LONG" else -1)
@@ -205,6 +213,7 @@ class TradeEpisodeStore:
                     .where(
                         LedgerTransactionORM.ownership_status == "VERIFIED",
                         LedgerTransactionORM.account_id.is_not(None),
+                        LedgerTransactionORM.instrument_id == plan.symbol,
                         LedgerTransactionORM.fill_id.in_(entry_fill_ids),
                         LedgerEntryORM.currency == currency,
                     )
@@ -426,21 +435,26 @@ class TradeEpisodeStore:
         now = datetime.now(UTC)
         deadline = now + timedelta(seconds=max(60, lease_seconds))
         async with self.session_factory() as session:
-            claim = (
-                await session.execute(
-                    select(DailyReviewRunORM).where(
-                        DailyReviewRunORM.review_date == review_date,
-                        DailyReviewRunORM.claim_token == claim_token,
-                        DailyReviewRunORM.owner == owner,
-                        DailyReviewRunORM.status.in_(("RUNNING", "SUCCEEDED")),
-                        DailyReviewRunORM.claim_deadline_at.is_not(None),
-                        DailyReviewRunORM.claim_deadline_at >= now,
-                    )
+            # Conditional atomic UPDATE is the actual fence. The database row
+            # lock/CAS guarantees exactly one worker can both renew the claim
+            # and proceed to episode mutation in this transaction.
+            claim_update = await session.execute(
+                update(DailyReviewRunORM)
+                .where(
+                    DailyReviewRunORM.review_date == review_date,
+                    DailyReviewRunORM.claim_token == claim_token,
+                    DailyReviewRunORM.owner == owner,
+                    DailyReviewRunORM.status.in_(("RUNNING", "SUCCEEDED")),
+                    DailyReviewRunORM.claim_deadline_at.is_not(None),
+                    DailyReviewRunORM.claim_deadline_at >= now,
                 )
-            ).scalar_one_or_none()
-            if claim is None:
+                .values(
+                    claim_deadline_at=deadline,
+                    last_attempt_at=now,
+                )
+            )
+            if claim_update.rowcount != 1:
                 return False
-            claim.claim_deadline_at = deadline
             rows = []
             for start in range(0, len(episode_ids), 500):
                 chunk = episode_ids[start : start + 500]

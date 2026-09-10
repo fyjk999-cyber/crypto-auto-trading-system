@@ -315,6 +315,7 @@ class FundingEventResolutionORM(Base):
     quantity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     mark_price: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     funding_rate: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ledger_transaction_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )

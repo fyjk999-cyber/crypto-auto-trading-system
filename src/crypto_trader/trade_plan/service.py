@@ -202,6 +202,36 @@ class TradePlanService:
             ).scalars().first()
             return self._to_domain(row) if row is not None else None
 
+    async def plan_covering(
+        self, symbol: str, instant: datetime
+    ) -> TradePlan | None:
+        """The single factual lifecycle covering a settlement instant."""
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradePlanORM)
+                    .where(
+                        TradePlanORM.symbol == symbol,
+                        TradePlanORM.state.in_(
+                            (
+                                TradePlanState.ACTIVE.value,
+                                TradePlanState.CLOSED.value,
+                            )
+                        ),
+                        TradePlanORM.opened_at.is_not(None),
+                        TradePlanORM.opened_at < instant,
+                        or_(
+                            TradePlanORM.closed_at.is_(None),
+                            TradePlanORM.closed_at >= instant,
+                        ),
+                    )
+                    .order_by(TradePlanORM.opened_at.desc(), TradePlanORM.trade_plan_id)
+                )
+            ).scalars().all()
+        if len(rows) != 1:
+            return None
+        return self._to_domain(rows[0])
+
     async def lifecycles_overlapping(
         self, start: datetime, end: datetime
     ) -> list[TradePlan]:
