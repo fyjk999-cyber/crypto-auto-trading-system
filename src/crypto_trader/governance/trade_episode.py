@@ -293,12 +293,20 @@ class TradeEpisodeStore:
     async def mark_reviewed(self, episode_ids: list[str]) -> None:
         if not episode_ids:
             return
+        chunk_size = 500
         async with self.session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(TradeEpisodeORM).where(TradeEpisodeORM.episode_id.in_(episode_ids))
+            rows = []
+            for start in range(0, len(episode_ids), chunk_size):
+                chunk = episode_ids[start : start + chunk_size]
+                rows.extend(
+                    (
+                        await session.execute(
+                            select(TradeEpisodeORM).where(
+                                TradeEpisodeORM.episode_id.in_(chunk)
+                            )
+                        )
+                    ).scalars().all()
                 )
-            ).scalars().all()
             for row in rows:
                 row.review_status = "REVIEWED"
             await session.commit()
