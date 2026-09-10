@@ -823,6 +823,7 @@ class TradingEngine:
         open_orders = await self.order_manager.count_open()
         daily_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         daily_pnl, daily_pnl_source = await self.ledger.net_pnl_since(daily_start)
+        funding_status = await self.ledger.funding_status_since(daily_start)
         risk_decision = self.risk_engine.check(
             signal,
             account=account,
@@ -842,6 +843,7 @@ class TradingEngine:
             valuation_currency="USDT",
             valuation_source=drawdown_source,
             valuation_id=valuation_id,
+            funding_status=funding_status.value,
             risk_equity=mtm_equity if valuation_available else account.equity,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
