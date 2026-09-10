@@ -52,7 +52,7 @@ class RiskEngine:
         market_price: Decimal,
         open_order_count: int,
         market_prices: dict[str, Decimal] | None = None,
-        daily_pnl: Decimal = Decimal("0"),
+        daily_pnl: Decimal | None = Decimal("0"),
         daily_pnl_source: str = "UNSPECIFIED",
         drawdown: Decimal | None = Decimal("0"),
         drawdown_source: str = "UNSPECIFIED",
@@ -192,7 +192,7 @@ class RiskEngine:
                 "approved_notional": str(notional),
                 "requested_leverage": str(requested_leverage),
                 "approved_leverage": str(approved_leverage),
-                "daily_pnl": str(daily_pnl),
+                "daily_pnl": str(daily_pnl) if daily_pnl is not None else None,
                 "daily_pnl_source": daily_pnl_source,
                 "drawdown": str(drawdown),
                 "drawdown_source": drawdown_source,
@@ -212,6 +212,8 @@ class RiskEngine:
             return fail("MAX_CONSECUTIVE_FAILURES")
         checks["max_consecutive_failures"] = True
 
+        if daily_pnl is None:
+            return fail("DAILY_PNL_UNAVAILABLE")
         if daily_pnl < -abs(self.config.max_daily_loss):
             return fail("MAX_DAILY_LOSS")
         checks["max_daily_loss"] = True

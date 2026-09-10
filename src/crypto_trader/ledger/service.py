@@ -405,6 +405,8 @@ class LedgerService:
                     if row.direction == LedgerDirection.DEBIT.value
                     else row.amount
                 )
+        if not rows:
+            return Decimal("0"), "KNOWN_ZERO_NO_LEDGER_ACTIVITY"
         return total, "LEDGER:REALIZED+FEE+FUNDING"
 
 
