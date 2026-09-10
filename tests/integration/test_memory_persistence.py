@@ -54,3 +54,18 @@ async def test_daily_review_persistence_is_idempotent(database):
     assert len(rows) == 1
     assert rows[0]["date"] == "2026-08-24"
     assert rows[0]["daily_pnl"] == "10"
+
+
+async def test_daily_review_claim_is_atomic(database):
+    import asyncio
+    from datetime import UTC, datetime
+
+    persistence = MemoryPersistence(database.session_factory)
+    start = datetime(2026, 9, 9, tzinfo=UTC)
+    end = datetime(2026, 9, 10, tzinfo=UTC)
+    first, second = await asyncio.gather(
+        persistence.begin_daily_review("2026-09-09", start, end),
+        persistence.begin_daily_review("2026-09-09", start, end),
+    )
+    tokens = [t for t in (first, second) if t is not None]
+    assert len(tokens) == 1

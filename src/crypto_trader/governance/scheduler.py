@@ -38,10 +38,10 @@ class DailyReviewScheduler:
         date = date or (now - timedelta(days=1)).date().isoformat()
         window_start = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=UTC)
         window_end = window_start + timedelta(days=1)
-        should_run = await self.persistence.begin_daily_review(
+        claim_token = await self.persistence.begin_daily_review(
             date, window_start, window_end
         )
-        if not should_run:
+        if claim_token is None:
             prior = await self.persistence.get_daily_review(date) or {}
             prior["idempotent"] = True
             return prior
@@ -71,6 +71,7 @@ class DailyReviewScheduler:
                 stats,
                 episode_count=len(episodes),
                 output_ref=f"daily_review:{date}",
+                claim_token=claim_token,
             )
             return {
                 "date": date,
@@ -82,7 +83,7 @@ class DailyReviewScheduler:
             }
         except Exception as exc:
             await self.persistence.fail_daily_review(
-                date, type(exc).__name__, str(exc)
+                date, type(exc).__name__, str(exc), claim_token=claim_token
             )
             raise
 
