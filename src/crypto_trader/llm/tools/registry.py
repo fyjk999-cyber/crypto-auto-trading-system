@@ -132,6 +132,18 @@ class LLMToolRegistry:
             evidence = await self.call(
                 name, symbol, context, timeout_seconds=timeout_seconds
             )
+            if evidence.symbol != symbol:
+                evidence = ToolEvidence(
+                    tool_name=evidence.tool_name,
+                    symbol=symbol,
+                    timestamp=evidence.timestamp,
+                    features={},
+                    supporting_evidence=[],
+                    contrary_evidence=["wrong symbol evidence rejected"],
+                    confidence_of_measurement=0.0,
+                    data_quality="UNAVAILABLE",
+                    source_refs=[],
+                )
             timestamp = (
                 evidence.timestamp.astimezone(UTC)
                 if evidence.timestamp.tzinfo is not None

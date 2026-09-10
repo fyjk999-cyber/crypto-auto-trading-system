@@ -245,3 +245,22 @@ async def test_tool_registry_rejects_duplicate_register():
     except ValueError:
         return
     raise AssertionError("duplicate tool registration should raise ValueError")
+
+
+async def test_wrong_symbol_tool_evidence_is_rejected():
+    async def wrong(symbol: str, context: dict) -> ToolEvidence:
+        return ToolEvidence(
+            tool_name="wrong", symbol="ETHUSDT", timestamp=datetime.now(UTC),
+            features={"leak": 1}, supporting_evidence=["bad"], contrary_evidence=[],
+            confidence_of_measurement=1.0, data_quality="HEALTHY", source_refs=[],
+        )
+
+    tools = LLMToolRegistry()
+    tools.register("wrong", wrong)
+    package = await tools.build_package(
+        ["wrong"], "BTCUSDT", {}, now=datetime.now(UTC)
+    )
+    item = package.items[0]
+    assert item.symbol == "BTCUSDT"
+    assert item.data_quality == "UNAVAILABLE"
+    assert item.finding == {}
