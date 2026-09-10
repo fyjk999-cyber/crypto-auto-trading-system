@@ -478,3 +478,38 @@ async def test_funding_coverage_proves_known_zero_and_unknown(database):
         instrument_id="BTC-USDT-SWAP", start=start, end=end
     )
     assert status == "KNOWN_ZERO"
+
+
+async def test_pnl_provenance_keeps_unknown_funding_unknown(ledger):
+    from datetime import UTC, datetime
+
+    start = datetime(2026, 9, 10, tzinfo=UTC)
+    provenance = await ledger.net_pnl_provenance_since(start)
+    assert provenance.complete is False
+    assert provenance.funding_status == "UNKNOWN"
+    assert provenance.funding_amount is None
+    assert "FUNDING_UNKNOWN" in provenance.unknown_reasons
+
+
+async def test_pnl_provenance_known_funding_value(ledger):
+    from datetime import UTC, datetime
+
+    start = datetime(2026, 9, 10, tzinfo=UTC)
+    await ledger.apply_paper_funding_settlement(
+        __import__(
+            "crypto_trader.perpetual.funding_settlement",
+            fromlist=["compute_paper_funding"],
+        ).compute_paper_funding(
+            settlement_timestamp=datetime(2026, 9, 10, 8, tzinfo=UTC),
+            signed_quantity=Decimal("-1"),
+            mark_price=Decimal("100"),
+            funding_rate=Decimal("0.001"),
+            contract_size=Decimal("0.01"),
+            contract_multiplier=Decimal("1"),
+            instrument_id="BTC-USDT-SWAP",
+        )
+    )
+    provenance = await ledger.net_pnl_provenance_since(start)
+    assert provenance.complete is True
+    assert provenance.funding_status == "KNOWN_VALUE"
+    assert provenance.funding_amount == Decimal("0.001")

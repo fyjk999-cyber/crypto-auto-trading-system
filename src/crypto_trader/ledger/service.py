@@ -196,6 +196,22 @@ def build_derivative_trade_entries(
     return postings, metadata
 
 
+@dataclass(frozen=True)
+class PnlProvenance:
+    account_id: str
+    currency: str
+    window_start: datetime
+    window_end: datetime
+    ledger_watermark: str | None
+    realized_pnl: Decimal
+    fees: Decimal
+    funding_amount: Decimal | None
+    funding_status: str
+    calculation_version: str = "v1"
+    complete: bool = False
+    unknown_reasons: tuple[str, ...] = ()
+
+
 class FundingStatus(str, Enum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
     KNOWN_ZERO = "KNOWN_ZERO"
@@ -210,6 +226,73 @@ class LedgerService:
         self.session_factory = session_factory
 
 
+
+
+
+    async def net_pnl_provenance_since(
+        self,
+        start: datetime,
+        *,
+        account_id: str = "default",
+        currency: str = "USDT",
+        funding_coverage_status: str = "UNKNOWN",
+    ) -> PnlProvenance:
+        end = datetime.now(UTC)
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LedgerEntryORM).where(
+                        LedgerEntryORM.account.in_(
+                            (
+                                "REALIZED_PNL",
+                                "FUTURES_REALIZED_PNL",
+                                "FEE_EXPENSE",
+                                "FUNDING_RECEIPT",
+                                "FUNDING_PAYMENT",
+                            )
+                        ),
+                        LedgerEntryORM.created_at >= start,
+                    )
+                )
+            ).scalars().all()
+        realized = Decimal("0")
+        fees = Decimal("0")
+        funding = Decimal("0")
+        funding_rows = 0
+        for row in rows:
+            signed = (
+                row.amount
+                if row.direction == LedgerDirection.CREDIT.value
+                else -row.amount
+            )
+            if row.account in {"REALIZED_PNL", "FUTURES_REALIZED_PNL"}:
+                realized += signed
+            elif row.account == "FEE_EXPENSE":
+                fees += -signed
+            else:
+                funding_rows += 1
+                funding += signed
+        if funding_rows:
+            funding_status = "KNOWN_VALUE"
+            funding_amount: Decimal | None = funding
+        else:
+            funding_status = funding_coverage_status
+            funding_amount = Decimal("0") if funding_coverage_status == "KNOWN_ZERO" else None
+        complete = funding_status != "UNKNOWN"
+        unknown = () if complete else ("FUNDING_UNKNOWN",)
+        return PnlProvenance(
+            account_id=account_id,
+            currency=currency,
+            window_start=start,
+            window_end=end,
+            ledger_watermark=None,
+            realized_pnl=realized,
+            fees=fees,
+            funding_amount=funding_amount,
+            funding_status=funding_status,
+            complete=complete,
+            unknown_reasons=unknown,
+        )
 
     async def apply_paper_funding_settlement(self, settlement) -> Decimal:
         """Idempotently post a versioned PAPER funding settlement."""
