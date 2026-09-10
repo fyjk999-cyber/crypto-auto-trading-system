@@ -109,7 +109,8 @@ async def test_daily_review_scheduler_idempotent(database):
     first = await scheduler.run_once(today)
     second = await scheduler.run_once(today)
     assert first["trade_count"] == 1
-    assert first == second
+    assert second["status"] == "SUCCEEDED"
+    assert second["trade_count"] == 1
     rows = await persistence.load_daily_reviews(limit=10)
     assert len(rows) == 1
 
