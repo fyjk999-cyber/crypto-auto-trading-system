@@ -199,6 +199,12 @@ def test_market_data_engine_zscore_insufficient_returns_none():
     assert mde.zscore(5) is None
 
 
+def test_market_data_engine_donchian_empty_returns_none():
+    mde = MarketDataEngine("BTCUSDT")
+    assert mde.donchian(5) == (None, None)
+
+
+
 
 def test_ml_meta_not_a_directional_sub_strategy():
     assert "ml_meta" not in BASE_WEIGHTS
