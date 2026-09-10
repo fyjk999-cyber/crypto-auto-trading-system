@@ -209,6 +209,41 @@ class LedgerService:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
 
+
+
+    async def apply_paper_funding_settlement(self, settlement) -> Decimal:
+        """Idempotently post a versioned PAPER funding settlement."""
+        amount = D(settlement.signed_amount)
+        if amount == 0:
+            return Decimal("0")
+        if amount > 0:
+            entry_type = LedgerEntryType.FUNDING_RECEIPT
+            postings = [
+                LedgerPosting("CASH", LedgerDirection.DEBIT, amount, settlement.currency),
+                LedgerPosting(
+                    "FUNDING_RECEIPT", LedgerDirection.CREDIT, amount, settlement.currency
+                ),
+            ]
+        else:
+            entry_type = LedgerEntryType.FUNDING_PAYMENT
+            postings = [
+                LedgerPosting(
+                    "FUNDING_PAYMENT", LedgerDirection.DEBIT, -amount, settlement.currency
+                ),
+                LedgerPosting("CASH", LedgerDirection.CREDIT, -amount, settlement.currency),
+            ]
+        await self.record(
+            entry_type,
+            postings,
+            event_id=settlement.idempotency_key,
+            metadata={
+                "source": "PAPER_DERIVED",
+                "rule_version": settlement.rule_version,
+                "settlement_timestamp": settlement.settlement_timestamp.isoformat(),
+            },
+        )
+        return amount
+
     async def record(
         self,
         entry_type: LedgerEntryType,

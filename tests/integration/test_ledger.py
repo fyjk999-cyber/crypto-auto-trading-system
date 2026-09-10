@@ -350,3 +350,34 @@ def test_equity_status_classification():
     assert PortfolioService.classify_equity_status(Decimal("1")) == "HEALTHY"
     assert PortfolioService.classify_equity_status(Decimal("0")) == "ZERO_EQUITY"
     assert PortfolioService.classify_equity_status(Decimal("-1")) == "INSOLVENT"
+
+
+async def test_paper_funding_settlement_is_idempotent(ledger, database):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import func, select
+
+    from crypto_trader.perpetual.funding_settlement import compute_paper_funding
+    from crypto_trader.persistence.models import LedgerTransactionORM
+
+    settlement = compute_paper_funding(
+        settlement_timestamp=datetime(2026, 9, 10, 8, tzinfo=UTC),
+        signed_quantity=Decimal("-1"),
+        mark_price=Decimal("100"),
+        funding_rate=Decimal("0.001"),
+        contract_size=Decimal("0.01"),
+        contract_multiplier=Decimal("1"),
+        instrument_id="BTC-USDT-SWAP",
+    )
+    first = await ledger.apply_paper_funding_settlement(settlement)
+    second = await ledger.apply_paper_funding_settlement(settlement)
+    assert first == second == Decimal("0.001")
+    async with database.session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count()).select_from(LedgerTransactionORM).where(
+                    LedgerTransactionORM.entry_type == "FUNDING_RECEIPT"
+                )
+            )
+        ).scalar_one()
+    assert count == 1
