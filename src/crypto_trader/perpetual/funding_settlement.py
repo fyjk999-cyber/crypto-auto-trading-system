@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 
@@ -16,6 +16,21 @@ class PaperFundingSettlement:
     currency: str
     rule_version: str
     idempotency_key: str
+
+
+def canonical_utc_timestamp(value: datetime) -> datetime:
+    """Normalize an aware settlement instant to UTC.
+
+    Equivalent offsets (+00:00, +08:00, -05:00) must produce one canonical
+    identity; naive datetimes are rejected because their instant is unknown.
+    """
+    if value.tzinfo is None:
+        raise ValueError("settlement_timestamp must be timezone-aware")
+    return value.astimezone(UTC)
+
+
+def canonical_utc_timestamp_text(value: datetime) -> str:
+    return canonical_utc_timestamp(value).isoformat().replace("+00:00", "Z")
 
 
 def compute_paper_funding(
@@ -35,6 +50,11 @@ def compute_paper_funding(
 
     LONG with positive rate pays; SHORT with positive rate receives.
     """
+    if not account_id or not str(account_id).strip():
+        raise ValueError("account_id is required for funding settlement")
+    if not instrument_id or not str(instrument_id).strip():
+        raise ValueError("instrument_id is required for funding settlement")
+    canonical_timestamp = canonical_utc_timestamp(settlement_timestamp)
     signed_amount = (
         -signed_quantity
         * mark_price
@@ -43,12 +63,16 @@ def compute_paper_funding(
         * funding_rate
     )
     # Business identity excludes rule_version: a rule upgrade must not charge
-    # the same account/instrument/settlement a second time.
-    key = f"{account_id}|{instrument_id}|{settlement_timestamp.isoformat()}"
+    # the same account/instrument/settlement instant a second time. UTC
+    # normalization guarantees equivalent offsets share one identity.
+    key = (
+        f"{account_id}|{instrument_id}|"
+        f"{canonical_utc_timestamp_text(canonical_timestamp)}"
+    )
     return PaperFundingSettlement(
         account_id=account_id,
         instrument_id=instrument_id,
-        settlement_timestamp=settlement_timestamp,
+        settlement_timestamp=canonical_timestamp,
         signed_amount=signed_amount,
         currency=currency,
         rule_version=rule_version,

@@ -485,9 +485,26 @@ class LedgerService:
 
     async def apply_paper_funding_settlement(self, settlement) -> Decimal:
         """Idempotently post a versioned PAPER funding settlement."""
+        from crypto_trader.perpetual.funding_settlement import (
+            canonical_utc_timestamp,
+            canonical_utc_timestamp_text,
+        )
+
         amount = D(settlement.signed_amount)
         if amount == 0:
             return Decimal("0")
+        canonical_timestamp = canonical_utc_timestamp(settlement.settlement_timestamp)
+        account_id = getattr(settlement, "account_id", None) or None
+        instrument_id = getattr(settlement, "instrument_id", None)
+        if account_id and instrument_id:
+            # Do not trust a caller-built key: the canonical business identity
+            # is account|instrument|UTC instant (rule_version excluded).
+            event_id = (
+                f"{account_id}|{instrument_id}|"
+                f"{canonical_utc_timestamp_text(canonical_timestamp)}"
+            )
+        else:
+            event_id = settlement.idempotency_key
         if amount > 0:
             entry_type = LedgerEntryType.FUNDING_RECEIPT
             postings = [
@@ -507,18 +524,20 @@ class LedgerService:
         await self.record(
             entry_type,
             postings,
-            account_id=getattr(settlement, "account_id", None) or None,
-            instrument_id=settlement.instrument_id,
-            event_id=settlement.idempotency_key,
+            account_id=account_id,
+            instrument_id=instrument_id,
+            event_id=event_id,
             # The posting is dated at the economic settlement instant, not at
             # process wall-clock time, so [start, end) window scoping is factual.
-            created_at=settlement.settlement_timestamp,
+            created_at=canonical_timestamp,
             metadata={
                 "source": "PAPER_DERIVED",
                 "rule_version": settlement.rule_version,
-                "instrument_id": settlement.instrument_id,
+                "instrument_id": instrument_id,
                 "currency": settlement.currency,
-                "settlement_timestamp": settlement.settlement_timestamp.isoformat(),
+                "settlement_timestamp": canonical_utc_timestamp_text(
+                    canonical_timestamp
+                ),
             },
         )
         return amount
