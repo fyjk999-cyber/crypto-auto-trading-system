@@ -462,7 +462,10 @@ async def test_funding_coverage_proves_known_zero_and_unknown(database):
     service = FundingCoverageService(database.session_factory)
     start = datetime(2026, 9, 10, 0, tzinfo=UTC)
     end = datetime(2026, 9, 10, 8, tzinfo=UTC)
-    assert await service.status_for(instrument_id="BTC-USDT-SWAP", start=start, end=end) == "UNKNOWN"
+    status = await service.status_for(
+        instrument_id="BTC-USDT-SWAP", start=start, end=end
+    )
+    assert status == "UNKNOWN"
     await service.record(
         instrument_id="BTC-USDT-SWAP",
         window_start=start - timedelta(hours=1),
@@ -471,4 +474,7 @@ async def test_funding_coverage_proves_known_zero_and_unknown(database):
         pagination_complete=True,
         event_manifest_hash="sha256:test",
     )
-    assert await service.status_for(instrument_id="BTC-USDT-SWAP", start=start, end=end) == "KNOWN_ZERO"
+    status = await service.status_for(
+        instrument_id="BTC-USDT-SWAP", start=start, end=end
+    )
+    assert status == "KNOWN_ZERO"
