@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -195,6 +196,13 @@ def build_derivative_trade_entries(
     return postings, metadata
 
 
+class FundingStatus(str, Enum):
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    KNOWN_ZERO = "KNOWN_ZERO"
+    KNOWN_VALUE = "KNOWN_VALUE"
+    UNKNOWN = "UNKNOWN"
+
+
 class LedgerService:
     """Atomic ledger writer and reader."""
 
@@ -344,6 +352,29 @@ class LedgerService:
             )
         )
         return list(result.scalars().all())
+
+
+
+    async def funding_status_since(self, start: datetime) -> FundingStatus:
+        """Return factual funding applicability state for a UTC interval.
+
+        Without a complete funding-source coverage proof, absence of a funding
+        posting is UNKNOWN, not a factual zero.
+        """
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LedgerEntryORM).where(
+                        LedgerEntryORM.account.in_(
+                            ("FUNDING_RECEIPT", "FUNDING_PAYMENT")
+                        ),
+                        LedgerEntryORM.created_at >= start,
+                    )
+                )
+            ).scalars().all()
+        if rows:
+            return FundingStatus.KNOWN_VALUE
+        return FundingStatus.UNKNOWN
 
     async def realized_pnl_since(self, start: datetime) -> Decimal:
         """Sum realized PnL postings since a UTC boundary (losses are negative)."""

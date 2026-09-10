@@ -267,3 +267,27 @@ async def test_earliest_factual_closed_episode_date_ignores_non_factual(database
 
     store = TradeEpisodeStore(database.session_factory)
     assert await store.earliest_factual_closed_date() == "2026-09-08"
+
+
+async def test_funding_status_unknown_without_source_coverage(ledger):
+    from datetime import UTC, datetime
+    from crypto_trader.ledger.service import FundingStatus
+
+    start = datetime(2026, 9, 10, tzinfo=UTC)
+    assert await ledger.funding_status_since(start) == FundingStatus.UNKNOWN
+
+
+async def test_funding_status_known_value_with_posting(ledger):
+    from datetime import UTC, datetime
+    from crypto_trader.ledger.service import FundingStatus
+
+    start = datetime(2026, 9, 10, tzinfo=UTC)
+    await ledger.record(
+        LedgerEntryType.FUNDING_RECEIPT,
+        [
+            LedgerPosting("CASH", LedgerDirection.DEBIT, Decimal("2")),
+            LedgerPosting("FUNDING_RECEIPT", LedgerDirection.CREDIT, Decimal("2")),
+        ],
+        transaction_id="funding_receipt_1",
+    )
+    assert await ledger.funding_status_since(start) == FundingStatus.KNOWN_VALUE
