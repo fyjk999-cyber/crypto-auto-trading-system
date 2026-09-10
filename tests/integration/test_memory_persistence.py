@@ -69,3 +69,72 @@ async def test_daily_review_claim_is_atomic(database):
     )
     tokens = [t for t in (first, second) if t is not None]
     assert len(tokens) == 1
+
+
+async def test_learning_retry_does_not_bump_pattern_version(database):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from crypto_trader.governance.factual_learning import FactualEpisodeLearning
+    from crypto_trader.governance.trade_episode import FactualTradeEpisode
+    from crypto_trader.persistence.models import AIMarketPatternORM, TradeEpisodeORM
+
+    episode = FactualTradeEpisode(
+        episode_id="ep_retry",
+        trade_plan_id="plan_retry",
+        symbol="BTCUSDT",
+        direction="LONG",
+        entry_decision_id="d1",
+        exit_decision_id="d2",
+        position_decision_ids=[],
+        risk_decision_ids=[],
+        order_ids=[],
+        fill_ids=[],
+        entry_price=Decimal("100"),
+        exit_price=Decimal("101"),
+        opened_quantity=Decimal("1"),
+        closed_quantity=Decimal("1"),
+        leverage=Decimal("1"),
+        fees=Decimal("0"),
+        funding_pnl=Decimal("0"),
+        gross_pnl=Decimal("1"),
+        net_pnl=Decimal("1"),
+        holding_time_seconds=1.0,
+        entry_market_regime="TREND",
+        terminal_reason="EXIT",
+        opened_at=datetime(2026, 9, 9, tzinfo=UTC),
+        closed_at=datetime(2026, 9, 9, tzinfo=UTC),
+    )
+    async with database.session_factory() as session:
+        session.add(
+            TradeEpisodeORM(
+                episode_id="ep_retry",
+                trade_plan_id="plan_retry",
+                symbol="BTCUSDT",
+                direction="LONG",
+                entry_decision_id="d1",
+                entry_price=Decimal("100"),
+                exit_price=Decimal("101"),
+                opened_quantity=Decimal("1"),
+                closed_quantity=Decimal("1"),
+                leverage=Decimal("1"),
+                gross_pnl=Decimal("1"),
+                net_pnl=Decimal("1"),
+                holding_time_seconds=1.0,
+                entry_market_regime="TREND",
+                terminal_reason="EXIT",
+                factual=True,
+                opened_at=datetime(2026, 9, 9, tzinfo=UTC),
+                closed_at=datetime(2026, 9, 9, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+
+    learning = FactualEpisodeLearning(database.session_factory)
+    await learning.review(episode)
+    await learning.review(episode)
+    async with database.session_factory() as session:
+        pattern = (await session.execute(select(AIMarketPatternORM))).scalar_one()
+    assert pattern.version == 1
+    assert pattern.sample_count == 1

@@ -91,9 +91,13 @@ class FactualEpisodeLearning:
             if pattern is None:
                 session.add(AIMarketPatternORM(pattern_id=pattern_id, **values))
             else:
-                for key, value in values.items():
-                    setattr(pattern, key, value)
-                pattern.version += 1
+                changed = any(
+                    getattr(pattern, key) != value for key, value in values.items()
+                )
+                if changed:
+                    for key, value in values.items():
+                        setattr(pattern, key, value)
+                    pattern.version += 1
             await session.commit()
 
     async def list_reviews(self, *, limit: int = 50) -> list[dict]:
