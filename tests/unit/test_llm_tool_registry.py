@@ -228,3 +228,20 @@ async def test_tool_registry_rejects_unknown_tool():
     except KeyError:
         return
     raise AssertionError("unknown tool should raise KeyError")
+
+
+
+async def test_tool_registry_rejects_duplicate_register():
+    tools = LLMToolRegistry()
+    async def tool(symbol: str, context: dict) -> ToolEvidence:
+        return ToolEvidence(
+            tool_name="dup", symbol=symbol, timestamp=datetime.now(UTC), features={},
+            supporting_evidence=[], contrary_evidence=[], confidence_of_measurement=1.0,
+            data_quality="HEALTHY", source_refs=[],
+        )
+    tools.register("dup", tool)
+    try:
+        tools.register("dup", tool)
+    except ValueError:
+        return
+    raise AssertionError("duplicate tool registration should raise ValueError")
