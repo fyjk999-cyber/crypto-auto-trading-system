@@ -63,13 +63,14 @@ class PortfolioService:
         account_id: str = "default",
         currency: str = "USDT",
         source: str = "LEDGER_PROJECTION",
+        valuation_as_of: datetime | None = None,
     ) -> tuple[Decimal, Decimal, datetime, str]:
         """Persist a factual equity point and return canonical drawdown.
 
         Convention: drawdown <= 0, where drawdown = current_equity - peak_equity.
         Peak is durably retained across restarts.
         """
-        as_of = datetime.now(UTC)
+        as_of = valuation_as_of or datetime.now(UTC)
         async with self.session_factory() as session:
             latest = (
                 await session.execute(

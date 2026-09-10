@@ -810,9 +810,20 @@ class TradingEngine:
                 mtm_equity += (mark - position.avg_entry_price) * position.quantity
         valuation_id = new_id("val") if valuation_available else None
         if valuation_available:
+            market_as_of = max(
+                (
+                    book.updated_at
+                    for symbol_key in positions
+                    if (book := self.market_data.books.get(symbol_key)) is not None
+                    and book.updated_at is not None
+                ),
+                default=None,
+            )
             drawdown, peak_equity, valuation_as_of, drawdown_source = (
                 await self.portfolio.record_equity_drawdown(
-                    mtm_equity, source="MARK_TO_MARKET_EQUITY"
+                    mtm_equity,
+                    source="MARK_TO_MARKET_EQUITY",
+                    valuation_as_of=market_as_of,
                 )
             )
         else:
