@@ -290,6 +290,20 @@ class TradeEpisodeStore:
                 break
         return out
 
+
+
+    async def earliest_factual_closed_date(self) -> str | None:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradeEpisodeORM)
+                    .where(TradeEpisodeORM.factual.is_(True))
+                    .order_by(TradeEpisodeORM.closed_at.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        return row.closed_at.date().isoformat() if row is not None else None
+
     async def mark_reviewed(self, episode_ids: list[str]) -> None:
         if not episode_ids:
             return

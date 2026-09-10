@@ -538,10 +538,14 @@ class TradingEngine:
         if scheduler is None:
             return
         latest = await scheduler.persistence.latest_succeeded_review_date()
-        if latest is None:
-            # No factual history: do not invent dates.
-            return
-        start = datetime.strptime(latest, "%Y-%m-%d").date() + timedelta(days=1)
+        if latest is not None:
+            start = datetime.strptime(latest, "%Y-%m-%d").date() + timedelta(days=1)
+        else:
+            earliest = await scheduler.episodes.earliest_factual_closed_date()
+            if earliest is None:
+                # No factual history: do not invent dates.
+                return
+            start = datetime.strptime(earliest, "%Y-%m-%d").date()
         end = (datetime.now(UTC) - timedelta(days=1)).date()
         if start > end:
             return
