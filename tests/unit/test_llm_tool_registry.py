@@ -218,3 +218,13 @@ async def test_tool_budget_partial_failure_preserves_other_factual_items():
     assert fast_item.data_quality == "HEALTHY"
     assert slow_item.data_quality == "UNAVAILABLE"
 
+
+
+
+async def test_tool_registry_rejects_unknown_tool():
+    tools = LLMToolRegistry()
+    try:
+        await tools.call("missing", "BTCUSDT", {})
+    except KeyError:
+        return
+    raise AssertionError("unknown tool should raise KeyError")
