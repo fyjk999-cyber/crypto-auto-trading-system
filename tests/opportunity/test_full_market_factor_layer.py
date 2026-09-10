@@ -153,6 +153,7 @@ def make_ctx(symbol: str = "BTCUSDT") -> StrategyContext:
         clock_time=now,
         run_id="run_1",
         mark_price=Decimal("100.5"),
+        realized_volatility=Decimal("0.01"),
         instrument=Instrument(
             symbol=symbol, base_asset=symbol[:-4], quote_asset="USDT", step_size="0.00001"
         ),
