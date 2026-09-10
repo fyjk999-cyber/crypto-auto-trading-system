@@ -23,6 +23,14 @@ class PortfolioService:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
 
+    @staticmethod
+    def classify_equity_status(equity: Decimal) -> str:
+        if equity > 0:
+            return "HEALTHY"
+        if equity == 0:
+            return "ZERO_EQUITY"
+        return "INSOLVENT"
+
     async def refresh(self, initial_balances: dict[str, Decimal] | None = None) -> None:
         async with self.session_factory() as session:
             await rebuild_projections(session, initial_balances=initial_balances)
@@ -131,7 +139,7 @@ class PortfolioService:
                     peak_adjusted_equity=peak_adjusted,
                     drawdown=drawdown,
                     valuation_source=source,
-                    valuation_status="HEALTHY",
+                    valuation_status=self.classify_equity_status(current_equity),
                     valuation_as_of=as_of,
                 )
             )

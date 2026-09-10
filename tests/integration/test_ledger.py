@@ -342,3 +342,11 @@ async def test_equity_drawdown_isolated_by_account_and_currency(database):
     )
     assert dd_a == Decimal("-10") and peak_a == Decimal("100")
     assert dd_b == Decimal("0") and peak_b == Decimal("50")
+
+
+def test_equity_status_classification():
+    from crypto_trader.portfolio.service import PortfolioService
+
+    assert PortfolioService.classify_equity_status(Decimal("1")) == "HEALTHY"
+    assert PortfolioService.classify_equity_status(Decimal("0")) == "ZERO_EQUITY"
+    assert PortfolioService.classify_equity_status(Decimal("-1")) == "INSOLVENT"
