@@ -249,6 +249,33 @@ class ValuationBatchORM(Base):
     components_json: Mapped[list[Any] | None] = mapped_column(JSON)
 
 
+class FundingCoverageORM(Base):
+    """Durable proof window for factual per-instrument funding coverage."""
+
+    __tablename__ = "funding_coverage_windows"
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_id",
+            "window_start",
+            "window_end",
+            "rule_version",
+            name="uq_funding_coverage_window",
+        ),
+    )
+
+    coverage_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    instrument_id: Mapped[str] = mapped_column(String(64), index=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(64), default="OKX_PUBLIC")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    pagination_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    event_manifest_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    gaps_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    rule_version: Mapped[str] = mapped_column(String(32), default="v1")
+    coverage_status: Mapped[str] = mapped_column(String(16), default="UNKNOWN")
+
+
 class EquitySnapshotORM(Base):
     """Durable factual equity/drawdown history used by canonical Risk."""
 

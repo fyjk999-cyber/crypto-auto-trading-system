@@ -452,3 +452,23 @@ async def test_incomplete_valuation_batch_keeps_known_facts(database):
     assert batch.quality == "UNAVAILABLE"
     assert batch.reason_codes_json == ["VALUATION_UNAVAILABLE"]
     assert batch.missing_marks_json == ["SOLUSDT"]
+
+
+async def test_funding_coverage_proves_known_zero_and_unknown(database):
+    from datetime import UTC, datetime, timedelta
+
+    from crypto_trader.perpetual.funding_coverage import FundingCoverageService
+
+    service = FundingCoverageService(database.session_factory)
+    start = datetime(2026, 9, 10, 0, tzinfo=UTC)
+    end = datetime(2026, 9, 10, 8, tzinfo=UTC)
+    assert await service.status_for(instrument_id="BTC-USDT-SWAP", start=start, end=end) == "UNKNOWN"
+    await service.record(
+        instrument_id="BTC-USDT-SWAP",
+        window_start=start - timedelta(hours=1),
+        window_end=end + timedelta(hours=1),
+        coverage_status="KNOWN_ZERO",
+        pagination_complete=True,
+        event_manifest_hash="sha256:test",
+    )
+    assert await service.status_for(instrument_id="BTC-USDT-SWAP", start=start, end=end) == "KNOWN_ZERO"
