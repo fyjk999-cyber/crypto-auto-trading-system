@@ -69,31 +69,31 @@ class PortfolioService:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            period_flow = Decimal("0")
-            if latest is not None:
-                flow_rows = (
-                    await session.execute(
-                        select(LedgerTransactionORM).where(
-                            LedgerTransactionORM.created_at > latest.valuation_as_of,
-                            LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
-                        )
+            # Cumulative economic external flow from unique transactions, not
+            # individual double-entry postings. This is idempotent across
+            # restarts/same-timestamp replays and does not depend on a cursor.
+            flow_rows = (
+                await session.execute(
+                    select(LedgerTransactionORM).where(
+                        LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL"))
                     )
-                ).scalars().all()
-                for txn in flow_rows:
-                    metadata = txn.metadata_json or {}
-                    raw_amount = (
-                        metadata.get("amount")
-                        or metadata.get("quantity")
-                        or metadata.get("total")
-                        or "0"
-                    )
-                    amount = abs(D(raw_amount))
-                    period_flow += amount if txn.entry_type == "DEPOSIT" else -amount
-            cumulative_flow = (
-                latest.cumulative_external_cash_flow + period_flow
-                if latest is not None
-                else Decimal("0")
+                )
+            ).scalars().all()
+            cumulative_flow = Decimal("0")
+            for txn in flow_rows:
+                metadata = txn.metadata_json or {}
+                raw_amount = (
+                    metadata.get("amount")
+                    or metadata.get("quantity")
+                    or metadata.get("total")
+                    or "0"
+                )
+                amount = abs(D(raw_amount))
+                cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
+            prior_cumulative = (
+                latest.cumulative_external_cash_flow if latest is not None else Decimal("0")
             )
+            period_flow = cumulative_flow - prior_cumulative
             cash_flow_adjusted = current_equity - cumulative_flow
             prior_peak = (
                 latest.peak_adjusted_equity
