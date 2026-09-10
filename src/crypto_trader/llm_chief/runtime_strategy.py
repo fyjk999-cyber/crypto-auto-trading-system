@@ -261,6 +261,15 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             and best_bid.quantity > 0
             and best_ask.quantity > 0
         ) else Decimal("0")
+        if ctx.instrument is None:
+            await self.audit.log(
+                "LIVE_LLM_INSTRUMENT_UNAVAILABLE",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"symbol": ctx.symbol},
+            )
+            return []
         sized = self.sizer.size(
             side=decision.action.value,
             requested_quantity=Decimal(str(decision.position_size_request)),
@@ -272,7 +281,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             requested_leverage=Decimal(str(decision.leverage_request or 1)),
             account=ctx.account,
             positions=ctx.positions,
-            instrument=ctx.instrument.model_copy(update={"instrument_type": "LINEAR_PERP"}),
+            instrument=ctx.instrument,
             price=mid,
             stop_price=stop_price,
             volatility=volatility,
@@ -293,7 +302,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 limit_price=mid,
                 quantity=sized.normalized_quantity,
                 execution_metadata={
-                    "instrument_type": "LINEAR_PERP",
+                    "instrument_type": ctx.instrument.instrument_type,
                     "contract_size": str(ctx.instrument.contract_size),
                     "contract_multiplier": str(ctx.instrument.contract_multiplier),
                     "requested_quantity": str(decision.position_size_request),

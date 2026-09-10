@@ -24,6 +24,12 @@ from crypto_trader.persistence.models import (
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 from tests.conftest import make_paper_engine
 
+BTC_EXECUTION_METADATA = {
+    "instrument_type": "LINEAR_PERP",
+    "contract_size": "0.01",
+    "contract_multiplier": "1",
+}
+
 
 class MutableClock(Clock):
     def __init__(self) -> None:
@@ -92,7 +98,8 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -266,7 +273,8 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("99")
+        entry, limit_price=Decimal("99"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -310,7 +318,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
         assert episode.direction == "SHORT"
         assert episode.opened_quantity == Decimal("0.1")
         assert episode.closed_quantity == Decimal("0.1")
-        assert episode.gross_pnl == Decimal("-0.01")
+        assert episode.gross_pnl == Decimal("-0.0001")
     await engine.stop()
 
 
@@ -336,7 +344,8 @@ async def test_partial_exit_fill_stays_active_until_factual_remaining_position_c
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -412,7 +421,8 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -479,7 +489,9 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(
         plans, max_holding_time_seconds=60
-    ).create_entry_signal(entry, limit_price=Decimal("101"))
+    ).create_entry_signal(entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
+    )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
     await engine.process_signal(signal)
@@ -535,7 +547,8 @@ async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database)
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -589,7 +602,8 @@ async def test_expired_entry_is_terminal_before_order_creation(database):
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     signal = signal.model_copy(
@@ -621,7 +635,8 @@ async def test_cancelled_unfilled_entry_cancels_approved_trade_plan(database):
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("99.5")
+        entry, limit_price=Decimal("99.5"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await engine.process_signal(signal)
@@ -656,7 +671,8 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     )
     await decisions.save(entry, run_id=first.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101")
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
@@ -695,7 +711,7 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     database, action, expected_side, stop_loss, limit_price
 ):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
-    engine.risk_engine.config.max_order_notional = Decimal(limit_price)
+    engine.risk_engine.config.max_order_notional = Decimal(limit_price) * Decimal("0.01")
     await engine.start("run-risk-scale-down")
     assert await engine._strategy_context("BTCUSDT") is not None
     decisions = LLMDecisionStore(database.session_factory)
@@ -714,7 +730,8 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal(limit_price)
+        entry, limit_price=Decimal(limit_price),
+        execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)

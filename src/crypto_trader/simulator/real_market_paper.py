@@ -41,50 +41,90 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         return await self.feed.refresh(symbol)
 
     async def get_exchange_info(self, symbol: str | None = None) -> list[Instrument]:
-        """Load the bounded execution symbol's factual OKX linear-SWAP contract."""
+        """Load factual executable OKX USDT linear-SWAP instruments.
 
-        canonical = (symbol or self.feed.symbol).upper()
-        provider_symbol = SymbolMapper().to_okx(canonical)
+        With ``symbol=None`` this returns the full execution registry, not only
+        the bounded feed symbol. Non-linear / non-USDT products are not claimed
+        executable by this PAPER runtime.
+        """
+
         try:
             rows = await self.feed.client.get_instruments("SWAP")
         except Exception:
             return []
-        matches = [
-            row
-            for row in rows
-            if row.get("instId") == provider_symbol
-            and row.get("state") == "live"
-            and row.get("ctType", "linear") == "linear"
-        ]
-        if len(matches) != 1:
-            return []
-        raw = matches[0]
+        parsed: list[Instrument] = []
+        for raw in rows:
+            inst_id = raw.get("instId", "")
+            if not inst_id.endswith("-USDT-SWAP"):
+                continue
+            if raw.get("state") != "live":
+                continue
+            if raw.get("ctType", "linear") != "linear":
+                continue
+            instrument = self._instrument_from_okx_row(raw)
+            if instrument is None:
+                continue
+            parsed.append(instrument)
+        if symbol is None:
+            for instrument in parsed:
+                self.instruments[instrument.symbol] = instrument
+            return parsed
+        canonical = symbol.upper()
+        for instrument in parsed:
+            if instrument.symbol == canonical:
+                self.instruments[canonical] = instrument
+                return [instrument]
+        return []
+
+    def _instrument_from_okx_row(self, raw: dict) -> Instrument | None:
+        inst_id = str(raw.get("instId") or "")
+        try:
+            canonical = SymbolMapper().to_canonical(inst_id)
+        except ValueError:
+            return None
         tick_size = D(raw.get("tickSz", "0"))
         lot_size = D(raw.get("lotSz", "0"))
         min_size = D(raw.get("minSz", "0"))
         contract_size = D(raw.get("ctVal", "0"))
         contract_multiplier = D(raw.get("ctMult") or "1")
         if min(tick_size, lot_size, min_size, contract_size, contract_multiplier) <= 0:
-            return []
-        base, quote, *_ = provider_symbol.split("-")
-        instrument = Instrument(
-                symbol=canonical,
-                base_asset=base,
-                quote_asset=quote,
-                status="TRADING",
-                tick_size=tick_size,
-                step_size=lot_size,
-                min_qty=min_size,
-                min_notional=Decimal("0.00000001"),
-                price_precision=_precision(tick_size),
-                quantity_precision=_precision(lot_size),
-                exchange="OKX",
-                instrument_type="LINEAR_PERP",
-                contract_size=contract_size,
-                contract_multiplier=contract_multiplier,
-            )
-        self.instruments[canonical] = instrument
-        return [instrument]
+            return None
+        base, quote, *_ = inst_id.split("-")
+        inst_type = str(raw.get("instType") or "SWAP")
+        ct_type = raw.get("ctType")
+        instrument_type = (
+            "LINEAR_PERP"
+            if inst_type == "SWAP" and ct_type == "linear"
+            else inst_type
+        )
+        return Instrument(
+            symbol=canonical,
+            base_asset=base,
+            quote_asset=quote,
+            status="TRADING",
+            tick_size=tick_size,
+            step_size=lot_size,
+            min_qty=min_size,
+            min_notional=Decimal("0.00000001"),
+            price_precision=_precision(tick_size),
+            quantity_precision=_precision(lot_size),
+            exchange="OKX",
+            instrument_type=instrument_type,
+            contract_size=contract_size,
+            contract_multiplier=contract_multiplier,
+            inst_id=inst_id,
+            inst_type=inst_type,
+            ct_type=ct_type,
+            ct_val=raw.get("ctVal"),
+            ct_mult=raw.get("ctMult"),
+            ct_val_ccy=raw.get("ctValCcy"),
+            settle_ccy=raw.get("settleCcy"),
+            state=raw.get("state", "TRADING"),
+            list_time=raw.get("listTime"),
+            expiry_time=raw.get("expTime"),
+            lot_size=raw.get("lotSz"),
+            min_size=raw.get("minSz"),
+        )
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:

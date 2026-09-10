@@ -230,6 +230,54 @@ async def test_paper_real_market_uses_real_best_sizes():
 
 
 
+async def test_paper_real_market_loads_full_factual_execution_registry():
+    class FakeClient:
+        async def get_instruments(self, inst_type):
+            assert inst_type == "SWAP"
+            return [
+                {
+                    "instId": "BTC-USDT-SWAP", "instType": "SWAP", "state": "live",
+                    "ctType": "linear", "tickSz": "0.1", "lotSz": "0.01",
+                    "minSz": "0.01", "ctVal": "0.01", "ctMult": "1",
+                    "ctValCcy": "BTC", "settleCcy": "USDT",
+                },
+                {
+                    "instId": "ETH-USDT-SWAP", "instType": "SWAP", "state": "live",
+                    "ctType": "linear", "tickSz": "0.01", "lotSz": "0.1",
+                    "minSz": "0.1", "ctVal": "0.1", "ctMult": "1",
+                    "ctValCcy": "ETH", "settleCcy": "USDT",
+                },
+                {
+                    "instId": "BTC-USDC-SWAP", "instType": "SWAP", "state": "live",
+                    "ctType": "linear", "tickSz": "0.1", "lotSz": "0.01",
+                    "minSz": "0.01", "ctVal": "0.01", "ctMult": "1",
+                },
+                {
+                    "instId": "BTC-USD-SWAP", "instType": "SWAP", "state": "live",
+                    "ctType": "inverse", "tickSz": "0.1", "lotSz": "0.01",
+                    "minSz": "0.01", "ctVal": "0.01", "ctMult": "1",
+                },
+            ]
+
+    class FakeFeed:
+        client = FakeClient()
+
+        async def close(self):
+            return None
+
+    adapter = PaperRealMarketAdapter(feed=FakeFeed())  # type: ignore[arg-type]
+    instruments = await adapter.get_exchange_info()
+    symbols = {i.symbol for i in instruments}
+    assert {"BTCUSDT", "ETHUSDT"} <= symbols
+    eth = next(i for i in instruments if i.symbol == "ETHUSDT")
+    assert eth.instrument_type == "LINEAR_PERP"
+    assert eth.inst_id == "ETH-USDT-SWAP"
+    assert eth.ct_val == "0.1"
+    one = await adapter.get_exchange_info("ETHUSDT")
+    assert [i.symbol for i in one] == ["ETHUSDT"]
+
+
+
 
 async def test_paper_real_market_missing_depth_does_not_use_quantity_one():
     class NoDepthFeed:

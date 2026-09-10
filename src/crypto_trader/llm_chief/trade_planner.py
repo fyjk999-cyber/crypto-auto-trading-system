@@ -69,7 +69,9 @@ class LiveLLMTradePlanner:
                 "decision_id": decision.decision_id,
                 "direction": decision.action.value,
                 "requested_leverage": str(decision.leverage_request),
-                "instrument_type": "LINEAR_PERP",
+                # Factual execution metadata must be supplied by the caller;
+                # UNKNOWN prevents pretending a generic signal is a perp.
+                "instrument_type": "UNKNOWN",
                 "contract_size": "1",
                 "contract_multiplier": "1",
                 **(execution_metadata or {}),
