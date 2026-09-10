@@ -358,3 +358,19 @@ async def test_daily_review_scheduler_run_missed_days_iterates_in_order():
     results = await sched.run_missed_days("2026-09-01", "2026-09-02")
     assert calls == ["2026-09-01", "2026-09-02"]
     assert len(results) == 2
+
+
+async def test_daily_review_scheduler_missed_days_continues_after_failure():
+    from crypto_trader.governance.scheduler import DailyReviewScheduler
+
+    sched = object.__new__(DailyReviewScheduler)
+
+    async def flaky_run_once(date: str) -> dict:
+        if date == "2026-09-01":
+            raise RuntimeError("temporary")
+        return {"date": date, "trade_count": 0}
+
+    sched.run_once = flaky_run_once  # type: ignore[method-assign]
+    results = await sched.run_missed_days("2026-09-01", "2026-09-02")
+    assert results[0] == {"date": "2026-09-01", "failed": True}
+    assert results[1]["date"] == "2026-09-02"
