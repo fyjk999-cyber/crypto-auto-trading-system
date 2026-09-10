@@ -134,6 +134,23 @@ def test_market_data_engine_realized_vol_hand_calculated():
     assert mde.realized_vol(2) > 0
 
 
+def test_market_data_engine_bounded_window_does_not_cross_symbols():
+    a = MarketDataEngine("BTCUSDT", max_bars=3)
+    b = MarketDataEngine("ETHUSDT", max_bars=3)
+    ts_a = TS
+    ts_b = TS
+    for i in range(4):
+        ts_a += timedelta(minutes=1)
+        ts_b += timedelta(minutes=1)
+        a.ingest(ts_a, Decimal(100 + i), Decimal("10"))
+        b.ingest(ts_b, Decimal(200 + i), Decimal("10"))
+    assert len(a.closes()) == 3
+    assert a.latest().price == Decimal("103")
+    assert b.latest().price == Decimal("203")
+    assert all(p > 100 for p in a.closes())
+    assert all(p > 200 for p in b.closes())
+
+
 def test_market_data_engine_zero_vol_is_not_none_and_duplicate_rejected():
     mde = MarketDataEngine("BTCUSDT")
     ts = TS
