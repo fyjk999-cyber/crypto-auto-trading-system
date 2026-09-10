@@ -52,6 +52,7 @@ class PortfolioService:
         self,
         current_equity: Decimal,
         *,
+        account_id: str = "default",
         currency: str = "USDT",
         source: str = "LEDGER_PROJECTION",
     ) -> tuple[Decimal, Decimal, datetime, str]:
@@ -65,6 +66,10 @@ class PortfolioService:
             latest = (
                 await session.execute(
                     select(EquitySnapshotORM)
+                    .where(
+                        EquitySnapshotORM.account_id == account_id,
+                        EquitySnapshotORM.currency == currency,
+                    )
                     .order_by(EquitySnapshotORM.id.desc())
                     .limit(1)
                 )
@@ -88,6 +93,14 @@ class PortfolioService:
                     or metadata.get("total")
                     or "0"
                 )
+                row_currency = (
+                    metadata.get("currency")
+                    or metadata.get("settleCcy")
+                    or metadata.get("quote_currency")
+                    or currency
+                )
+                if row_currency != currency:
+                    continue
                 amount = abs(D(raw_amount))
                 cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
             prior_cumulative = (
@@ -106,7 +119,7 @@ class PortfolioService:
             drawdown = cash_flow_adjusted - peak_adjusted
             session.add(
                 EquitySnapshotORM(
-                    account_id="default",
+                    account_id=account_id,
                     currency=currency,
                     current_equity=current_equity,
                     raw_equity=current_equity,

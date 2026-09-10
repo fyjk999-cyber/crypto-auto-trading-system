@@ -328,3 +328,17 @@ async def test_daily_review_pagination_reads_more_than_1000_episodes(database):
     store = TradeEpisodeStore(database.session_factory)
     episodes = await store.load_all_closed_on("2026-09-08")
     assert len(episodes) == 1001
+
+
+async def test_equity_drawdown_isolated_by_account_and_currency(database):
+    service = PortfolioService(database.session_factory)
+    await service.record_equity_drawdown(Decimal("100"), account_id="A", currency="USDT")
+    await service.record_equity_drawdown(Decimal("50"), account_id="B", currency="USDT")
+    dd_a, peak_a, _, _ = await service.record_equity_drawdown(
+        Decimal("90"), account_id="A", currency="USDT"
+    )
+    dd_b, peak_b, _, _ = await service.record_equity_drawdown(
+        Decimal("50"), account_id="B", currency="USDT"
+    )
+    assert dd_a == Decimal("-10") and peak_a == Decimal("100")
+    assert dd_b == Decimal("0") and peak_b == Decimal("50")
