@@ -758,6 +758,14 @@ class TradingEngine:
                 market_prices[position_symbol] = position_mid
         if market_price > 0:
             market_prices[symbol] = market_price
+        # Refresh stale non-signal positions before valuation.
+        for position_symbol, position in positions.items():
+            if position.quantity == 0 or position_symbol == symbol:
+                continue
+            if not self.market_data.is_fresh(
+                position_symbol, self.settings.orderbook_max_age_seconds
+            ):
+                await self._refresh_execution_market(position_symbol)
 
         valuation_available = True
         mtm_equity = account.equity
@@ -766,6 +774,11 @@ class TradingEngine:
                 continue
             mark = market_prices.get(position_symbol)
             if mark is None or mark <= 0:
+                valuation_available = False
+                break
+            if not self.market_data.is_fresh(
+                position_symbol, self.settings.orderbook_max_age_seconds
+            ):
                 valuation_available = False
                 break
             instrument = self._instruments.get(position_symbol)
