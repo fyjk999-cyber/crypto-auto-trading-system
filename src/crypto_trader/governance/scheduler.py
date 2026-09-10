@@ -87,9 +87,10 @@ class DailyReviewScheduler:
             ):
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST")
             await self.learning.review_many(pending)
-            await self.episodes.mark_reviewed(
-                [episode.episode_id for episode in pending]
-            )
+            # Publish SUCCEEDED only through the fenced claim update. Episode
+            # mark_reviewed must happen after that fence so an old/stale token
+            # can never mark factual episodes REVIEWED without a published
+            # successful review.
             saved = await self.persistence.save_daily_review(
                 date,
                 stats,
@@ -98,7 +99,17 @@ class DailyReviewScheduler:
                 claim_token=claim_token,
             )
             if not saved:
-                raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_SUCCEEDED")
+                raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_MARK")
+            if not await self.persistence.heartbeat_daily_review(
+                date,
+                claim_token,
+                owner=self.owner,
+                lease_seconds=self.claim_lease_seconds,
+            ):
+                raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_MARK")
+            await self.episodes.mark_reviewed(
+                [episode.episode_id for episode in pending]
+            )
             return {
                 "date": date,
                 "status": "SUCCEEDED",

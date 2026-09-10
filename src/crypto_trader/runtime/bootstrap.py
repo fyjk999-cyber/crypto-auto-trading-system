@@ -173,6 +173,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         settlement_service=funding_settlement,
         portfolio=portfolio,
         trade_plans=trade_plans,
+        ledger=ledger,
+        order_manager=order_manager,
         instruments_provider=lambda: getattr(adapter, "instruments", {}) or {},
         account_id="default",
         currency=settings.paper_settlement_asset,

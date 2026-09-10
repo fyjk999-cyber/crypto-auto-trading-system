@@ -596,3 +596,45 @@ async def test_record_without_account_is_unknown_not_default(ledger, database):
     )
     assert provenance.complete is False
     assert "UNATTRIBUTED_LEDGER_OWNERSHIP" in provenance.unknown_reasons
+
+
+async def test_closed_instrument_window_end_scopes_funding_coverage(ledger):
+    # A closed swap produced realized PnL at 04:00; it only requires proven
+    # funding coverage for the factual hold interval, not post-close events.
+    await ledger.record(
+        LedgerEntryType.TRADE,
+        [
+            LedgerPosting("CASH", LedgerDirection.DEBIT, Decimal("5")),
+            LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, Decimal("5")),
+        ],
+        account_id="default",
+        instrument_id="SOL-USDT-SWAP",
+        transaction_id="closed_sol_window",
+        created_at=WINDOW_START + timedelta(hours=4),
+    )
+    open_start = WINDOW_START + timedelta(hours=2)
+    close_end = WINDOW_START + timedelta(hours=4, minutes=30)
+    proven_zero = await ledger.net_pnl_provenance_since(
+        WINDOW_START,
+        account_id="default",
+        currency="USDT",
+        instrument_ids=[],
+        end=WINDOW_END,
+        coverage_status_by_instrument={"SOL-USDT-SWAP": "KNOWN_ZERO"},
+        instrument_window_starts={"SOL-USDT-SWAP": open_start},
+        instrument_window_ends={"SOL-USDT-SWAP": close_end},
+    )
+    assert proven_zero.complete is True
+    assert proven_zero.required_instruments == ("SOL-USDT-SWAP",)
+
+    missing_coverage = await ledger.net_pnl_provenance_since(
+        WINDOW_START,
+        account_id="default",
+        currency="USDT",
+        instrument_ids=[],
+        end=WINDOW_END,
+        instrument_window_starts={"SOL-USDT-SWAP": open_start},
+        instrument_window_ends={"SOL-USDT-SWAP": close_end},
+    )
+    assert missing_coverage.complete is False
+    assert "FUNDING_COVERAGE_UNKNOWN:SOL-USDT-SWAP" in missing_coverage.unknown_reasons

@@ -154,14 +154,19 @@ class MemoryPersistence:
         owner: str | None = None,
         lease_seconds: int = 1800,
     ) -> bool:
-        """Refresh the live claim. Returns False for stale/old tokens."""
+        """Refresh the live claim. Returns False for stale/old tokens.
+
+        The same token may heartbeat after its own fenced SUCCEEDED publish so
+        the scheduler can fence episode marking; another worker's token still
+        fails this check.
+        """
         now = datetime.now(UTC)
         deadline = now + timedelta(seconds=max(60, lease_seconds))
         async with self.session_factory() as session:
             conditions = [
                 DailyReviewRunORM.review_date == date,
                 DailyReviewRunORM.claim_token == claim_token,
-                DailyReviewRunORM.status == "RUNNING",
+                DailyReviewRunORM.status.in_(("RUNNING", "SUCCEEDED")),
                 or_(
                     DailyReviewRunORM.claim_deadline_at.is_(None),
                     DailyReviewRunORM.claim_deadline_at >= now,

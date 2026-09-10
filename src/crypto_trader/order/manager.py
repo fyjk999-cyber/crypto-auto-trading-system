@@ -474,6 +474,28 @@ class OrderManager:
             ).scalar_one_or_none()
             return _orm_to_fill(row) if row else None
 
+    async def signed_quantity_at(self, symbol: str, at: datetime) -> Decimal:
+        """Factual signed position quantity as of an instant, from fills.
+
+        Funding settles on the position actually held at each settlement
+        timestamp; using the current projection quantity for historical events
+        would retroactively apply later adds/reductions.
+        """
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FillORM.side, FillORM.quantity).where(
+                        FillORM.symbol == symbol,
+                        FillORM.timestamp <= at,
+                    )
+                )
+            ).all()
+        total = Decimal("0")
+        for side, quantity in rows:
+            signed = Decimal(quantity)
+            total += signed if str(side).upper() == OrderSide.BUY.value else -signed
+        return total
+
     async def list_events(self, order_id: str) -> list[OrderEvent]:
         async with self.session_factory() as session:
             rows = (

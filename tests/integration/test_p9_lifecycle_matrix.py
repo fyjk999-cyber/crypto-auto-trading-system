@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -13,6 +14,7 @@ from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
+from crypto_trader.perpetual.funding_settlement import FundingSettlementService
 from crypto_trader.persistence.models import (
     LedgerEntryORM,
     TradeEpisodeORM,
@@ -83,6 +85,19 @@ async def test_full_lifecycle_is_symmetric_and_creates_one_episode(
     expected_sign = 1 if direction == "LONG" else -1
     assert position.quantity == Decimal("0.1") * expected_sign
 
+    # A factual PAPER funding posting during the holding window must flow into
+    # the closed episode PnL and net PnL, never be dropped as zero.
+    funding_amount = await FundingSettlementService(engine.ledger).settle(
+        account_id="default",
+        instrument_id="BTCUSDT",
+        settlement_timestamp=datetime.now(UTC),
+        signed_quantity=position.quantity,
+        mark_price=Decimal("101"),
+        funding_rate=Decimal("0.001"),
+        contract_size=Decimal("0.01"),
+        contract_multiplier=Decimal("1"),
+    )
+
     chief = SequencedChief([("HOLD", "0"), ("REDUCE", "0.04"), ("EXIT", "0")])
     engine.position_manager = LiveLLMPositionManager(
         chief=chief,
@@ -130,6 +145,10 @@ async def test_full_lifecycle_is_symmetric_and_creates_one_episode(
     assert episodes[0].direction == direction
     assert episodes[0].closed_quantity == Decimal("0.1")
     assert episodes[0].factual is True
+    assert episodes[0].funding_pnl == funding_amount
+    assert episodes[0].net_pnl == (
+        episodes[0].gross_pnl - episodes[0].fees + funding_amount
+    )
 
     review = await DailyReviewScheduler(
         database.session_factory, canonical_only=True

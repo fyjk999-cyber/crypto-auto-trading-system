@@ -11,12 +11,16 @@ from sqlalchemy import select
 from crypto_trader.domain.money import D
 from crypto_trader.persistence.models import (
     FillORM,
+    LedgerEntryORM,
+    LedgerTransactionORM,
     LLMDecisionORM,
     OrderORM,
     PositionProjectionORM,
     TradeEpisodeORM,
     TradePlanORM,
 )
+
+FUNDING_PNL_ACCOUNTS = ("FUNDING_RECEIPT", "FUNDING_PAYMENT")
 
 
 @dataclass(frozen=True)
@@ -158,7 +162,61 @@ class TradeEpisodeStore:
             price_delta = exit_price - entry_price
             gross_pnl = price_delta * pnl_factor * (1 if plan.direction == "LONG" else -1)
             fees = sum((fill.fee for fill in fills), Decimal("0"))
-            funding_pnl = Decimal("0")
+            opened_at = _as_utc(plan.opened_at)
+            closed_at = _as_utc(plan.closed_at)
+            currency = str(metadata.get("quote_currency") or "USDT")
+
+            # Funding is a factual ledger posting for the same proven account,
+            # instrument and currency, inside the factual holding interval.
+            entry_fill_ids = [fill.fill_id for fill in entry_fills]
+            account_id = (
+                await session.execute(
+                    select(LedgerTransactionORM.account_id)
+                    .join(
+                        LedgerEntryORM,
+                        LedgerEntryORM.transaction_id
+                        == LedgerTransactionORM.transaction_id,
+                    )
+                    .where(
+                        LedgerTransactionORM.ownership_status == "VERIFIED",
+                        LedgerTransactionORM.account_id.is_not(None),
+                        LedgerTransactionORM.fill_id.in_(entry_fill_ids),
+                        LedgerEntryORM.currency == currency,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if account_id is None:
+                # Without a verified account lineage the episode cannot claim a
+                # factual funding PnL; fail closed rather than write zero.
+                return None
+            funding_rows = (
+                await session.execute(
+                    select(LedgerEntryORM.direction, LedgerEntryORM.amount)
+                    .join(
+                        LedgerTransactionORM,
+                        LedgerTransactionORM.transaction_id
+                        == LedgerEntryORM.transaction_id,
+                    )
+                    .where(
+                        LedgerTransactionORM.ownership_status == "VERIFIED",
+                        LedgerTransactionORM.account_id == account_id,
+                        LedgerTransactionORM.instrument_id == plan.symbol,
+                        LedgerEntryORM.currency == currency,
+                        LedgerEntryORM.account.in_(FUNDING_PNL_ACCOUNTS),
+                        LedgerEntryORM.created_at >= opened_at,
+                        LedgerEntryORM.created_at <= closed_at,
+                    )
+                )
+            ).all()
+            funding_pnl = sum(
+                (
+                    Decimal(amount)
+                    if str(direction).upper() == "CREDIT"
+                    else -Decimal(amount)
+                )
+                for direction, amount in funding_rows
+            )
             net_pnl = gross_pnl - fees + funding_pnl
 
             decisions = (
@@ -171,9 +229,6 @@ class TradeEpisodeStore:
             entry_decision = await session.get(LLMDecisionORM, plan.decision_id)
             if entry_decision is None:
                 return None
-
-            opened_at = _as_utc(plan.opened_at)
-            closed_at = _as_utc(plan.closed_at)
             row = TradeEpisodeORM(
                 episode_id=f"episode_{plan.trade_plan_id}",
                 trade_plan_id=plan.trade_plan_id,

@@ -938,7 +938,7 @@ class TradingEngine:
         # The ledger read below adds any instrument with factual PnL/funding
         # postings, so an unattributed or wrong-instrument posting can never be
         # silently dropped from the daily total.
-        funding_instrument_ids = sorted(
+        open_instrument_ids = sorted(
             {
                 position_symbol
                 for position_symbol, position in positions.items()
@@ -946,25 +946,44 @@ class TradingEngine:
                 and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
             }
         )
-        # Funding only accrues while the factual position is open. Use the
-        # durable TradePlan opened_at so the coverage proof window matches the
-        # supervisor's settlement window instead of charging pre-entry events.
+        activity_instrument_ids = await self.ledger.activity_instruments(
+            daily_start,
+            account_id=account_id,
+            currency="USDT",
+            end=daily_end,
+        )
+        funding_instrument_ids = sorted(
+            set(open_instrument_ids) | activity_instrument_ids
+        )
+
+        def _utc(value):
+            if value is None:
+                return None
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
+
+        # Funding only accrues while the factual position is open. Open
+        # positions use the active plan; closed instruments use their latest
+        # plan's factual close so post-close funding events cannot be charged.
         instrument_window_starts: dict[str, datetime] = {}
+        instrument_window_ends: dict[str, datetime] = {}
         for instrument_id in funding_instrument_ids:
-            plan = await self.trade_plans.get_active_for_symbol(instrument_id)
-            opened_at = getattr(plan, "opened_at", None) if plan is not None else None
-            if opened_at is None:
-                continue
-            if opened_at.tzinfo is None:
-                opened_at = opened_at.replace(tzinfo=UTC)
+            if instrument_id in open_instrument_ids:
+                plan = await self.trade_plans.get_active_for_symbol(instrument_id)
             else:
-                opened_at = opened_at.astimezone(UTC)
-            instrument_window_starts[instrument_id] = max(daily_start, opened_at)
+                plan = await self.trade_plans.latest_for_symbol(instrument_id)
+            opened_at = _utc(getattr(plan, "opened_at", None) if plan is not None else None)
+            closed_at = _utc(getattr(plan, "closed_at", None) if plan is not None else None)
+            if opened_at is not None:
+                instrument_window_starts[instrument_id] = max(daily_start, opened_at)
+            if closed_at is not None:
+                instrument_window_ends[instrument_id] = min(daily_end, closed_at)
         coverage_status_by_instrument = {
             instrument_id: await self.funding_coverage.status_for(
                 instrument_id=instrument_id,
                 start=instrument_window_starts.get(instrument_id, daily_start),
-                end=daily_end,
+                end=instrument_window_ends.get(instrument_id, daily_end),
             )
             for instrument_id in funding_instrument_ids
         }
@@ -976,6 +995,7 @@ class TradingEngine:
             end=daily_end,
             coverage_status_by_instrument=coverage_status_by_instrument,
             instrument_window_starts=instrument_window_starts,
+            instrument_window_ends=instrument_window_ends,
         )
         if pnl_provenance.complete:
             daily_pnl = (

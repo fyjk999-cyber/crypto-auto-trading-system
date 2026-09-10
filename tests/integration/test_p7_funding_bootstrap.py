@@ -33,6 +33,14 @@ class FakePlans:
     async def get_active_for_symbol(self, symbol):
         return FakePlan(OPENED)
 
+    async def latest_for_symbol(self, symbol):
+        return FakePlan(OPENED)
+
+
+class FakeOrderManager:
+    async def signed_quantity_at(self, symbol, at):
+        return Decimal("1")
+
 
 class FakePortfolio:
     async def get_positions(self):
@@ -81,7 +89,8 @@ class PublicFactualAdapter:
                 "1",
                 close,
             ]
-            for hour, close in ((8, "100"), (10, "110"))
+            # 07:00 closes at 08:00; 09:00 closes at 10:00 (no lookahead).
+            for hour, close in ((7, "100"), (9, "110"))
         ]
 
 
@@ -122,6 +131,8 @@ async def test_supervisor_real_chain_settles_once_and_marks_paper_derived(databa
         settlement_service=settlement,
         portfolio=FakePortfolio(),
         trade_plans=FakePlans(),
+        ledger=ledger,
+        order_manager=FakeOrderManager(),
         instruments_provider=lambda: {},
         lookback_hours=24,
     )
@@ -199,3 +210,97 @@ async def test_active_position_funding_window_matches_supervisor(database):
     assert provenance.complete is True
     assert provenance.funding_status == "KNOWN_VALUE"
     assert provenance.funding_amount == Decimal("-0.0022")
+
+
+async def test_supervisor_uses_historical_fill_quantity_per_settlement(database):
+    from crypto_trader.domain.enums import OrderSide, TradingMode
+    from crypto_trader.domain.models import OrderIntent
+    from crypto_trader.order.manager import OrderManager
+    from crypto_trader.perpetual.funding_coverage import FundingCoverage
+    from crypto_trader.persistence.models import FillORM
+
+    order_manager = OrderManager(database.session_factory)
+    order = await order_manager.create_from_intent(
+        OrderIntent(
+            client_order_id="p0_hist_order",
+            symbol="BTC-USDT-SWAP",
+            side=OrderSide.BUY,
+            quantity=Decimal("1"),
+            price=Decimal("100"),
+            strategy_id="p0-history",
+        ),
+        trading_mode=TradingMode.PAPER,
+    )
+    async with database.session_factory() as session:
+        session.add(
+            FillORM(
+                fill_id="p0_hist_fill_buy",
+                order_id=order.internal_order_id,
+                symbol="BTC-USDT-SWAP",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("1"),
+                fee=Decimal("0"),
+                timestamp=datetime(2026, 9, 10, 7, tzinfo=UTC),
+            )
+        )
+        session.add(
+            FillORM(
+                fill_id="p0_hist_fill_sell",
+                order_id=order.internal_order_id,
+                symbol="BTC-USDT-SWAP",
+                side="SELL",
+                price=Decimal("105"),
+                quantity=Decimal("0.6"),
+                fee=Decimal("0"),
+                timestamp=datetime(2026, 9, 10, 9, 30, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+
+    class CaptureIngestor:
+        async def ingest(self, adapter, **kwargs):
+            return FundingCoverage(
+                instrument_id=kwargs["instrument_id"],
+                window_start=kwargs["window_start"],
+                window_end=kwargs["window_end"],
+                coverage_status="KNOWN_VALUE",
+                pagination_complete=True,
+                event_manifest_hash="sha256:test",
+                gaps=[],
+                rule_version="v1",
+                boundary_proof=True,
+                fetched_count=2,
+                window_event_count=2,
+                window_events=(
+                    PublicFactualAdapter._event(8, "0.001"),
+                    PublicFactualAdapter._event(10, "0.002"),
+                ),
+            )
+
+    class CaptureSettlement:
+        def __init__(self):
+            self.calls = []
+
+        async def settle(self, **kwargs):
+            self.calls.append(kwargs)
+            return Decimal("0.001")
+
+    settlement = CaptureSettlement()
+    supervisor = FundingAccountingSupervisor(
+        adapter=PublicFactualAdapter(),
+        ingestor=CaptureIngestor(),
+        settlement_service=settlement,
+        portfolio=FakePortfolio(),
+        trade_plans=FakePlans(),
+        order_manager=order_manager,
+        instruments_provider=lambda: {},
+        lookback_hours=24,
+    )
+    report = await supervisor.run_once(now=NOW)
+    assert report.settled == 2
+    quantities = {
+        call["settlement_timestamp"].hour: call["signed_quantity"]
+        for call in settlement.calls
+    }
+    assert quantities == {8: Decimal("1"), 10: Decimal("0.4")}

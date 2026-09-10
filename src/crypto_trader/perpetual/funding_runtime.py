@@ -43,6 +43,8 @@ class FundingAccountingSupervisor:
         settlement_service: FundingSettlementService,
         portfolio,
         trade_plans=None,
+        ledger=None,
+        order_manager=None,
         instruments_provider: Callable[[], Mapping[str, Any]] | None = None,
         account_id: str = "default",
         currency: str = "USDT",
@@ -53,6 +55,8 @@ class FundingAccountingSupervisor:
         self.settlement_service = settlement_service
         self.portfolio = portfolio
         self.trade_plans = trade_plans
+        self.ledger = ledger
+        self.order_manager = order_manager
         self.instruments_provider = instruments_provider or (lambda: {})
         self.account_id = account_id
         self.currency = currency
@@ -64,40 +68,83 @@ class FundingAccountingSupervisor:
             report.errors.append("NO_PUBLIC_FUNDING_ADAPTER")
             return report
         now = now or datetime.now(UTC)
+        lookback_start = now - timedelta(hours=self.lookback_hours)
         positions = await self.portfolio.get_positions()
         instruments = self.instruments_provider() or {}
-        for symbol, position in sorted(positions.items()):
-            if position.quantity == 0:
-                continue
-            if getattr(position, "instrument_type", "SPOT") != "LINEAR_PERP":
-                continue
+        activity_instruments: set[str] = set()
+        if self.ledger is not None:
+            activity_instruments = await self.ledger.activity_instruments(
+                lookback_start,
+                account_id=self.account_id,
+                currency=self.currency,
+                end=now,
+            )
+        open_symbols = {
+            symbol
+            for symbol, position in positions.items()
+            if position.quantity != 0
+            and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
+        }
+        # Closed positions with verified activity still need a coverage proof
+        # for the interval they were held, even though no new settlement is
+        # due once the position is flat.
+        for symbol in sorted(open_symbols | activity_instruments):
+            position = positions.get(symbol)
+            is_open = (
+                position is not None
+                and position.quantity != 0
+                and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
+            )
             report.evaluated_instruments.append(symbol)
             try:
-                plan = (
-                    await self.trade_plans.get_active_for_symbol(symbol)
-                    if self.trade_plans is not None
-                    else None
+                if is_open:
+                    plan = (
+                        await self.trade_plans.get_active_for_symbol(symbol)
+                        if self.trade_plans is not None
+                        else None
+                    )
+                else:
+                    plan = (
+                        await self.trade_plans.latest_for_symbol(symbol)
+                        if self.trade_plans is not None
+                        else None
+                    )
+                opened_at = _as_utc(
+                    getattr(plan, "opened_at", None) if plan is not None else None
                 )
-                opened_at = _as_utc(plan.opened_at if plan is not None else None)
-                if opened_at is None:
-                    # Without proof of when the position became factual, a
-                    # historical funding event cannot be attributed safely.
+                closed_at = _as_utc(
+                    getattr(plan, "closed_at", None) if plan is not None else None
+                )
+                if is_open and opened_at is None:
                     report.skipped.append(f"{symbol}:POSITION_OPEN_TIME_UNPROVEN")
-                    continue
-                window_start = max(now - timedelta(hours=self.lookback_hours), opened_at)
+                if is_open:
+                    window_start = max(lookback_start, opened_at or lookback_start)
+                    window_end = now
+                else:
+                    # A closed position only needs coverage over its factual
+                    # holding interval; including post-close history would let
+                    # later funding events masquerade as unsettled hold events.
+                    window_start = max(lookback_start, opened_at or lookback_start)
+                    window_end = min(now, closed_at) if closed_at is not None else now
+                    if window_end <= window_start:
+                        continue
                 coverage = await self.ingestor.ingest(
                     self.adapter,
                     instrument_id=symbol,
                     window_start=window_start,
-                    window_end=now,
-                    include_events=True,
+                    window_end=window_end,
+                    include_events=is_open,
                 )
             except Exception as exc:  # network/API failures stay observable
                 report.errors.append(f"{symbol}:{type(exc).__name__}")
                 continue
             report.coverage_status[symbol] = coverage.coverage_status
+            if not is_open:
+                continue
             if coverage.coverage_status == "UNKNOWN":
                 report.skipped.append(f"{symbol}:FUNDING_COVERAGE_UNKNOWN")
+                continue
+            if opened_at is None:
                 continue
             instrument = instruments.get(symbol)
             contract_size = (
@@ -124,6 +171,16 @@ class FundingAccountingSupervisor:
                 if rate in (None, ""):
                     report.skipped.append(f"{symbol}:MISSING_FUNDING_RATE")
                     continue
+                # Historical quantity must be the factual signed position at
+                # each settlement instant, not the current projection amount.
+                if self.order_manager is None:
+                    report.skipped.append(f"{symbol}:POSITION_QUANTITY_UNAVAILABLE")
+                    continue
+                signed_quantity = await self.order_manager.signed_quantity_at(
+                    symbol, settlement_time
+                )
+                if signed_quantity == 0:
+                    continue
                 mark_price = await self._factual_settlement_mark(
                     symbol, settlement_time
                 )
@@ -135,7 +192,7 @@ class FundingAccountingSupervisor:
                         account_id=self.account_id,
                         instrument_id=symbol,
                         settlement_timestamp=settlement_time,
-                        signed_quantity=position.quantity,
+                        signed_quantity=signed_quantity,
                         mark_price=mark_price,
                         funding_rate=D(rate),
                         contract_size=D(contract_size),
@@ -151,33 +208,42 @@ class FundingAccountingSupervisor:
     async def _factual_settlement_mark(
         self, symbol: str, settlement_time: datetime
     ) -> Decimal | None:
-        """Use the OKX candle close at/before settlement; never a fallback."""
+        """Use the close of a candle already CLOSED at settlement.
+
+        A candle whose close is later than the settlement instant is lookahead
+        and must never be used. Try 1-minute candles first for recent
+        settlements, then 1-hour candles for older ones.
+        """
         get_candles = getattr(self.adapter, "get_candles", None)
         if not callable(get_candles):
             return None
-        try:
-            rows = await get_candles(symbol, bar="1H", limit=100)
-        except Exception:
-            return None
         target_ms = int(settlement_time.timestamp() * 1000)
-        best: tuple[int, Decimal] | None = None
-        for row in rows or []:
+        for bar, interval_ms, tolerance_ms in (
+            ("1m", 60_000, 60_000),
+            ("1H", 3_600_000, 3_600_000),
+        ):
             try:
-                open_time_ms = int(row[0])
-                close = D(row[4])
-            except (IndexError, TypeError, ValueError):
+                rows = await get_candles(symbol, bar=bar, limit=100)
+            except Exception:
                 continue
-            if open_time_ms > target_ms:
+            best: tuple[int, Decimal] | None = None
+            for row in rows or []:
+                try:
+                    open_time_ms = int(row[0])
+                    close = D(row[4])
+                except (IndexError, TypeError, ValueError):
+                    continue
+                close_time_ms = open_time_ms + interval_ms
+                if close_time_ms > target_ms:
+                    continue
+                if best is None or close_time_ms > best[0]:
+                    best = (close_time_ms, close)
+            if best is None:
                 continue
-            if best is None or open_time_ms > best[0]:
-                best = (open_time_ms, close)
-        if best is None:
-            return None
-        # A settlement mark must be economically close to the settlement
-        # instant; an arbitrarily old candle is not a factual settlement mark.
-        if target_ms - best[0] > 60 * 60 * 1000:
-            return None
-        return best[1]
+            if target_ms - best[0] > tolerance_ms:
+                continue
+            return best[1]
+        return None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

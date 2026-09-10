@@ -202,6 +202,21 @@ class TradePlanService:
             ).scalars().first()
             return self._to_domain(row) if row is not None else None
 
+    async def latest_for_symbol(self, symbol: str) -> TradePlan | None:
+        """Most recent factual plan for a symbol, open or closed."""
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM)
+                    .where(TradePlanORM.symbol == symbol)
+                    .order_by(
+                        TradePlanORM.opened_at.desc(),
+                        TradePlanORM.created_at.desc(),
+                    )
+                )
+            ).scalars().first()
+            return self._to_domain(row) if row is not None else None
+
     async def transition(
         self, trade_plan_id: str, state: TradePlanState, *, reason: str | None = None
     ) -> TradePlan:

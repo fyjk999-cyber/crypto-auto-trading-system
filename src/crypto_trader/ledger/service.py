@@ -353,6 +353,7 @@ class LedgerService:
         end: datetime | None = None,
         coverage_status_by_instrument: dict[str, str] | None = None,
         instrument_window_starts: Mapping[str, datetime] | None = None,
+        instrument_window_ends: Mapping[str, datetime] | None = None,
     ) -> PnlProvenance:
         """Scoped UTC-window PnL provenance.
 
@@ -379,6 +380,10 @@ class LedgerService:
         window_starts = {
             str(instrument): window_start
             for instrument, window_start in (instrument_window_starts or {}).items()
+        }
+        window_ends = {
+            str(instrument): window_end
+            for instrument, window_end in (instrument_window_ends or {}).items()
         }
 
         async with self.session_factory() as session:
@@ -451,12 +456,23 @@ class LedgerService:
                 if raw_start.tzinfo is None:
                     raw_start = raw_start.replace(tzinfo=UTC)
                 scope_start = max(start, raw_start)
+            raw_end = window_ends.get(instrument)
+            scope_end = end
+            if raw_end is not None:
+                if raw_end.tzinfo is None:
+                    raw_end = raw_end.replace(tzinfo=UTC)
+                scope_end = min(end, raw_end)
+            if scope_start >= scope_end:
+                unattributed_reasons.add(
+                    f"POSITION_WINDOW_UNAVAILABLE:{instrument}"
+                )
+                continue
             scope = FundingScope(
                 account_id=account_id,
                 currency=currency,
                 instrument_id=instrument,
                 window_start=scope_start,
-                window_end=end,
+                window_end=scope_end,
             )
             scope_provenances.append(
                 await self.funding_scope_provenance(
@@ -765,6 +781,44 @@ class LedgerService:
             created_at.isoformat() if isinstance(created_at, datetime) else str(created_at)
         )
         return f"ledger-{stamp}-{entry_id}"
+
+    async def activity_instruments(
+        self,
+        start: datetime,
+        *,
+        account_id: str,
+        currency: str,
+        end: datetime | None = None,
+    ) -> set[str]:
+        """Verified instrument lineage with PnL/fee/funding activity in window.
+
+        Closed positions still require funding coverage for the interval they
+        were held; this gives the supervisor the same instrument set that the
+        scoped provenance reader will require.
+        """
+        end = end or datetime.now(UTC)
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LedgerTransactionORM.instrument_id)
+                    .join(
+                        LedgerEntryORM,
+                        LedgerEntryORM.transaction_id
+                        == LedgerTransactionORM.transaction_id,
+                    )
+                    .where(
+                        LedgerTransactionORM.ownership_status == OWNERSHIP_VERIFIED,
+                        LedgerTransactionORM.account_id == account_id,
+                        LedgerTransactionORM.instrument_id.is_not(None),
+                        LedgerEntryORM.currency == currency,
+                        LedgerEntryORM.account.in_(PNL_ACCOUNTS),
+                        LedgerEntryORM.created_at >= start,
+                        LedgerEntryORM.created_at < end,
+                    )
+                    .distinct()
+                )
+            ).scalars().all()
+        return {str(instrument) for instrument in rows if instrument}
 
     async def funding_status_since(
         self,

@@ -199,8 +199,12 @@ async def test_failure_after_learning_retries_without_duplicates(database, monke
     with pytest.raises(RuntimeError):
         await scheduler.run_once(REVIEW_DATE)
     row = await _review_row(database)
-    assert row.status == "FAILED"
-    # Retry after the failed attempt.
+    # SUCCEEDED was already fenced/published; only episode marking failed.
+    assert row.status == "SUCCEEDED"
+    async with database.session_factory() as session:
+        episode = (await session.execute(select(TradeEpisodeORM))).scalar_one()
+    assert episode.review_status == "PENDING"
+    # Retry as a late revision without duplicating review data.
     monkeypatch.setattr(
         scheduler.episodes,
         "mark_reviewed",
@@ -208,6 +212,7 @@ async def test_failure_after_learning_retries_without_duplicates(database, monke
     )
     result = await scheduler.run_once(REVIEW_DATE)
     assert result["status"] == "SUCCEEDED"
+    assert result["reviewed_this_attempt"] == 1
     async with database.session_factory() as session:
         reviews = (await session.execute(select(AITradeReviewORM))).scalars().all()
         pattern = (await session.execute(select(AIMarketPatternORM))).scalar_one()
@@ -224,11 +229,12 @@ def _real_mark_reviewed(database):
     return mark
 
 
-async def test_failure_after_mark_before_succeeded_recovers(database, monkeypatch):
+async def test_failure_before_publish_never_marks_episode(database, monkeypatch):
     await _insert_episodes(database, 1)
     scheduler = DailyReviewScheduler(database.session_factory, canonical_only=True)
     original_save = scheduler.persistence.save_daily_review
     calls = {"save": 0}
+    mark_calls = {"count": 0}
 
     async def flaky_save(*args, **kwargs):
         calls["save"] += 1
@@ -236,19 +242,25 @@ async def test_failure_after_mark_before_succeeded_recovers(database, monkeypatc
             raise RuntimeError("simulated crash before SUCCEEDED")
         return await original_save(*args, **kwargs)
 
+    async def spy_mark(ids):
+        mark_calls["count"] += 1
+        await _real_mark_reviewed(database)(ids)
+
     monkeypatch.setattr(scheduler.persistence, "save_daily_review", flaky_save)
+    monkeypatch.setattr(scheduler.episodes, "mark_reviewed", spy_mark)
     with pytest.raises(RuntimeError):
         await scheduler.run_once(REVIEW_DATE)
     row = await _review_row(database)
     assert row.status == "FAILED"
-    # Episode was already marked REVIEWED before the failed publish.
+    # Publishing the fenced SUCCEEDED failed, so episodes must stay PENDING.
     async with database.session_factory() as session:
         episode = (await session.execute(select(TradeEpisodeORM))).scalar_one()
-    assert episode.review_status == "REVIEWED"
+    assert episode.review_status == "PENDING"
+    assert mark_calls["count"] == 0
 
     result = await scheduler.run_once(REVIEW_DATE)
     assert result["status"] == "SUCCEEDED"
-    assert result["reviewed_this_attempt"] == 0
+    assert result["reviewed_this_attempt"] == 1
     async with database.session_factory() as session:
         reviews = (await session.execute(select(AITradeReviewORM))).scalars().all()
         pattern = (await session.execute(select(AIMarketPatternORM))).scalar_one()
