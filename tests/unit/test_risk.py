@@ -299,3 +299,43 @@ def test_risk_evidence_persists_funding_status():
         funding_status="UNKNOWN",
     )
     assert decision.checks["funding_status"] == "UNKNOWN"
+
+
+def test_risk_rejects_new_exposure_on_unknown_daily_pnl():
+
+    decision = RiskEngine().check(
+        make_signal(),
+        account=make_account(),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=None,
+    )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert "DAILY_PNL_UNAVAILABLE" in str(decision.checks) or (
+        "DAILY_PNL_UNAVAILABLE" in str(decision.reason)
+    )
+
+
+def test_risk_allows_reducing_action_when_daily_pnl_unknown():
+    from crypto_trader.domain.models import Position
+
+    decision = RiskEngine().check(
+        make_signal(qty="0.1").model_copy(update={"side": OrderSide.SELL}),
+        account=make_account(),
+        positions={
+            "BTCUSDT": Position(
+                symbol="BTCUSDT",
+                base_asset="BTC",
+                quote_asset="USDT",
+                quantity=Decimal("1"),
+                avg_entry_price=Decimal("100"),
+                cost_basis=Decimal("100"),
+            )
+        },
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=None,
+    )
+    assert decision.decision in {ExecutionDecision.APPROVE, ExecutionDecision.SCALE_DOWN}
+    assert decision.checks["daily_pnl_unavailable"] is True

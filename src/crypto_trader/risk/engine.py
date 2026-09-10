@@ -228,17 +228,30 @@ class RiskEngine:
             return fail("MAX_CONSECUTIVE_FAILURES")
         checks["max_consecutive_failures"] = True
 
+        position = positions.get(getattr(intent, "symbol", ""))
+        signed_position = position.quantity if position is not None else Decimal("0")
+        side_value = intent.side.value
+        is_risk_reducing = signed_position != 0 and (
+            (signed_position > 0 and side_value == "SELL")
+            or (signed_position < 0 and side_value == "BUY")
+        )
         if daily_pnl is None:
-            return fail("DAILY_PNL_UNAVAILABLE")
-        if daily_pnl < -abs(self.config.max_daily_loss):
-            return fail("MAX_DAILY_LOSS")
-        checks["max_daily_loss"] = True
+            if not is_risk_reducing:
+                return fail("DAILY_PNL_UNAVAILABLE")
+            checks["daily_pnl_unavailable"] = True
+        else:
+            if daily_pnl < -abs(self.config.max_daily_loss):
+                return fail("MAX_DAILY_LOSS")
+            checks["max_daily_loss"] = True
 
         if drawdown is None:
-            return fail("DRAWDOWN_UNAVAILABLE")
-        if drawdown < -abs(self.config.max_drawdown):
-            return fail("MAX_DRAWDOWN")
-        checks["max_drawdown"] = True
+            if not is_risk_reducing:
+                return fail("DRAWDOWN_UNAVAILABLE")
+            checks["drawdown_unavailable"] = True
+        else:
+            if drawdown < -abs(self.config.max_drawdown):
+                return fail("MAX_DRAWDOWN")
+            checks["max_drawdown"] = True
 
         cash = effective_equity
         if cash <= 0:

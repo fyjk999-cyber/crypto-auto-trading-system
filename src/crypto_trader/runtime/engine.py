@@ -824,6 +824,15 @@ class TradingEngine:
         daily_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         daily_pnl, daily_pnl_source = await self.ledger.net_pnl_since(daily_start)
         funding_status = await self.ledger.funding_status_since(daily_start)
+        if (
+            funding_status.value == "UNKNOWN"
+            and any(position.quantity != 0 for position in positions.values())
+        ):
+            # Open swap positions crossed an interval without funding coverage.
+            # Unknown must not masquerade as factual zero; risk-reducing
+            # actions remain allowed by the RiskEngine contract.
+            daily_pnl = None
+            daily_pnl_source = "FUNDING_UNKNOWN"
         risk_decision = self.risk_engine.check(
             signal,
             account=account,
