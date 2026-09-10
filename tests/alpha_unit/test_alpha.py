@@ -162,6 +162,11 @@ def test_market_data_engine_zero_vol_is_not_none_and_duplicate_rejected():
         mde.ingest(ts, Decimal("101"), Decimal("10"))
 
 
+def test_market_data_engine_average_volume_empty_is_none():
+    mde = MarketDataEngine("BTCUSDT")
+    assert mde.average_volume(20) is None
+
+
 def test_ml_meta_not_a_directional_sub_strategy():
     assert "ml_meta" not in BASE_WEIGHTS
     assert sum(BASE_WEIGHTS.values()) == Decimal("1.00")
