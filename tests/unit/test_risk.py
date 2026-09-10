@@ -287,3 +287,15 @@ def test_risk_rejects_non_positive_mtm_equity():
     )
     assert decision.decision == ExecutionDecision.REJECT
     assert "NON_POSITIVE_EQUITY" in str(decision.checks)
+
+
+def test_risk_evidence_persists_funding_status():
+    decision = RiskEngine().check(
+        make_signal(),
+        account=make_account(),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        funding_status="UNKNOWN",
+    )
+    assert decision.checks["funding_status"] == "UNKNOWN"
