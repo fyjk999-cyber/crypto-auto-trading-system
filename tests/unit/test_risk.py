@@ -298,6 +298,8 @@ def test_risk_evidence_persists_funding_status():
         open_order_count=0,
         funding_status="UNKNOWN",
     )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert decision.reason == "ACCOUNTING_INCOMPLETE"
     assert decision.checks["funding_status"] == "UNKNOWN"
 
 
@@ -358,4 +360,6 @@ def test_risk_evidence_persists_pnl_provenance():
         open_order_count=0,
         pnl_provenance=provenance,
     )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert decision.reason == "ACCOUNTING_INCOMPLETE"
     assert decision.checks["pnl_provenance"] == provenance

@@ -60,6 +60,7 @@ from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
+from crypto_trader.perpetual.funding_coverage import FundingCoverageService
 from crypto_trader.persistence.database import Database
 from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
 from crypto_trader.portfolio.service import PortfolioService
@@ -102,6 +103,7 @@ class TradingEngine:
         daily_review_scheduler: DailyReviewScheduler | None = None,
         enforce_llm_entry_authority: bool = False,
         opportunity_service=None,
+        funding_coverage: FundingCoverageService | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -109,6 +111,9 @@ class TradingEngine:
         self.order_manager = order_manager
         self.ledger = ledger
         self.portfolio = portfolio
+        self.funding_coverage = funding_coverage or FundingCoverageService(
+            database.session_factory
+        )
         self.risk_engine = risk_engine
         self.market_data = market_data
         self.lease_manager = lease_manager
@@ -856,21 +861,52 @@ class TradingEngine:
             valuation_as_of = None
             drawdown_source = "VALUATION_UNAVAILABLE"
         open_orders = await self.order_manager.count_open()
-        daily_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        daily_pnl, daily_pnl_source = await self.ledger.net_pnl_since(daily_start)
-        funding_status = await self.ledger.funding_status_since(daily_start)
-        pnl_provenance = await self.ledger.net_pnl_provenance_since(
-            daily_start, funding_coverage_status=funding_status.value
+        daily_end = datetime.now(UTC)
+        daily_start = daily_end.replace(hour=0, minute=0, second=0, microsecond=0)
+        account_id = getattr(account, "account_id", None) or "default"
+        # Every open USDT linear swap must independently prove funding coverage.
+        # The ledger read below adds any instrument with factual PnL/funding
+        # postings, so an unattributed or wrong-instrument posting can never be
+        # silently dropped from the daily total.
+        funding_instrument_ids = sorted(
+            {
+                position_symbol
+                for position_symbol, position in positions.items()
+                if position.quantity != 0
+                and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
+            }
         )
-        if (
-            not pnl_provenance.complete
-            and any(position.quantity != 0 for position in positions.values())
-        ):
-            # Open swap positions crossed an interval without funding coverage.
+        coverage_status_by_instrument = {
+            instrument_id: await self.funding_coverage.status_for(
+                instrument_id=instrument_id,
+                start=daily_start,
+                end=daily_end,
+            )
+            for instrument_id in funding_instrument_ids
+        }
+        pnl_provenance = await self.ledger.net_pnl_provenance_since(
+            daily_start,
+            account_id=account_id,
+            currency="USDT",
+            instrument_ids=funding_instrument_ids,
+            end=daily_end,
+            coverage_status_by_instrument=coverage_status_by_instrument,
+        )
+        if pnl_provenance.complete:
+            daily_pnl = (
+                pnl_provenance.realized_pnl
+                - pnl_provenance.fees
+                + (pnl_provenance.funding_amount or Decimal("0"))
+            )
+            daily_pnl_source = "LEDGER:REALIZED-FEE+FUNDING"
+        else:
             # Unknown must not masquerade as factual zero; risk-reducing
             # actions remain allowed by the RiskEngine contract.
             daily_pnl = None
-            daily_pnl_source = "FUNDING_UNKNOWN"
+            daily_pnl_source = (
+                "ACCOUNTING_INCOMPLETE:"
+                + ",".join(pnl_provenance.unknown_reasons or ("UNSPECIFIED",))
+            )
         risk_decision = self.risk_engine.check(
             signal,
             account=account,
@@ -892,6 +928,11 @@ class TradingEngine:
             valuation_id=valuation_id,
             funding_status=pnl_provenance.funding_status,
             pnl_provenance={
+                "account_id": pnl_provenance.account_id,
+                "currency": pnl_provenance.currency,
+                "window_start": pnl_provenance.window_start.isoformat(),
+                "window_end": pnl_provenance.window_end.isoformat(),
+                "ledger_watermark": pnl_provenance.ledger_watermark,
                 "realized_pnl": str(pnl_provenance.realized_pnl),
                 "fees": str(pnl_provenance.fees),
                 "funding_amount": (
@@ -899,6 +940,12 @@ class TradingEngine:
                     if pnl_provenance.funding_amount is not None
                     else None
                 ),
+                "known_funding_subtotal": (
+                    str(pnl_provenance.known_funding_subtotal)
+                    if pnl_provenance.known_funding_subtotal is not None
+                    else None
+                ),
+                "required_instruments": list(pnl_provenance.required_instruments),
                 "funding_status": pnl_provenance.funding_status,
                 "complete": pnl_provenance.complete,
                 "unknown_reasons": list(pnl_provenance.unknown_reasons),
@@ -1231,6 +1278,7 @@ class TradingEngine:
         if order is None:
             return
         position = await self.portfolio.get_position(fill.symbol)
+        account = await self.portfolio.get_account(self.settings.effective_mode())
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
             postings, metadata = build_derivative_trade_entries(
                 side=order.side,
@@ -1268,6 +1316,8 @@ class TradingEngine:
         await self.ledger.record(
             LedgerEntryType.TRADE,
             postings,
+            account_id=account.account_id,
+            instrument_id=order.symbol,
             order_id=order.internal_order_id,
             fill_id=fill.fill_id,
             event_id=new_id("evt"),

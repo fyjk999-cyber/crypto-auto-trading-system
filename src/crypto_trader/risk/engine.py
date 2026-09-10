@@ -62,7 +62,7 @@ class RiskEngine:
         valuation_currency: str = "USDT",
         valuation_source: str = "UNSPECIFIED",
         valuation_id: str | None = None,
-        funding_status: str = "UNKNOWN",
+        funding_status: str = "NOT_PROVIDED",
         pnl_provenance: dict | None = None,
         risk_equity: Decimal | None = None,
         available_margin: Decimal | None = None,
@@ -237,6 +237,14 @@ class RiskEngine:
             (signed_position > 0 and side_value == "SELL")
             or (signed_position < 0 and side_value == "BUY")
         )
+        provenance = pnl_provenance or {}
+        if not is_risk_reducing and (
+            provenance.get("complete") is False
+            or funding_status in {"UNKNOWN", "ACCOUNTING_INCOMPLETE"}
+        ):
+            # Unknown/unattributed funding ownership can never fund new risk.
+            # Risk-reducing actions remain allowed.
+            return fail("ACCOUNTING_INCOMPLETE")
         if daily_pnl is None:
             if not is_risk_reducing:
                 return fail("DAILY_PNL_UNAVAILABLE")

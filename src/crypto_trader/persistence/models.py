@@ -167,6 +167,14 @@ class LedgerTransactionORM(Base):
 
     transaction_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     account_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    instrument_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    # Ownership is only "VERIFIED" when the canonical writer explicitly bound
+    # this transaction to an account at write time. Historical rows (including
+    # rows backfilled by the pre-correction 0029 migration) default to
+    # "UNKNOWN" and must never be attributed to an account by guessing.
+    ownership_status: Mapped[str] = mapped_column(
+        String(16), index=True, nullable=False, default="UNKNOWN", server_default="UNKNOWN"
+    )
     entry_type: Mapped[str] = mapped_column(String(32), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     order_id: Mapped[str | None] = mapped_column(String(64))

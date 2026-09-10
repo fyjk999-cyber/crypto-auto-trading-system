@@ -196,6 +196,53 @@ def build_derivative_trade_entries(
     return postings, metadata
 
 
+def _pnl_signed_amount(entry: LedgerEntryORM) -> Decimal:
+    """Signed PnL contribution: credit increases PnL, debit decreases it."""
+    if entry.direction == LedgerDirection.CREDIT.value:
+        return Decimal(entry.amount)
+    return -Decimal(entry.amount)
+
+
+@dataclass(frozen=True)
+class FundingScope:
+    """Formal funding/PnL ownership window.
+
+    Every factual funding query must bind all five dimensions. Missing or
+    mismatched identity makes the result ACCOUNTING_INCOMPLETE, never zero.
+    """
+
+    account_id: str
+    currency: str
+    instrument_id: str
+    window_start: datetime
+    window_end: datetime
+
+    def __post_init__(self) -> None:
+        if not self.account_id or not str(self.account_id).strip():
+            raise ValueError("FundingScope.account_id is required")
+        if not self.currency or not str(self.currency).strip():
+            raise ValueError("FundingScope.currency is required")
+        if not self.instrument_id or not str(self.instrument_id).strip():
+            raise ValueError("FundingScope.instrument_id is required")
+        if self.window_start.tzinfo is None or self.window_end.tzinfo is None:
+            raise ValueError("FundingScope window must be timezone-aware UTC")
+        if self.window_start >= self.window_end:
+            raise ValueError("FundingScope.window_start must be before window_end")
+
+
+@dataclass(frozen=True)
+class FundingScopeProvenance:
+    """Per account/currency/instrument proven funding result."""
+
+    scope: FundingScope
+    coverage_status: str
+    settled_amount: Decimal | None
+    known_subtotal: Decimal | None
+    posting_count: int
+    complete: bool
+    unknown_reasons: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True)
 class PnlProvenance:
     account_id: str
@@ -210,6 +257,9 @@ class PnlProvenance:
     calculation_version: str = "v1"
     complete: bool = False
     unknown_reasons: tuple[str, ...] = ()
+    known_funding_subtotal: Decimal | None = None
+    required_instruments: tuple[str, ...] = ()
+    scope_provenances: tuple[FundingScopeProvenance, ...] = ()
 
 
 class FundingStatus(str, Enum):
@@ -217,6 +267,15 @@ class FundingStatus(str, Enum):
     KNOWN_ZERO = "KNOWN_ZERO"
     KNOWN_VALUE = "KNOWN_VALUE"
     UNKNOWN = "UNKNOWN"
+    ACCOUNTING_INCOMPLETE = "ACCOUNTING_INCOMPLETE"
+
+
+OWNERSHIP_VERIFIED = "VERIFIED"
+OWNERSHIP_UNKNOWN = "UNKNOWN"
+FUNDING_ACCOUNTS = ("FUNDING_RECEIPT", "FUNDING_PAYMENT")
+REALIZED_PNL_ACCOUNTS = ("REALIZED_PNL", "FUTURES_REALIZED_PNL")
+FEE_ACCOUNTS = ("FEE_EXPENSE", "FUTURES_TRADING_FEE")
+PNL_ACCOUNTS = REALIZED_PNL_ACCOUNTS + FEE_ACCOUNTS + FUNDING_ACCOUNTS
 
 
 class LedgerService:
@@ -225,19 +284,18 @@ class LedgerService:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
 
+    # ------------------------------------------------------------ scoped read
 
+    async def funding_scope_provenance(
+        self, scope: FundingScope, *, coverage_status: str
+    ) -> FundingScopeProvenance:
+        """Prove funding for one account/currency/instrument/window.
 
-
-
-    async def net_pnl_provenance_since(
-        self,
-        start: datetime,
-        *,
-        account_id: str = "default",
-        currency: str = "USDT",
-        funding_coverage_status: str = "UNKNOWN",
-    ) -> PnlProvenance:
-        end = datetime.now(UTC)
+        Postings are only counted when the transaction carries canonical
+        ownership (``VERIFIED``), the exact account, the exact instrument and
+        the exact currency. Any coverage status other than KNOWN_ZERO or
+        KNOWN_VALUE is not a factual zero.
+        """
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -248,67 +306,181 @@ class LedgerService:
                         == LedgerEntryORM.transaction_id,
                     )
                     .where(
-                        LedgerTransactionORM.account_id == account_id,
+                        LedgerTransactionORM.ownership_status == OWNERSHIP_VERIFIED,
+                        LedgerTransactionORM.account_id == scope.account_id,
+                        LedgerTransactionORM.instrument_id == scope.instrument_id,
+                        LedgerEntryORM.currency == scope.currency,
+                        LedgerEntryORM.account.in_(FUNDING_ACCOUNTS),
+                        LedgerEntryORM.created_at >= scope.window_start,
+                        LedgerEntryORM.created_at < scope.window_end,
+                    )
+                )
+            ).scalars().all()
+        settled = sum((_pnl_signed_amount(row) for row in rows), Decimal("0"))
+        known_subtotal = settled
+        reasons: list[str] = []
+        coverage = str(coverage_status or FundingStatus.UNKNOWN.value)
+        if coverage not in {
+            FundingStatus.KNOWN_ZERO.value,
+            FundingStatus.KNOWN_VALUE.value,
+        }:
+            reasons.append(f"FUNDING_COVERAGE_UNKNOWN:{scope.instrument_id}")
+        elif coverage == FundingStatus.KNOWN_ZERO.value and settled != 0:
+            reasons.append(
+                f"FUNDING_COVERAGE_CONTRADICTION:{scope.instrument_id}"
+            )
+        elif coverage == FundingStatus.KNOWN_VALUE.value and not rows:
+            reasons.append(f"FUNDING_EVENTS_NOT_SETTLED:{scope.instrument_id}")
+        complete = not reasons
+        return FundingScopeProvenance(
+            scope=scope,
+            coverage_status=coverage,
+            settled_amount=settled if complete else None,
+            known_subtotal=known_subtotal,
+            posting_count=len(rows),
+            complete=complete,
+            unknown_reasons=tuple(reasons),
+        )
+
+    async def net_pnl_provenance_since(
+        self,
+        start: datetime,
+        *,
+        account_id: str,
+        currency: str,
+        instrument_ids,
+        end: datetime | None = None,
+        coverage_status_by_instrument: dict[str, str] | None = None,
+    ) -> PnlProvenance:
+        """Scoped UTC-window PnL provenance.
+
+        ``instrument_ids`` is the set of instruments that must be covered
+        (normally the open positions). Instruments with factual funding/PnL
+        postings in the window are added automatically so a wrong instrument
+        can never be silently dropped from a daily total.
+        """
+        if not account_id or not str(account_id).strip():
+            raise ValueError("account_id is required for scoped PnL")
+        if not currency or not str(currency).strip():
+            raise ValueError("currency is required for scoped PnL")
+        end = end or datetime.now(UTC)
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("PnlProvenance window must be timezone-aware UTC")
+        if start >= end:
+            raise ValueError("start must be before end")
+        requested = tuple(
+            dict.fromkeys(
+                str(instrument) for instrument in (instrument_ids or []) if instrument
+            )
+        )
+        coverage_map = dict(coverage_status_by_instrument or {})
+
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LedgerEntryORM, LedgerTransactionORM)
+                    .join(
+                        LedgerTransactionORM,
+                        LedgerTransactionORM.transaction_id
+                        == LedgerEntryORM.transaction_id,
+                    )
+                    .where(
                         LedgerEntryORM.currency == currency,
-                        LedgerEntryORM.account.in_(
-                            (
-                                "REALIZED_PNL",
-                                "FUTURES_REALIZED_PNL",
-                                "FEE_EXPENSE",
-                                "FUNDING_RECEIPT",
-                                "FUNDING_PAYMENT",
-                            )
-                        ),
+                        LedgerEntryORM.account.in_(PNL_ACCOUNTS),
                         LedgerEntryORM.created_at >= start,
                         LedgerEntryORM.created_at < end,
                     )
                 )
-            ).scalars().all()
+            ).all()
+
+        unattributed_reasons: set[str] = set()
         realized = Decimal("0")
         fees = Decimal("0")
-        funding = Decimal("0")
-        funding_rows = 0
-        for row in rows:
-            signed = (
-                row.amount
-                if row.direction == LedgerDirection.CREDIT.value
-                else -row.amount
+        known_funding = Decimal("0")
+        discovered_funding_instruments: set[str] = set()
+        watermark_values: list[datetime] = []
+        for entry, txn in rows:
+            ownership_verified = (
+                txn.ownership_status == OWNERSHIP_VERIFIED and txn.account_id is not None
             )
-            if row.account in {"REALIZED_PNL", "FUTURES_REALIZED_PNL"}:
+            if not ownership_verified:
+                # A NULL/unverified transaction may belong to this account;
+                # it must never be silently ignored in a factual total.
+                if txn.account_id in (None, account_id):
+                    unattributed_reasons.add("UNATTRIBUTED_LEDGER_OWNERSHIP")
+                continue
+            if txn.account_id != account_id:
+                continue
+            if txn.created_at is not None:
+                watermark_values.append(txn.created_at)
+            signed = _pnl_signed_amount(entry)
+            if entry.account in REALIZED_PNL_ACCOUNTS:
                 realized += signed
-            elif row.account == "FEE_EXPENSE":
+            elif entry.account in FEE_ACCOUNTS:
                 fees += -signed
             else:
-                funding_rows += 1
-                funding += signed
-        coverage_complete = funding_coverage_status in {"KNOWN_ZERO", "KNOWN_VALUE"}
-        if funding_rows:
-            # Keep the known subtotal, but do not let one posting prove full
-            # interval/instrument coverage.
-            funding_amount: Decimal | None = funding
-            if coverage_complete:
-                funding_status = "KNOWN_VALUE"
-                complete = True
-            else:
-                funding_status = "UNKNOWN"
-                complete = False
+                if not txn.instrument_id:
+                    unattributed_reasons.add("FUNDING_INSTRUMENT_UNKNOWN")
+                    continue
+                discovered_funding_instruments.add(txn.instrument_id)
+                known_funding += signed
+
+        required = sorted(set(requested) | discovered_funding_instruments)
+        scope_provenances: list[FundingScopeProvenance] = []
+        for instrument in required:
+            scope = FundingScope(
+                account_id=account_id,
+                currency=currency,
+                instrument_id=instrument,
+                window_start=start,
+                window_end=end,
+            )
+            scope_provenances.append(
+                await self.funding_scope_provenance(
+                    scope,
+                    coverage_status=coverage_map.get(instrument, "UNKNOWN"),
+                )
+            )
+
+        unknown_reasons = set(unattributed_reasons)
+        for scope_prov in scope_provenances:
+            unknown_reasons.update(scope_prov.unknown_reasons)
+        complete = not unknown_reasons and all(
+            scope_prov.complete for scope_prov in scope_provenances
+        )
+        if not required and not unattributed_reasons:
+            funding_status = FundingStatus.NOT_APPLICABLE.value
+        elif not complete:
+            funding_status = FundingStatus.ACCOUNTING_INCOMPLETE.value
+        elif any(
+            scope_prov.coverage_status == FundingStatus.KNOWN_VALUE.value
+            for scope_prov in scope_provenances
+        ) or known_funding != 0:
+            funding_status = FundingStatus.KNOWN_VALUE.value
         else:
-            funding_status = funding_coverage_status
-            funding_amount = Decimal("0") if coverage_complete else None
-            complete = coverage_complete
-        unknown = () if complete else ("FUNDING_UNKNOWN",)
+            funding_status = FundingStatus.KNOWN_ZERO.value
+        funding_amount = sum(
+            (scope_prov.settled_amount or Decimal("0") for scope_prov in scope_provenances),
+            Decimal("0"),
+        ) if complete else None
+        ledger_watermark = (
+            max(watermark_values).isoformat() if watermark_values else None
+        )
         return PnlProvenance(
             account_id=account_id,
             currency=currency,
             window_start=start,
             window_end=end,
-            ledger_watermark=None,
+            ledger_watermark=ledger_watermark,
             realized_pnl=realized,
             fees=fees,
             funding_amount=funding_amount,
             funding_status=funding_status,
             complete=complete,
-            unknown_reasons=unknown,
+            unknown_reasons=tuple(sorted(unknown_reasons)),
+            known_funding_subtotal=known_funding if required else None,
+            required_instruments=tuple(required),
+            scope_provenances=tuple(scope_provenances),
         )
 
     async def apply_paper_funding_settlement(self, settlement) -> Decimal:
@@ -335,11 +507,17 @@ class LedgerService:
         await self.record(
             entry_type,
             postings,
-            account_id=getattr(settlement, "account_id", "default"),
+            account_id=getattr(settlement, "account_id", None) or None,
+            instrument_id=settlement.instrument_id,
             event_id=settlement.idempotency_key,
+            # The posting is dated at the economic settlement instant, not at
+            # process wall-clock time, so [start, end) window scoping is factual.
+            created_at=settlement.settlement_timestamp,
             metadata={
                 "source": "PAPER_DERIVED",
                 "rule_version": settlement.rule_version,
+                "instrument_id": settlement.instrument_id,
+                "currency": settlement.currency,
                 "settlement_timestamp": settlement.settlement_timestamp.isoformat(),
             },
         )
@@ -351,7 +529,9 @@ class LedgerService:
         postings: list[LedgerPosting],
         *,
         transaction_id: str | None = None,
-        account_id: str = "default",
+        account_id: str | None = "default",
+        instrument_id: str | None = None,
+        ownership_status: str | None = None,
         order_id: str | None = None,
         fill_id: str | None = None,
         event_id: str | None = None,
@@ -387,10 +567,25 @@ class LedgerService:
             raise JournalUnbalanced(f"journal unbalanced: debit={debits} credit={credits}")
         transaction_id = transaction_id or new_id("txn")
         created_at = created_at or datetime.now(UTC)
+        if ownership_status is None:
+            ownership_status = OWNERSHIP_VERIFIED if account_id else OWNERSHIP_UNKNOWN
+        if ownership_status not in {OWNERSHIP_VERIFIED, OWNERSHIP_UNKNOWN}:
+            raise ValueError(f"invalid ownership_status: {ownership_status}")
+        if ownership_status == OWNERSHIP_UNKNOWN:
+            # An unverified writer must not present an account claim as fact.
+            # The raw value is retained only in metadata for audit.
+            metadata = {
+                **(metadata or {}),
+                "unverified_account_claim": account_id,
+            }
+            account_id = None
+        resolved_instrument = instrument_id or (metadata or {}).get("instrument_id")
         async with self.session_factory() as session:
             txn = LedgerTransactionORM(
                 transaction_id=transaction_id,
                 account_id=account_id,
+                instrument_id=resolved_instrument,
+                ownership_status=ownership_status,
                 entry_type=entry_type.value,
                 created_at=created_at,
                 order_id=order_id,
@@ -493,91 +688,104 @@ class LedgerService:
 
 
 
-    async def funding_status_since(self, start: datetime) -> FundingStatus:
-        """Return factual funding applicability state for a UTC interval.
+    async def funding_status_since(
+        self,
+        start: datetime,
+        *,
+        account_id: str,
+        currency: str,
+        instrument_id: str,
+        end: datetime | None = None,
+        coverage_status: str = "UNKNOWN",
+    ) -> FundingStatus:
+        """Scoped funding applicability for one account/currency/instrument.
 
-        Without a complete funding-source coverage proof, absence of a funding
-        posting is UNKNOWN, not a factual zero.
+        The old boundary-free call is intentionally gone: without an explicit
+        scope, absence of a posting can never be a factual zero.
         """
-        async with self.session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(LedgerEntryORM).where(
-                        LedgerEntryORM.account.in_(
-                            ("FUNDING_RECEIPT", "FUNDING_PAYMENT")
-                        ),
-                        LedgerEntryORM.created_at >= start,
-                    )
-                )
-            ).scalars().all()
-        if rows:
+        end = end or datetime.now(UTC)
+        provenance = await self.funding_scope_provenance(
+            FundingScope(
+                account_id=account_id,
+                currency=currency,
+                instrument_id=instrument_id,
+                window_start=start,
+                window_end=end,
+            ),
+            coverage_status=coverage_status,
+        )
+        if not provenance.complete:
+            return FundingStatus.ACCOUNTING_INCOMPLETE
+        if (
+            provenance.coverage_status == FundingStatus.KNOWN_VALUE.value
+            or (provenance.settled_amount or Decimal("0")) != 0
+        ):
             return FundingStatus.KNOWN_VALUE
-        return FundingStatus.UNKNOWN
+        return FundingStatus.KNOWN_ZERO
 
-    async def realized_pnl_since(self, start: datetime) -> Decimal:
-        """Sum realized PnL postings since a UTC boundary (losses are negative)."""
+    async def realized_pnl_since(
+        self,
+        start: datetime,
+        *,
+        account_id: str,
+        currency: str,
+        end: datetime | None = None,
+    ) -> Decimal:
+        """Sum verified-ownership realized PnL for one account/currency/window."""
+        end = end or datetime.now(UTC)
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
-                    select(LedgerEntryORM).where(
+                    select(LedgerEntryORM)
+                    .join(
+                        LedgerTransactionORM,
+                        LedgerTransactionORM.transaction_id
+                        == LedgerEntryORM.transaction_id,
+                    )
+                    .where(
+                        LedgerTransactionORM.ownership_status == OWNERSHIP_VERIFIED,
+                        LedgerTransactionORM.account_id == account_id,
+                        LedgerEntryORM.currency == currency,
                         LedgerEntryORM.account == "REALIZED_PNL",
                         LedgerEntryORM.created_at >= start,
+                        LedgerEntryORM.created_at < end,
                     )
                 )
             ).scalars().all()
-        total = sum(
-            (
-                row.amount
-                if row.direction == LedgerDirection.CREDIT.value
-                else -row.amount
-            )
-            for row in rows
-        )
-        return total
+        return sum((_pnl_signed_amount(row) for row in rows), Decimal("0"))
 
-    async def net_pnl_since(self, start: datetime) -> tuple[Decimal | None, str]:
-        """Factual UTC-day net PnL: realized +/- fees + funding.
+    async def net_pnl_since(
+        self,
+        start: datetime,
+        *,
+        account_id: str,
+        currency: str,
+        instrument_ids=(),
+        end: datetime | None = None,
+        coverage_status_by_instrument: dict[str, str] | None = None,
+    ) -> tuple[Decimal | None, str]:
+        """Scoped factual net PnL: realized - fees + proven funding.
 
         Returns ``(net, source)``. If any required accounting line is missing
-        and cannot be proven zero, net is ``None`` so Risk never treats missing
-        data as zero.
+        and cannot be proven, net is ``None`` so Risk never treats missing data
+        as zero.
         """
-        accounts = (
-            "REALIZED_PNL",
-            "FEE_EXPENSE",
-            "FUNDING_RECEIPT",
-            "FUNDING_PAYMENT",
-            "FUTURES_TRADING_FEE",
-            "FUTURES_REALIZED_PNL",
+        provenance = await self.net_pnl_provenance_since(
+            start,
+            account_id=account_id,
+            currency=currency,
+            instrument_ids=instrument_ids,
+            end=end,
+            coverage_status_by_instrument=coverage_status_by_instrument,
         )
-        async with self.session_factory() as session:
-            rows = (
-                await session.execute(
-                    select(LedgerEntryORM).where(
-                        LedgerEntryORM.account.in_(accounts),
-                        LedgerEntryORM.created_at >= start,
-                    )
-                )
-            ).scalars().all()
-        total = Decimal("0")
-        for row in rows:
-            account = row.account
-            if account in {"REALIZED_PNL", "FUNDING_RECEIPT", "FUTURES_REALIZED_PNL"}:
-                total += (
-                    row.amount
-                    if row.direction == LedgerDirection.CREDIT.value
-                    else -row.amount
-                )
-            else:  # expense/fee/funding payment: debit increases loss
-                total += (
-                    -row.amount
-                    if row.direction == LedgerDirection.DEBIT.value
-                    else row.amount
-                )
-        if not rows:
-            return Decimal("0"), "KNOWN_ZERO_NO_LEDGER_ACTIVITY"
-        return total, "LEDGER:REALIZED+FEE+FUNDING"
-
+        if not provenance.complete:
+            return None, provenance.funding_status
+        net = (
+            provenance.realized_pnl
+            - provenance.fees
+            + (provenance.funding_amount or Decimal("0"))
+        )
+        return net, "LEDGER:REALIZED-FEE+FUNDING"
 
 async def _txn_to_domain(txn: LedgerTransactionORM) -> LedgerTransaction:
     entries = [

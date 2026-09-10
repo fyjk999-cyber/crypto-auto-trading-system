@@ -201,9 +201,17 @@ async def test_ledger_realized_pnl_since_utc_boundary(ledger, database):
         transaction_id="pnl_loss",
     )
     start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    assert await ledger.realized_pnl_since(start) == Decimal("6")
+    realized = await ledger.realized_pnl_since(
+        start, account_id="default", currency="USDT"
+    )
+    assert realized == Decimal("6")
     # Future start returns zero
-    assert await ledger.realized_pnl_since(start + timedelta(days=1)) == Decimal("0")
+    assert (
+        await ledger.realized_pnl_since(
+            start + timedelta(days=1), account_id="default", currency="USDT"
+        )
+        == Decimal("0")
+    )
 
 
 async def test_equity_peak_is_durable_across_service_restart(database):
@@ -281,7 +289,13 @@ async def test_funding_status_unknown_without_source_coverage(ledger):
     from crypto_trader.ledger.service import FundingStatus
 
     start = datetime(2026, 9, 10, tzinfo=UTC)
-    assert await ledger.funding_status_since(start) == FundingStatus.UNKNOWN
+    status = await ledger.funding_status_since(
+        start,
+        account_id="default",
+        currency="USDT",
+        instrument_id="BTC-USDT-SWAP",
+    )
+    assert status == FundingStatus.ACCOUNTING_INCOMPLETE
 
 
 async def test_funding_status_known_value_with_posting(ledger):
@@ -297,8 +311,17 @@ async def test_funding_status_known_value_with_posting(ledger):
             LedgerPosting("FUNDING_RECEIPT", LedgerDirection.CREDIT, Decimal("2")),
         ],
         transaction_id="funding_receipt_1",
+        account_id="default",
+        instrument_id="BTC-USDT-SWAP",
     )
-    assert await ledger.funding_status_since(start) == FundingStatus.KNOWN_VALUE
+    status = await ledger.funding_status_since(
+        start,
+        account_id="default",
+        currency="USDT",
+        instrument_id="BTC-USDT-SWAP",
+        coverage_status="KNOWN_VALUE",
+    )
+    assert status == FundingStatus.KNOWN_VALUE
 
 
 async def test_daily_review_pagination_reads_more_than_1000_episodes(database):
@@ -484,11 +507,16 @@ async def test_pnl_provenance_keeps_unknown_funding_unknown(ledger):
     from datetime import UTC, datetime
 
     start = datetime(2026, 9, 10, tzinfo=UTC)
-    provenance = await ledger.net_pnl_provenance_since(start)
+    provenance = await ledger.net_pnl_provenance_since(
+        start,
+        account_id="default",
+        currency="USDT",
+        instrument_ids=["BTC-USDT-SWAP"],
+    )
     assert provenance.complete is False
-    assert provenance.funding_status == "UNKNOWN"
+    assert provenance.funding_status == "ACCOUNTING_INCOMPLETE"
     assert provenance.funding_amount is None
-    assert "FUNDING_UNKNOWN" in provenance.unknown_reasons
+    assert "FUNDING_COVERAGE_UNKNOWN:BTC-USDT-SWAP" in provenance.unknown_reasons
 
 
 async def test_pnl_provenance_known_funding_value(ledger):
@@ -510,7 +538,11 @@ async def test_pnl_provenance_known_funding_value(ledger):
         )
     )
     provenance = await ledger.net_pnl_provenance_since(
-        start, funding_coverage_status="KNOWN_VALUE"
+        start,
+        account_id="default",
+        currency="USDT",
+        instrument_ids=["BTC-USDT-SWAP"],
+        coverage_status_by_instrument={"BTC-USDT-SWAP": "KNOWN_VALUE"},
     )
     assert provenance.complete is True
     assert provenance.funding_status == "KNOWN_VALUE"
