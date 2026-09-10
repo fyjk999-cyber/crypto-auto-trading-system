@@ -76,3 +76,11 @@ def test_embargo_gap_rejects_adjacent_windows():
     assert_embargo_gap([{"ts": 1}], [{"ts": 3}], key=lambda x: x["ts"])
     with pytest.raises(ValueError):
         assert_embargo_gap([{"ts": 1}], [{"ts": 2}], key=lambda x: x["ts"])
+
+
+def test_test_observations_cannot_be_used_for_tuning():
+    from crypto_trader.validation.time_split import assert_test_not_used_for_tuning
+
+    assert_test_not_used_for_tuning({1, 2}, {3, 4})
+    with pytest.raises(ValueError):
+        assert_test_not_used_for_tuning({1, 2}, {2, 3})

@@ -62,3 +62,11 @@ def assert_embargo_gap(
         raise ValueError("train and test must be non-empty")
     if key(test[0]) - key(train[-1]) <= min_gap:
         raise ValueError("train/test embargo gap too small")
+
+
+def assert_test_not_used_for_tuning(
+    test_indices: set[int], tuned_indices: set[int]
+) -> None:
+    """Reject parameter selection that touched final test observations."""
+    if test_indices & tuned_indices:
+        raise ValueError("test observations used for parameter tuning")
