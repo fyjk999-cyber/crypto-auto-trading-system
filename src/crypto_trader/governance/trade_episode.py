@@ -187,9 +187,33 @@ class TradeEpisodeStore:
                 )
             ).scalar_one_or_none()
             if account_id is None:
-                # Without a verified account lineage the episode cannot claim a
-                # factual funding PnL; fail closed rather than write zero.
-                return None
+                # Fall back to a single verified funding-owner account for the
+                # same instrument/currency/window; ambiguous ownership fails
+                # closed rather than writing a zero funding PnL.
+                owner_rows = (
+                    await session.execute(
+                        select(LedgerTransactionORM.account_id)
+                        .join(
+                            LedgerEntryORM,
+                            LedgerEntryORM.transaction_id
+                            == LedgerTransactionORM.transaction_id,
+                        )
+                        .where(
+                            LedgerTransactionORM.ownership_status == "VERIFIED",
+                            LedgerTransactionORM.account_id.is_not(None),
+                            LedgerTransactionORM.instrument_id == plan.symbol,
+                            LedgerEntryORM.currency == currency,
+                            LedgerEntryORM.account.in_(FUNDING_PNL_ACCOUNTS),
+                            LedgerEntryORM.created_at >= opened_at,
+                            LedgerEntryORM.created_at <= closed_at,
+                        )
+                        .distinct()
+                    )
+                ).scalars().all()
+                owners = {str(owner) for owner in owner_rows if owner}
+                if len(owners) != 1:
+                    return None
+                account_id = owners.pop()
             funding_rows = (
                 await session.execute(
                     select(LedgerEntryORM.direction, LedgerEntryORM.amount)
