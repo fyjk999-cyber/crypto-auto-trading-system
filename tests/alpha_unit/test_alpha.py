@@ -204,6 +204,16 @@ def test_market_data_engine_donchian_empty_returns_none():
     assert mde.donchian(5) == (None, None)
 
 
+def test_market_data_engine_average_volume_uses_last_n():
+    mde = MarketDataEngine("BTCUSDT")
+    ts = TS
+    for price, volume in (("100", "10"), ("101", "20"), ("102", "30")):
+        ts += timedelta(minutes=1)
+        mde.ingest(ts, Decimal(price), Decimal(volume))
+    assert mde.average_volume(2) == Decimal("25")
+
+
+
 
 
 def test_ml_meta_not_a_directional_sub_strategy():
