@@ -53,7 +53,6 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self.connected = False
         self._handlers: dict[str, Callable[[ExchangeEvent], Awaitable[None]]] = {}
         self._sub_counter = 0
-        self.next_exchange_order_id = 1000
         self.event_log: list[ExchangeEvent] = []
 
         # chaos / fault injection hooks
@@ -189,7 +188,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         return Order(
             internal_order_id=raw.internal_order_id,
             client_order_id=raw.client_order_id,
-            exchange_order_id=f"sim_{self.next_exchange_order_id}",
+            exchange_order_id=new_id("sim"),
             symbol=raw.symbol,
             side=raw.side,
             order_type=raw.order_type,
@@ -225,7 +224,6 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             await asyncio.sleep(self.submit_delay_seconds)
 
         local = self._local_order_for(order)
-        self.next_exchange_order_id += 1
         self.orders[local.exchange_order_id] = local
 
         if self.timeout_but_created:

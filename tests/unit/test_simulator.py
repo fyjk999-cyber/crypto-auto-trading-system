@@ -152,8 +152,9 @@ async def test_submit_timeout_but_order_created():
     with pytest.raises(UnknownExecutionState):
         await sim.submit_order(make_order())
     # order exists at exchange and can be recovered
-    recovered = await sim.get_order("BTCUSDT", "sim_1000")
-    assert recovered.exchange_order_id == "sim_1000"
+    created_id = next(iter(sim.orders))
+    recovered = await sim.get_order("BTCUSDT", created_id)
+    assert recovered.exchange_order_id == created_id
     assert recovered.status == OrderStatus.ACKNOWLEDGED
 
 
@@ -337,6 +338,20 @@ async def test_paper_real_market_stale_book_does_not_fill():
         await adapter.submit_order(make_order(cid="stale"))
     assert adapter.orders == {}
     await adapter.disconnect()
+
+
+async def test_sim_exchange_order_id_unique_across_adapter_restart():
+    first = SimulatedExchangeAdapter()
+    await first.connect()
+    await first.get_orderbook("BTCUSDT")
+    a = await first.submit_order(make_order(cid="restart-a"))
+    second = SimulatedExchangeAdapter()
+    await second.connect()
+    await second.get_orderbook("BTCUSDT")
+    b = await second.submit_order(make_order(cid="restart-b"))
+    assert a.exchange_order_id != b.exchange_order_id
+    assert a.exchange_order_id.startswith("sim_")
+    assert b.exchange_order_id.startswith("sim_")
 
 
 async def _noop():
