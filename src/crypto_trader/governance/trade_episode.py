@@ -45,6 +45,7 @@ class FactualTradeEpisode:
     terminal_reason: str
     opened_at: datetime
     closed_at: datetime
+    review_status: str = "PENDING"
 
 
 class TradeEpisodeStore:
@@ -360,4 +361,5 @@ def _to_domain(row: TradeEpisodeORM) -> FactualTradeEpisode:
         terminal_reason=row.terminal_reason,
         opened_at=_as_utc(row.opened_at),
         closed_at=_as_utc(row.closed_at),
+        review_status=row.review_status or "PENDING",
     )

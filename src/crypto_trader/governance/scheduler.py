@@ -21,6 +21,8 @@ class DailyReviewScheduler:
         *,
         canonical_only: bool = False,
         use_local_time: bool = False,
+        owner: str = "daily-review",
+        claim_lease_seconds: int = 1800,
     ) -> None:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
@@ -29,6 +31,8 @@ class DailyReviewScheduler:
         self.review_time_utc = review_time_utc
         self.canonical_only = canonical_only
         self.use_local_time = use_local_time
+        self.owner = owner
+        self.claim_lease_seconds = max(60, claim_lease_seconds)
 
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
@@ -38,18 +42,31 @@ class DailyReviewScheduler:
         date = date or (now - timedelta(days=1)).date().isoformat()
         window_start = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=UTC)
         window_end = window_start + timedelta(days=1)
+        # A late factual episode may be inserted after the day already
+        # SUCCEEDED. Revision is a new owned attempt; reviewed episodes are
+        # still included in the day's factual statistics.
+        episodes = await self.episodes.load_all_closed_on(
+            date,
+            timezone=now.tzinfo or UTC,
+        )
+        pending = [
+            episode
+            for episode in episodes
+            if getattr(episode, "review_status", "PENDING") != "REVIEWED"
+        ]
         claim_token = await self.persistence.begin_daily_review(
-            date, window_start, window_end
+            date,
+            window_start,
+            window_end,
+            owner=self.owner,
+            lease_seconds=self.claim_lease_seconds,
+            allow_revision=bool(pending),
         )
         if claim_token is None:
             prior = await self.persistence.get_daily_review(date) or {}
             prior["idempotent"] = True
             return prior
         try:
-            episodes = await self.episodes.load_all_closed_on(
-                date,
-                timezone=now.tzinfo or UTC,
-            )
             records = [_episode_record(episode) for episode in episodes]
             if not self.canonical_only and not records:
                 records = await self.persistence.load_trade_memory(limit=1000)
@@ -61,18 +78,27 @@ class DailyReviewScheduler:
                 if record.failure_class is not None:
                     failure_memory.record(record.decision_id, record.failure_class)
             stats = DailyReview(trade_memory, failure_memory).run(date)
-            for episode in episodes:
-                await self.learning.review(episode)
+            # Only the live claim owner may run learning/mark/publish.
+            if not await self.persistence.heartbeat_daily_review(
+                date,
+                claim_token,
+                owner=self.owner,
+                lease_seconds=self.claim_lease_seconds,
+            ):
+                raise RuntimeError("DAILY_REVIEW_CLAIM_LOST")
+            await self.learning.review_many(pending)
             await self.episodes.mark_reviewed(
-                [episode.episode_id for episode in episodes]
+                [episode.episode_id for episode in pending]
             )
-            await self.persistence.save_daily_review(
+            saved = await self.persistence.save_daily_review(
                 date,
                 stats,
                 episode_count=len(episodes),
                 output_ref=f"daily_review:{date}",
                 claim_token=claim_token,
             )
+            if not saved:
+                raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_SUCCEEDED")
             return {
                 "date": date,
                 "status": "SUCCEEDED",
@@ -80,6 +106,8 @@ class DailyReviewScheduler:
                 "trade_count": stats.trade_count,
                 "win_rate": str(stats.win_rate),
                 "profit_factor": str(stats.profit_factor),
+                "episode_count": len(episodes),
+                "reviewed_this_attempt": len(pending),
             }
         except Exception as exc:
             await self.persistence.fail_daily_review(

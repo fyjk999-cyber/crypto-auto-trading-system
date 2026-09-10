@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 
 from crypto_trader.governance.memory import TradeMemoryRecord
 from crypto_trader.persistence.models import DailyReviewRunORM, TradeMemoryRecordORM
@@ -58,34 +58,57 @@ class MemoryPersistence:
             return [_row_to_record(r) for r in rows]
 
     async def begin_daily_review(
-        self, date: str, window_start: datetime, window_end: datetime
+        self,
+        date: str,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        owner: str = "daily-review",
+        lease_seconds: int = 1800,
+        allow_revision: bool = False,
     ) -> str | None:
-        """Atomically claim a review date; returns claim token or None."""
+        """Atomically claim a review date; returns claim token or None.
+
+        Ownership is DB-level (status + claim_token + owner + deadline). Two
+        workers cannot both claim the same review; an expired RUNNING claim is
+        reclaimable after a restart. ``allow_revision`` permits a new attempt
+        for an already-SUCCEEDED day when a late factual episode appeared.
+        """
         now = datetime.now(UTC)
-        stale_before = now - timedelta(minutes=30)
+        deadline = now + timedelta(seconds=max(60, lease_seconds))
         token = uuid4().hex
 
         def claim_values() -> dict:
             return {
                 "status": "RUNNING",
                 "claim_token": token,
+                "owner": owner,
+                "claim_deadline_at": deadline,
                 "started_at": now,
                 "last_attempt_at": now,
                 "last_error_type": None,
                 "last_error_detail_sanitized": None,
             }
 
+        eligible = or_(
+            DailyReviewRunORM.status.in_(("PENDING", "FAILED")),
+            and_(
+                DailyReviewRunORM.status == "RUNNING",
+                or_(
+                    DailyReviewRunORM.claim_deadline_at.is_(None),
+                    DailyReviewRunORM.claim_deadline_at < now,
+                ),
+            ),
+        )
+        if allow_revision:
+            eligible = or_(eligible, DailyReviewRunORM.status == "SUCCEEDED")
+
         async with self.session_factory() as session:
             result = await session.execute(
                 update(DailyReviewRunORM)
                 .where(
                     DailyReviewRunORM.review_date == date,
-                    DailyReviewRunORM.status != "SUCCEEDED",
-                    or_(
-                        DailyReviewRunORM.status != "RUNNING",
-                        DailyReviewRunORM.last_attempt_at < stale_before,
-                        DailyReviewRunORM.last_attempt_at.is_(None),
-                    ),
+                    eligible,
                 )
                 .values(
                     **claim_values(),
@@ -123,24 +146,84 @@ class MemoryPersistence:
                 await session.rollback()
                 return None
 
-    async def fail_daily_review(
-        self, date: str, error_type: str, detail: str, *, claim_token: str | None = None
-    ) -> None:
+    async def heartbeat_daily_review(
+        self,
+        date: str,
+        claim_token: str,
+        *,
+        owner: str | None = None,
+        lease_seconds: int = 1800,
+    ) -> bool:
+        """Refresh the live claim. Returns False for stale/old tokens."""
+        now = datetime.now(UTC)
+        deadline = now + timedelta(seconds=max(60, lease_seconds))
         async with self.session_factory() as session:
+            conditions = [
+                DailyReviewRunORM.review_date == date,
+                DailyReviewRunORM.claim_token == claim_token,
+                DailyReviewRunORM.status == "RUNNING",
+                or_(
+                    DailyReviewRunORM.claim_deadline_at.is_(None),
+                    DailyReviewRunORM.claim_deadline_at >= now,
+                ),
+            ]
+            if owner is not None:
+                conditions.append(DailyReviewRunORM.owner == owner)
+            result = await session.execute(
+                update(DailyReviewRunORM)
+                .where(*conditions)
+                .values(last_attempt_at=now, claim_deadline_at=deadline)
+            )
+            await session.commit()
+            return result.rowcount == 1
+
+    async def fail_daily_review(
+        self,
+        date: str,
+        error_type: str,
+        detail: str,
+        *,
+        claim_token: str | None = None,
+    ) -> bool:
+        """Record failure only for the worker that still owns the claim."""
+        now = datetime.now(UTC)
+        async with self.session_factory() as session:
+            if claim_token is not None:
+                result = await session.execute(
+                    update(DailyReviewRunORM)
+                    .where(
+                        DailyReviewRunORM.review_date == date,
+                        DailyReviewRunORM.claim_token == claim_token,
+                        DailyReviewRunORM.status == "RUNNING",
+                        or_(
+                            DailyReviewRunORM.claim_deadline_at.is_(None),
+                            DailyReviewRunORM.claim_deadline_at >= now,
+                        ),
+                    )
+                    .values(
+                        status="FAILED",
+                        last_error_type=error_type[:64],
+                        last_error_detail_sanitized=detail[:255],
+                        last_attempt_at=now,
+                    )
+                )
+                await session.commit()
+                return result.rowcount == 1
+
             existing = (
                 await session.execute(
                     select(DailyReviewRunORM).where(DailyReviewRunORM.review_date == date)
                 )
             ).scalar_one_or_none()
             if existing is None:
-                return
-            if claim_token is not None and existing.claim_token != claim_token:
-                return
+                await session.commit()
+                return False
             existing.status = "FAILED"
             existing.last_error_type = error_type[:64]
             existing.last_error_detail_sanitized = detail[:255]
-            existing.last_attempt_at = datetime.now(UTC)
+            existing.last_attempt_at = now
             await session.commit()
+            return True
 
     async def save_daily_review(
         self,
@@ -150,7 +233,42 @@ class MemoryPersistence:
         episode_count: int = 0,
         output_ref: str | None = None,
         claim_token: str | None = None,
-    ) -> None:
+    ) -> bool:
+        """Publish SUCCEEDED only for the live claim owner."""
+        now = datetime.now(UTC)
+        if claim_token is not None:
+            async with self.session_factory() as session:
+                result = await session.execute(
+                    update(DailyReviewRunORM)
+                    .where(
+                        DailyReviewRunORM.review_date == date,
+                        DailyReviewRunORM.claim_token == claim_token,
+                        DailyReviewRunORM.status == "RUNNING",
+                        or_(
+                            DailyReviewRunORM.claim_deadline_at.is_(None),
+                            DailyReviewRunORM.claim_deadline_at >= now,
+                        ),
+                    )
+                    .values(
+                        daily_pnl=stats.daily_pnl,
+                        long_pnl=stats.long_pnl,
+                        short_pnl=stats.short_pnl,
+                        trade_count=stats.trade_count,
+                        win_rate=stats.win_rate,
+                        profit_factor=stats.profit_factor,
+                        expectancy=stats.expectancy,
+                        episode_count=episode_count,
+                        output_ref=output_ref,
+                        status="SUCCEEDED",
+                        completed_at=now,
+                        last_attempt_at=now,
+                    )
+                )
+                await session.commit()
+                return result.rowcount == 1
+
+        # Legacy direct write path (no worker ownership). The scheduler always
+        # supplies a claim token; this exists only for older callers/tests.
         async with self.session_factory() as session:
             existing = (
                 await session.execute(
@@ -158,8 +276,6 @@ class MemoryPersistence:
                 )
             ).scalar_one_or_none()
             if existing is not None:
-                if claim_token is not None and existing.claim_token != claim_token:
-                    return
                 existing.daily_pnl = stats.daily_pnl
                 existing.long_pnl = stats.long_pnl
                 existing.short_pnl = stats.short_pnl
@@ -170,17 +286,17 @@ class MemoryPersistence:
                 existing.episode_count = episode_count
                 existing.output_ref = output_ref
                 existing.status = "SUCCEEDED"
-                existing.completed_at = datetime.now(UTC)
-                existing.last_attempt_at = datetime.now(UTC)
+                existing.completed_at = now
+                existing.last_attempt_at = now
             else:
                 session.add(
                     DailyReviewRunORM(
                         review_date=date,
                         status="SUCCEEDED",
                         attempt_count=1,
-                        started_at=datetime.now(UTC),
-                        completed_at=datetime.now(UTC),
-                        last_attempt_at=datetime.now(UTC),
+                        started_at=now,
+                        completed_at=now,
+                        last_attempt_at=now,
                         episode_count=episode_count,
                         output_ref=output_ref,
                         daily_pnl=stats.daily_pnl,
@@ -193,9 +309,7 @@ class MemoryPersistence:
                     )
                 )
             await session.commit()
-
-
-
+            return True
 
     async def latest_succeeded_review_date(self) -> str | None:
         async with self.session_factory() as session:
@@ -230,6 +344,14 @@ class MemoryPersistence:
             "expectancy": str(row.expectancy),
             "episode_count": row.episode_count,
             "attempt_count": row.attempt_count,
+            "owner": row.owner,
+            "claim_deadline_at": (
+                row.claim_deadline_at.isoformat()
+                if row.claim_deadline_at is not None
+                else None
+            ),
+            "last_error_type": row.last_error_type,
+            "last_error_detail": row.last_error_detail_sanitized,
         }
 
     async def load_daily_reviews(self, limit: int = 60) -> list[dict]:
