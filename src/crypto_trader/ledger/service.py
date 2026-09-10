@@ -11,6 +11,7 @@ legs were replaced by crypto spot trade journals defined in SPAC section 6.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -351,6 +352,7 @@ class LedgerService:
         instrument_ids,
         end: datetime | None = None,
         coverage_status_by_instrument: dict[str, str] | None = None,
+        instrument_window_starts: Mapping[str, datetime] | None = None,
     ) -> PnlProvenance:
         """Scoped UTC-window PnL provenance.
 
@@ -374,6 +376,10 @@ class LedgerService:
             )
         )
         coverage_map = dict(coverage_status_by_instrument or {})
+        window_starts = {
+            str(instrument): window_start
+            for instrument, window_start in (instrument_window_starts or {}).items()
+        }
 
         async with self.session_factory() as session:
             rows = (
@@ -428,11 +434,17 @@ class LedgerService:
         required = sorted(set(requested) | discovered_funding_instruments)
         scope_provenances: list[FundingScopeProvenance] = []
         for instrument in required:
+            raw_start = window_starts.get(instrument)
+            scope_start = start
+            if raw_start is not None:
+                if raw_start.tzinfo is None:
+                    raw_start = raw_start.replace(tzinfo=UTC)
+                scope_start = max(start, raw_start)
             scope = FundingScope(
                 account_id=account_id,
                 currency=currency,
                 instrument_id=instrument,
-                window_start=start,
+                window_start=scope_start,
                 window_end=end,
             )
             scope_provenances.append(

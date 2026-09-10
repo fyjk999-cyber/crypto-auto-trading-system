@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     run_lease_renew_interval_seconds: int = 3
     engine_tick_seconds: float = 0.5
     reconciliation_interval_seconds: int = 30
+    funding_refresh_interval_seconds: int = 900
+    funding_lookback_hours: int = 24
     market_data_max_age_seconds: float = 5.0
     orderbook_max_age_seconds: float = 2.0
     max_websocket_reconnect_attempts: int = 5

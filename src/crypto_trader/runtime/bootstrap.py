@@ -38,6 +38,12 @@ from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
+from crypto_trader.perpetual.funding_coverage import (
+    FundingCoverageService,
+    FundingHistoryIngestor,
+)
+from crypto_trader.perpetual.funding_runtime import FundingAccountingSupervisor
+from crypto_trader.perpetual.funding_settlement import FundingSettlementService
 from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
@@ -49,6 +55,7 @@ from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.dummy import DummyStrategy
 from crypto_trader.trade_plan.service import TradePlanService
+from crypto_trader.valuation.service import ValuationService
 
 
 @dataclass
@@ -146,6 +153,31 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         )
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
+    # Formal funding accounting chain. The adapter must expose factual public
+    # funding history + candles; otherwise the supervisor fails closed and
+    # daily PnL stays incomplete instead of inventing a settlement.
+    funding_adapter = (
+        feed_client
+        if callable(getattr(feed_client, "get_funding_rate_history", None))
+        else adapter
+        if callable(getattr(adapter, "get_funding_rate_history", None))
+        else None
+    )
+    funding_coverage = FundingCoverageService(database.session_factory)
+    funding_ingestor = FundingHistoryIngestor(funding_coverage)
+    funding_settlement = FundingSettlementService(ledger)
+    valuation_service = ValuationService(portfolio=portfolio, ledger=ledger)
+    funding_supervisor = FundingAccountingSupervisor(
+        adapter=funding_adapter,
+        ingestor=funding_ingestor,
+        settlement_service=funding_settlement,
+        portfolio=portfolio,
+        trade_plans=trade_plans,
+        instruments_provider=lambda: getattr(adapter, "instruments", {}) or {},
+        account_id="default",
+        currency=settings.paper_settlement_asset,
+        lookback_hours=settings.funding_lookback_hours,
+    )
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief_context = ChiefContextLoader(database.session_factory)
     llm_provider = DeepSeekProvider()
@@ -218,6 +250,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         ),
         enforce_llm_entry_authority=settings.auto_start_runtime,
         opportunity_service=opportunity_service,
+        funding_coverage=funding_coverage,
+        valuation_service=valuation_service,
+        funding_supervisor=funding_supervisor,
     )
 
     app_state = AppState(

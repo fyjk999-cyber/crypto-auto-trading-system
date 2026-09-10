@@ -110,6 +110,7 @@ class TradingEngine:
         opportunity_service=None,
         funding_coverage: FundingCoverageService | None = None,
         valuation_service: ValuationService | None = None,
+        funding_supervisor=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -123,6 +124,7 @@ class TradingEngine:
         self.valuations = valuation_service or ValuationService(
             portfolio=portfolio, ledger=ledger
         )
+        self.funding_supervisor = funding_supervisor
         # Candidate valuation batches are computed for strategy context
         # (Sizing) and persisted only when a factual signal reaches Risk, so
         # Sizing and Risk reference the exact same valuation_id.
@@ -217,6 +219,13 @@ class TradingEngine:
         ]
         if self.require_lease:
             self._tasks.append(asyncio.create_task(self._lease_loop(), name="engine-lease"))
+        if self.funding_supervisor is not None:
+            # Formal public funding history -> coverage -> PAPER settlement
+            # -> ledger chain. Runs under the execution lease; ledger
+            # idempotency makes a restart/retry a no-op.
+            self._tasks.append(
+                asyncio.create_task(self._funding_loop(), name="funding-accounting")
+            )
         self._tasks.append(asyncio.create_task(self._reconciliation_loop(), name="engine-recon"))
         if self.daily_review_scheduler is not None:
             self._tasks.append(
@@ -364,6 +373,17 @@ class TradingEngine:
                         run_id=self.run_id,
                     )
             await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
+
+    async def _funding_loop(self) -> None:
+        while True:
+            try:
+                report = await self.funding_supervisor.run_once()
+                ok = not report.errors
+                detail = "; ".join(report.errors[:3]) if report.errors else ""
+                self.health.set("funding_accounting", ok, detail)
+            except Exception as exc:
+                self.health.set("funding_accounting", False, type(exc).__name__)
+            await asyncio.sleep(max(1, self.settings.funding_refresh_interval_seconds))
 
     async def _reconciliation_loop(self) -> None:
         while True:
@@ -926,10 +946,24 @@ class TradingEngine:
                 and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
             }
         )
+        # Funding only accrues while the factual position is open. Use the
+        # durable TradePlan opened_at so the coverage proof window matches the
+        # supervisor's settlement window instead of charging pre-entry events.
+        instrument_window_starts: dict[str, datetime] = {}
+        for instrument_id in funding_instrument_ids:
+            plan = await self.trade_plans.get_active_for_symbol(instrument_id)
+            opened_at = getattr(plan, "opened_at", None) if plan is not None else None
+            if opened_at is None:
+                continue
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=UTC)
+            else:
+                opened_at = opened_at.astimezone(UTC)
+            instrument_window_starts[instrument_id] = max(daily_start, opened_at)
         coverage_status_by_instrument = {
             instrument_id: await self.funding_coverage.status_for(
                 instrument_id=instrument_id,
-                start=daily_start,
+                start=instrument_window_starts.get(instrument_id, daily_start),
                 end=daily_end,
             )
             for instrument_id in funding_instrument_ids
@@ -941,6 +975,7 @@ class TradingEngine:
             instrument_ids=funding_instrument_ids,
             end=daily_end,
             coverage_status_by_instrument=coverage_status_by_instrument,
+            instrument_window_starts=instrument_window_starts,
         )
         if pnl_provenance.complete:
             daily_pnl = (

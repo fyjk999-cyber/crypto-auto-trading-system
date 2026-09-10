@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -12,6 +12,16 @@ from sqlalchemy import select
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.money import D
 from crypto_trader.persistence.models import FundingCoverageORM
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _same_instant(left: datetime, right: datetime) -> bool:
+    return _utc(left) == _utc(right)
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,9 @@ class FundingCoverage:
     fetched_count: int = 0
     window_event_count: int = 0
     boundary_proof: bool = False
+    # In-memory only: raw window events for the settlement layer. The durable
+    # coverage row stores counts + manifest, never a second event store.
+    window_events: tuple[dict, ...] = ()
 
 
 class FundingCoverageService:
@@ -52,17 +65,29 @@ class FundingCoverageService:
         window_event_count: int = 0,
         boundary_proof: bool = False,
     ) -> FundingCoverage:
+        window_start = _utc(window_start)
+        window_end = _utc(window_end)
         async with self.session_factory() as session:
-            existing = (
+            # SQLite stores naive UTC strings; compare instants in Python so a
+            # repeated supervisor run updates the same coverage row instead of
+            # hitting the unique window constraint.
+            candidates = (
                 await session.execute(
                     select(FundingCoverageORM).where(
                         FundingCoverageORM.instrument_id == instrument_id,
-                        FundingCoverageORM.window_start == window_start,
-                        FundingCoverageORM.window_end == window_end,
                         FundingCoverageORM.rule_version == rule_version,
                     )
                 )
-            ).scalar_one_or_none()
+            ).scalars().all()
+            existing = next(
+                (
+                    row
+                    for row in candidates
+                    if _same_instant(row.window_start, window_start)
+                    and _same_instant(row.window_end, window_end)
+                ),
+                None,
+            )
             if existing is None:
                 existing = FundingCoverageORM(
                     coverage_id=new_id("fcov"),
@@ -72,7 +97,7 @@ class FundingCoverageService:
                 )
                 session.add(existing)
             existing.source = source
-            existing.fetched_at = fetched_at
+            existing.fetched_at = fetched_at or datetime.now(UTC)
             existing.pagination_complete = pagination_complete
             existing.event_manifest_hash = event_manifest_hash
             existing.gaps_json = gaps or []
@@ -98,17 +123,24 @@ class FundingCoverageService:
     async def status_for(
         self, *, instrument_id: str, start: datetime, end: datetime
     ) -> str:
+        start = _utc(start)
+        end = _utc(end)
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(FundingCoverageORM).where(
                         FundingCoverageORM.instrument_id == instrument_id,
-                        FundingCoverageORM.window_start <= start,
-                        FundingCoverageORM.window_end >= end,
-                        FundingCoverageORM.pagination_complete.is_(True),
                     )
                 )
             ).scalars().all()
+        rows = [
+            row
+            for row in rows
+            if row.pagination_complete
+            and row.boundary_proof
+            and _utc(row.window_start) <= start
+            and _utc(row.window_end) >= end
+        ]
         if not rows:
             return "UNKNOWN"
         if all(row.coverage_status == "KNOWN_ZERO" for row in rows):
@@ -132,6 +164,7 @@ class FundingHistoryIngestor:
         window_start: datetime,
         window_end: datetime,
         max_pages: int = 20,
+        include_events: bool = False,
     ) -> FundingCoverage:
         start_ms = int(window_start.timestamp() * 1000)
         end_ms = int(window_end.timestamp() * 1000)
@@ -205,7 +238,7 @@ class FundingHistoryIngestor:
             status = "KNOWN_VALUE"
         else:
             status = "KNOWN_ZERO"
-        return await self.coverage_service.record(
+        coverage = await self.coverage_service.record(
             instrument_id=instrument_id,
             window_start=window_start,
             window_end=window_end,
@@ -217,6 +250,9 @@ class FundingHistoryIngestor:
             window_event_count=len(window_events),
             boundary_proof=boundary_proof,
         )
+        if include_events:
+            return replace(coverage, window_events=tuple(window_events))
+        return coverage
 
     @staticmethod
     def _detect_gaps(rows: list[dict]) -> list[str]:

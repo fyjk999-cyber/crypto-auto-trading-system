@@ -495,6 +495,7 @@ async def test_funding_coverage_proves_known_zero_and_unknown(database):
         window_end=end + timedelta(hours=1),
         coverage_status="KNOWN_ZERO",
         pagination_complete=True,
+        boundary_proof=True,
         event_manifest_hash="sha256:test",
     )
     status = await service.status_for(
