@@ -213,7 +213,9 @@ def test_market_data_engine_average_volume_uses_last_n():
     assert mde.average_volume(2) == Decimal("25")
 
 
-
+def test_market_data_engine_latest_empty_returns_none():
+    mde = MarketDataEngine("BTCUSDT")
+    assert mde.latest() is None
 
 
 def test_ml_meta_not_a_directional_sub_strategy():
