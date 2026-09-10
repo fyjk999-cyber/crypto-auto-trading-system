@@ -58,7 +58,7 @@ class ReviewSubmissionContract(unittest.TestCase):
                 "exit_code": 0,
                 "evidence": {
                     "path": ".ops/ai-native-remediation/submission.log",
-                    "sha256": "0" * 64,
+                    "sha256": "a" * 64,
                     "complete": True,
                 },
             }
@@ -81,6 +81,51 @@ class ReviewSubmissionContract(unittest.TestCase):
             self.assertTrue(first.exists())
             with self.assertRaises(FileExistsError):
                 mod.create_request(**kwargs)
+
+    def test_placeholder_test_evidence_rejected(self):
+        mod = _import()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".ops" / "ai-native-remediation").mkdir(parents=True)
+            (root / ".ops" / "ai-native-remediation" / "status.json").write_text(
+                json.dumps(
+                    {
+                        "review_request_id": None,
+                        "work_state": "WAITING_FOR_USER",
+                        "last_progress_at": None,
+                        "active_operation": None,
+                        "last_supervision_at": "2026-09-09T00:00:00Z",
+                    }
+                )
+            )
+            mod.REQUEST_DIR = root / ".ops" / "ai-native-remediation" / "requests"
+            mod.STATUS_FILE = root / ".ops" / "ai-native-remediation" / "status.json"
+            with self.assertRaises(ValueError):
+                mod.create_request(
+                    chapter_id="00",
+                    base_sha="a" * 40,
+                    candidate_sha="b" * 40,
+                    branch="codex/test",
+                    project_path=str(root),
+                    changed_files=[],
+                    finding_ids=[],
+                    tests=[
+                        {
+                            "command_redacted": "fake",
+                            "environment": "fixture",
+                            "exit_code": 0,
+                            "evidence": {
+                                "path": ".ops/ai-native-remediation/submission.log",
+                                "sha256": "0" * 64,
+                                "complete": True,
+                            },
+                        }
+                    ],
+                    migration_validation="not applicable",
+                    rollback="none",
+                    unverified_items=[],
+                    pre_existing_dirty=[],
+                )
 
     def test_invalid_sha_and_branch_rejected(self):
         mod = _import()

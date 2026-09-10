@@ -60,6 +60,18 @@ def create_request(
         raise ValueError("branch must begin with codex/")
     if not tests:
         raise ValueError("at least one test record required")
+    for index, test in enumerate(tests):
+        evidence = test.get("evidence") or {}
+        digest = evidence.get("sha256")
+        if (
+            evidence.get("complete") is not True
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+            or digest == "0" * 64
+        ):
+            raise ValueError(
+                f"test[{index}] requires complete evidence with real sha256"
+            )
     request_id = request_id or f"req-{uuid.uuid4().hex}"
     payload = {
         "schema_version": 1,
@@ -105,7 +117,11 @@ def main() -> int:
     parser.add_argument("--project-path", required=True)
     parser.add_argument("--changed-files", nargs="*", default=[])
     parser.add_argument("--finding-ids", nargs="*", default=[])
-    parser.add_argument("--tests", nargs="*", default=[])
+    parser.add_argument(
+        "--tests-json",
+        required=True,
+        help="JSON file containing real test evidence records",
+    )
     parser.add_argument("--migration-validation", required=True)
     parser.add_argument("--rollback", required=True)
     parser.add_argument("--unverified-items", nargs="*", default=[])
@@ -116,19 +132,7 @@ def main() -> int:
         for item in args.dirty:
             path, status = item.split("=", 1)
             dirty.append({"path": path, "status": status, "sha256": None})
-        tests = [
-            {
-                "command_redacted": c,
-                "environment": "isolated",
-                "exit_code": 0,
-                "evidence": {
-                    "path": ".ops/ai-native-remediation/submission.log",
-                    "sha256": "0" * 64,
-                    "complete": False,
-                },
-            }
-            for c in args.tests
-        ]
+        tests = json.loads(Path(args.tests_json).read_text())
         path = create_request(
             chapter_id=args.chapter,
             base_sha=args.base_sha,
