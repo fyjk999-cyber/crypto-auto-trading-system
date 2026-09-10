@@ -863,7 +863,7 @@ class TradingEngine:
             daily_start, funding_coverage_status=funding_status.value
         )
         if (
-            funding_status.value == "UNKNOWN"
+            not pnl_provenance.complete
             and any(position.quantity != 0 for position in positions.values())
         ):
             # Open swap positions crossed an interval without funding coverage.
@@ -890,7 +890,7 @@ class TradingEngine:
             valuation_currency="USDT",
             valuation_source=drawdown_source,
             valuation_id=valuation_id,
-            funding_status=funding_status.value,
+            funding_status=pnl_provenance.funding_status,
             pnl_provenance={
                 "realized_pnl": str(pnl_provenance.realized_pnl),
                 "fees": str(pnl_provenance.fees),

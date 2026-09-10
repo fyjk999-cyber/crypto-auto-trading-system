@@ -9,6 +9,8 @@ from decimal import Decimal
 
 @dataclass(frozen=True)
 class PaperFundingSettlement:
+    account_id: str
+    instrument_id: str
     settlement_timestamp: datetime
     signed_amount: Decimal
     currency: str
@@ -40,10 +42,12 @@ def compute_paper_funding(
         * contract_multiplier
         * funding_rate
     )
-    key = (
-        f"{account_id}|{instrument_id}|{settlement_timestamp.isoformat()}|{rule_version}"
-    )
+    # Business identity excludes rule_version: a rule upgrade must not charge
+    # the same account/instrument/settlement a second time.
+    key = f"{account_id}|{instrument_id}|{settlement_timestamp.isoformat()}"
     return PaperFundingSettlement(
+        account_id=account_id,
+        instrument_id=instrument_id,
         settlement_timestamp=settlement_timestamp,
         signed_amount=signed_amount,
         currency=currency,

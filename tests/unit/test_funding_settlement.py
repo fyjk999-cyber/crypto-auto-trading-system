@@ -25,7 +25,8 @@ def test_paper_funding_signs_and_idempotency_key():
     assert long_positive.signed_amount == Decimal("-0.001")
     assert short_positive.signed_amount == Decimal("0.001")
     assert zero.signed_amount == Decimal("0")
-    assert long_positive.idempotency_key.endswith("|v1")
+    assert "|v1" not in long_positive.idempotency_key
+    assert long_positive.idempotency_key.startswith("default|BTC-USDT-SWAP|")
 
 
 async def test_funding_settlement_service_is_idempotent():

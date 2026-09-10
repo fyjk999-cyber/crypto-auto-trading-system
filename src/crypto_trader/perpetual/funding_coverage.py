@@ -117,33 +117,43 @@ class FundingHistoryIngestor:
         window_end: datetime,
         max_pages: int = 20,
     ) -> FundingCoverage:
+        start_ms = int(window_start.timestamp() * 1000)
+        end_ms = int(window_end.timestamp() * 1000)
         rows: list[dict] = []
         complete = False
-        before_ms = int(window_end.timestamp() * 1000)
+        cursor_ms = end_ms
+        missing_rates = False
         for _ in range(max_pages):
+            # OKX `after` returns records older than the cursor; `before`
+            # returns newer records and cannot page backwards safely.
             page = await adapter.get_funding_rate_history(
-                instrument_id, before=str(before_ms), limit=100
+                instrument_id, after=str(cursor_ms), limit=100
             )
+            page = [
+                row
+                for row in page
+                if start_ms <= int(row.get("fundingTime", -1)) < end_ms
+            ]
             if not page:
-                complete = True
+                # Only an empty response at/below the lower bound proves that
+                # no earlier record exists inside the requested window.
+                complete = cursor_ms <= start_ms
                 break
+            for row in page:
+                if not row.get("realizedRate"):
+                    missing_rates = True
             rows.extend(page)
             oldest_ms = min(int(row["fundingTime"]) for row in page)
-            if oldest_ms <= int(window_start.timestamp() * 1000):
+            if oldest_ms <= start_ms:
                 complete = True
                 break
-            before_ms = oldest_ms - 1
-        rows = [
-            row
-            for row in rows
-            if int(row.get("fundingTime", 0))
-            >= int(window_start.timestamp() * 1000)
-        ]
+            cursor_ms = oldest_ms
+        rows = [row for row in rows if start_ms <= int(row["fundingTime"]) < end_ms]
         rows.sort(key=lambda row: int(row["fundingTime"]))
         gaps = self._detect_gaps(rows)
-        if not complete or gaps:
+        if not complete or gaps or missing_rates:
             status = "UNKNOWN"
-        elif rows and any(D(row.get("realizedRate", "0")) != 0 for row in rows):
+        elif rows and any(D(row["realizedRate"]) != 0 for row in rows):
             status = "KNOWN_VALUE"
         else:
             status = "KNOWN_ZERO"

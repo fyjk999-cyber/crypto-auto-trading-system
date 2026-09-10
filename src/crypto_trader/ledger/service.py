@@ -241,7 +241,15 @@ class LedgerService:
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
-                    select(LedgerEntryORM).where(
+                    select(LedgerEntryORM)
+                    .join(
+                        LedgerTransactionORM,
+                        LedgerTransactionORM.transaction_id
+                        == LedgerEntryORM.transaction_id,
+                    )
+                    .where(
+                        LedgerTransactionORM.account_id == account_id,
+                        LedgerEntryORM.currency == currency,
                         LedgerEntryORM.account.in_(
                             (
                                 "REALIZED_PNL",
@@ -252,6 +260,7 @@ class LedgerService:
                             )
                         ),
                         LedgerEntryORM.created_at >= start,
+                        LedgerEntryORM.created_at < end,
                     )
                 )
             ).scalars().all()
@@ -272,13 +281,21 @@ class LedgerService:
             else:
                 funding_rows += 1
                 funding += signed
+        coverage_complete = funding_coverage_status in {"KNOWN_ZERO", "KNOWN_VALUE"}
         if funding_rows:
-            funding_status = "KNOWN_VALUE"
+            # Keep the known subtotal, but do not let one posting prove full
+            # interval/instrument coverage.
             funding_amount: Decimal | None = funding
+            if coverage_complete:
+                funding_status = "KNOWN_VALUE"
+                complete = True
+            else:
+                funding_status = "UNKNOWN"
+                complete = False
         else:
             funding_status = funding_coverage_status
-            funding_amount = Decimal("0") if funding_coverage_status == "KNOWN_ZERO" else None
-        complete = funding_status != "UNKNOWN"
+            funding_amount = Decimal("0") if coverage_complete else None
+            complete = coverage_complete
         unknown = () if complete else ("FUNDING_UNKNOWN",)
         return PnlProvenance(
             account_id=account_id,
@@ -318,6 +335,7 @@ class LedgerService:
         await self.record(
             entry_type,
             postings,
+            account_id=getattr(settlement, "account_id", "default"),
             event_id=settlement.idempotency_key,
             metadata={
                 "source": "PAPER_DERIVED",

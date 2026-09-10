@@ -509,7 +509,47 @@ async def test_pnl_provenance_known_funding_value(ledger):
             instrument_id="BTC-USDT-SWAP",
         )
     )
-    provenance = await ledger.net_pnl_provenance_since(start)
+    provenance = await ledger.net_pnl_provenance_since(
+        start, funding_coverage_status="KNOWN_VALUE"
+    )
     assert provenance.complete is True
     assert provenance.funding_status == "KNOWN_VALUE"
     assert provenance.funding_amount == Decimal("0.001")
+
+
+async def test_unavailable_valuation_does_not_pollute_peak(database):
+    from sqlalchemy import select
+
+    from crypto_trader.portfolio.service import PortfolioService
+
+    service = PortfolioService(database.session_factory)
+    await service.record_equity_drawdown(Decimal("100"))
+    await service.record_equity_drawdown(Decimal("200"), quality="UNAVAILABLE")
+    async with database.session_factory() as session:
+        snapshots = (
+            await session.execute(
+                select(EquitySnapshotORM).order_by(EquitySnapshotORM.id)
+            )
+        ).scalars().all()
+    assert snapshots[-1].peak_adjusted_equity == Decimal("100")
+
+
+async def test_available_margin_comes_from_account_projection(database):
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AccountProjectionORM
+    from crypto_trader.portfolio.service import PortfolioService
+
+    async with database.session_factory() as session:
+        session.add(
+            AccountProjectionORM(
+                account_id="default", currency="USDT", total=Decimal("100"),
+                available=Decimal("40"), frozen=Decimal("60"), equity=Decimal("100"),
+            )
+        )
+        await session.commit()
+    service = PortfolioService(database.session_factory)
+    await service.record_equity_drawdown(Decimal("100"))
+    async with database.session_factory() as session:
+        batch = (await session.execute(select(ValuationBatchORM))).scalar_one()
+    assert batch.available_margin == Decimal("40")

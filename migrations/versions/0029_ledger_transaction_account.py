@@ -26,19 +26,9 @@ def upgrade() -> None:
             "ledger_transactions",
             sa.Column("account_id", sa.String(64), nullable=True),
         )
-    # Only attribute historical rows when the ledger provably has one account.
-    if "accounts_projection" in set(inspector.get_table_names()):
-        distinct = bind.execute(
-            sa.text("SELECT COUNT(DISTINCT account_id) FROM accounts_projection")
-        ).scalar_one()
-        if distinct <= 1:
-            bind.execute(
-                sa.text(
-                    "UPDATE ledger_transactions SET account_id = "
-                    "(SELECT account_id FROM accounts_projection LIMIT 1) "
-                    "WHERE account_id IS NULL"
-                )
-            )
+    # Historical ownership is not provable from a singleton projection.
+    # Leave account_id NULL and mark dependent valuations incomplete instead
+    # of silently attributing old transactions to "default".
 
 
 def downgrade() -> None:

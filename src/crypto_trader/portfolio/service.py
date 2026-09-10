@@ -121,6 +121,14 @@ class PortfolioService:
                     continue
                 amount = abs(D(raw_amount))
                 cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
+            account_row = (
+                await session.execute(
+                    select(AccountProjectionORM).where(
+                        AccountProjectionORM.account_id == account_id,
+                        AccountProjectionORM.currency == currency,
+                    )
+                )
+            ).scalar_one_or_none()
             prior_cumulative = (
                 latest.cumulative_external_cash_flow if latest is not None else Decimal("0")
             )
@@ -133,15 +141,24 @@ class PortfolioService:
                 if latest is not None
                 else cash_flow_adjusted
             )
-            peak_adjusted = max(prior_peak, cash_flow_adjusted)
+            if quality == "HEALTHY":
+                peak_adjusted = max(prior_peak, cash_flow_adjusted)
+            else:
+                # Unavailable/incomplete marks must not create a new peak or
+                # pollute historical drawdown performance.
+                peak_adjusted = prior_peak
             drawdown = cash_flow_adjusted - peak_adjusted
             valuation_id = valuation_id or new_id("val")
             health = self.classify_equity_status(current_equity)
-            solvency = {
-                "HEALTHY": "POSITIVE",
-                "ZERO_EQUITY": "ZERO_EQUITY",
-                "INSOLVENT": "INSOLVENT",
-            }.get(health, "UNKNOWN")
+            solvency = (
+                {
+                    "HEALTHY": "POSITIVE",
+                    "ZERO_EQUITY": "ZERO_EQUITY",
+                    "INSOLVENT": "INSOLVENT",
+                }.get(health, "UNKNOWN")
+                if quality == "HEALTHY"
+                else None
+            )
             session.add(
                 ValuationBatchORM(
                     valuation_id=valuation_id,
@@ -151,7 +168,11 @@ class PortfolioService:
                     ledger_watermark=None,
                     position_snapshot_ref=None,
                     raw_mtm_equity=current_equity if quality == "HEALTHY" else None,
-                    available_margin=current_equity if quality == "HEALTHY" else None,
+                    available_margin=(
+                        account_row.available if account_row is not None else None
+                    )
+                    if quality == "HEALTHY"
+                    else None,
                     adjusted_equity=cash_flow_adjusted,
                     peak_adjusted_equity=peak_adjusted,
                     drawdown_amount=drawdown,

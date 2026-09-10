@@ -70,3 +70,25 @@ async def test_ingest_detects_unexpected_gap_as_unknown():
     )
     assert result.coverage_status == "UNKNOWN"
     assert result.gaps
+
+
+async def test_empty_unproven_window_is_unknown_not_zero():
+    coverage = FakeCoverage()
+    adapter = FakeAdapter([[]])
+    result = await FundingHistoryIngestor(coverage).ingest(
+        adapter, instrument_id="BTC-USDT-SWAP", window_start=START, window_end=END
+    )
+    assert result.coverage_status == "UNKNOWN"
+    assert result.pagination_complete is False
+
+
+async def test_missing_realized_rate_is_unknown():
+    coverage = FakeCoverage()
+    rows = [
+        {"fundingTime": str(int(START.timestamp() * 1000)), "realizedRate": ""},
+    ]
+    adapter = FakeAdapter([rows])
+    result = await FundingHistoryIngestor(coverage).ingest(
+        adapter, instrument_id="BTC-USDT-SWAP", window_start=START, window_end=END
+    )
+    assert result.coverage_status == "UNKNOWN"
