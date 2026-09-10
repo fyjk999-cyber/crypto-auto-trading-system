@@ -25,6 +25,12 @@ def test_split_allows_no_validation_window():
     assert test == [5, 6, 7, 8, 9]
 
 
+
+def test_split_rejects_non_positive_train_fraction():
+    with pytest.raises(ValueError):
+        split_ordered(list(range(10)), train=0.0, val=0.2)
+
+
 def test_split_rejects_empty_items():
     with pytest.raises(ValueError):
         split_ordered([], train=0.5, val=0.2)
