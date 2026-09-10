@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from crypto_trader.domain.money import D
 from crypto_trader.persistence.models import (
@@ -84,6 +84,25 @@ class TradeEpisodeStore:
             ):
                 return None
 
+            overlapping = (
+                await session.execute(
+                    select(TradePlanORM.trade_plan_id).where(
+                        TradePlanORM.symbol == plan.symbol,
+                        TradePlanORM.trade_plan_id != plan.trade_plan_id,
+                        TradePlanORM.state.in_(("ACTIVE", "CLOSED")),
+                        TradePlanORM.opened_at.is_not(None),
+                        TradePlanORM.opened_at < plan.closed_at,
+                        or_(
+                            TradePlanORM.closed_at.is_(None),
+                            TradePlanORM.closed_at > plan.opened_at,
+                        ),
+                    )
+                )
+            ).scalars().all()
+            if overlapping:
+                # Account/instrument funding is not attributable per plan when
+                # lifecycles overlap; fail closed rather than double count.
+                return None
             projected = (
                 await session.execute(
                     select(PositionProjectionORM).where(

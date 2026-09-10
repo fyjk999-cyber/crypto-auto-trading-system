@@ -537,6 +537,7 @@ class OrderManager:
                         ).where(
                             LedgerTransactionORM.ownership_status == "VERIFIED",
                             LedgerTransactionORM.account_id.is_not(None),
+                            LedgerTransactionORM.instrument_id == symbol,
                             LedgerTransactionORM.fill_id.in_(chunk),
                         )
                     )
