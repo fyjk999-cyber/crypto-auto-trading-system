@@ -235,9 +235,22 @@ class RiskEngine:
         position = positions.get(getattr(intent, "symbol", ""))
         signed_position = position.quantity if position is not None else Decimal("0")
         side_value = intent.side.value
-        is_risk_reducing = signed_position != 0 and (
+        requested_quantity = D(getattr(intent, "quantity", 0) or "0")
+        is_opposite = signed_position != 0 and (
             (signed_position > 0 and side_value == "SELL")
             or (signed_position < 0 and side_value == "BUY")
+        )
+        if is_opposite and requested_quantity > abs(signed_position):
+            # A reduction can never cross zero or reverse the position. This is
+            # checked before every accounting exemption so an incomplete daily
+            # PnL can never authorize a hidden reversal.
+            return fail("REDUCE_QUANTITY_EXCEEDS_POSITION")
+        # Only an explicitly reduce-only, quantity-bounded opposite order is a
+        # risk-reducing action eligible for accounting exemptions.
+        is_risk_reducing = (
+            is_opposite
+            and metadata.get("reduce_only") is True
+            and Decimal("0") < requested_quantity <= abs(signed_position)
         )
         provenance = pnl_provenance or {}
         if not is_risk_reducing and (

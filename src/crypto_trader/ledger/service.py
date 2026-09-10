@@ -404,16 +404,17 @@ class LedgerService:
         fees = Decimal("0")
         known_funding = Decimal("0")
         discovered_funding_instruments: set[str] = set()
+        discovered_activity_instruments: set[str] = set()
         watermark_values: list[datetime] = []
         for entry, txn in rows:
             ownership_verified = (
                 txn.ownership_status == OWNERSHIP_VERIFIED and txn.account_id is not None
             )
             if not ownership_verified:
-                # A NULL/unverified transaction may belong to this account;
-                # it must never be silently ignored in a factual total.
-                if txn.account_id in (None, account_id):
-                    unattributed_reasons.add("UNATTRIBUTED_LEDGER_OWNERSHIP")
+                # The retained account label on an unverified row is only an
+                # unproven claim. It may affect ANY account, so every scoped
+                # query must fail closed instead of trusting it.
+                unattributed_reasons.add("UNATTRIBUTED_LEDGER_OWNERSHIP")
                 continue
             if txn.account_id != account_id:
                 continue
@@ -422,8 +423,14 @@ class LedgerService:
             signed = _pnl_signed_amount(entry)
             if entry.account in REALIZED_PNL_ACCOUNTS:
                 realized += signed
+                # A closed swap with realized activity still requires proven
+                # funding coverage for the window, not just current positions.
+                if txn.instrument_id:
+                    discovered_activity_instruments.add(txn.instrument_id)
             elif entry.account in FEE_ACCOUNTS:
                 fees += -signed
+                if txn.instrument_id:
+                    discovered_activity_instruments.add(txn.instrument_id)
             else:
                 if not txn.instrument_id:
                     unattributed_reasons.add("FUNDING_INSTRUMENT_UNKNOWN")
@@ -431,7 +438,11 @@ class LedgerService:
                 discovered_funding_instruments.add(txn.instrument_id)
                 known_funding += signed
 
-        required = sorted(set(requested) | discovered_funding_instruments)
+        required = sorted(
+            set(requested)
+            | discovered_funding_instruments
+            | discovered_activity_instruments
+        )
         scope_provenances: list[FundingScopeProvenance] = []
         for instrument in required:
             raw_start = window_starts.get(instrument)
@@ -560,7 +571,7 @@ class LedgerService:
         postings: list[LedgerPosting],
         *,
         transaction_id: str | None = None,
-        account_id: str | None = "default",
+        account_id: str | None = None,
         instrument_id: str | None = None,
         ownership_status: str | None = None,
         order_id: str | None = None,
@@ -602,6 +613,9 @@ class LedgerService:
             ownership_status = OWNERSHIP_VERIFIED if account_id else OWNERSHIP_UNKNOWN
         if ownership_status not in {OWNERSHIP_VERIFIED, OWNERSHIP_UNKNOWN}:
             raise ValueError(f"invalid ownership_status: {ownership_status}")
+        if ownership_status == OWNERSHIP_VERIFIED and not account_id:
+            # A verifier cannot certify ownership of an unknown account.
+            raise ValueError("account_id is required for VERIFIED ledger ownership")
         if ownership_status == OWNERSHIP_UNKNOWN:
             # An unverified writer must not present an account claim as fact.
             # The raw value is retained only in metadata for audit.

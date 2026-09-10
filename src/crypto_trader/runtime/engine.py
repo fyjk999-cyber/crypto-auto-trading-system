@@ -1527,6 +1527,7 @@ class TradingEngine:
                             "EQUITY", LedgerDirection.CREDIT, balance.total, balance.currency
                         ),
                     ],
+                    account_id="default",
                     metadata={"amount": str(balance.total), "currency": balance.currency},
                 )
             await self.portfolio.refresh(initial_balances=self._initial_balances)

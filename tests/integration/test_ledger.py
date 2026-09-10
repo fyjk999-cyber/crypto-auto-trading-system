@@ -191,6 +191,7 @@ async def test_ledger_realized_pnl_since_utc_boundary(ledger, database):
             LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, Decimal("10")),
         ],
         transaction_id="pnl_profit",
+        account_id="default",
     )
     await ledger.record(
         LedgerEntryType.TRADE,
@@ -199,6 +200,7 @@ async def test_ledger_realized_pnl_since_utc_boundary(ledger, database):
             LedgerPosting("CASH", LedgerDirection.CREDIT, Decimal("4")),
         ],
         transaction_id="pnl_loss",
+        account_id="default",
     )
     start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     realized = await ledger.realized_pnl_since(

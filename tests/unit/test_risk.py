@@ -323,7 +323,9 @@ def test_risk_allows_reducing_action_when_daily_pnl_unknown():
     from crypto_trader.domain.models import Position
 
     decision = RiskEngine().check(
-        make_signal(qty="0.1").model_copy(update={"side": OrderSide.SELL}),
+        make_signal(qty="0.1").model_copy(
+            update={"side": OrderSide.SELL, "metadata": {"reduce_only": True, "direction": "LONG"}}
+        ),
         account=make_account(),
         positions={
             "BTCUSDT": Position(

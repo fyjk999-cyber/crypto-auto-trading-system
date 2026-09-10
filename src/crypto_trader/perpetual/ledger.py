@@ -47,6 +47,7 @@ class FuturesLedger:
                 ),
                 LedgerPosting("CASH", LedgerDirection.CREDIT, amount, contract.margin_asset),
             ],
+            account_id="default",
             order_id=order_id,
             metadata={"symbol": symbol, "amount": str(amount)},
         )
@@ -63,6 +64,7 @@ class FuturesLedger:
                     f"MARGIN:{symbol}", LedgerDirection.CREDIT, amount, contract.margin_asset
                 ),
             ],
+            account_id="default",
             order_id=order_id,
             metadata={"symbol": symbol, "amount": str(amount)},
         )
@@ -104,6 +106,7 @@ class FuturesLedger:
         await self.ledger.record(
             LedgerEntryType.FUTURES_TRADING_FEE if fee > 0 else LedgerEntryType.FUTURES_MARGIN_POST,
             postings,
+            account_id="default",
             order_id=order_id,
             metadata={
                 "symbol": symbol,
@@ -183,6 +186,7 @@ class FuturesLedger:
         await self.ledger.record(
             LedgerEntryType.FUTURES_REALIZED_PNL,
             postings,
+            account_id="default",
             order_id=order_id,
             metadata={
                 "symbol": symbol,
@@ -229,6 +233,7 @@ class FuturesLedger:
         await self.ledger.record(
             entry_type,
             postings,
+            account_id="default",
             order_id=order_id,
             metadata={
                 "symbol": symbol,
