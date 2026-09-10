@@ -164,6 +164,9 @@ class TradingEngine:
         await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
         await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
+        # Daily review recovery is not an execution mutation and must not
+        # consume the execution lease lifetime.
+        await self._recover_missed_daily_reviews()
 
         if self.require_lease:
             self.lease = await self.lease_manager.acquire(
@@ -183,7 +186,6 @@ class TradingEngine:
                     after={"stale_run_ids": stale_runs},
                 )
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
-        await self._recover_missed_daily_reviews()
 
         self.state_machine.transition(RuntimeState.RUNNING)
         await self._persist_run(RuntimeState.RUNNING)
