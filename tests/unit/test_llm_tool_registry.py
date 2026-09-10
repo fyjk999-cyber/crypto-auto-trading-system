@@ -186,3 +186,35 @@ async def test_tool_budget_rejects_excess_selection():
         return
     raise AssertionError("budget should reject excess tool selection")
 
+
+async def test_tool_budget_partial_failure_preserves_other_factual_items():
+    import asyncio
+
+    async def fast(symbol: str, context: dict) -> ToolEvidence:
+        return ToolEvidence(
+            tool_name="fast", symbol=symbol, timestamp=datetime.now(UTC), features={"ok": 1},
+            supporting_evidence=["fact"], contrary_evidence=[], confidence_of_measurement=1.0,
+            data_quality="HEALTHY", source_refs=[],
+        )
+
+    async def slow(symbol: str, context: dict) -> ToolEvidence:
+        await asyncio.sleep(1.0)
+        return ToolEvidence(
+            tool_name="slow", symbol=symbol, timestamp=datetime.now(UTC), features={},
+            supporting_evidence=[], contrary_evidence=[], confidence_of_measurement=1.0,
+            data_quality="HEALTHY", source_refs=[],
+        )
+
+    tools = LLMToolRegistry()
+    tools.register("fast", fast)
+    tools.register("slow", slow)
+    package = await tools.build_package(
+        ["fast", "slow"], "BTCUSDT", {}, now=datetime.now(UTC),
+        timeout_seconds=0.01, max_tools=2,
+    )
+    assert len(package.items) == 2
+    fast_item = next(i for i in package.items if i.tool_name == "fast")
+    slow_item = next(i for i in package.items if i.tool_name == "slow")
+    assert fast_item.data_quality == "HEALTHY"
+    assert slow_item.data_quality == "UNAVAILABLE"
+
