@@ -291,3 +291,37 @@ async def test_funding_status_known_value_with_posting(ledger):
         transaction_id="funding_receipt_1",
     )
     assert await ledger.funding_status_since(start) == FundingStatus.KNOWN_VALUE
+
+
+async def test_daily_review_pagination_reads_more_than_1000_episodes(database):
+    from datetime import UTC, datetime
+    from crypto_trader.governance.trade_episode import TradeEpisodeStore
+
+    async with database.session_factory() as session:
+        for i in range(1001):
+            session.add(
+                TradeEpisodeORM(
+                    episode_id=f"ep_page_{i:04d}",
+                    trade_plan_id=f"plan_page_{i:04d}",
+                    symbol="BTCUSDT",
+                    direction="LONG",
+                    entry_decision_id="d",
+                    entry_price=Decimal("100"),
+                    exit_price=Decimal("101"),
+                    opened_quantity=Decimal("1"),
+                    closed_quantity=Decimal("1"),
+                    leverage=Decimal("1"),
+                    gross_pnl=Decimal("1"),
+                    net_pnl=Decimal("1"),
+                    holding_time_seconds=1.0,
+                    entry_market_regime="TREND",
+                    terminal_reason="EXIT",
+                    factual=True,
+                    opened_at=datetime(2026, 9, 8, tzinfo=UTC),
+                    closed_at=datetime(2026, 9, 8, 12, tzinfo=UTC),
+                )
+            )
+        await session.commit()
+    store = TradeEpisodeStore(database.session_factory)
+    episodes = await store.load_all_closed_on("2026-09-08")
+    assert len(episodes) == 1001
