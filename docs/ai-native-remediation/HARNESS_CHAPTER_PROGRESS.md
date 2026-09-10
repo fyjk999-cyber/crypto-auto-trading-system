@@ -100,3 +100,33 @@ Ruff: PASS
 | 13 | PARTIAL_PASS | UTC-only bootstrap; durable run-state table still pending |
 | 14 | PROVISIONAL_PASS | frontend green |
 | 15 | BLOCKED | fixed-SHA natural acceptance requires engineering acceptance first |
+
+## FINAL ENGINEERING CONVERGENCE PROGRESS
+
+Latest HEAD: 172ba13 (plus later commits)
+Backend gate: 688 passed
+Ruff: PASS
+
+```text
+PRIORITY_0 restart-safe global PAPER exchange_order_id = DONE (c6db0b1)
+06 MTM equity + durable cash-flow adjusted drawdown = IMPLEMENTED (f03b3b8)
+13 paginated full-day review + startup backfill = IMPLEMENTED (172ba13)
+11 terminal close canonical slippage semantics = DONE (dcbfb77)
+05 EXECUTABLE_SCOPE = USDT_LINEAR_SWAP_ONLY = DONE (e93249d)
+```
+
+Still open:
+```text
+06 cash-flow test matrix and stale valuation exhaustive tests
+13 PENDING->RUNNING CAS lifecycle proof and >1000 episode regression
+08 targeted verification
+09 targeted verification
+10 full lifecycle chaos/restart regression
+11 full hand-calculated backtest matrix
+12 OOS/ablation/counterexample/leakage
+14 frontend final contract regression
+15 fixed-SHA natural acceptance
+```
+
+ENGINEERING_ACCEPTANCE = NOT_YET_PASS
+NATURAL_ACCEPTANCE = NOT_READY
