@@ -428,23 +428,62 @@ class TradingEngine:
             oldest = next(iter(self._pending_valuations))
             self._pending_valuations.pop(oldest, None)
 
-    def _collect_valuation_prices(
+    async def _collect_refreshed_valuation_inputs(
         self, positions: dict[str, object], *, symbol: str | None = None
-    ) -> dict[str, Decimal]:
+    ) -> tuple[dict[str, Decimal], dict[str, datetime | None], list[str]]:
+        """P2: refresh all required marks, then build an immutable fresh map.
+
+        Refresh happens first and the map is read only after every required
+        same-symbol refresh. The old pre-refresh map is never reused, so a
+        refreshed timestamp can never be paired with a stale price.
+        """
+        required = sorted(
+            {
+                position_symbol
+                for position_symbol, position in positions.items()
+                if position.quantity != 0
+            }
+            | ({symbol} if symbol and symbol in positions else set())
+        )
+        reasons: list[str] = []
+        for position_symbol in required:
+            if not self.market_data.is_fresh(
+                position_symbol, self.settings.orderbook_max_age_seconds
+            ):
+                refreshed = False
+                try:
+                    refreshed = await self._refresh_execution_market(position_symbol)
+                except Exception:
+                    refreshed = False
+                if not refreshed:
+                    reasons.append(f"MARK_REFRESH_FAILED:{position_symbol}")
         prices: dict[str, Decimal] = {}
-        for position_symbol in positions:
-            position_book = self.market_data.books.get(position_symbol)
-            if position_book is None:
+        mark_timestamps: dict[str, datetime | None] = {}
+        for position_symbol in required:
+            book = self.market_data.books.get(position_symbol)
+            if book is None or not self.market_data.is_healthy(position_symbol):
+                reasons.append(f"MARK_BOOK_UNHEALTHY:{position_symbol}")
                 continue
-            position_mid = position_book.mid_price()
-            if position_mid is not None and position_mid > 0:
-                prices[position_symbol] = position_mid
-        if symbol is not None:
-            symbol_book = self.market_data.books.get(symbol)
-            if symbol_book is not None:
-                symbol_mid = symbol_book.mid_price()
-                if symbol_mid is not None and symbol_mid > 0:
-                    prices[symbol] = symbol_mid
+            mid = book.mid_price()
+            if mid is None or mid <= 0:
+                reasons.append(f"MARK_INVALID:{position_symbol}")
+                continue
+            prices[position_symbol] = mid
+            mark_timestamps[position_symbol] = book.updated_at
+        return prices, mark_timestamps, reasons
+
+    def _prices_from_batch(
+        self, batch: ValuationBatch, *, symbol: str | None, market_price: Decimal
+    ) -> dict[str, Decimal]:
+        """Risk exposure uses the exact marks recorded in the shared batch."""
+        prices: dict[str, Decimal] = {}
+        for component in batch.components:
+            instrument_id = component.get("instrument_id")
+            mark = component.get("mark_price")
+            if instrument_id and mark:
+                prices[str(instrument_id)] = D(mark)
+        if symbol is not None and market_price > 0:
+            prices[symbol] = market_price
         return prices
 
     async def _build_valuation_candidate(
@@ -454,14 +493,15 @@ class TradingEngine:
         positions: dict[str, object],
         symbol: str | None = None,
     ) -> ValuationBatch:
-        """Compute one candidate batch; persisted only when a signal exists."""
-        prices = self._collect_valuation_prices(positions, symbol=symbol)
+        """Compute one candidate batch from fully refreshed immutable marks."""
+        prices, mark_timestamps, refresh_reasons = (
+            await self._collect_refreshed_valuation_inputs(positions, symbol=symbol)
+        )
         market_as_of = max(
             (
-                book.updated_at
-                for symbol_key in prices
-                if (book := self.market_data.books.get(symbol_key)) is not None
-                and book.updated_at is not None
+                timestamp
+                for timestamp in mark_timestamps.values()
+                if isinstance(timestamp, datetime)
             ),
             default=None,
         )
@@ -473,7 +513,11 @@ class TradingEngine:
             is_fresh=lambda symbol_key: self.market_data.is_fresh(
                 symbol_key, self.settings.orderbook_max_age_seconds
             ),
+            require_mark_healthy=self.market_data.is_healthy,
+            mark_timestamps=mark_timestamps,
+            allowed_future_skew_seconds=0,
             market_as_of=market_as_of,
+            reason_codes=refresh_reasons,
         )
         self._remember_pending_valuation(batch)
         return batch
@@ -856,7 +900,9 @@ class TradingEngine:
             batch.quality == VALUATION_QUALITY_HEALTHY
             and batch.raw_mtm_equity is not None
         )
-        market_prices = self._collect_valuation_prices(positions, symbol=symbol)
+        market_prices = self._prices_from_batch(
+            batch, symbol=symbol, market_price=market_price
+        )
         mtm_equity = batch.raw_mtm_equity if valuation_available else account.equity
         drawdown = batch.drawdown_amount
         peak_equity = batch.peak_adjusted_equity

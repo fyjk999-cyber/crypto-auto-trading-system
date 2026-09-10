@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.identifiers import new_id
@@ -39,15 +39,28 @@ class ValuationService:
         market_prices: Mapping[str, Decimal],
         instruments: Mapping[str, Instrument] | None = None,
         is_fresh: Callable[[str], bool] | None = None,
+        require_mark_healthy: Callable[[str], bool] | None = None,
+        mark_timestamps: Mapping[str, datetime | None] | None = None,
+        allowed_future_skew_seconds: int = 0,
         market_as_of: datetime | None = None,
         currency: str = "USDT",
         reason_codes: list[str] | None = None,
     ) -> ValuationBatch:
-        """Compute one immutable candidate batch without writing anything."""
-        instruments = instruments or {}
+        """Compute one immutable candidate batch without writing anything.
+
+        Callers must refresh all required same-symbol markets BEFORE invoking
+        this method; the price map passed here is the refreshed immutable map.
+        Any missing/stale/unhealthy/future/wrong-product mark invalidates the
+        whole batch. Unreliable marks are never replaced by entry price, zero,
+        another symbol, or a stale cached value.
+        """
+        validate_instruments = instruments is not None
+        instrument_map = instruments or {}
         missing_marks: list[str] = []
         stale_marks: list[str] = []
+        invalid_reasons: list[str] = []
         components: list[dict] = []
+        now = datetime.now(UTC)
         raw_mtm_equity = Decimal(account.equity)
         for symbol, position in positions.items():
             if position.quantity == 0:
@@ -59,7 +72,35 @@ class ValuationService:
             if is_fresh is not None and not is_fresh(symbol):
                 stale_marks.append(symbol)
                 continue
-            instrument = instruments.get(symbol)
+            if require_mark_healthy is not None and not require_mark_healthy(symbol):
+                stale_marks.append(symbol)
+                invalid_reasons.append(f"MARK_BOOK_UNHEALTHY:{symbol}")
+                continue
+            if mark_timestamps is not None:
+                mark_timestamp = mark_timestamps.get(symbol)
+                if mark_timestamp is None:
+                    stale_marks.append(symbol)
+                    invalid_reasons.append(f"MARK_TIMESTAMP_MISSING:{symbol}")
+                    continue
+                timestamp = mark_timestamp
+                if timestamp.tzinfo is None:
+                    timestamp = timestamp.replace(tzinfo=UTC)
+                if (timestamp - now).total_seconds() > allowed_future_skew_seconds:
+                    stale_marks.append(symbol)
+                    invalid_reasons.append(f"FUTURE_MARK_TIMESTAMP:{symbol}")
+                    continue
+            if validate_instruments:
+                instrument = instrument_map.get(symbol)
+                if instrument is None:
+                    missing_marks.append(symbol)
+                    invalid_reasons.append(f"INSTRUMENT_METADATA_UNAVAILABLE:{symbol}")
+                    continue
+                if instrument.instrument_type.upper() != position.instrument_type.upper():
+                    stale_marks.append(symbol)
+                    invalid_reasons.append(f"INSTRUMENT_PRODUCT_MISMATCH:{symbol}")
+                    continue
+            else:
+                instrument = None
             contract_size = (
                 instrument.contract_size if instrument is not None else position.contract_size
             )
@@ -114,6 +155,7 @@ class ValuationService:
             reasons.append("MISSING_MARKS")
         if stale_marks:
             reasons.append("STALE_MARKS")
+        reasons.extend(invalid_reasons)
         return ValuationBatch(
             valuation_id=new_id("val"),
             account_id=account.account_id,
