@@ -514,19 +514,56 @@ class TradingEngine:
             return False
 
     # --------------------------------------------------------------- signals
+    async def _current_lease_valid(self) -> bool:
+        """Return whether the current runtime still owns the execution lease."""
+        if not self.require_lease:
+            return True
+        if self.lease is None or self.lease_manager is None:
+            return False
+        valid = await self.lease_manager.is_current(
+            self.lease_key,
+            self.lease.token,
+            self.lease.fence_generation,
+            owner_id=self.lease.owner_id,
+        )
+        self._lease_valid = valid
+        return valid
+
     async def _cancel_unsettled_entry_order(self, entry_order) -> None:
         """Cancel a non-terminal entry order before a later EXIT/REDUCE.
 
-        Uses OrderManager + adapter cancel path. No direct DB mutation and no
-        new exit order. If cancellation fails, the runtime stays fail-closed:
-        the exception propagates to the caller and the position action is not
-        submitted.
+        Cancellation is an execution mutation and therefore must be fenced by
+        the current lease. Uses OrderManager + adapter cancel path. No direct
+        DB mutation and no new exit order. If cancellation fails, the runtime
+        stays fail-closed.
         """
         try:
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_CANCEL_ENTRY_BLOCKED",
+                    target=entry_order.client_order_id,
+                    run_id=self.run_id,
+                    client_order_id=entry_order.client_order_id,
+                    order_id=entry_order.internal_order_id,
+                    after={"reason": "EXECUTION_LEASE_NOT_HELD"},
+                )
+                return
             await self.order_manager.cancel_pending(
                 entry_order.internal_order_id,
                 reason="POSITION_ACTION_ENTRY_UNSETTLED",
             )
+            # Re-check immediately before the exchange mutation; lease can be
+            # lost during local persistence.
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_CANCEL_ENTRY_BLOCKED",
+                    target=entry_order.client_order_id,
+                    run_id=self.run_id,
+                    client_order_id=entry_order.client_order_id,
+                    order_id=entry_order.internal_order_id,
+                    after={"reason": "EXECUTION_LEASE_LOST_BEFORE_CANCEL"},
+                )
+                return
             await self.adapter.cancel_order(
                 entry_order.symbol, entry_order.exchange_order_id
             )
