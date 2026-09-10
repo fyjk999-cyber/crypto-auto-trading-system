@@ -1,4 +1,5 @@
 from decimal import Decimal
+from types import SimpleNamespace
 
 from crypto_trader.alpha.sub_strategy.trend_following import TrendFollowingStrategy
 from crypto_trader.governance.backtest import BacktestEngine, BacktestMetrics
@@ -297,6 +298,27 @@ def test_backtest_engine_metrics_no_future_leak():
     assert isinstance(metrics, BacktestMetrics)
     assert metrics.turnover >= 0
     assert metrics.max_drawdown >= 0
+
+
+def test_backtest_engine_long_short_reversal_hand_calculated():
+    class ReversalStrategy:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate(self, ctx):
+            side = SimpleNamespace(value="LONG" if self.calls == 0 else "SHORT")
+            self.calls += 1
+            return SimpleNamespace(side=side)
+
+    prices = [Decimal("100")] * 60 + [Decimal("110"), Decimal("120")]
+    metrics = BacktestEngine(
+        ReversalStrategy(), fee_rate="0", slippage="0"
+    ).run(prices, initial_equity=Decimal("10000"))
+    assert metrics.long_contribution == Decimal("10")
+    assert metrics.short_contribution == Decimal("-10")
+    assert metrics.turnover == 4
+    assert metrics.max_drawdown >= 0
+
 
 
 def test_walk_forward_overfitting_gate():

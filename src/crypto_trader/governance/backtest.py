@@ -46,6 +46,8 @@ class BacktestEngine:
         regime_engine = RegimeEngine()
         ts = datetime(2026, 1, 1, tzinfo=UTC)
         equity = D(initial_equity)
+        marked_equity = equity
+        prev_marked_equity = equity
         peak = equity
         max_dd = D("0")
         returns: list[Decimal] = []
@@ -56,6 +58,12 @@ class BacktestEngine:
         turnover = 0
         position_side = None
         entry_price = D("0")
+
+        def close_pnl(side: str, exit_price: Decimal) -> Decimal:
+            if side == "LONG":
+                return exit_price * (D("1") - self.slippage) - entry_price
+            return entry_price - exit_price * (D("1") + self.slippage)
+
         for i, price in enumerate(prices):
             ts = ts + __import__("datetime").timedelta(minutes=1)
             mde.ingest(ts, price, Decimal("10"))
@@ -67,7 +75,7 @@ class BacktestEngine:
             signal = self.strategy.evaluate(ctx)
             if signal.side.value == "LONG" and position_side != "LONG":
                 if position_side is not None:
-                    pnl = (price * (D("1") - self.slippage) - entry_price) * D("1")
+                    pnl = close_pnl(position_side, price)
                     fee = price * self.fee_rate
                     equity += pnl - fee
                     pnl_list.append(pnl - fee)
@@ -85,7 +93,7 @@ class BacktestEngine:
                 turnover += 1
             elif signal.side.value == "SHORT" and position_side != "SHORT":
                 if position_side is not None:
-                    pnl = (entry_price - price * (D("1") + self.slippage)) * D("1")
+                    pnl = close_pnl(position_side, price)
                     fee = price * self.fee_rate
                     equity += pnl - fee
                     pnl_list.append(pnl - fee)
@@ -101,13 +109,20 @@ class BacktestEngine:
                 equity -= fee
                 fees += fee
                 turnover += 1
+            unrealized = D("0")
             if position_side is not None:
-                mark = (price - entry_price) if position_side == "LONG" else (entry_price - price)
-                ret = mark / entry_price
-                returns.append(ret)
-            if equity > peak:
-                peak = equity
-            dd = (peak - equity) / peak if peak > 0 else D("0")
+                unrealized = (
+                    (price - entry_price)
+                    if position_side == "LONG"
+                    else (entry_price - price)
+                )
+            marked_equity = equity + unrealized
+            if prev_marked_equity > 0:
+                returns.append(marked_equity / prev_marked_equity - D("1"))
+            prev_marked_equity = marked_equity
+            if marked_equity > peak:
+                peak = marked_equity
+            dd = (peak - marked_equity) / peak if peak > 0 else D("0")
             if dd > max_dd:
                 max_dd = dd
         if position_side is not None:
@@ -122,6 +137,13 @@ class BacktestEngine:
                 short_pnl += pnl
             fees += fee
             turnover += 1
+        if prev_marked_equity > 0:
+            returns.append(equity / prev_marked_equity - D("1"))
+        if equity > peak:
+            peak = equity
+        final_dd = (peak - equity) / peak if peak > 0 else D("0")
+        if final_dd > max_dd:
+            max_dd = final_dd
         wins = [p for p in pnl_list if p > 0]
         losses = [-p for p in pnl_list if p < 0]
         metrics = BacktestMetrics()
