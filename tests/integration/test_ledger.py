@@ -9,7 +9,11 @@ from crypto_trader.domain.errors import JournalUnbalanced
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
-from crypto_trader.persistence.models import LedgerEntryORM, TradeEpisodeORM
+from crypto_trader.persistence.models import (
+    LedgerEntryORM,
+    LedgerTransactionORM,
+    TradeEpisodeORM,
+)
 from crypto_trader.portfolio.service import PortfolioService
 
 
@@ -381,3 +385,28 @@ async def test_paper_funding_settlement_is_idempotent(ledger, database):
             )
         ).scalar_one()
     assert count == 1
+
+
+async def test_ledger_transaction_account_id_is_formal(ledger, database):
+    from sqlalchemy import select
+
+    for account in ("A", "B"):
+        await ledger.record(
+            LedgerEntryType.DEPOSIT,
+            [
+                LedgerPosting("CASH", LedgerDirection.DEBIT, Decimal("10")),
+                LedgerPosting("EQUITY", LedgerDirection.CREDIT, Decimal("10")),
+            ],
+            transaction_id=f"txn_{account}",
+            account_id=account,
+        )
+    async with database.session_factory() as session:
+        rows = (
+            await session.execute(
+                select(LedgerTransactionORM).order_by(LedgerTransactionORM.account_id)
+            )
+        ).scalars().all()
+    assert [(row.account_id, row.transaction_id) for row in rows] == [
+        ("A", "txn_A"),
+        ("B", "txn_B"),
+    ]

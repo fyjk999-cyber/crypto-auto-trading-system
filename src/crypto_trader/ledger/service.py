@@ -250,6 +250,7 @@ class LedgerService:
         postings: list[LedgerPosting],
         *,
         transaction_id: str | None = None,
+        account_id: str = "default",
         order_id: str | None = None,
         fill_id: str | None = None,
         event_id: str | None = None,
@@ -288,6 +289,7 @@ class LedgerService:
         async with self.session_factory() as session:
             txn = LedgerTransactionORM(
                 transaction_id=transaction_id,
+                account_id=account_id,
                 entry_type=entry_type.value,
                 created_at=created_at,
                 order_id=order_id,
@@ -497,6 +499,7 @@ async def _txn_to_domain(txn: LedgerTransactionORM) -> LedgerTransaction:
     ]
     return LedgerTransaction(
         transaction_id=txn.transaction_id,
+        account_id=txn.account_id,
         entry_type=LedgerEntryType(txn.entry_type),
         created_at=txn.created_at,
         metadata=txn.metadata_json or {},

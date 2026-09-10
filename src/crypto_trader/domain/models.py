@@ -237,6 +237,7 @@ class LedgerTransaction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transaction_id: str
+    account_id: str | None = None
     entry_type: LedgerEntryType
     created_at: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)

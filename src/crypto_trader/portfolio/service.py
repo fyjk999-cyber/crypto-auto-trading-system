@@ -89,7 +89,8 @@ class PortfolioService:
             flow_rows = (
                 await session.execute(
                     select(LedgerTransactionORM).where(
-                        LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL"))
+                        LedgerTransactionORM.account_id == account_id,
+                        LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
                     )
                 )
             ).scalars().all()

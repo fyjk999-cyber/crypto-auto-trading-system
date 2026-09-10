@@ -166,6 +166,7 @@ class LedgerTransactionORM(Base):
     )
 
     transaction_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     entry_type: Mapped[str] = mapped_column(String(32), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     order_id: Mapped[str | None] = mapped_column(String(64))
