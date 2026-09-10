@@ -686,7 +686,40 @@ class LedgerService:
         )
         return list(result.scalars().all())
 
+    async def watermark(self, *, account_id: str, currency: str) -> str | None:
+        """Canonical ledger watermark for one verified account/currency.
 
+        Used by ValuationBatch so Sizing/Risk/API can reference the same
+        factual ledger state instead of an implicit "latest" read.
+        """
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(LedgerTransactionORM.created_at, LedgerEntryORM.id)
+                    .join(
+                        LedgerTransactionORM,
+                        LedgerTransactionORM.transaction_id
+                        == LedgerEntryORM.transaction_id,
+                    )
+                    .where(
+                        LedgerTransactionORM.ownership_status == OWNERSHIP_VERIFIED,
+                        LedgerTransactionORM.account_id == account_id,
+                        LedgerEntryORM.currency == currency,
+                    )
+                    .order_by(
+                        LedgerTransactionORM.created_at.desc(),
+                        LedgerEntryORM.id.desc(),
+                    )
+                    .limit(1)
+                )
+            ).first()
+        if row is None:
+            return None
+        created_at, entry_id = row
+        stamp = (
+            created_at.isoformat() if isinstance(created_at, datetime) else str(created_at)
+        )
+        return f"ledger-{stamp}-{entry_id}"
 
     async def funding_status_since(
         self,

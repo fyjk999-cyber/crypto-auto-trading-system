@@ -73,6 +73,11 @@ from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
+from crypto_trader.valuation.domain import (
+    VALUATION_QUALITY_HEALTHY,
+    ValuationBatch,
+)
+from crypto_trader.valuation.service import ValuationService
 
 logger = logging.getLogger("crypto_trader.engine")
 
@@ -104,6 +109,7 @@ class TradingEngine:
         enforce_llm_entry_authority: bool = False,
         opportunity_service=None,
         funding_coverage: FundingCoverageService | None = None,
+        valuation_service: ValuationService | None = None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -114,6 +120,13 @@ class TradingEngine:
         self.funding_coverage = funding_coverage or FundingCoverageService(
             database.session_factory
         )
+        self.valuations = valuation_service or ValuationService(
+            portfolio=portfolio, ledger=ledger
+        )
+        # Candidate valuation batches are computed for strategy context
+        # (Sizing) and persisted only when a factual signal reaches Risk, so
+        # Sizing and Risk reference the exact same valuation_id.
+        self._pending_valuations: dict[str, ValuationBatch] = {}
         self.risk_engine = risk_engine
         self.market_data = market_data
         self.lease_manager = lease_manager
@@ -409,6 +422,81 @@ class TradingEngine:
         self.health.set("engine_loop", True)
         return decisions
 
+    def _remember_pending_valuation(self, batch: ValuationBatch) -> None:
+        self._pending_valuations[batch.valuation_id] = batch
+        while len(self._pending_valuations) > 64:
+            oldest = next(iter(self._pending_valuations))
+            self._pending_valuations.pop(oldest, None)
+
+    def _collect_valuation_prices(
+        self, positions: dict[str, object], *, symbol: str | None = None
+    ) -> dict[str, Decimal]:
+        prices: dict[str, Decimal] = {}
+        for position_symbol in positions:
+            position_book = self.market_data.books.get(position_symbol)
+            if position_book is None:
+                continue
+            position_mid = position_book.mid_price()
+            if position_mid is not None and position_mid > 0:
+                prices[position_symbol] = position_mid
+        if symbol is not None:
+            symbol_book = self.market_data.books.get(symbol)
+            if symbol_book is not None:
+                symbol_mid = symbol_book.mid_price()
+                if symbol_mid is not None and symbol_mid > 0:
+                    prices[symbol] = symbol_mid
+        return prices
+
+    async def _build_valuation_candidate(
+        self,
+        *,
+        account,
+        positions: dict[str, object],
+        symbol: str | None = None,
+    ) -> ValuationBatch:
+        """Compute one candidate batch; persisted only when a signal exists."""
+        prices = self._collect_valuation_prices(positions, symbol=symbol)
+        market_as_of = max(
+            (
+                book.updated_at
+                for symbol_key in prices
+                if (book := self.market_data.books.get(symbol_key)) is not None
+                and book.updated_at is not None
+            ),
+            default=None,
+        )
+        batch = await self.valuations.build(
+            account=account,
+            positions=positions,
+            market_prices=prices,
+            instruments=self._instruments,
+            is_fresh=lambda symbol_key: self.market_data.is_fresh(
+                symbol_key, self.settings.orderbook_max_age_seconds
+            ),
+            market_as_of=market_as_of,
+        )
+        self._remember_pending_valuation(batch)
+        return batch
+
+    async def _resolve_signal_valuation(
+        self, signal: SignalIntent, *, account, positions: dict[str, object]
+    ) -> ValuationBatch:
+        """Return the exact batch Sizing used, persisted as the factual fact."""
+        valuation_id = str(signal.metadata.get("valuation_id") or "")
+        if valuation_id:
+            candidate = self._pending_valuations.pop(valuation_id, None)
+            if candidate is not None:
+                return await self.valuations.persist(
+                    candidate, fallback_equity=account.equity
+                )
+            existing = await self.valuations.get(valuation_id)
+            if existing is not None:
+                return existing
+        candidate = await self._build_valuation_candidate(
+            account=account, positions=positions, symbol=signal.symbol
+        )
+        return await self.valuations.persist(candidate, fallback_equity=account.equity)
+
     async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
         symbol = symbol or (
             getattr(self.strategies[0], "symbol", "BTCUSDT")
@@ -459,6 +547,9 @@ class TradingEngine:
             return None
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
+        valuation = await self._build_valuation_candidate(
+            account=account, positions=positions, symbol=symbol
+        )
         return StrategyContext(
             symbol=symbol,
             book=book,
@@ -475,6 +566,7 @@ class TradingEngine:
                 market_state.realized_volatility if market_state else None
             ),
             instrument=self._instruments.get(symbol),
+            valuation=valuation,
         )
 
     async def _refresh_execution_market(self, symbol: str) -> bool:
@@ -757,109 +849,21 @@ class TradingEngine:
             mid = book.mid_price()
             if mid is not None:
                 market_price = mid
-        market_prices: dict[str, Decimal] = {}
-        for position_symbol in positions:
-            position_book = self.market_data.books.get(position_symbol)
-            if position_book is None:
-                continue
-            position_mid = position_book.mid_price()
-            if position_mid is not None and position_mid > 0:
-                market_prices[position_symbol] = position_mid
-        if market_price > 0:
-            market_prices[symbol] = market_price
-        # Refresh stale non-signal positions before valuation.
-        for position_symbol, position in positions.items():
-            if position.quantity == 0 or position_symbol == symbol:
-                continue
-            if not self.market_data.is_fresh(
-                position_symbol, self.settings.orderbook_max_age_seconds
-            ):
-                await self._refresh_execution_market(position_symbol)
-
-        valuation_available = True
-        valuation_marks_missing: list[str] = []
-        valuation_marks_stale: list[str] = []
-        mtm_equity = account.equity
-        for position_symbol, position in positions.items():
-            if position.quantity == 0:
-                continue
-            mark = market_prices.get(position_symbol)
-            if mark is None or mark <= 0:
-                valuation_available = False
-                valuation_marks_missing.append(position_symbol)
-                break
-            if not self.market_data.is_fresh(
-                position_symbol, self.settings.orderbook_max_age_seconds
-            ):
-                valuation_available = False
-                valuation_marks_stale.append(position_symbol)
-                break
-            instrument = self._instruments.get(position_symbol)
-            contract_size = (
-                instrument.contract_size if instrument is not None else position.contract_size
-            )
-            contract_multiplier = (
-                instrument.contract_multiplier
-                if instrument is not None
-                else position.contract_multiplier
-            )
-            instrument_type = (
-                instrument.instrument_type
-                if instrument is not None
-                else position.instrument_type
-            )
-            if instrument_type == "LINEAR_PERP":
-                mtm_equity += (
-                    (mark - position.avg_entry_price)
-                    * position.quantity
-                    * contract_size
-                    * contract_multiplier
-                )
-            else:
-                mtm_equity += (mark - position.avg_entry_price) * position.quantity
-        valuation_id = new_id("val") if valuation_available else None
-        if valuation_available:
-            market_as_of = max(
-                (
-                    book.updated_at
-                    for symbol_key in positions
-                    if (book := self.market_data.books.get(symbol_key)) is not None
-                    and book.updated_at is not None
-                ),
-                default=None,
-            )
-            drawdown, peak_equity, valuation_as_of, drawdown_source = (
-                await self.portfolio.record_equity_drawdown(
-                    mtm_equity,
-                    source="MARK_TO_MARKET_EQUITY",
-                    valuation_as_of=market_as_of,
-                    valuation_id=valuation_id,
-                    quality="HEALTHY",
-                    components=[
-                        {
-                            "instrument_id": symbol_key,
-                            "quantity": str(position.quantity),
-                            "mark_price": str(market_prices.get(symbol_key)),
-                        }
-                        for symbol_key, position in positions.items()
-                        if position.quantity != 0
-                    ],
-                )
-            )
-        else:
-            await self.portfolio.record_equity_drawdown(
-                account.equity,
-                source="VALUATION_UNAVAILABLE",
-                valuation_id=valuation_id,
-                quality="UNAVAILABLE",
-                reason_codes=["VALUATION_UNAVAILABLE"],
-                missing_marks=valuation_marks_missing,
-                stale_marks=valuation_marks_stale,
-            )
-            drawdown = None
-            peak_equity = None
-            valuation_as_of = None
-            drawdown_source = "VALUATION_UNAVAILABLE"
+        batch = await self._resolve_signal_valuation(
+            signal, account=account, positions=positions
+        )
+        valuation_available = (
+            batch.quality == VALUATION_QUALITY_HEALTHY
+            and batch.raw_mtm_equity is not None
+        )
+        market_prices = self._collect_valuation_prices(positions, symbol=symbol)
+        mtm_equity = batch.raw_mtm_equity if valuation_available else account.equity
+        drawdown = batch.drawdown_amount
+        peak_equity = batch.peak_adjusted_equity
+        valuation_as_of = batch.market_as_of or batch.valuation_as_of
+        drawdown_source = (
+            "MARK_TO_MARKET_EQUITY" if valuation_available else "VALUATION_UNAVAILABLE"
+        )
         open_orders = await self.order_manager.count_open()
         daily_end = datetime.now(UTC)
         daily_start = daily_end.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -923,11 +927,17 @@ class TradingEngine:
             valuation_as_of=(
                 valuation_as_of.isoformat() if valuation_as_of is not None else None
             ),
-            valuation_currency="USDT",
+            valuation_currency=batch.currency,
             valuation_source=drawdown_source,
-            valuation_id=valuation_id,
+            valuation_id=batch.valuation_id,
+            valuation_quality=batch.quality,
+            available_margin=batch.available_margin,
             funding_status=pnl_provenance.funding_status,
             pnl_provenance={
+                "valuation_id": batch.valuation_id,
+                "valuation_quality": batch.quality,
+                "valuation_position_snapshot_ref": batch.position_snapshot_ref,
+                "valuation_ledger_watermark": batch.ledger_watermark,
                 "account_id": pnl_provenance.account_id,
                 "currency": pnl_provenance.currency,
                 "window_start": pnl_provenance.window_start.isoformat(),

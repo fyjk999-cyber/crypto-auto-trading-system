@@ -222,6 +222,12 @@ class LiveLLMPositionManager:
                 "instrument_type": position.instrument_type,
                 "contract_size": str(position.contract_size),
                 "contract_multiplier": str(position.contract_multiplier),
+                "valuation_id": (
+                    ctx.valuation.valuation_id if ctx.valuation is not None else None
+                ),
+                "valuation_quality": (
+                    ctx.valuation.quality if ctx.valuation is not None else None
+                ),
             },
         )
 

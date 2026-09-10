@@ -304,6 +304,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             stop_price=stop_price,
             volatility=volatility,
             liquidity=liquidity,
+            valuation=ctx.valuation,
         )
         if sized.normalized_quantity <= 0:
             await self.audit.log(
@@ -314,6 +315,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 after={"reason_codes": list(sized.sizing_reason_codes)},
             )
             return []
+        valuation = ctx.valuation
         try:
             plan, signal = await self.planner.create_entry_signal(
                 decision,
@@ -336,6 +338,18 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                         sized.portfolio_exposure_after_trade
                     ),
                     "sizing_reason_codes": list(sized.sizing_reason_codes),
+                    "valuation_id": (
+                        valuation.valuation_id if valuation is not None else None
+                    ),
+                    "valuation_quality": (
+                        valuation.quality if valuation is not None else None
+                    ),
+                    "sizing_equity": str(sized.sizing_equity)
+                    if sized.sizing_equity is not None
+                    else None,
+                    "available_margin": str(sized.available_margin)
+                    if sized.available_margin is not None
+                    else None,
                 },
             )
             if plan is not None:

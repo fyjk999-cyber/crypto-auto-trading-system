@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from crypto_trader.domain.models import Account, Instrument, Position, SignalIntent
 from crypto_trader.market_data.orderbook import OrderBook
+from crypto_trader.valuation.domain import ValuationBatch
 
 
 @dataclass
@@ -26,6 +27,9 @@ class StrategyContext:
     basis: Decimal | None = None
     realized_volatility: Decimal | None = None
     instrument: Instrument | None = None
+    # One canonical valuation truth; strategies must size from this batch and
+    # must never re-derive equity from account.equity independently.
+    valuation: ValuationBatch | None = None
 
 
 class StrategyPlugin(ABC):

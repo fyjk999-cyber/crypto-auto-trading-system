@@ -247,6 +247,8 @@ class ValuationBatchORM(Base):
     adjusted_equity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     peak_adjusted_equity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     drawdown_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    drawdown_ratio: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    market_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     quality: Mapped[str] = mapped_column(String(16), default="HEALTHY")
     reason_codes_json: Mapped[list[Any] | None] = mapped_column(JSON)
     solvency: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -303,14 +305,14 @@ class EquitySnapshotORM(Base):
     cumulative_external_cash_flow: Mapped[Decimal] = mapped_column(
         ExactDecimal(), default=Decimal("0")
     )
-    cash_flow_adjusted_equity: Mapped[Decimal] = mapped_column(
-        ExactDecimal(), default=Decimal("0")
+    cash_flow_adjusted_equity: Mapped[Decimal | None] = mapped_column(
+        ExactDecimal(), nullable=True
     )
-    peak_equity: Mapped[Decimal] = mapped_column(ExactDecimal())
-    peak_adjusted_equity: Mapped[Decimal] = mapped_column(
-        ExactDecimal(), default=Decimal("0")
+    peak_equity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    peak_adjusted_equity: Mapped[Decimal | None] = mapped_column(
+        ExactDecimal(), nullable=True
     )
-    drawdown: Mapped[Decimal] = mapped_column(ExactDecimal())
+    drawdown: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
     valuation_status: Mapped[str] = mapped_column(String(16), default="HEALTHY")
     valuation_source: Mapped[str] = mapped_column(String(64), default="LEDGER_PROJECTION")
     valuation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

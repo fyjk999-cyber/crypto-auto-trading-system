@@ -85,6 +85,30 @@ def serialize_position(position, *, price: Decimal | None = None) -> dict:
     return payload
 
 
+def serialize_valuation(batch) -> dict | None:
+    """Return the one canonical valuation batch (or explicit UNAVAILABLE)."""
+    if batch is None:
+        return {
+            "valuation_id": None,
+            "quality": "UNAVAILABLE",
+            "raw_mtm_equity": None,
+            "available_margin": None,
+            "adjusted_equity": None,
+            "peak_adjusted_equity": None,
+            "drawdown_amount": None,
+            "drawdown_ratio": None,
+            "market_as_of": None,
+            "ledger_watermark": None,
+            "position_snapshot_ref": None,
+            "missing_marks": [],
+            "stale_marks": [],
+            "components": [],
+            "solvency": None,
+            "reason_codes": ["NO_VALUATION_BATCH"],
+        }
+    return batch.to_evidence()
+
+
 def create_app(state: AppState) -> FastAPI:
     okx_broker = BrokerClient()
 
@@ -658,11 +682,16 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/risk")
     async def risk():
+        account = await state.portfolio.get_account(state.settings.effective_mode())
+        batch = await state.portfolio.latest_valuation_batch(
+            account_id=account.account_id, currency="USDT"
+        )
         return {
             "trading_mode": state.settings.effective_mode().value,
             "live_trading_enabled": state.settings.live_trading_enabled,
             "kill_switch": state.risk.kill_switch.snapshot(),
             "risk_config": state.risk.config.model_dump(mode="json"),
+            "valuation": serialize_valuation(batch),
         }
 
     @app.get("/margin")
@@ -675,8 +704,12 @@ def create_app(state: AppState) -> FastAPI:
             for symbol, pos in positions.items()
         }
         exposure = ExposureService.for_portfolio(positions, prices=prices)
+        batch = await state.portfolio.latest_valuation_batch(
+            account_id=account.account_id, currency="USDT"
+        )
         return {
             "equity": str(account.equity),
+            "valuation": serialize_valuation(batch),
             "balances": {k: v.model_dump(mode="json") for k, v in account.balances.items()},
             "positions": serialized,
             "gross_exposure": str(exposure.gross_notional),
@@ -818,7 +851,12 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/account")
     async def account():
         account = await state.portfolio.get_account(state.settings.effective_mode())
-        return account.model_dump(mode="json")
+        batch = await state.portfolio.latest_valuation_batch(
+            account_id=account.account_id, currency="USDT"
+        )
+        payload = account.model_dump(mode="json")
+        payload["valuation"] = serialize_valuation(batch)
+        return payload
 
     @app.get("/ledger")
     async def ledger(limit: int = 200):

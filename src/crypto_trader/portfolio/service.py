@@ -19,6 +19,10 @@ from crypto_trader.persistence.models import (
     PositionProjectionORM,
     ValuationBatchORM,
 )
+from crypto_trader.valuation.domain import (
+    VALUATION_QUALITY_HEALTHY,
+    ValuationBatch,
+)
 
 
 class PortfolioService:
@@ -58,27 +62,40 @@ class PortfolioService:
 
 
 
-    async def record_equity_drawdown(
+    async def record_valuation_batch(
         self,
-        current_equity: Decimal,
         *,
+        valuation_id: str | None = None,
         account_id: str = "default",
         currency: str = "USDT",
-        source: str = "LEDGER_PROJECTION",
+        quality: str = VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity: Decimal | None = None,
+        fallback_equity: Decimal | None = None,
+        source: str = "MARK_TO_MARKET_EQUITY",
         valuation_as_of: datetime | None = None,
-        valuation_id: str | None = None,
-        quality: str = "HEALTHY",
+        market_as_of: datetime | None = None,
+        ledger_watermark: str | None = None,
+        position_snapshot_ref: str | None = None,
         reason_codes: list[str] | None = None,
         missing_marks: list[str] | None = None,
         stale_marks: list[str] | None = None,
         components: list[dict] | None = None,
-    ) -> tuple[Decimal, Decimal, datetime, str]:
-        """Persist a factual equity point and return canonical drawdown.
+    ) -> ValuationBatch:
+        """Persist the one canonical valuation batch for account/currency.
 
-        Convention: drawdown <= 0, where drawdown = current_equity - peak_equity.
-        Peak is durably retained across restarts.
+        The batch and its equity snapshot are written atomically. Peak and
+        drawdown are updated only from HEALTHY batches; the first UNAVAILABLE
+        batch can never seed a baseline.
         """
         as_of = valuation_as_of or datetime.now(UTC)
+        healthy = quality == VALUATION_QUALITY_HEALTHY
+        snapshot_equity = (
+            raw_mtm_equity
+            if raw_mtm_equity is not None
+            else fallback_equity
+            if fallback_equity is not None
+            else Decimal("0")
+        )
         async with self.session_factory() as session:
             latest = (
                 await session.execute(
@@ -91,13 +108,11 @@ class PortfolioService:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            # Cumulative economic external flow from unique transactions, not
-            # individual double-entry postings. This is idempotent across
-            # restarts/same-timestamp replays and does not depend on a cursor.
             flow_rows = (
                 await session.execute(
                     select(LedgerTransactionORM).where(
                         LedgerTransactionORM.account_id == account_id,
+                        LedgerTransactionORM.ownership_status == "VERIFIED",
                         LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
                     )
                 )
@@ -129,53 +144,60 @@ class PortfolioService:
                     )
                 )
             ).scalar_one_or_none()
-            prior_cumulative = (
-                latest.cumulative_external_cash_flow if latest is not None else Decimal("0")
+            adjusted_equity = (
+                snapshot_equity - cumulative_flow if healthy else None
             )
-            period_flow = cumulative_flow - prior_cumulative
-            cash_flow_adjusted = current_equity - cumulative_flow
             prior_peak = (
                 latest.peak_adjusted_equity
-                if latest is not None and latest.peak_adjusted_equity > 0
-                else latest.peak_equity
-                if latest is not None
-                else cash_flow_adjusted
+                if latest is not None and latest.peak_adjusted_equity is not None
+                else None
             )
-            if quality == "HEALTHY":
-                peak_adjusted = max(prior_peak, cash_flow_adjusted)
+            if healthy:
+                peak_adjusted = (
+                    adjusted_equity
+                    if prior_peak is None
+                    else max(prior_peak, adjusted_equity)
+                )
+                drawdown = adjusted_equity - peak_adjusted
+                drawdown_ratio = (
+                    drawdown / peak_adjusted
+                    if peak_adjusted is not None and peak_adjusted != 0
+                    else None
+                )
             else:
-                # Unavailable/incomplete marks must not create a new peak or
-                # pollute historical drawdown performance.
                 peak_adjusted = prior_peak
-            drawdown = cash_flow_adjusted - peak_adjusted
-            valuation_id = valuation_id or new_id("val")
-            health = self.classify_equity_status(current_equity)
+                drawdown = None
+                drawdown_ratio = None
+            health = self.classify_equity_status(snapshot_equity)
             solvency = (
                 {
                     "HEALTHY": "POSITIVE",
                     "ZERO_EQUITY": "ZERO_EQUITY",
                     "INSOLVENT": "INSOLVENT",
                 }.get(health, "UNKNOWN")
-                if quality == "HEALTHY"
+                if healthy
                 else None
             )
+            valuation_id = valuation_id or new_id("val")
             session.add(
                 ValuationBatchORM(
                     valuation_id=valuation_id,
                     account_id=account_id,
                     currency=currency,
                     valuation_as_of=as_of,
-                    ledger_watermark=None,
-                    position_snapshot_ref=None,
-                    raw_mtm_equity=current_equity if quality == "HEALTHY" else None,
+                    market_as_of=market_as_of,
+                    ledger_watermark=ledger_watermark,
+                    position_snapshot_ref=position_snapshot_ref,
+                    raw_mtm_equity=raw_mtm_equity if healthy else None,
                     available_margin=(
                         account_row.available if account_row is not None else None
                     )
-                    if quality == "HEALTHY"
+                    if healthy
                     else None,
-                    adjusted_equity=cash_flow_adjusted,
+                    adjusted_equity=adjusted_equity,
                     peak_adjusted_equity=peak_adjusted,
                     drawdown_amount=drawdown,
+                    drawdown_ratio=drawdown_ratio,
                     quality=quality,
                     reason_codes_json=reason_codes or [],
                     solvency=solvency,
@@ -188,24 +210,138 @@ class PortfolioService:
                 EquitySnapshotORM(
                     account_id=account_id,
                     currency=currency,
-                    current_equity=current_equity,
-                    raw_equity=current_equity,
-                    external_cash_flow_adjustment=period_flow,
-                    period_external_cash_flow=period_flow,
+                    current_equity=snapshot_equity,
+                    raw_equity=(
+                        raw_mtm_equity if raw_mtm_equity is not None else snapshot_equity
+                    ),
+                    external_cash_flow_adjustment=cumulative_flow,
+                    period_external_cash_flow=cumulative_flow,
                     cumulative_external_cash_flow=cumulative_flow,
-                    cash_flow_adjusted_equity=cash_flow_adjusted,
+                    cash_flow_adjusted_equity=adjusted_equity,
                     peak_equity=peak_adjusted,
                     peak_adjusted_equity=peak_adjusted,
                     drawdown=drawdown,
+                    # Valuation quality and solvency are independent facts.
+                    valuation_status=quality,
                     valuation_source=source,
-                    valuation_status=health,
                     valuation_id=valuation_id,
                     valuation_as_of=as_of,
                 )
             )
             await session.commit()
-        return drawdown, peak_adjusted, as_of, source
+        return ValuationBatch(
+            valuation_id=valuation_id,
+            account_id=account_id,
+            currency=currency,
+            quality=quality,
+            raw_mtm_equity=raw_mtm_equity if healthy else None,
+            available_margin=(
+                account_row.available if healthy and account_row is not None else None
+            ),
+            adjusted_equity=adjusted_equity,
+            peak_adjusted_equity=peak_adjusted,
+            drawdown_amount=drawdown,
+            drawdown_ratio=drawdown_ratio,
+            market_as_of=market_as_of,
+            ledger_watermark=ledger_watermark,
+            position_snapshot_ref=position_snapshot_ref,
+            missing_marks=tuple(missing_marks or ()),
+            stale_marks=tuple(stale_marks or ()),
+            components=tuple(components or ()),
+            solvency=solvency,
+            reason_codes=tuple(reason_codes or ()),
+            valuation_as_of=as_of,
+        )
 
+    async def record_equity_drawdown(
+        self,
+        current_equity: Decimal,
+        *,
+        account_id: str = "default",
+        currency: str = "USDT",
+        source: str = "LEDGER_PROJECTION",
+        valuation_as_of: datetime | None = None,
+        valuation_id: str | None = None,
+        quality: str = "HEALTHY",
+        reason_codes: list[str] | None = None,
+        missing_marks: list[str] | None = None,
+        stale_marks: list[str] | None = None,
+        components: list[dict] | None = None,
+        ledger_watermark: str | None = None,
+        position_snapshot_ref: str | None = None,
+    ) -> tuple[Decimal | None, Decimal | None, datetime, str]:
+        """Backward-compatible wrapper returning canonical batch facts."""
+        as_of = valuation_as_of or datetime.now(UTC)
+        healthy = quality == VALUATION_QUALITY_HEALTHY
+        batch = await self.record_valuation_batch(
+            valuation_id=valuation_id,
+            account_id=account_id,
+            currency=currency,
+            quality=quality,
+            raw_mtm_equity=current_equity if healthy else None,
+            fallback_equity=current_equity,
+            source=source,
+            valuation_as_of=as_of,
+            market_as_of=None,
+            ledger_watermark=ledger_watermark,
+            position_snapshot_ref=position_snapshot_ref,
+            reason_codes=reason_codes,
+            missing_marks=missing_marks,
+            stale_marks=stale_marks,
+            components=components,
+        )
+        return batch.drawdown_amount, batch.peak_adjusted_equity, as_of, source
+
+    @staticmethod
+    def _batch_to_domain(row: ValuationBatchORM) -> ValuationBatch:
+        return ValuationBatch(
+            valuation_id=row.valuation_id,
+            account_id=row.account_id,
+            currency=row.currency,
+            quality=row.quality,
+            raw_mtm_equity=row.raw_mtm_equity,
+            available_margin=row.available_margin,
+            adjusted_equity=row.adjusted_equity,
+            peak_adjusted_equity=row.peak_adjusted_equity,
+            drawdown_amount=row.drawdown_amount,
+            drawdown_ratio=row.drawdown_ratio,
+            market_as_of=row.market_as_of,
+            ledger_watermark=row.ledger_watermark,
+            position_snapshot_ref=row.position_snapshot_ref,
+            missing_marks=tuple(row.missing_marks_json or ()),
+            stale_marks=tuple(row.stale_marks_json or ()),
+            components=tuple(row.components_json or ()),
+            solvency=row.solvency,
+            reason_codes=tuple(row.reason_codes_json or ()),
+            valuation_as_of=row.valuation_as_of,
+        )
+
+    async def get_valuation_batch(self, valuation_id: str) -> ValuationBatch | None:
+        if not valuation_id:
+            return None
+        async with self.session_factory() as session:
+            row = await session.get(ValuationBatchORM, valuation_id)
+            return None if row is None else self._batch_to_domain(row)
+
+    async def latest_valuation_batch(
+        self, *, account_id: str = "default", currency: str = "USDT"
+    ) -> ValuationBatch | None:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(ValuationBatchORM)
+                    .where(
+                        ValuationBatchORM.account_id == account_id,
+                        ValuationBatchORM.currency == currency,
+                    )
+                    .order_by(
+                        ValuationBatchORM.created_at.desc(),
+                        ValuationBatchORM.valuation_id.desc(),
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return None if row is None else self._batch_to_domain(row)
     async def get_positions(self) -> dict[str, Position]:
         async with self.session_factory() as session:
             rows = (await session.execute(select(PositionProjectionORM))).scalars().all()

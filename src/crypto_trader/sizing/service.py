@@ -10,6 +10,7 @@ from crypto_trader.domain.money import D, floor_to_step
 from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.leverage import clamp_leverage
 from crypto_trader.sizing.risk_normalized import calculate_risk_normalized_size
+from crypto_trader.valuation.domain import ValuationBatch
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,9 @@ class CanonicalSize:
     max_loss_estimate: Decimal
     portfolio_exposure_after_trade: Decimal
     sizing_reason_codes: tuple[str, ...]
+    valuation_id: str | None = None
+    sizing_equity: Decimal | None = None
+    available_margin: Decimal | None = None
 
 
 class LiveEntrySizingService:
@@ -50,6 +54,7 @@ class LiveEntrySizingService:
         stop_price: Decimal | None,
         volatility: Decimal = Decimal("0"),
         liquidity: Decimal = Decimal("1"),
+        valuation: ValuationBatch | None = None,
     ) -> CanonicalSize:
         requested_quantity = D(requested_quantity)
         requested_leverage = D(requested_leverage or "1")
@@ -58,8 +63,30 @@ class LiveEntrySizingService:
         multiplier = D(instrument.contract_multiplier)
         lot_size = D(instrument.step_size)
         requested_exposure = D(requested_exposure or "0")
-        if price <= 0 or account.equity <= 0:
-            return _zero(requested_leverage, "INVALID_SIZING_INPUT")
+        if valuation is not None:
+            if not valuation.usable_for_new_risk:
+                return _zero(
+                    requested_leverage,
+                    "VALUATION_BATCH_UNAVAILABLE",
+                    valuation=valuation,
+                )
+            equity_for_risk = D(valuation.raw_mtm_equity or "0")
+            available_margin = (
+                D(valuation.available_margin)
+                if valuation.available_margin is not None
+                else None
+            )
+        else:
+            equity_for_risk = D(account.equity)
+            available_margin = None
+        if price <= 0 or equity_for_risk <= 0:
+            return _zero(requested_leverage, "INVALID_SIZING_INPUT", valuation=valuation)
+        if available_margin is not None and available_margin <= 0:
+            return _zero(
+                requested_leverage,
+                "INSUFFICIENT_AVAILABLE_MARGIN",
+                valuation=valuation,
+            )
         spec = InstrumentExposureSpec(
             instrument_type=instrument.instrument_type,
             contract_size=contract_size,
@@ -82,7 +109,7 @@ class LiveEntrySizingService:
         quantity = requested_quantity
         if stop_distance > 0:
             normalized = calculate_risk_normalized_size(
-                equity=account.equity,
+                equity=equity_for_risk,
                 risk_fraction=self.risk_fraction,
                 price=price,
                 stop_distance=stop_distance,
@@ -98,7 +125,21 @@ class LiveEntrySizingService:
             reasons.append("MAX_ORDER_NOTIONAL")
         quantity = floor_to_step(quantity, lot_size)
         if quantity <= 0:
-            return _zero(requested_leverage, "BELOW_MINIMUM_LOT")
+            return _zero(requested_leverage, "BELOW_MINIMUM_LOT", valuation=valuation)
+        if available_margin is not None:
+            within_margin = available_margin * self.max_leverage / (
+                price * contract_size * multiplier
+            )
+            if quantity > within_margin:
+                quantity = min(quantity, within_margin)
+                reasons.append("AVAILABLE_MARGIN_CAP")
+                quantity = floor_to_step(quantity, lot_size)
+        if quantity <= 0:
+            return _zero(
+                requested_leverage,
+                "INSUFFICIENT_AVAILABLE_MARGIN",
+                valuation=valuation,
+            )
         normalized_notional = ExposureService.calculate(
             quantity=quantity,
             price=price,
@@ -131,10 +172,18 @@ class LiveEntrySizingService:
             max_loss_estimate=max_loss,
             portfolio_exposure_after_trade=existing + normalized_notional,
             sizing_reason_codes=tuple(reasons or ["REQUEST_WITHIN_BOUNDS"]),
+            valuation_id=valuation.valuation_id if valuation is not None else None,
+            sizing_equity=equity_for_risk,
+            available_margin=available_margin,
         )
 
 
-def _zero(requested_leverage: Decimal, reason: str) -> CanonicalSize:
+def _zero(
+    requested_leverage: Decimal,
+    reason: str,
+    *,
+    valuation: ValuationBatch | None = None,
+) -> CanonicalSize:
     return CanonicalSize(
         requested_notional=Decimal("0"),
         risk_normalized_notional=Decimal("0"),
@@ -144,4 +193,7 @@ def _zero(requested_leverage: Decimal, reason: str) -> CanonicalSize:
         max_loss_estimate=Decimal("0"),
         portfolio_exposure_after_trade=Decimal("0"),
         sizing_reason_codes=(reason,),
+        valuation_id=valuation.valuation_id if valuation is not None else None,
+        sizing_equity=valuation.raw_mtm_equity if valuation is not None else None,
+        available_margin=valuation.available_margin if valuation is not None else None,
     )
