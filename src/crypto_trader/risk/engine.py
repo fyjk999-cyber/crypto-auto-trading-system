@@ -63,6 +63,7 @@ class RiskEngine:
         valuation_source: str = "UNSPECIFIED",
         valuation_id: str | None = None,
         risk_equity: Decimal | None = None,
+        available_margin: Decimal | None = None,
         consecutive_failures: int = 0,
         run_id: str | None = None,
         order_id: str | None = None,
@@ -185,6 +186,14 @@ class RiskEngine:
         )
         if approved_leverage < requested_leverage:
             adjustment_reasons.append("LEVERAGE_CLAMPED")
+        effective_equity = (
+            risk_equity if risk_equity is not None else account.equity
+        )
+        effective_margin = (
+            available_margin
+            if available_margin is not None
+            else effective_equity - account.margin_used
+        )
         checks.update(
             {
                 "original_direction": original_direction,
@@ -204,7 +213,8 @@ class RiskEngine:
                 "valuation_currency": valuation_currency,
                 "valuation_source": valuation_source,
                 "valuation_id": valuation_id,
-                "risk_equity": str(risk_equity if risk_equity is not None else account.equity),
+                "risk_equity": str(effective_equity),
+                "available_margin": str(effective_margin),
             }
         )
 
@@ -228,9 +238,11 @@ class RiskEngine:
             return fail("MAX_DRAWDOWN")
         checks["max_drawdown"] = True
 
-        cash = risk_equity if risk_equity is not None else account.equity
+        cash = effective_equity
         if cash <= 0:
             return fail("NON_POSITIVE_EQUITY")
+        if effective_margin <= 0:
+            return fail("INSUFFICIENT_AVAILABLE_MARGIN")
         valuation_prices = dict(market_prices or {})
         valuation_prices[intent.symbol] = market_price
         portfolio_exposure = ExposureService.for_portfolio(
