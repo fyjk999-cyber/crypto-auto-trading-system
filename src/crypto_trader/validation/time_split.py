@@ -60,5 +60,5 @@ def assert_embargo_gap(
     """Reject adjacent train/test windows without a purge/embargo gap."""
     if not train or not test:
         raise ValueError("train and test must be non-empty")
-    if key(test[0]) - key(train[-1]) < min_gap:
+    if key(test[0]) - key(train[-1]) <= min_gap:
         raise ValueError("train/test embargo gap too small")
