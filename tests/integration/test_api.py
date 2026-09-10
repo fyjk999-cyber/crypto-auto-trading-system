@@ -211,4 +211,6 @@ async def test_api_opportunity_stats_exposes_market_layer_sets(database):
         "analysis_count": 12,
         "executable_count": 40,
     }
+    assert response.json()["executable_scope"] == "USDT_LINEAR_SWAP_ONLY"
+    assert response.json()["unsupported_products"]["SPOT"] == "NOT_EXECUTABLE"
 

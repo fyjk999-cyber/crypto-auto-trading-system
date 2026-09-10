@@ -156,6 +156,12 @@ def create_app(state: AppState) -> FastAPI:
             "universe_size": snap["universe_size"],
             "eligible_count": snap["eligible_count"],
             "market_sets": snap.get("market_sets"),
+            "executable_scope": "USDT_LINEAR_SWAP_ONLY",
+            "unsupported_products": {
+                "SPOT": "NOT_EXECUTABLE",
+                "FUTURES": "NOT_EXECUTABLE",
+                "INVERSE_SWAP": "NOT_EXECUTABLE",
+            },
             "candidate_count": snap["candidate_count"],
             "scan_stats": snap["scan_stats"],
             "stats": snap["stats"],
