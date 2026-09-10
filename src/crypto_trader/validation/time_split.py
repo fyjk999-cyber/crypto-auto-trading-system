@@ -26,3 +26,23 @@ def split_ordered(
     if not test_items:
         raise ValueError("time split left no test items")
     return train_items, val_items, test_items
+
+
+def assert_strict_time_order(
+    train: list, val: list, test: list, *, key
+) -> None:
+    """Reject future leakage or non-monotonic time splits."""
+    if not train or not test:
+        raise ValueError("train and test must be non-empty")
+    train_keys = [key(item) for item in train]
+    val_keys = [key(item) for item in val]
+    test_keys = [key(item) for item in test]
+    for keys in (train_keys, val_keys, test_keys):
+        if any(a >= b for a, b in zip(keys, keys[1:], strict=False)):
+            raise ValueError("timestamps must be strictly increasing")
+    if val_keys and train_keys[-1] >= val_keys[0]:
+        raise ValueError("train/test overlap")
+    if val_keys and val_keys[-1] >= test_keys[0]:
+        raise ValueError("validation/test overlap")
+    if train_keys[-1] >= test_keys[0]:
+        raise ValueError("train/test overlap")

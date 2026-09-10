@@ -35,3 +35,16 @@ def test_split_rejects_empty_items():
     with pytest.raises(ValueError):
         split_ordered([], train=0.5, val=0.2)
 
+
+
+def test_strict_time_order_rejects_future_leakage():
+    from crypto_trader.validation.time_split import assert_strict_time_order
+
+    train = [{"ts": 1}, {"ts": 2}]
+    val = [{"ts": 3}]
+    test = [{"ts": 4}, {"ts": 5}]
+    assert_strict_time_order(train, val, test, key=lambda x: x["ts"])
+    with pytest.raises(ValueError):
+        assert_strict_time_order(
+            train, val, [{"ts": 1}], key=lambda x: x["ts"]
+        )
