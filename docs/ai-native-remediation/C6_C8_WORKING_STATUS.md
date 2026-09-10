@@ -126,3 +126,26 @@ fixed-SHA natural runtime acceptance
 ```
 
 Status: C8 = PARTIAL (gate dry run only; no final SHA, no runtime authorization).
+
+## C8 additional gate evidence
+
+On cc47d / 4ce3c2b code state:
+
+```text
+pytest -q \
+  tests/opportunity/test_full_market_factor_layer.py::test_migration_chain_extends_llm_decisions_with_lineage \
+  tests/integration/test_bootstrap.py \
+  tests/runtime_unit/test_supervisor.py \
+  tests/integration/test_recovery.py
+
+result: 11 passed
+```
+
+Covers:
+
+```text
+alembic upgrade head migration chain
+stale writer recovery in bootstrap
+lease renewal / zombie writer / stale fence
+order recovery after restart
+```
