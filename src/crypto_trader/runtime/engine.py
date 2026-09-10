@@ -51,6 +51,7 @@ from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import (
+    FundingScope,
     LedgerPosting,
     LedgerService,
     build_derivative_trade_entries,
@@ -934,28 +935,9 @@ class TradingEngine:
         daily_end = datetime.now(UTC)
         daily_start = daily_end.replace(hour=0, minute=0, second=0, microsecond=0)
         account_id = getattr(account, "account_id", None) or "default"
-        # Every open USDT linear swap must independently prove funding coverage.
-        # The ledger read below adds any instrument with factual PnL/funding
-        # postings, so an unattributed or wrong-instrument posting can never be
-        # silently dropped from the daily total.
-        open_instrument_ids = sorted(
-            {
-                position_symbol
-                for position_symbol, position in positions.items()
-                if position.quantity != 0
-                and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
-            }
-        )
-        activity_instrument_ids = await self.ledger.activity_instruments(
-            daily_start,
-            account_id=account_id,
-            currency="USDT",
-            end=daily_end,
-        )
-        funding_instrument_ids = sorted(
-            set(open_instrument_ids) | activity_instrument_ids
-        )
-
+        # Every factual lifecycle independently proves funding coverage; a
+        # symbol may have several sequential or concurrent lifecycles in one
+        # day and none may be collapsed into a single latest window.
         def _utc(value):
             if value is None:
                 return None
@@ -963,39 +945,75 @@ class TradingEngine:
                 return value.replace(tzinfo=UTC)
             return value.astimezone(UTC)
 
-        # Funding only accrues while the factual position is open. Open
-        # positions use the active plan; closed instruments use their latest
-        # plan's factual close so post-close funding events cannot be charged.
-        instrument_window_starts: dict[str, datetime] = {}
-        instrument_window_ends: dict[str, datetime] = {}
-        for instrument_id in funding_instrument_ids:
-            if instrument_id in open_instrument_ids:
-                plan = await self.trade_plans.get_active_for_symbol(instrument_id)
+        lifecycle_plans = await self.trade_plans.lifecycles_overlapping(
+            daily_start, daily_end
+        )
+        funding_scopes: list[FundingScope] = []
+        covered_instruments: set[str] = set()
+        for plan in lifecycle_plans:
+            opened_at = _utc(getattr(plan, "opened_at", None))
+            if opened_at is None:
+                continue
+            scope_start = max(daily_start, opened_at)
+            closed_at = _utc(getattr(plan, "closed_at", None))
+            if closed_at is None:
+                scope_end = daily_end
             else:
-                plan = await self.trade_plans.latest_for_symbol(instrument_id)
-            opened_at = _utc(getattr(plan, "opened_at", None) if plan is not None else None)
-            closed_at = _utc(getattr(plan, "closed_at", None) if plan is not None else None)
-            if opened_at is not None:
-                instrument_window_starts[instrument_id] = max(daily_start, opened_at)
-            if closed_at is not None:
-                instrument_window_ends[instrument_id] = min(daily_end, closed_at)
-        coverage_status_by_instrument = {
-            instrument_id: await self.funding_coverage.status_for(
-                instrument_id=instrument_id,
-                start=instrument_window_starts.get(instrument_id, daily_start),
-                end=instrument_window_ends.get(instrument_id, daily_end),
+                # Include a funding event exactly at the factual close.
+                scope_end = min(daily_end, closed_at + timedelta(microseconds=1))
+            if scope_start >= scope_end:
+                continue
+            funding_scopes.append(
+                FundingScope(
+                    account_id=account_id,
+                    currency="USDT",
+                    instrument_id=str(plan.symbol),
+                    window_start=scope_start,
+                    window_end=scope_end,
+                    lifecycle_id=plan.trade_plan_id,
+                )
             )
-            for instrument_id in funding_instrument_ids
-        }
+            covered_instruments.add(str(plan.symbol))
+        # Verified ledger activity without a lifecycle plan still needs a
+        # conservative instrument-wide scope; it cannot be attributed to a
+        # fabricated lifecycle window.
+        activity_instrument_ids = await self.ledger.activity_instruments(
+            daily_start,
+            account_id=account_id,
+            currency="USDT",
+            end=daily_end,
+        )
+        for instrument_id in sorted(activity_instrument_ids - covered_instruments):
+            funding_scopes.append(
+                FundingScope(
+                    account_id=account_id,
+                    currency="USDT",
+                    instrument_id=instrument_id,
+                    window_start=daily_start,
+                    window_end=daily_end,
+                    lifecycle_id=None,
+                )
+            )
+        coverage_by_scope: dict[str, tuple[str, tuple[dict, ...] | None]] = {}
+        for scope in funding_scopes:
+            coverage = await self.funding_coverage.coverage_for(
+                instrument_id=scope.instrument_id,
+                start=scope.window_start,
+                end=scope.window_end,
+            )
+            key = scope.lifecycle_id or scope.instrument_id
+            coverage_by_scope[key] = (
+                coverage.coverage_status if coverage is not None else "UNKNOWN",
+                coverage.window_events if coverage is not None else None,
+            )
         pnl_provenance = await self.ledger.net_pnl_provenance_since(
             daily_start,
             account_id=account_id,
             currency="USDT",
-            instrument_ids=funding_instrument_ids,
+            instrument_ids=[],
             end=daily_end,
-            coverage_status_by_instrument=coverage_status_by_instrument,
-            instrument_window_starts=instrument_window_starts,
-            instrument_window_ends=instrument_window_ends,
+            funding_scopes=funding_scopes,
+            coverage_by_scope=coverage_by_scope,
         )
         if pnl_provenance.complete:
             daily_pnl = (

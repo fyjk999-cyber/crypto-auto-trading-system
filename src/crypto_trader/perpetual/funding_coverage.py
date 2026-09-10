@@ -6,12 +6,16 @@ import hashlib
 import json
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.money import D
-from crypto_trader.persistence.models import FundingCoverageORM
+from crypto_trader.persistence.models import (
+    FundingCoverageORM,
+    FundingEventResolutionORM,
+)
 
 
 def _utc(value: datetime) -> datetime:
@@ -39,9 +43,30 @@ class FundingCoverage:
     fetched_count: int = 0
     window_event_count: int = 0
     boundary_proof: bool = False
-    # In-memory only: raw window events for the settlement layer. The durable
-    # coverage row stores counts + manifest, never a second event store.
+    # Raw window events; persisted as events_json so completeness can be
+    # proven event-by-event, not inferred from a single status.
     window_events: tuple[dict, ...] = ()
+
+
+@dataclass(frozen=True)
+class FundingEventResolution:
+    account_id: str
+    instrument_id: str
+    settlement_timestamp: datetime
+    currency: str
+    status: str
+    quantity: Decimal | None
+    mark_price: Decimal | None
+    funding_rate: Decimal | None
+    ledger_transaction_id: str | None
+    reason: str | None
+
+    @property
+    def complete(self) -> bool:
+        return self.status in {"SETTLED", "NO_OP"}
+
+
+SETTLED_FUNDING_RESOLUTIONS = {"SETTLED", "NO_OP"}
 
 
 class FundingCoverageService:
@@ -64,6 +89,7 @@ class FundingCoverageService:
         fetched_count: int = 0,
         window_event_count: int = 0,
         boundary_proof: bool = False,
+        events: list[dict] | None = None,
     ) -> FundingCoverage:
         window_start = _utc(window_start)
         window_end = _utc(window_end)
@@ -105,6 +131,7 @@ class FundingCoverageService:
             existing.fetched_count = fetched_count
             existing.window_event_count = window_event_count
             existing.boundary_proof = boundary_proof
+            existing.events_json = list(events or [])
             await session.commit()
             return FundingCoverage(
                 instrument_id=instrument_id,
@@ -118,11 +145,13 @@ class FundingCoverageService:
                 fetched_count=fetched_count,
                 window_event_count=window_event_count,
                 boundary_proof=boundary_proof,
+                window_events=tuple(events or ()),
             )
 
-    async def status_for(
+    async def coverage_for(
         self, *, instrument_id: str, start: datetime, end: datetime
-    ) -> str:
+    ) -> FundingCoverage | None:
+        """Best durable proof window covering [start, end), or None."""
         start = _utc(start)
         end = _utc(end)
         async with self.session_factory() as session:
@@ -133,7 +162,7 @@ class FundingCoverageService:
                     )
                 )
             ).scalars().all()
-        rows = [
+        covering = [
             row
             for row in rows
             if row.pagination_complete
@@ -141,13 +170,152 @@ class FundingCoverageService:
             and _utc(row.window_start) <= start
             and _utc(row.window_end) >= end
         ]
-        if not rows:
-            return "UNKNOWN"
-        if all(row.coverage_status == "KNOWN_ZERO" for row in rows):
-            return "KNOWN_ZERO"
-        if all(row.coverage_status in {"KNOWN_ZERO", "KNOWN_VALUE"} for row in rows):
-            return "KNOWN_VALUE"
-        return "UNKNOWN"
+        if not covering:
+            return None
+        # Prefer the tightest covering window so event filters stay precise.
+        row = min(
+            covering,
+            key=lambda item: (
+                _utc(item.window_end) - _utc(item.window_start),
+                item.coverage_id,
+            ),
+        )
+        events = list(row.events_json or [])
+        return FundingCoverage(
+            instrument_id=row.instrument_id,
+            window_start=_utc(row.window_start),
+            window_end=_utc(row.window_end),
+            coverage_status=row.coverage_status,
+            pagination_complete=row.pagination_complete,
+            event_manifest_hash=row.event_manifest_hash,
+            gaps=list(row.gaps_json or []),
+            rule_version=row.rule_version,
+            fetched_count=row.fetched_count,
+            window_event_count=row.window_event_count,
+            boundary_proof=row.boundary_proof,
+            window_events=tuple(events),
+        )
+
+    async def record_event_resolution(
+        self,
+        *,
+        account_id: str,
+        instrument_id: str,
+        settlement_timestamp: datetime,
+        currency: str = "USDT",
+        status: str,
+        quantity: Decimal | None = None,
+        mark_price: Decimal | None = None,
+        funding_rate: Decimal | None = None,
+        ledger_transaction_id: str | None = None,
+        reason: str | None = None,
+    ) -> FundingEventResolution:
+        settlement_timestamp = _utc(settlement_timestamp)
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FundingEventResolutionORM).where(
+                        FundingEventResolutionORM.account_id == account_id,
+                        FundingEventResolutionORM.instrument_id == instrument_id,
+                    )
+                )
+            ).scalars().all()
+            existing = next(
+                (
+                    row
+                    for row in rows
+                    if _same_instant(row.settlement_timestamp, settlement_timestamp)
+                ),
+                None,
+            )
+            if existing is None:
+                existing = FundingEventResolutionORM(
+                    resolution_id=new_id("fres"),
+                    account_id=account_id,
+                    instrument_id=instrument_id,
+                    currency=currency,
+                    settlement_timestamp=settlement_timestamp,
+                    status=status,
+                )
+                session.add(existing)
+            elif existing.status in SETTLED_FUNDING_RESOLUTIONS and status not in (
+                SETTLED_FUNDING_RESOLUTIONS
+            ):
+                # Never downgrade a proven settlement/no-op on retry.
+                return FundingEventResolution(
+                    account_id=existing.account_id,
+                    instrument_id=existing.instrument_id,
+                    settlement_timestamp=_utc(existing.settlement_timestamp),
+                    currency=existing.currency,
+                    status=existing.status,
+                    quantity=existing.quantity,
+                    mark_price=existing.mark_price,
+                    funding_rate=existing.funding_rate,
+                    ledger_transaction_id=existing.ledger_transaction_id,
+                    reason=existing.reason,
+                )
+            existing.currency = currency
+            existing.status = status
+            existing.quantity = quantity
+            existing.mark_price = mark_price
+            existing.funding_rate = funding_rate
+            existing.ledger_transaction_id = ledger_transaction_id
+            existing.reason = reason
+            existing.updated_at = datetime.now(UTC)
+            await session.commit()
+            return FundingEventResolution(
+                account_id=account_id,
+                instrument_id=instrument_id,
+                settlement_timestamp=settlement_timestamp,
+                currency=currency,
+                status=status,
+                quantity=quantity,
+                mark_price=mark_price,
+                funding_rate=funding_rate,
+                ledger_transaction_id=ledger_transaction_id,
+                reason=reason,
+            )
+
+    async def event_resolutions(
+        self,
+        *,
+        account_id: str,
+        instrument_id: str,
+        currency: str = "USDT",
+    ) -> list[FundingEventResolution]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FundingEventResolutionORM).where(
+                        FundingEventResolutionORM.account_id == account_id,
+                        FundingEventResolutionORM.instrument_id == instrument_id,
+                        FundingEventResolutionORM.currency == currency,
+                    )
+                )
+            ).scalars().all()
+        return [
+            FundingEventResolution(
+                account_id=row.account_id,
+                instrument_id=row.instrument_id,
+                settlement_timestamp=_utc(row.settlement_timestamp),
+                currency=row.currency,
+                status=row.status,
+                quantity=row.quantity,
+                mark_price=row.mark_price,
+                funding_rate=row.funding_rate,
+                ledger_transaction_id=row.ledger_transaction_id,
+                reason=row.reason,
+            )
+            for row in rows
+        ]
+
+    async def status_for(
+        self, *, instrument_id: str, start: datetime, end: datetime
+    ) -> str:
+        coverage = await self.coverage_for(
+            instrument_id=instrument_id, start=start, end=end
+        )
+        return coverage.coverage_status if coverage is not None else "UNKNOWN"
 
 
 class FundingHistoryIngestor:
@@ -249,6 +417,7 @@ class FundingHistoryIngestor:
             fetched_count=len(fetched_history),
             window_event_count=len(window_events),
             boundary_proof=boundary_proof,
+            events=window_events,
         )
         if include_events:
             return replace(coverage, window_events=tuple(window_events))

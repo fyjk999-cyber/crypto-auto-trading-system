@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,7 +14,11 @@ from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
-from crypto_trader.perpetual.funding_settlement import FundingSettlementService
+from crypto_trader.perpetual.funding_coverage import FundingCoverageService
+from crypto_trader.perpetual.funding_settlement import (
+    FundingSettlementService,
+    canonical_utc_timestamp_text,
+)
 from crypto_trader.persistence.models import (
     LedgerEntryORM,
     TradeEpisodeORM,
@@ -87,15 +91,54 @@ async def test_full_lifecycle_is_symmetric_and_creates_one_episode(
 
     # A factual PAPER funding posting during the holding window must flow into
     # the closed episode PnL and net PnL, never be dropped as zero.
+    active_plan = await plans.get(plan.trade_plan_id)
+    assert active_plan is not None and active_plan.opened_at is not None
+    plan_opened = active_plan.opened_at
+    if plan_opened.tzinfo is None:
+        plan_opened = plan_opened.replace(tzinfo=UTC)
+    else:
+        plan_opened = plan_opened.astimezone(UTC)
+    funding_timestamp = (plan_opened + timedelta(milliseconds=5)).replace(
+        microsecond=((plan_opened + timedelta(milliseconds=5)).microsecond // 1000) * 1000
+    )
     funding_amount = await FundingSettlementService(engine.ledger).settle(
         account_id="default",
         instrument_id="BTCUSDT",
-        settlement_timestamp=datetime.now(UTC),
+        settlement_timestamp=funding_timestamp,
         signed_quantity=position.quantity,
         mark_price=Decimal("101"),
         funding_rate=Decimal("0.001"),
         contract_size=Decimal("0.01"),
         contract_multiplier=Decimal("1"),
+    )
+    coverage_service = FundingCoverageService(database.session_factory)
+    await coverage_service.record(
+        instrument_id="BTCUSDT",
+        window_start=datetime(2026, 9, 10, tzinfo=UTC),
+        window_end=datetime(2030, 1, 1, tzinfo=UTC),
+        coverage_status="KNOWN_VALUE",
+        pagination_complete=True,
+        boundary_proof=True,
+        events=[
+            {
+                "fundingTime": str(int(funding_timestamp.timestamp() * 1000)),
+                "realizedRate": "0.001",
+            }
+        ],
+        fetched_count=1,
+        window_event_count=1,
+    )
+    await coverage_service.record_event_resolution(
+        account_id="default",
+        instrument_id="BTCUSDT",
+        settlement_timestamp=funding_timestamp,
+        status="SETTLED",
+        quantity=position.quantity,
+        mark_price=Decimal("101"),
+        funding_rate=Decimal("0.001"),
+        ledger_transaction_id=await engine.ledger.transaction_id_for_event(
+            "default|BTCUSDT|" + canonical_utc_timestamp_text(funding_timestamp)
+        ),
     )
 
     chief = SequencedChief([("HOLD", "0"), ("REDUCE", "0.04"), ("EXIT", "0")])

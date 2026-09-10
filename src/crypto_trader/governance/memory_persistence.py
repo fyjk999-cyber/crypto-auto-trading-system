@@ -101,7 +101,19 @@ class MemoryPersistence:
             ),
         )
         if allow_revision:
-            eligible = or_(eligible, DailyReviewRunORM.status == "SUCCEEDED")
+            # A SUCCEEDED row may still be owned by the worker finishing a
+            # fenced episode mark; revision can only take over an expired or
+            # abandoned claim.
+            eligible = or_(
+                eligible,
+                and_(
+                    DailyReviewRunORM.status == "SUCCEEDED",
+                    or_(
+                        DailyReviewRunORM.claim_deadline_at.is_(None),
+                        DailyReviewRunORM.claim_deadline_at < now,
+                    ),
+                ),
+            )
 
         async with self.session_factory() as session:
             result = await session.execute(

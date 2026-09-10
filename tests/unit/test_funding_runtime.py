@@ -7,6 +7,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.models import Position
+from crypto_trader.order.provenance import (
+    HistoricalQuantityProvenance,
+    HistoricalQuantityStatus,
+)
 from crypto_trader.perpetual.funding_coverage import FundingCoverage
 from crypto_trader.perpetual.funding_runtime import FundingAccountingSupervisor
 
@@ -17,17 +21,41 @@ OPENED = datetime(2026, 9, 10, 8, tzinfo=UTC)
 @dataclass
 class FakePlan:
     opened_at: datetime
+    symbol: str = "BTC-USDT-SWAP"
+    trade_plan_id: str = "plan-test"
+    closed_at: datetime | None = None
 
 
 class FakePlans:
-    def __init__(self, opened_at=OPENED):
+    def __init__(
+        self,
+        opened_at=OPENED,
+        symbol="BTC-USDT-SWAP",
+        closed_at=None,
+    ):
         self.opened_at = opened_at
+        self.symbol = symbol
+        self.closed_at = closed_at
+
+    def _plan(self):
+        if self.opened_at is None:
+            return None
+        return FakePlan(
+            self.opened_at,
+            symbol=self.symbol,
+            trade_plan_id=f"plan-{self.symbol}",
+            closed_at=self.closed_at,
+        )
 
     async def get_active_for_symbol(self, symbol):
-        return FakePlan(self.opened_at) if self.opened_at else None
+        return self._plan()
 
     async def latest_for_symbol(self, symbol):
-        return FakePlan(self.opened_at) if self.opened_at else None
+        return self._plan()
+
+    async def lifecycles_overlapping(self, start, end):
+        plan = self._plan()
+        return [plan] if plan is not None else []
 
 
 class FakeOrderManager:
@@ -35,8 +63,25 @@ class FakeOrderManager:
         self.quantity_at = quantity_at or (lambda _symbol, _at: Decimal("1"))
         self.calls = []
 
-    async def signed_quantity_at(self, symbol, at):
+    async def historical_quantity_at(
+        self, *, account_id, symbol, at, currency="USDT"
+    ):
         self.calls.append((symbol, at))
+        quantity = self.quantity_at(symbol, at)
+        return HistoricalQuantityProvenance(
+            account_id=account_id,
+            instrument_id=symbol,
+            settlement_timestamp=at,
+            status=(
+                HistoricalQuantityStatus.PROVEN_ZERO
+                if quantity == 0
+                else HistoricalQuantityStatus.PROVEN_VALUE
+            ),
+            quantity=quantity,
+            source="FAKE_VERIFIED_FILLS",
+        )
+
+    async def signed_quantity_at(self, symbol, at):
         return self.quantity_at(symbol, at)
 
 
@@ -179,6 +224,7 @@ async def test_historical_quantity_is_used_for_each_settlement():
     supervisor, _, settlement, _ = _supervisor(
         events=[_event(8), _event(10)],
         candles=candles,
+        opened_at=datetime(2026, 9, 10, 7, 30, tzinfo=UTC),
         quantity_at=quantity_at,
     )
     report = await supervisor.run_once(now=NOW)
@@ -226,7 +272,7 @@ async def test_supervisor_skips_without_proven_position_open_time():
     report = await supervisor.run_once(now=NOW)
     assert ingestor.calls  # coverage may still be fetched...
     assert settlement.calls == []  # ...but no settlement without proven open time
-    assert any("POSITION_OPEN_TIME_UNPROVEN" in item for item in report.skipped)
+    assert any("LIFECYCLE_PLAN_MISSING" in item for item in report.skipped)
 
 
 async def test_supervisor_does_not_settle_unknown_coverage():
@@ -260,8 +306,11 @@ async def test_closed_activity_instrument_receives_coverage_without_settlement()
         ingestor=ingestor,
         settlement_service=settlement,
         portfolio=EmptyPortfolio(),
-        trade_plans=FakePlans(OPENED),
-        ledger=FakeLedgerActivity({"SOL-USDT-SWAP"}),
+        trade_plans=FakePlans(
+            OPENED,
+            symbol="SOL-USDT-SWAP",
+            closed_at=datetime(2026, 9, 10, 11, tzinfo=UTC),
+        ),
         order_manager=FakeOrderManager(),
         instruments_provider=lambda: {},
         lookback_hours=24,

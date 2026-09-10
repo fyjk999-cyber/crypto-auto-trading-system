@@ -75,6 +75,24 @@ class SequencedChief:
         )
 
 
+async def _seed_known_zero_funding_coverage(database, plan, symbol="BTCUSDT") -> None:
+    from crypto_trader.perpetual.funding_coverage import FundingCoverageService
+
+    opened_at = plan.opened_at
+    if opened_at.tzinfo is None:
+        opened_at = opened_at.replace(tzinfo=UTC)
+    await FundingCoverageService(database.session_factory).record(
+        instrument_id=symbol,
+        window_start=opened_at - timedelta(seconds=1),
+        window_end=datetime(2030, 1, 1, tzinfo=UTC),
+        coverage_status="KNOWN_ZERO",
+        pagination_complete=True,
+        boundary_proof=True,
+        fetched_count=0,
+        window_event_count=0,
+    )
+
+
 async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(database):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     clock = MutableClock()
@@ -114,6 +132,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     assert position is not None and position.quantity == Decimal("0.1")
     assert position.leverage == Decimal("5")
     assert engine.adapter.positions["BTCUSDT"].leverage == Decimal("5")
+    await _seed_known_zero_funding_coverage(database, active)
     entry_order = list(engine.adapter.orders.values())[0]
     persisted_entry = await engine.order_manager.get_by_client(entry_order.client_order_id)
     assert persisted_entry is not None
@@ -284,7 +303,9 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     assert opened is not None and opened.quantity == Decimal("-0.1")
     assert opened.instrument_type == "LINEAR_PERP"
     assert opened.leverage == Decimal("2")
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    active = await plans.get(plan.trade_plan_id)
+    assert active is not None and active.state == TradePlanState.ACTIVE
+    await _seed_known_zero_funding_coverage(database, active)
 
     chief = SequencedChief([("REDUCE", "0.04"), ("EXIT", "0")])
     engine.position_manager = LiveLLMPositionManager(

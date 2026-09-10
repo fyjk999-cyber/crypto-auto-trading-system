@@ -60,6 +60,19 @@ def _stats(date: str = REVIEW_DATE) -> DailyReviewStats:
     return DailyReviewStats(date=date, daily_pnl=Decimal("10"))
 
 
+async def _expire_review_claim(database, date: str = REVIEW_DATE) -> None:
+    from datetime import timedelta
+
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(DailyReviewRunORM).where(DailyReviewRunORM.review_date == date)
+            )
+        ).scalar_one()
+        row.claim_deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+        await session.commit()
+
+
 async def _review_row(database, date: str = REVIEW_DATE) -> DailyReviewRunORM:
     async with database.session_factory() as session:
         return (
@@ -169,6 +182,11 @@ async def test_late_episode_revision_reviews_only_the_late_episode(database):
     async with database.session_factory() as session:
         session.add(late)
         await session.commit()
+    # The first successful claim still owns the mark lease; only an expired
+    # (abandoned) claim may be revised.
+    blocked = await scheduler.run_once(REVIEW_DATE)
+    assert blocked is not None and blocked.get("idempotent") is True
+    await _expire_review_claim(database)
 
     revised = await scheduler.run_once(REVIEW_DATE)
     assert revised["status"] == "SUCCEEDED"
@@ -191,11 +209,14 @@ async def test_failure_after_learning_retries_without_duplicates(database, monke
     scheduler = DailyReviewScheduler(database.session_factory, canonical_only=True)
     calls = {"mark": 0}
 
-    async def flaky_mark(_ids):
+    async def flaky_mark(*_args, **_kwargs):
         calls["mark"] += 1
         raise RuntimeError("simulated crash before mark_reviewed")
 
-    monkeypatch.setattr(scheduler.episodes, "mark_reviewed", flaky_mark)
+    real_fenced = scheduler.episodes.mark_reviewed_fenced
+    monkeypatch.setattr(
+        scheduler.episodes, "mark_reviewed_fenced", flaky_mark
+    )
     with pytest.raises(RuntimeError):
         await scheduler.run_once(REVIEW_DATE)
     row = await _review_row(database)
@@ -205,10 +226,11 @@ async def test_failure_after_learning_retries_without_duplicates(database, monke
         episode = (await session.execute(select(TradeEpisodeORM))).scalar_one()
     assert episode.review_status == "PENDING"
     # Retry as a late revision without duplicating review data.
+    await _expire_review_claim(database)
     monkeypatch.setattr(
         scheduler.episodes,
-        "mark_reviewed",
-        _real_mark_reviewed(database),
+        "mark_reviewed_fenced",
+        real_fenced,
     )
     result = await scheduler.run_once(REVIEW_DATE)
     assert result["status"] == "SUCCEEDED"
@@ -218,15 +240,6 @@ async def test_failure_after_learning_retries_without_duplicates(database, monke
         pattern = (await session.execute(select(AIMarketPatternORM))).scalar_one()
     assert len(reviews) == 1
     assert pattern.sample_count == 1
-
-
-def _real_mark_reviewed(database):
-    async def mark(ids):
-        from crypto_trader.governance.trade_episode import TradeEpisodeStore
-
-        await TradeEpisodeStore(database.session_factory).mark_reviewed(list(ids))
-
-    return mark
 
 
 async def test_failure_before_publish_never_marks_episode(database, monkeypatch):
@@ -242,12 +255,12 @@ async def test_failure_before_publish_never_marks_episode(database, monkeypatch)
             raise RuntimeError("simulated crash before SUCCEEDED")
         return await original_save(*args, **kwargs)
 
-    async def spy_mark(ids):
+    async def spy_mark(*_args, **_kwargs):
         mark_calls["count"] += 1
-        await _real_mark_reviewed(database)(ids)
+        return True
 
     monkeypatch.setattr(scheduler.persistence, "save_daily_review", flaky_save)
-    monkeypatch.setattr(scheduler.episodes, "mark_reviewed", spy_mark)
+    monkeypatch.setattr(scheduler.episodes, "mark_reviewed_fenced", spy_mark)
     with pytest.raises(RuntimeError):
         await scheduler.run_once(REVIEW_DATE)
     row = await _review_row(database)

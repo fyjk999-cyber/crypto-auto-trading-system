@@ -27,17 +27,42 @@ OPENED = datetime(2026, 9, 10, 8, tzinfo=UTC)
 @dataclass
 class FakePlan:
     opened_at: datetime
+    symbol: str = "BTC-USDT-SWAP"
+    trade_plan_id: str = "plan-p7"
 
 
 class FakePlans:
+    def __init__(self, opened_at=OPENED):
+        self.opened_at = opened_at
+
     async def get_active_for_symbol(self, symbol):
-        return FakePlan(OPENED)
+        return FakePlan(self.opened_at, symbol=symbol)
 
     async def latest_for_symbol(self, symbol):
-        return FakePlan(OPENED)
+        return FakePlan(self.opened_at, symbol=symbol)
+
+    async def lifecycles_overlapping(self, start, end):
+        return [FakePlan(self.opened_at, symbol="BTC-USDT-SWAP")]
 
 
 class FakeOrderManager:
+    async def historical_quantity_at(
+        self, *, account_id, symbol, at, currency="USDT"
+    ):
+        from crypto_trader.order.provenance import (
+            HistoricalQuantityProvenance,
+            HistoricalQuantityStatus,
+        )
+
+        return HistoricalQuantityProvenance(
+            account_id=account_id,
+            instrument_id=symbol,
+            settlement_timestamp=at,
+            status=HistoricalQuantityStatus.PROVEN_VALUE,
+            quantity=Decimal("1"),
+            source="FAKE_VERIFIED_FILLS",
+        )
+
     async def signed_quantity_at(self, symbol, at):
         return Decimal("1")
 
@@ -138,8 +163,8 @@ async def test_supervisor_real_chain_settles_once_and_marks_paper_derived(databa
     )
     first = await supervisor.run_once(now=NOW)
     second = await supervisor.run_once(now=NOW)
-    assert first.settled == 2
-    assert second.settled == 2  # replayed, but ledger identity dedupes
+    assert first.settled == 1  # event exactly at opened_at is not funded
+    assert second.settled == 0  # durable resolution dedupes the replay
     async with database.session_factory() as session:
         transactions = (
             await session.execute(
@@ -153,7 +178,7 @@ async def test_supervisor_real_chain_settles_once_and_marks_paper_derived(databa
         coverage_rows = (
             await session.execute(select(FundingCoverageORM))
         ).scalars().all()
-    assert len(transactions) == 2
+    assert len(transactions) == 1
     assert all(txn.metadata_json["source"] == "PAPER_DERIVED" for txn in transactions)
     assert all(txn.account_id == "default" for txn in transactions)
     assert all(txn.instrument_id == "BTC-USDT-SWAP" for txn in transactions)
@@ -166,7 +191,6 @@ async def test_supervisor_real_chain_settles_once_and_marks_paper_derived(databa
     assert coverage.event_manifest_hash.startswith("sha256:")
     # Every posting is dated at the factual settlement instant, not run time.
     assert {txn.created_at.strftime("%H:%M") for txn in transactions} == {
-        "08:00",
         "10:00",
     }
 
@@ -258,6 +282,28 @@ async def test_supervisor_uses_historical_fill_quantity_per_settlement(database)
         )
         await session.commit()
 
+    from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType
+    from crypto_trader.domain.money import D as _D
+    from crypto_trader.ledger.service import LedgerPosting, LedgerService
+
+    ledger = LedgerService(database.session_factory)
+    for fill_id, stamp in (
+        ("p0_hist_fill_buy", datetime(2026, 9, 10, 7, tzinfo=UTC)),
+        ("p0_hist_fill_sell", datetime(2026, 9, 10, 9, 30, tzinfo=UTC)),
+    ):
+        await ledger.record(
+            LedgerEntryType.TRADE,
+            [
+                LedgerPosting("CASH", LedgerDirection.DEBIT, _D("1")),
+                LedgerPosting("REALIZED_PNL", LedgerDirection.CREDIT, _D("1")),
+            ],
+            account_id="default",
+            instrument_id="BTC-USDT-SWAP",
+            fill_id=fill_id,
+            transaction_id=f"txn_{fill_id}",
+            created_at=stamp,
+        )
+
     class CaptureIngestor:
         async def ingest(self, adapter, **kwargs):
             return FundingCoverage(
@@ -292,7 +338,10 @@ async def test_supervisor_uses_historical_fill_quantity_per_settlement(database)
         ingestor=CaptureIngestor(),
         settlement_service=settlement,
         portfolio=FakePortfolio(),
-        trade_plans=FakePlans(),
+        trade_plans=FakePlans(
+            opened_at=datetime(2026, 9, 10, 7, 30, tzinfo=UTC)
+        ),
+        ledger=ledger,
         order_manager=order_manager,
         instruments_provider=lambda: {},
         lookback_hours=24,

@@ -10,7 +10,10 @@ from sqlalchemy import select
 
 from crypto_trader.domain.money import D
 from crypto_trader.persistence.models import (
+    DailyReviewRunORM,
     FillORM,
+    FundingCoverageORM,
+    FundingEventResolutionORM,
     LedgerEntryORM,
     LedgerTransactionORM,
     LLMDecisionORM,
@@ -169,9 +172,12 @@ class TradeEpisodeStore:
             # Funding is a factual ledger posting for the same proven account,
             # instrument and currency, inside the factual holding interval.
             entry_fill_ids = [fill.fill_id for fill in entry_fills]
-            account_id = (
+            owner_rows = (
                 await session.execute(
-                    select(LedgerTransactionORM.account_id)
+                    select(
+                        LedgerTransactionORM.fill_id,
+                        LedgerTransactionORM.account_id,
+                    )
                     .join(
                         LedgerEntryORM,
                         LedgerEntryORM.transaction_id
@@ -183,37 +189,35 @@ class TradeEpisodeStore:
                         LedgerTransactionORM.fill_id.in_(entry_fill_ids),
                         LedgerEntryORM.currency == currency,
                     )
-                    .limit(1)
                 )
-            ).scalar_one_or_none()
-            if account_id is None:
-                # Fall back to a single verified funding-owner account for the
-                # same instrument/currency/window; ambiguous ownership fails
-                # closed rather than writing a zero funding PnL.
-                owner_rows = (
-                    await session.execute(
-                        select(LedgerTransactionORM.account_id)
-                        .join(
-                            LedgerEntryORM,
-                            LedgerEntryORM.transaction_id
-                            == LedgerTransactionORM.transaction_id,
-                        )
-                        .where(
-                            LedgerTransactionORM.ownership_status == "VERIFIED",
-                            LedgerTransactionORM.account_id.is_not(None),
-                            LedgerTransactionORM.instrument_id == plan.symbol,
-                            LedgerEntryORM.currency == currency,
-                            LedgerEntryORM.account.in_(FUNDING_PNL_ACCOUNTS),
-                            LedgerEntryORM.created_at >= opened_at,
-                            LedgerEntryORM.created_at <= closed_at,
-                        )
-                        .distinct()
-                    )
-                ).scalars().all()
-                owners = {str(owner) for owner in owner_rows if owner}
-                if len(owners) != 1:
-                    return None
-                account_id = owners.pop()
+            ).all()
+            owners_by_fill: dict[str, set[str]] = {
+                fill_id: set() for fill_id in entry_fill_ids
+            }
+            for fill_id, owner in owner_rows:
+                owners_by_fill.setdefault(str(fill_id), set()).add(str(owner))
+            if any(
+                len(owners_by_fill.get(fill_id, set())) != 1
+                for fill_id in entry_fill_ids
+            ):
+                return None
+            owners = {
+                next(iter(owners_by_fill[fill_id])) for fill_id in entry_fill_ids
+            }
+            if len(owners) != 1:
+                return None
+            account_id = owners.pop()
+            funding_complete, _funding_reason = await _lifecycle_funding_complete(
+                session,
+                account_id=str(account_id),
+                instrument_id=plan.symbol,
+                currency=currency,
+                opened_at=opened_at,
+                closed_at=closed_at,
+            )
+            if not funding_complete:
+                return None
+            funding_window_end = closed_at + timedelta(microseconds=1)
             funding_rows = (
                 await session.execute(
                     select(LedgerEntryORM.direction, LedgerEntryORM.amount)
@@ -229,7 +233,7 @@ class TradeEpisodeStore:
                         LedgerEntryORM.currency == currency,
                         LedgerEntryORM.account.in_(FUNDING_PNL_ACCOUNTS),
                         LedgerEntryORM.created_at >= opened_at,
-                        LedgerEntryORM.created_at <= closed_at,
+                        LedgerEntryORM.created_at < funding_window_end,
                     )
                 )
             ).all()
@@ -384,14 +388,43 @@ class TradeEpisodeStore:
             ).scalar_one_or_none()
         return row.closed_at.date().isoformat() if row is not None else None
 
-    async def mark_reviewed(self, episode_ids: list[str]) -> None:
+    async def mark_reviewed_fenced(
+        self,
+        episode_ids: list[str],
+        *,
+        review_date: str,
+        claim_token: str,
+        owner: str,
+        lease_seconds: int = 1800,
+    ) -> bool:
+        """Atomically prove the live DB claim and mark episodes REVIEWED.
+
+        The claim row and episode updates commit in one transaction; a stale
+        token can never mark factual episodes regardless of heartbeat timing.
+        """
         if not episode_ids:
-            return
-        chunk_size = 500
+            return True
+        now = datetime.now(UTC)
+        deadline = now + timedelta(seconds=max(60, lease_seconds))
         async with self.session_factory() as session:
+            claim = (
+                await session.execute(
+                    select(DailyReviewRunORM).where(
+                        DailyReviewRunORM.review_date == review_date,
+                        DailyReviewRunORM.claim_token == claim_token,
+                        DailyReviewRunORM.owner == owner,
+                        DailyReviewRunORM.status.in_(("RUNNING", "SUCCEEDED")),
+                        DailyReviewRunORM.claim_deadline_at.is_not(None),
+                        DailyReviewRunORM.claim_deadline_at >= now,
+                    )
+                )
+            ).scalar_one_or_none()
+            if claim is None:
+                return False
+            claim.claim_deadline_at = deadline
             rows = []
-            for start in range(0, len(episode_ids), chunk_size):
-                chunk = episode_ids[start : start + chunk_size]
+            for start in range(0, len(episode_ids), 500):
+                chunk = episode_ids[start : start + 500]
                 rows.extend(
                     (
                         await session.execute(
@@ -404,6 +437,139 @@ class TradeEpisodeStore:
             for row in rows:
                 row.review_status = "REVIEWED"
             await session.commit()
+        return True
+
+    async def materialize_pending_closed(self, *, limit: int = 200) -> int:
+        """Retry factual episodes whose lifecycle funding was incomplete."""
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradePlanORM.trade_plan_id)
+                    .outerjoin(
+                        TradeEpisodeORM,
+                        TradeEpisodeORM.trade_plan_id == TradePlanORM.trade_plan_id,
+                    )
+                    .where(
+                        TradePlanORM.state == "CLOSED",
+                        TradeEpisodeORM.episode_id.is_(None),
+                    )
+                    .order_by(TradePlanORM.closed_at, TradePlanORM.trade_plan_id)
+                    .limit(max(1, limit))
+                )
+            ).scalars().all()
+        created = 0
+        for plan_id in rows:
+            try:
+                episode = await self.build_for_closed_plan(str(plan_id))
+            except Exception:
+                episode = None
+            if episode is not None:
+                created += 1
+        return created
+
+
+def _event_instant(event: dict) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(event["fundingTime"]) / 1000, tz=UTC)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _event_rate(event: dict) -> Decimal:
+    raw = event.get("realizedRate")
+    if raw in (None, ""):
+        return Decimal("0")
+    try:
+        return D(raw)
+    except Exception:
+        return Decimal("0")
+
+
+async def _lifecycle_funding_complete(
+    session,
+    *,
+    account_id: str,
+    instrument_id: str,
+    currency: str,
+    opened_at: datetime,
+    closed_at: datetime,
+) -> tuple[bool, str | None]:
+    """Prove every KNOWN_VALUE event in the holding interval is resolved."""
+    scope_end = closed_at + timedelta(microseconds=1)
+    coverage_rows = (
+        await session.execute(
+            select(FundingCoverageORM).where(
+                FundingCoverageORM.instrument_id == instrument_id,
+                FundingCoverageORM.pagination_complete.is_(True),
+                FundingCoverageORM.boundary_proof.is_(True),
+            )
+        )
+    ).scalars().all()
+    covering = [
+        row
+        for row in coverage_rows
+        if _as_utc(row.window_start) <= opened_at
+        and _as_utc(row.window_end) >= scope_end
+    ]
+    if not covering:
+        return False, "FUNDING_COVERAGE_UNKNOWN"
+    row = min(
+        covering,
+        key=lambda item: (
+            _as_utc(item.window_end) - _as_utc(item.window_start),
+            item.coverage_id,
+        ),
+    )
+    status = str(row.coverage_status or "UNKNOWN")
+    if status == "KNOWN_ZERO":
+        return True, None
+    if status != "KNOWN_VALUE":
+        return False, "FUNDING_COVERAGE_UNKNOWN"
+    if row.events_json is None:
+        return False, "FUNDING_EVENTS_UNPROVEN"
+    events = list(row.events_json)
+    if any(_event_instant(event) is None for event in events):
+        return False, "FUNDING_EVENT_MALFORMED"
+    if (row.window_event_count or 0) > len(events):
+        return False, "FUNDING_EVENTS_UNPROVEN"
+    required = [
+        event
+        for event in events
+        if (instant := _event_instant(event)) is not None
+        and opened_at < instant <= closed_at
+        and _event_rate(event) != 0
+    ]
+    if not required:
+        return True, None
+    resolution_rows = (
+        await session.execute(
+            select(
+                FundingEventResolutionORM.settlement_timestamp,
+                FundingEventResolutionORM.status,
+                FundingEventResolutionORM.ledger_transaction_id,
+            ).where(
+                FundingEventResolutionORM.account_id == account_id,
+                FundingEventResolutionORM.instrument_id == instrument_id,
+                FundingEventResolutionORM.currency == currency,
+            )
+        )
+    ).all()
+    resolved = {
+        _as_utc(timestamp): (status, transaction_id)
+        for timestamp, status, transaction_id in resolution_rows
+    }
+    for event in required:
+        instant = _event_instant(event)
+        resolution = resolved.get(instant)
+        if resolution is None:
+            return False, f"FUNDING_EVENT_UNRESOLVED:{instant.isoformat()}"
+        status, transaction_id = resolution
+        if status == "SETTLED" and transaction_id:
+            continue
+        if status == "NO_OP":
+            continue
+        return False, f"FUNDING_EVENT_UNRESOLVED:{instant.isoformat()}"
+    return True, None
 
 
 def _weighted_price(fills: list[FillORM], quantity: Decimal) -> Decimal:

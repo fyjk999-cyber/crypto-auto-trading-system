@@ -17,15 +17,21 @@ from decimal import Decimal
 from typing import Any
 
 from crypto_trader.domain.money import D
+from crypto_trader.order.provenance import HistoricalQuantityStatus
 from crypto_trader.perpetual.funding_coverage import FundingHistoryIngestor
-from crypto_trader.perpetual.funding_settlement import FundingSettlementService
+from crypto_trader.perpetual.funding_settlement import (
+    FundingSettlementService,
+    canonical_utc_timestamp_text,
+)
 
 
 @dataclass
 class FundingRunReport:
     evaluated_instruments: list[str] = field(default_factory=list)
     coverage_status: dict[str, str] = field(default_factory=dict)
+    lifecycle_coverage: dict[str, str] = field(default_factory=dict)
     settled: int = 0
+    no_op: int = 0
     skipped: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -45,6 +51,7 @@ class FundingAccountingSupervisor:
         trade_plans=None,
         ledger=None,
         order_manager=None,
+        trade_episodes=None,
         instruments_provider: Callable[[], Mapping[str, Any]] | None = None,
         account_id: str = "default",
         currency: str = "USDT",
@@ -57,6 +64,7 @@ class FundingAccountingSupervisor:
         self.trade_plans = trade_plans
         self.ledger = ledger
         self.order_manager = order_manager
+        self.trade_episodes = trade_episodes
         self.instruments_provider = instruments_provider or (lambda: {})
         self.account_id = account_id
         self.currency = currency
@@ -71,7 +79,51 @@ class FundingAccountingSupervisor:
         lookback_start = now - timedelta(hours=self.lookback_hours)
         positions = await self.portfolio.get_positions()
         instruments = self.instruments_provider() or {}
-        activity_instruments: set[str] = set()
+        coverage_service = getattr(self.ingestor, "coverage_service", None)
+        existing_resolutions: dict[datetime, str] = {}
+        lifecycle_specs: list[tuple[object, str, datetime, datetime]] = []
+        if self.trade_plans is not None:
+            plans = await self.trade_plans.lifecycles_overlapping(
+                lookback_start, now
+            )
+            for plan in plans:
+                opened_at = _as_utc(getattr(plan, "opened_at", None))
+                closed_at = _as_utc(getattr(plan, "closed_at", None))
+                if opened_at is None:
+                    report.skipped.append(
+                        f"{getattr(plan, 'symbol', 'UNKNOWN')}:POSITION_OPEN_TIME_UNPROVEN"
+                    )
+                    continue
+                window_start = max(lookback_start, opened_at)
+                if closed_at is None:
+                    window_end = now
+                else:
+                    # Include a funding event exactly at the factual close.
+                    window_end = min(now, closed_at + timedelta(microseconds=1))
+                if window_end <= window_start:
+                    continue
+                lifecycle_specs.append(
+                    (plan, str(getattr(plan, "symbol", "")), window_start, window_end)
+                )
+        # Open positions without a durable plan still need coverage, but their
+        # events cannot be attributed to a lifecycle and settlement stays
+        # blocked until lineage exists.
+        planned_symbols = {
+            symbol for plan, symbol, *_ in lifecycle_specs if plan is not None
+        }
+        for symbol, position in sorted(positions.items()):
+            if position.quantity == 0:
+                continue
+            if getattr(position, "instrument_type", "SPOT") != "LINEAR_PERP":
+                continue
+            if symbol in planned_symbols:
+                continue
+            report.skipped.append(f"{symbol}:LIFECYCLE_PLAN_MISSING")
+            lifecycle_specs.append((None, symbol, lookback_start, now))
+
+        covered_unplanned = {
+            str(item[1]) for item in lifecycle_specs if item[0] is None
+        }
         if self.ledger is not None:
             activity_instruments = await self.ledger.activity_instruments(
                 lookback_start,
@@ -79,122 +131,148 @@ class FundingAccountingSupervisor:
                 currency=self.currency,
                 end=now,
             )
-        open_symbols = {
-            symbol
-            for symbol, position in positions.items()
-            if position.quantity != 0
-            and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
-        }
-        # Closed positions with verified activity still need a coverage proof
-        # for the interval they were held, even though no new settlement is
-        # due once the position is flat.
-        for symbol in sorted(open_symbols | activity_instruments):
-            position = positions.get(symbol)
-            is_open = (
-                position is not None
-                and position.quantity != 0
-                and getattr(position, "instrument_type", "SPOT") == "LINEAR_PERP"
-            )
+            for symbol in sorted(
+                activity_instruments - planned_symbols - covered_unplanned
+            ):
+                lifecycle_specs.append((None, symbol, lookback_start, now))
+
+        for plan, symbol, window_start, window_end in lifecycle_specs:
+            plan_id = getattr(plan, "trade_plan_id", None)
             report.evaluated_instruments.append(symbol)
             try:
-                if is_open:
-                    plan = (
-                        await self.trade_plans.get_active_for_symbol(symbol)
-                        if self.trade_plans is not None
-                        else None
-                    )
-                else:
-                    plan = (
-                        await self.trade_plans.latest_for_symbol(symbol)
-                        if self.trade_plans is not None
-                        else None
-                    )
-                opened_at = _as_utc(
-                    getattr(plan, "opened_at", None) if plan is not None else None
-                )
-                closed_at = _as_utc(
-                    getattr(plan, "closed_at", None) if plan is not None else None
-                )
-                if is_open and opened_at is None:
-                    report.skipped.append(f"{symbol}:POSITION_OPEN_TIME_UNPROVEN")
-                if is_open:
-                    window_start = max(lookback_start, opened_at or lookback_start)
-                    window_end = now
-                else:
-                    # A closed position only needs coverage over its factual
-                    # holding interval; including post-close history would let
-                    # later funding events masquerade as unsettled hold events.
-                    window_start = max(lookback_start, opened_at or lookback_start)
-                    window_end = min(now, closed_at) if closed_at is not None else now
-                    if window_end <= window_start:
-                        continue
                 coverage = await self.ingestor.ingest(
                     self.adapter,
                     instrument_id=symbol,
                     window_start=window_start,
                     window_end=window_end,
-                    include_events=is_open,
+                    include_events=True,
                 )
-            except Exception as exc:  # network/API failures stay observable
+            except Exception as exc:
                 report.errors.append(f"{symbol}:{type(exc).__name__}")
                 continue
             report.coverage_status[symbol] = coverage.coverage_status
-            if not is_open:
-                continue
+            if plan_id is not None:
+                report.lifecycle_coverage[plan_id] = coverage.coverage_status
             if coverage.coverage_status == "UNKNOWN":
                 report.skipped.append(f"{symbol}:FUNDING_COVERAGE_UNKNOWN")
                 continue
-            if opened_at is None:
+            if plan is None:
                 continue
-            instrument = instruments.get(symbol)
-            contract_size = (
-                instrument.contract_size
-                if instrument is not None
-                else position.contract_size
-            )
-            contract_multiplier = (
-                instrument.contract_multiplier
-                if instrument is not None
-                else position.contract_multiplier
-            )
-            for event in coverage.window_events:
-                try:
-                    settlement_time = datetime.fromtimestamp(
-                        int(event["fundingTime"]) / 1000, tz=UTC
+            opened_at = _as_utc(getattr(plan, "opened_at", None))
+            closed_at = _as_utc(getattr(plan, "closed_at", None))
+            if coverage_service is not None:
+                existing_resolutions = {
+                    resolution.settlement_timestamp: resolution.status
+                    for resolution in await coverage_service.event_resolutions(
+                        account_id=self.account_id,
+                        instrument_id=symbol,
+                        currency=self.currency,
                     )
-                except (KeyError, TypeError, ValueError):
+                }
+            for event in coverage.window_events:
+                settlement_time = _event_time(event)
+                if settlement_time is None:
                     report.skipped.append(f"{symbol}:MALFORMED_FUNDING_EVENT")
                     continue
-                if settlement_time < opened_at:
+                if opened_at is not None and settlement_time <= opened_at:
                     continue
-                rate = event.get("realizedRate")
-                if rate in (None, ""):
-                    report.skipped.append(f"{symbol}:MISSING_FUNDING_RATE")
+                if closed_at is not None and settlement_time > closed_at:
                     continue
-                # Historical quantity must be the factual signed position at
-                # each settlement instant, not the current projection amount.
                 if self.order_manager is None:
-                    report.skipped.append(f"{symbol}:POSITION_QUANTITY_UNAVAILABLE")
+                    report.skipped.append(
+                        f"{symbol}:POSITION_QUANTITY_AT_SETTLEMENT_UNPROVEN"
+                    )
                     continue
-                signed_quantity = await self.order_manager.signed_quantity_at(
-                    symbol, settlement_time
+                provenance = await self.order_manager.historical_quantity_at(
+                    account_id=self.account_id,
+                    symbol=symbol,
+                    at=settlement_time,
+                    currency=self.currency,
                 )
-                if signed_quantity == 0:
+                if provenance.status == HistoricalQuantityStatus.UNPROVEN:
+                    if coverage_service is not None:
+                        await coverage_service.record_event_resolution(
+                            account_id=self.account_id,
+                            instrument_id=symbol,
+                            settlement_timestamp=settlement_time,
+                            currency=self.currency,
+                            status="UNPROVEN",
+                            funding_rate=_event_rate(event),
+                            reason=provenance.reason or "UNPROVEN",
+                        )
+                    report.skipped.append(
+                        f"{symbol}:POSITION_QUANTITY_AT_SETTLEMENT_UNPROVEN"
+                    )
+                    continue
+                if provenance.status == HistoricalQuantityStatus.PROVEN_ZERO:
+                    if coverage_service is not None:
+                        await coverage_service.record_event_resolution(
+                            account_id=self.account_id,
+                            instrument_id=symbol,
+                            settlement_timestamp=settlement_time,
+                            currency=self.currency,
+                            status="NO_OP",
+                            quantity=Decimal("0"),
+                            funding_rate=_event_rate(event),
+                            reason="QUANTITY_ZERO",
+                        )
+                    report.no_op += 1
+                    continue
+                if existing_resolutions.get(settlement_time) in {"SETTLED", "NO_OP"}:
+                    continue
+                quantity = provenance.quantity or Decimal("0")
+                rate = _event_rate(event)
+                if rate == 0 or quantity == 0:
+                    if coverage_service is not None:
+                        await coverage_service.record_event_resolution(
+                            account_id=self.account_id,
+                            instrument_id=symbol,
+                            settlement_timestamp=settlement_time,
+                            currency=self.currency,
+                            status="NO_OP",
+                            quantity=quantity,
+                            funding_rate=rate,
+                            reason="ZERO_AMOUNT",
+                        )
+                    report.no_op += 1
                     continue
                 mark_price = await self._factual_settlement_mark(
                     symbol, settlement_time
                 )
                 if mark_price is None:
+                    if coverage_service is not None:
+                        await coverage_service.record_event_resolution(
+                            account_id=self.account_id,
+                            instrument_id=symbol,
+                            settlement_timestamp=settlement_time,
+                            currency=self.currency,
+                            status="MARK_UNAVAILABLE",
+                            quantity=quantity,
+                            funding_rate=rate,
+                            reason="NO_CLOSED_CANDLE",
+                        )
                     report.skipped.append(f"{symbol}:SETTLEMENT_MARK_UNAVAILABLE")
                     continue
+                instrument = instruments.get(symbol)
+                position = positions.get(symbol)
+                contract_size = (
+                    instrument.contract_size
+                    if instrument is not None
+                    else getattr(position, "contract_size", Decimal("1"))
+                )
+                contract_multiplier = (
+                    instrument.contract_multiplier
+                    if instrument is not None
+                    else getattr(position, "contract_multiplier", Decimal("1"))
+                )
                 try:
                     await self.settlement_service.settle(
                         account_id=self.account_id,
                         instrument_id=symbol,
                         settlement_timestamp=settlement_time,
-                        signed_quantity=signed_quantity,
+                        signed_quantity=quantity,
                         mark_price=mark_price,
-                        funding_rate=D(rate),
+                        funding_rate=rate,
                         contract_size=D(contract_size),
                         contract_multiplier=D(contract_multiplier),
                         currency=self.currency,
@@ -202,7 +280,32 @@ class FundingAccountingSupervisor:
                 except Exception as exc:
                     report.errors.append(f"{symbol}:{type(exc).__name__}")
                     continue
+                transaction_id = None
+                if self.ledger is not None:
+                    transaction_id = await self.ledger.transaction_id_for_event(
+                        _canonical_event_id(
+                            self.account_id, symbol, settlement_time
+                        )
+                    )
+                if coverage_service is not None:
+                    await coverage_service.record_event_resolution(
+                        account_id=self.account_id,
+                        instrument_id=symbol,
+                        settlement_timestamp=settlement_time,
+                        currency=self.currency,
+                        status="SETTLED",
+                        quantity=quantity,
+                        mark_price=mark_price,
+                        funding_rate=rate,
+                        ledger_transaction_id=transaction_id,
+                        reason=None,
+                    )
                 report.settled += 1
+        if self.trade_episodes is not None:
+            try:
+                await self.trade_episodes.materialize_pending_closed()
+            except Exception as exc:
+                report.errors.append(f"EPISODE_RECOVERY:{type(exc).__name__}")
         return report
 
     async def _factual_settlement_mark(
@@ -252,3 +355,29 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _event_time(event: dict) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(event["fundingTime"]) / 1000, tz=UTC)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _event_rate(event: dict) -> Decimal:
+    raw = event.get("realizedRate")
+    if raw in (None, ""):
+        return Decimal("0")
+    try:
+        return D(raw)
+    except Exception:
+        return Decimal("0")
+
+
+def _canonical_event_id(
+    account_id: str, instrument_id: str, settlement_time: datetime
+) -> str:
+    return (
+        f"{account_id}|{instrument_id}|"
+        f"{canonical_utc_timestamp_text(settlement_time)}"
+    )

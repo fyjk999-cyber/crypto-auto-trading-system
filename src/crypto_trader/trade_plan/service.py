@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.identifiers import new_id
@@ -202,20 +202,32 @@ class TradePlanService:
             ).scalars().first()
             return self._to_domain(row) if row is not None else None
 
-    async def latest_for_symbol(self, symbol: str) -> TradePlan | None:
-        """Most recent factual plan for a symbol, open or closed."""
+    async def lifecycles_overlapping(
+        self, start: datetime, end: datetime
+    ) -> list[TradePlan]:
+        """Every factual lifecycle whose holding interval intersects window."""
         async with self.session_factory() as session:
-            row = (
+            rows = (
                 await session.execute(
                     select(TradePlanORM)
-                    .where(TradePlanORM.symbol == symbol)
-                    .order_by(
-                        TradePlanORM.opened_at.desc(),
-                        TradePlanORM.created_at.desc(),
+                    .where(
+                        TradePlanORM.opened_at.is_not(None),
+                        TradePlanORM.opened_at < end,
+                        TradePlanORM.state.in_(
+                            (
+                                TradePlanState.ACTIVE.value,
+                                TradePlanState.CLOSED.value,
+                            )
+                        ),
+                        or_(
+                            TradePlanORM.closed_at.is_(None),
+                            TradePlanORM.closed_at >= start,
+                        ),
                     )
+                    .order_by(TradePlanORM.opened_at, TradePlanORM.trade_plan_id)
                 )
-            ).scalars().first()
-            return self._to_domain(row) if row is not None else None
+            ).scalars().all()
+            return [self._to_domain(row) for row in rows]
 
     async def transition(
         self, trade_plan_id: str, state: TradePlanState, *, reason: str | None = None

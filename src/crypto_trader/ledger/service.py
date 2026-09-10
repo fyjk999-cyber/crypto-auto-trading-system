@@ -11,7 +11,7 @@ legs were replaced by crypto spot trade journals defined in SPAC section 6.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -27,7 +27,11 @@ from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import LedgerEntry, LedgerTransaction
 from crypto_trader.domain.money import D
 from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
-from crypto_trader.persistence.models import LedgerEntryORM, LedgerTransactionORM
+from crypto_trader.persistence.models import (
+    FundingEventResolutionORM,
+    LedgerEntryORM,
+    LedgerTransactionORM,
+)
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,36 @@ def _pnl_signed_amount(entry: LedgerEntryORM) -> Decimal:
     return -Decimal(entry.amount)
 
 
+def _as_utc_instant(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _event_instant(event: dict) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(event["fundingTime"]) / 1000, tz=UTC)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _event_rate(event: dict) -> Decimal:
+    raw = event.get("realizedRate")
+    if raw in (None, ""):
+        return Decimal("0")
+    try:
+        return D(raw)
+    except Exception:
+        return Decimal("0")
+
+
+def _funding_event_in_scope(event: dict, scope: FundingScope) -> bool:
+    instant = _event_instant(event)
+    if instant is None:
+        return False
+    return scope.window_start <= instant < scope.window_end
+
+
 @dataclass(frozen=True)
 class FundingScope:
     """Formal funding/PnL ownership window.
@@ -217,6 +251,7 @@ class FundingScope:
     instrument_id: str
     window_start: datetime
     window_end: datetime
+    lifecycle_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.account_id or not str(self.account_id).strip():
@@ -288,14 +323,18 @@ class LedgerService:
     # ------------------------------------------------------------ scoped read
 
     async def funding_scope_provenance(
-        self, scope: FundingScope, *, coverage_status: str
+        self,
+        scope: FundingScope,
+        *,
+        coverage_status: str,
+        coverage_events: Sequence[dict] | None = None,
     ) -> FundingScopeProvenance:
         """Prove funding for one account/currency/instrument/window.
 
         Postings are only counted when the transaction carries canonical
         ownership (``VERIFIED``), the exact account, the exact instrument and
-        the exact currency. Any coverage status other than KNOWN_ZERO or
-        KNOWN_VALUE is not a factual zero.
+        the exact currency. KNOWN_VALUE additionally requires every factual
+        nonzero event in scope to carry a durable SETTLED/NO_OP resolution.
         """
         async with self.session_factory() as session:
             rows = (
@@ -317,6 +356,23 @@ class LedgerService:
                     )
                 )
             ).scalars().all()
+            resolution_rows = (
+                await session.execute(
+                    select(
+                        FundingEventResolutionORM.settlement_timestamp,
+                        FundingEventResolutionORM.status,
+                    ).where(
+                        FundingEventResolutionORM.account_id == scope.account_id,
+                        FundingEventResolutionORM.instrument_id == scope.instrument_id,
+                        FundingEventResolutionORM.currency == scope.currency,
+                    )
+                )
+            ).all()
+        resolved_instants = {
+            _as_utc_instant(timestamp): status
+            for timestamp, status in resolution_rows
+            if status in {"SETTLED", "NO_OP"}
+        }
         settled = sum((_pnl_signed_amount(row) for row in rows), Decimal("0"))
         known_subtotal = settled
         reasons: list[str] = []
@@ -326,12 +382,42 @@ class LedgerService:
             FundingStatus.KNOWN_VALUE.value,
         }:
             reasons.append(f"FUNDING_COVERAGE_UNKNOWN:{scope.instrument_id}")
-        elif coverage == FundingStatus.KNOWN_ZERO.value and settled != 0:
-            reasons.append(
-                f"FUNDING_COVERAGE_CONTRADICTION:{scope.instrument_id}"
-            )
-        elif coverage == FundingStatus.KNOWN_VALUE.value and not rows:
-            reasons.append(f"FUNDING_EVENTS_NOT_SETTLED:{scope.instrument_id}")
+        elif coverage == FundingStatus.KNOWN_ZERO.value:
+            if settled != 0:
+                reasons.append(
+                    f"FUNDING_COVERAGE_CONTRADICTION:{scope.instrument_id}"
+                )
+        else:  # KNOWN_VALUE
+            if coverage_events is None:
+                # Legacy callers cannot prove no-op events; require postings.
+                if not rows:
+                    reasons.append(
+                        f"FUNDING_EVENTS_NOT_SETTLED:{scope.instrument_id}"
+                    )
+            elif not coverage_events:
+                reasons.append(f"FUNDING_EVENTS_UNPROVEN:{scope.instrument_id}")
+            else:
+                required_events = [
+                    event
+                    for event in coverage_events
+                    if _funding_event_in_scope(event, scope)
+                    and _event_rate(event) != 0
+                ]
+                for event in required_events:
+                    instant = _event_instant(event)
+                    if instant is None:
+                        reasons.append(
+                            f"FUNDING_EVENT_MALFORMED:{scope.instrument_id}"
+                        )
+                        continue
+                    if instant not in resolved_instants:
+                        reasons.append(
+                            f"FUNDING_EVENT_UNRESOLVED:{instant.isoformat()}"
+                        )
+                if not required_events and settled != 0:
+                    reasons.append(
+                        f"FUNDING_EVENTS_MISSING:{scope.instrument_id}"
+                    )
         complete = not reasons
         return FundingScopeProvenance(
             scope=scope,
@@ -352,8 +438,11 @@ class LedgerService:
         instrument_ids,
         end: datetime | None = None,
         coverage_status_by_instrument: dict[str, str] | None = None,
+        coverage_events_by_instrument: Mapping[str, Sequence[dict]] | None = None,
         instrument_window_starts: Mapping[str, datetime] | None = None,
         instrument_window_ends: Mapping[str, datetime] | None = None,
+        funding_scopes: Sequence[FundingScope] | None = None,
+        coverage_by_scope: Mapping[str, tuple[str, Sequence[dict] | None]] | None = None,
     ) -> PnlProvenance:
         """Scoped UTC-window PnL provenance.
 
@@ -385,6 +474,11 @@ class LedgerService:
             str(instrument): window_end
             for instrument, window_end in (instrument_window_ends or {}).items()
         }
+        coverage_events_map = {
+            str(instrument): events
+            for instrument, events in (coverage_events_by_instrument or {}).items()
+        }
+        scope_coverage_map = dict(coverage_by_scope or {})
 
         async with self.session_factory() as session:
             rows = (
@@ -443,44 +537,131 @@ class LedgerService:
                 discovered_funding_instruments.add(txn.instrument_id)
                 known_funding += signed
 
-        required = sorted(
-            set(requested)
-            | discovered_funding_instruments
-            | discovered_activity_instruments
-        )
-        scope_provenances: list[FundingScopeProvenance] = []
-        for instrument in required:
-            raw_start = window_starts.get(instrument)
-            scope_start = start
-            if raw_start is not None:
-                if raw_start.tzinfo is None:
-                    raw_start = raw_start.replace(tzinfo=UTC)
-                scope_start = max(start, raw_start)
-            raw_end = window_ends.get(instrument)
-            scope_end = end
-            if raw_end is not None:
-                if raw_end.tzinfo is None:
-                    raw_end = raw_end.replace(tzinfo=UTC)
-                scope_end = min(end, raw_end)
-            if scope_start >= scope_end:
-                unattributed_reasons.add(
-                    f"POSITION_WINDOW_UNAVAILABLE:{instrument}"
+        if funding_scopes is not None:
+            provided_scopes = list(funding_scopes)
+            for scope in provided_scopes:
+                if (
+                    scope.account_id != account_id
+                    or scope.currency != currency
+                ):
+                    raise ValueError(
+                        "FundingScope identity must match the scoped PnL query"
+                    )
+            by_instrument: dict[str, list[FundingScope]] = {}
+            for scope in provided_scopes:
+                by_instrument.setdefault(scope.instrument_id, []).append(scope)
+            for instrument, scopes_for_instrument in by_instrument.items():
+                ordered = sorted(
+                    scopes_for_instrument, key=lambda item: item.window_start
                 )
-                continue
-            scope = FundingScope(
-                account_id=account_id,
-                currency=currency,
-                instrument_id=instrument,
-                window_start=scope_start,
-                window_end=scope_end,
-            )
-            scope_provenances.append(
-                await self.funding_scope_provenance(
-                    scope,
-                    coverage_status=coverage_map.get(instrument, "UNKNOWN"),
+                for previous, current in zip(ordered, ordered[1:], strict=False):
+                    if current.window_start < previous.window_end:
+                        unattributed_reasons.add(
+                            f"OVERLAPPING_LIFECYCLE_SCOPES:{instrument}"
+                        )
+            covered_instruments = set(by_instrument)
+            fallback_instruments = sorted(
+                (
+                    set(requested)
+                    | discovered_funding_instruments
+                    | discovered_activity_instruments
                 )
+                - covered_instruments
             )
-
+            for instrument in fallback_instruments:
+                raw_start = window_starts.get(instrument)
+                scope_start = start
+                if raw_start is not None:
+                    if raw_start.tzinfo is None:
+                        raw_start = raw_start.replace(tzinfo=UTC)
+                    scope_start = max(start, raw_start)
+                raw_end = window_ends.get(instrument)
+                scope_end = end
+                if raw_end is not None:
+                    if raw_end.tzinfo is None:
+                        raw_end = raw_end.replace(tzinfo=UTC)
+                    scope_end = min(end, raw_end)
+                if scope_start >= scope_end:
+                    unattributed_reasons.add(
+                        f"POSITION_WINDOW_UNAVAILABLE:{instrument}"
+                    )
+                    continue
+                provided_scopes.append(
+                    FundingScope(
+                        account_id=account_id,
+                        currency=currency,
+                        instrument_id=instrument,
+                        window_start=scope_start,
+                        window_end=scope_end,
+                        lifecycle_id=None,
+                    )
+                )
+            scope_provenances: list[FundingScopeProvenance] = []
+            for scope in sorted(
+                provided_scopes,
+                key=lambda item: (
+                    item.instrument_id,
+                    item.window_start,
+                    item.lifecycle_id or "",
+                ),
+            ):
+                key = scope.lifecycle_id or scope.instrument_id
+                status, events = scope_coverage_map.get(
+                    key, ("UNKNOWN", None)
+                )
+                if status == "UNKNOWN" and scope.lifecycle_id is None:
+                    status = coverage_map.get(scope.instrument_id, "UNKNOWN")
+                    events = coverage_events_map.get(scope.instrument_id, events)
+                scope_provenances.append(
+                    await self.funding_scope_provenance(
+                        scope,
+                        coverage_status=status,
+                        coverage_events=events,
+                    )
+                )
+            required = sorted(
+                {scope.instrument_id for scope in provided_scopes}
+                | set(fallback_instruments)
+            )
+        else:
+            required = sorted(
+                set(requested)
+                | discovered_funding_instruments
+                | discovered_activity_instruments
+            )
+            scope_provenances = []
+            for instrument in required:
+                raw_start = window_starts.get(instrument)
+                scope_start = start
+                if raw_start is not None:
+                    if raw_start.tzinfo is None:
+                        raw_start = raw_start.replace(tzinfo=UTC)
+                    scope_start = max(start, raw_start)
+                raw_end = window_ends.get(instrument)
+                scope_end = end
+                if raw_end is not None:
+                    if raw_end.tzinfo is None:
+                        raw_end = raw_end.replace(tzinfo=UTC)
+                    scope_end = min(end, raw_end)
+                if scope_start >= scope_end:
+                    unattributed_reasons.add(
+                        f"POSITION_WINDOW_UNAVAILABLE:{instrument}"
+                    )
+                    continue
+                scope = FundingScope(
+                    account_id=account_id,
+                    currency=currency,
+                    instrument_id=instrument,
+                    window_start=scope_start,
+                    window_end=scope_end,
+                )
+                scope_provenances.append(
+                    await self.funding_scope_provenance(
+                        scope,
+                        coverage_status=coverage_map.get(instrument, "UNKNOWN"),
+                        coverage_events=coverage_events_map.get(instrument),
+                    )
+                )
         unknown_reasons = set(unattributed_reasons)
         for scope_prov in scope_provenances:
             unknown_reasons.update(scope_prov.unknown_reasons)
@@ -781,6 +962,20 @@ class LedgerService:
             created_at.isoformat() if isinstance(created_at, datetime) else str(created_at)
         )
         return f"ledger-{stamp}-{entry_id}"
+
+    async def transaction_id_for_event(self, event_id: str) -> str | None:
+        if not event_id:
+            return None
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(LedgerTransactionORM.transaction_id)
+                    .where(LedgerTransactionORM.event_id == event_id)
+                    .order_by(LedgerTransactionORM.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        return str(row) if row is not None else None
 
     async def activity_instruments(
         self,

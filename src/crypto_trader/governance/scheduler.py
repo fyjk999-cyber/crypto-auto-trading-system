@@ -100,16 +100,14 @@ class DailyReviewScheduler:
             )
             if not saved:
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_MARK")
-            if not await self.persistence.heartbeat_daily_review(
-                date,
-                claim_token,
+            if not await self.episodes.mark_reviewed_fenced(
+                [episode.episode_id for episode in pending],
+                review_date=date,
+                claim_token=claim_token,
                 owner=self.owner,
                 lease_seconds=self.claim_lease_seconds,
             ):
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_MARK")
-            await self.episodes.mark_reviewed(
-                [episode.episode_id for episode in pending]
-            )
             return {
                 "date": date,
                 "status": "SUCCEEDED",

@@ -287,6 +287,40 @@ class FundingCoverageORM(Base):
     fetched_count: Mapped[int] = mapped_column(Integer, default=0)
     window_event_count: Mapped[int] = mapped_column(Integer, default=0)
     boundary_proof: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Factual funding events (fundingTime, realizedRate) in this proven window.
+    # Required to prove every KNOWN_VALUE event has a canonical settlement or a
+    # proven no-op.
+    events_json: Mapped[list[Any] | None] = mapped_column(JSON)
+
+
+class FundingEventResolutionORM(Base):
+    """Durable per funding-event resolution for one account/instrument instant."""
+
+    __tablename__ = "funding_event_resolutions"
+    __table_args__ = (
+        UniqueConstraint(
+            "account_id",
+            "instrument_id",
+            "settlement_timestamp",
+            name="uq_funding_event_resolution",
+        ),
+    )
+
+    resolution_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    instrument_id: Mapped[str] = mapped_column(String(64), index=True)
+    currency: Mapped[str] = mapped_column(String(16), default="USDT")
+    settlement_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24), default="UNPROVEN")
+    quantity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    mark_price: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    funding_rate: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    ledger_transaction_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class EquitySnapshotORM(Base):

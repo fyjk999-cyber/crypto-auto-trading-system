@@ -26,8 +26,17 @@ from crypto_trader.domain.enums import (
 from crypto_trader.domain.errors import IdempotencyConflict, InvalidStateTransition, OrderNotFound
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill, Order, OrderEvent, OrderIntent
+from crypto_trader.order.provenance import (
+    HistoricalQuantityProvenance,
+    HistoricalQuantityStatus,
+)
 from crypto_trader.order.state_machine import OrderStateMachine
-from crypto_trader.persistence.models import FillORM, OrderEventORM, OrderORM
+from crypto_trader.persistence.models import (
+    FillORM,
+    LedgerTransactionORM,
+    OrderEventORM,
+    OrderORM,
+)
 
 SettlementCallback = Callable[[Fill], Awaitable[None]]
 
@@ -474,27 +483,137 @@ class OrderManager:
             ).scalar_one_or_none()
             return _orm_to_fill(row) if row else None
 
-    async def signed_quantity_at(self, symbol: str, at: datetime) -> Decimal:
-        """Factual signed position quantity as of an instant, from fills.
+    async def historical_quantity_at(
+        self,
+        *,
+        account_id: str,
+        symbol: str,
+        at: datetime,
+        currency: str = "USDT",
+    ) -> HistoricalQuantityProvenance:
+        """Account-scoped factual signed quantity with explicit provenance.
 
-        Funding settles on the position actually held at each settlement
-        timestamp; using the current projection quantity for historical events
-        would retroactively apply later adds/reductions.
+        A fill is only attributable when its canonical ledger transaction is
+        VERIFIED and belongs to ``account_id``. Missing or ambiguous lineage is
+        UNPROVEN and must never be treated as a factual zero.
         """
+        if not account_id:
+            return HistoricalQuantityProvenance(
+                account_id=account_id,
+                instrument_id=symbol,
+                settlement_timestamp=at,
+                status=HistoricalQuantityStatus.UNPROVEN,
+                quantity=None,
+                source="CANONICAL_FILLS+VERIFIED_LEDGER",
+                reason="ACCOUNT_ID_REQUIRED",
+            )
         async with self.session_factory() as session:
-            rows = (
+            fills = (
                 await session.execute(
-                    select(FillORM.side, FillORM.quantity).where(
-                        FillORM.symbol == symbol,
-                        FillORM.timestamp <= at,
-                    )
+                    select(FillORM)
+                    .where(FillORM.symbol == symbol, FillORM.timestamp <= at)
+                    .order_by(FillORM.timestamp, FillORM.id)
                 )
-            ).all()
+            ).scalars().all()
+            if not fills:
+                return HistoricalQuantityProvenance(
+                    account_id=account_id,
+                    instrument_id=symbol,
+                    settlement_timestamp=at,
+                    status=HistoricalQuantityStatus.UNPROVEN,
+                    quantity=None,
+                    source="CANONICAL_FILLS+VERIFIED_LEDGER",
+                    reason="NO_FILL_HISTORY",
+                )
+            fill_ids = [fill.fill_id for fill in fills]
+            owners: dict[str, set[str]] = {fill_id: set() for fill_id in fill_ids}
+            for offset in range(0, len(fill_ids), 500):
+                chunk = fill_ids[offset : offset + 500]
+                rows = (
+                    await session.execute(
+                        select(
+                            LedgerTransactionORM.fill_id,
+                            LedgerTransactionORM.account_id,
+                        ).where(
+                            LedgerTransactionORM.ownership_status == "VERIFIED",
+                            LedgerTransactionORM.account_id.is_not(None),
+                            LedgerTransactionORM.fill_id.in_(chunk),
+                        )
+                    )
+                ).all()
+                for fill_id, owner in rows:
+                    owners.setdefault(str(fill_id), set()).add(str(owner))
+
+        unproven = [
+            fill.fill_id
+            for fill in fills
+            if len(owners.get(fill.fill_id, set())) != 1
+        ]
+        if unproven:
+            return HistoricalQuantityProvenance(
+                account_id=account_id,
+                instrument_id=symbol,
+                settlement_timestamp=at,
+                status=HistoricalQuantityStatus.UNPROVEN,
+                quantity=None,
+                source="CANONICAL_FILLS+VERIFIED_LEDGER",
+                fill_ids=tuple(unproven),
+                reason="FILL_OWNERSHIP_UNPROVEN",
+            )
+        target_fills = [
+            fill
+            for fill in fills
+            if next(iter(owners[fill.fill_id])) == account_id
+        ]
+        watermark = (
+            f"{target_fills[-1].timestamp.isoformat()}:{target_fills[-1].id}"
+            if target_fills
+            else None
+        )
+        if not target_fills:
+            # Every symbol fill at/before the instant is verified to another
+            # account; this account's quantity is factually zero.
+            return HistoricalQuantityProvenance(
+                account_id=account_id,
+                instrument_id=symbol,
+                settlement_timestamp=at,
+                status=HistoricalQuantityStatus.PROVEN_ZERO,
+                quantity=Decimal("0"),
+                source="CANONICAL_FILLS+VERIFIED_LEDGER",
+                watermark=watermark,
+                reason="NO_FILLS_FOR_ACCOUNT",
+            )
         total = Decimal("0")
-        for side, quantity in rows:
-            signed = Decimal(quantity)
-            total += signed if str(side).upper() == OrderSide.BUY.value else -signed
-        return total
+        for fill in target_fills:
+            side = str(fill.side).upper()
+            if side not in {OrderSide.BUY.value, OrderSide.SELL.value}:
+                return HistoricalQuantityProvenance(
+                    account_id=account_id,
+                    instrument_id=symbol,
+                    settlement_timestamp=at,
+                    status=HistoricalQuantityStatus.UNPROVEN,
+                    quantity=None,
+                    source="CANONICAL_FILLS+VERIFIED_LEDGER",
+                    fill_ids=(fill.fill_id,),
+                    reason="UNKNOWN_FILL_SIDE",
+                )
+            signed = Decimal(fill.quantity)
+            total += signed if side == OrderSide.BUY.value else -signed
+        return HistoricalQuantityProvenance(
+            account_id=account_id,
+            instrument_id=symbol,
+            settlement_timestamp=at,
+            status=(
+                HistoricalQuantityStatus.PROVEN_ZERO
+                if total == 0
+                else HistoricalQuantityStatus.PROVEN_VALUE
+            ),
+            quantity=total,
+            source="CANONICAL_FILLS+VERIFIED_LEDGER",
+            fill_ids=tuple(fill.fill_id for fill in target_fills),
+            watermark=watermark,
+            reason=None if total != 0 else "NET_FLAT",
+        )
 
     async def list_events(self, order_id: str) -> list[OrderEvent]:
         async with self.session_factory() as session:
