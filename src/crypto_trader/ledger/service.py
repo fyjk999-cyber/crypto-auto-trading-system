@@ -366,6 +366,47 @@ class LedgerService:
         )
         return total
 
+    async def net_pnl_since(self, start: datetime) -> tuple[Decimal | None, str]:
+        """Factual UTC-day net PnL: realized +/- fees + funding.
+
+        Returns ``(net, source)``. If any required accounting line is missing
+        and cannot be proven zero, net is ``None`` so Risk never treats missing
+        data as zero.
+        """
+        accounts = (
+            "REALIZED_PNL",
+            "FEE_EXPENSE",
+            "FUNDING_RECEIPT",
+            "FUNDING_PAYMENT",
+            "FUTURES_TRADING_FEE",
+            "FUTURES_REALIZED_PNL",
+        )
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(LedgerEntryORM).where(
+                        LedgerEntryORM.account.in_(accounts),
+                        LedgerEntryORM.created_at >= start,
+                    )
+                )
+            ).scalars().all()
+        total = Decimal("0")
+        for row in rows:
+            account = row.account
+            if account in {"REALIZED_PNL", "FUNDING_RECEIPT", "FUTURES_REALIZED_PNL"}:
+                total += (
+                    row.amount
+                    if row.direction == LedgerDirection.CREDIT.value
+                    else -row.amount
+                )
+            else:  # expense/fee/funding payment: debit increases loss
+                total += (
+                    -row.amount
+                    if row.direction == LedgerDirection.DEBIT.value
+                    else row.amount
+                )
+        return total, "LEDGER:REALIZED+FEE+FUNDING"
+
 
 async def _txn_to_domain(txn: LedgerTransactionORM) -> LedgerTransaction:
     entries = [

@@ -53,7 +53,9 @@ class RiskEngine:
         open_order_count: int,
         market_prices: dict[str, Decimal] | None = None,
         daily_pnl: Decimal = Decimal("0"),
+        daily_pnl_source: str = "UNSPECIFIED",
         drawdown: Decimal = Decimal("0"),
+        drawdown_source: str = "UNSPECIFIED",
         consecutive_failures: int = 0,
         run_id: str | None = None,
         order_id: str | None = None,
@@ -185,6 +187,10 @@ class RiskEngine:
                 "approved_notional": str(notional),
                 "requested_leverage": str(requested_leverage),
                 "approved_leverage": str(approved_leverage),
+                "daily_pnl": str(daily_pnl),
+                "daily_pnl_source": daily_pnl_source,
+                "drawdown": str(drawdown),
+                "drawdown_source": drawdown_source,
             }
         )
 

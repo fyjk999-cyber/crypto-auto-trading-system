@@ -731,7 +731,7 @@ class TradingEngine:
             market_prices[symbol] = market_price
         open_orders = await self.order_manager.count_open()
         daily_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-        daily_pnl = await self.ledger.realized_pnl_since(daily_start)
+        daily_pnl, daily_pnl_source = await self.ledger.net_pnl_since(daily_start)
         risk_decision = self.risk_engine.check(
             signal,
             account=account,
@@ -740,6 +740,7 @@ class TradingEngine:
             market_prices=market_prices,
             open_order_count=open_orders,
             daily_pnl=daily_pnl,
+            daily_pnl_source=daily_pnl_source,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
         )
