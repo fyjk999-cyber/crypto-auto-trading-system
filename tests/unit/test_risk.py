@@ -271,4 +271,6 @@ def test_risk_rejects_unknown_drawdown_instead_of_treating_it_as_zero():
         drawdown=None,
     )
     assert decision.decision == ExecutionDecision.REJECT
-    assert "DRAWDOWN_UNAVAILABLE" in str(decision.checks) or "DRAWDOWN_UNAVAILABLE" in str(decision.reason)
+    assert "DRAWDOWN_UNAVAILABLE" in str(decision.checks) or (
+        "DRAWDOWN_UNAVAILABLE" in str(decision.reason)
+    )
