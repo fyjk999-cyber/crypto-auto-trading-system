@@ -814,9 +814,11 @@ class TradingEngine:
             daily_pnl_source=daily_pnl_source,
             drawdown=drawdown,
             drawdown_source=drawdown_source,
-            current_equity=account.equity,
+            current_equity=mtm_equity if valuation_available else account.equity,
             peak_equity=peak_equity,
-            valuation_as_of=valuation_as_of.isoformat(),
+            valuation_as_of=(
+                valuation_as_of.isoformat() if valuation_as_of is not None else None
+            ),
             valuation_currency="USDT",
             valuation_source=drawdown_source,
             consecutive_failures=self.consecutive_failures,

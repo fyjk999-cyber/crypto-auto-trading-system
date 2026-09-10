@@ -259,3 +259,16 @@ def test_portfolio_exposure_uses_factual_prices_for_every_held_symbol():
     assert decision.decision == ExecutionDecision.REJECT
     assert decision.reason == "MAX_ACCOUNT_EXPOSURE"
     assert decision.checks["existing_notional"] == "300"
+
+
+def test_risk_rejects_unknown_drawdown_instead_of_treating_it_as_zero():
+    decision = RiskEngine().check(
+        make_signal(),
+        account=make_account(),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        drawdown=None,
+    )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert "DRAWDOWN_UNAVAILABLE" in str(decision.checks) or "DRAWDOWN_UNAVAILABLE" in str(decision.reason)
