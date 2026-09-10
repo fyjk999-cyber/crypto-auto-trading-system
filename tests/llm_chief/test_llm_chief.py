@@ -155,6 +155,24 @@ async def test_deepseek_provider_timeout_fails_closed_after_bounded_retries():
     assert provider.diagnostics()["last_attempt_count"] == 2
 
 
+async def test_deepseek_provider_transport_error_fails_closed():
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectError("provider down")
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    result = await provider.complete_json(prompt="JSON", retries=0)
+    assert result.ok is False
+    assert result.error == "LLM_TRANSPORT_ERROR"
+    assert calls == 1
+
+
+
 async def test_deepseek_provider_malformed_payload_fails_closed():
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": []})
