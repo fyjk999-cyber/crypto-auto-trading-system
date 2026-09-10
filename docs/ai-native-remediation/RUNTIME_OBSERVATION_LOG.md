@@ -7,8 +7,8 @@ URL: http://127.0.0.1:8001
 Status: RUNNING / lease held / single_writer true / kill off / health OK
 
 Lifecycle counts:
-- llm_decisions: 2981
-- trade_plans: 6
+- llm_decisions: 3038
+- trade_plans: 7
 - orders: 0
 - fills: 0
 - trade_episodes: 0
@@ -18,3 +18,7 @@ Natural directional decisions observed:
 - after refresh fix, no new directional decisions yet
 
 Pending: natural order -> fill -> ACTIVE position -> exit -> CLOSED -> episode
+
+Additional fixes during observation:
+- market re-fetch before Risk and again immediately before ExecutionAuthority
+- DeepSeek decision timeout widened from 30s to 45s to reduce LLM_TIMEOUT fail-closed
