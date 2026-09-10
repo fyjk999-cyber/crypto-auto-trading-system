@@ -218,6 +218,12 @@ def test_market_data_engine_latest_empty_returns_none():
     assert mde.latest() is None
 
 
+def test_market_data_engine_closes_empty_returns_empty_list():
+    mde = MarketDataEngine("BTCUSDT")
+    assert mde.closes(5) == []
+
+
+
 def test_ml_meta_not_a_directional_sub_strategy():
     assert "ml_meta" not in BASE_WEIGHTS
     assert sum(BASE_WEIGHTS.values()) == Decimal("1.00")
