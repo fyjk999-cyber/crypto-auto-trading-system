@@ -194,6 +194,12 @@ def test_market_data_engine_ema_insufficient_returns_none():
     assert mde.ema(5) is None
 
 
+def test_market_data_engine_zscore_insufficient_returns_none():
+    mde = make_mde([Decimal("100"), Decimal("101")])
+    assert mde.zscore(5) is None
+
+
+
 def test_ml_meta_not_a_directional_sub_strategy():
     assert "ml_meta" not in BASE_WEIGHTS
     assert sum(BASE_WEIGHTS.values()) == Decimal("1.00")
