@@ -23,3 +23,9 @@ def test_split_allows_no_validation_window():
     train, val, test = split_ordered(list(range(10)), train=0.5, val=0.0)
     assert val == []
     assert test == [5, 6, 7, 8, 9]
+
+
+def test_split_rejects_empty_items():
+    with pytest.raises(ValueError):
+        split_ordered([], train=0.5, val=0.2)
+
