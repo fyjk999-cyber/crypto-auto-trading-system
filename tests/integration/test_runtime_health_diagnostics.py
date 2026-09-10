@@ -36,6 +36,21 @@ async def test_execution_market_refresh_succeeds_on_healthy_engine(database):
     await engine.stop()
 
 
+async def test_execution_market_refresh_replaces_stale_book(database):
+    from datetime import UTC, datetime, timedelta
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-market-refresh-stale")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    book = engine.market_data.books["BTCUSDT"]
+    book.updated_at = datetime.now(UTC) - timedelta(seconds=30)
+    assert engine.market_data.is_fresh("BTCUSDT", 2.0) is False
+    assert await engine._refresh_execution_market("BTCUSDT") is True
+    assert engine.market_data.is_fresh("BTCUSDT", 2.0) is True
+    await engine.stop()
+
+
+
 async def test_execution_market_refresh_failure_marks_health_false():
     from crypto_trader.market_data.service import MarketDataService
     from crypto_trader.runtime.engine import TradingEngine

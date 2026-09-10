@@ -786,6 +786,10 @@ class TradingEngine:
                 "trade_plan_id": trade_plan_id or None,
             },
         )
+        # Risk persistence and plan linkage can take non-trivial DB time; refresh
+        # again immediately before authority so a slow SQLite commit cannot make
+        # the 2s orderbook freshness check fail on an otherwise healthy feed.
+        await self._refresh_execution_market(symbol)
         auth_ctx = AuthorizationContext(
             now=self.clock.now(),
             trading_mode=self.settings.effective_mode(),
