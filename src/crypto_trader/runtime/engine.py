@@ -713,9 +713,6 @@ class TradingEngine:
 
         await self._refresh_execution_market(symbol)
         account = await self.portfolio.get_account(self.settings.effective_mode())
-        drawdown, peak_equity, valuation_as_of, drawdown_source = (
-            await self.portfolio.record_equity_drawdown(account.equity)
-        )
         book = self.market_data.books.get(symbol)
         market_price = D("0")
         if book is not None:
@@ -732,6 +729,50 @@ class TradingEngine:
                 market_prices[position_symbol] = position_mid
         if market_price > 0:
             market_prices[symbol] = market_price
+
+        valuation_available = True
+        mtm_equity = account.equity
+        for position_symbol, position in positions.items():
+            if position.quantity == 0:
+                continue
+            mark = market_prices.get(position_symbol)
+            if mark is None or mark <= 0:
+                valuation_available = False
+                break
+            instrument = self._instruments.get(position_symbol)
+            contract_size = (
+                instrument.contract_size if instrument is not None else position.contract_size
+            )
+            contract_multiplier = (
+                instrument.contract_multiplier
+                if instrument is not None
+                else position.contract_multiplier
+            )
+            instrument_type = (
+                instrument.instrument_type
+                if instrument is not None
+                else position.instrument_type
+            )
+            if instrument_type == "LINEAR_PERP":
+                mtm_equity += (
+                    (mark - position.avg_entry_price)
+                    * position.quantity
+                    * contract_size
+                    * contract_multiplier
+                )
+            else:
+                mtm_equity += (mark - position.avg_entry_price) * position.quantity
+        if valuation_available:
+            drawdown, peak_equity, valuation_as_of, drawdown_source = (
+                await self.portfolio.record_equity_drawdown(
+                    mtm_equity, source="MARK_TO_MARKET_EQUITY"
+                )
+            )
+        else:
+            drawdown = None
+            peak_equity = None
+            valuation_as_of = None
+            drawdown_source = "VALUATION_UNAVAILABLE"
         open_orders = await self.order_manager.count_open()
         daily_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         daily_pnl, daily_pnl_source = await self.ledger.net_pnl_since(daily_start)

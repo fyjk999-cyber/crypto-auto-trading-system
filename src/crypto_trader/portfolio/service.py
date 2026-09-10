@@ -9,10 +9,12 @@ from sqlalchemy import select
 
 from crypto_trader.domain.enums import TradingMode
 from crypto_trader.domain.models import Account, Balance, Position
+from crypto_trader.domain.money import D
 from crypto_trader.ledger.projections import rebuild_projections, replay_projections
 from crypto_trader.persistence.models import (
     AccountProjectionORM,
     EquitySnapshotORM,
+    LedgerEntryORM,
     PositionProjectionORM,
 )
 
@@ -67,22 +69,54 @@ class PortfolioService:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            prior_peak = latest.peak_equity if latest is not None else current_equity
-            peak = max(prior_peak, current_equity)
-            drawdown = current_equity - peak
+            external_flow = Decimal("0")
+            if latest is not None:
+                flow_rows = (
+                    await session.execute(
+                        select(LedgerEntryORM).where(
+                            LedgerEntryORM.created_at > latest.valuation_as_of,
+                            LedgerEntryORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
+                        )
+                    )
+                ).scalars().all()
+                for row in flow_rows:
+                    metadata = row.metadata_json or {}
+                    amount = D(metadata.get("amount") or metadata.get("quantity") or row.amount)
+                    external_flow += (
+                        amount if row.entry_type == "DEPOSIT" else -amount
+                    )
+            cash_flow_adjusted = (
+                current_equity
+                if latest is None
+                else current_equity - external_flow
+            )
+            prior_peak = (
+                latest.peak_adjusted_equity
+                if latest is not None and latest.peak_adjusted_equity > 0
+                else latest.peak_equity
+                if latest is not None
+                else cash_flow_adjusted
+            )
+            peak_adjusted = max(prior_peak, cash_flow_adjusted)
+            drawdown = cash_flow_adjusted - peak_adjusted
             session.add(
                 EquitySnapshotORM(
                     account_id="default",
                     currency=currency,
                     current_equity=current_equity,
-                    peak_equity=peak,
+                    raw_equity=current_equity,
+                    external_cash_flow_adjustment=external_flow,
+                    cash_flow_adjusted_equity=cash_flow_adjusted,
+                    peak_equity=peak_adjusted,
+                    peak_adjusted_equity=peak_adjusted,
                     drawdown=drawdown,
                     valuation_source=source,
+                    valuation_status="HEALTHY",
                     valuation_as_of=as_of,
                 )
             )
             await session.commit()
-        return drawdown, peak, as_of, source
+        return drawdown, peak_adjusted, as_of, source
 
     async def get_positions(self) -> dict[str, Position]:
         async with self.session_factory() as session:

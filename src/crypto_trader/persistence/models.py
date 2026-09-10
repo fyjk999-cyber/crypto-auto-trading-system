@@ -229,8 +229,19 @@ class EquitySnapshotORM(Base):
     account_id: Mapped[str] = mapped_column(String(64), default="default")
     currency: Mapped[str] = mapped_column(String(16))
     current_equity: Mapped[Decimal] = mapped_column(ExactDecimal())
+    raw_equity: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    external_cash_flow_adjustment: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
+    cash_flow_adjusted_equity: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
     peak_equity: Mapped[Decimal] = mapped_column(ExactDecimal())
+    peak_adjusted_equity: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
     drawdown: Mapped[Decimal] = mapped_column(ExactDecimal())
+    valuation_status: Mapped[str] = mapped_column(String(16), default="HEALTHY")
     valuation_source: Mapped[str] = mapped_column(String(64), default="LEDGER_PROJECTION")
     valuation_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

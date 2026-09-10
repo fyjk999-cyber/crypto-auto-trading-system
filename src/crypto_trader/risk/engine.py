@@ -54,7 +54,7 @@ class RiskEngine:
         market_prices: dict[str, Decimal] | None = None,
         daily_pnl: Decimal = Decimal("0"),
         daily_pnl_source: str = "UNSPECIFIED",
-        drawdown: Decimal = Decimal("0"),
+        drawdown: Decimal | None = Decimal("0"),
         drawdown_source: str = "UNSPECIFIED",
         current_equity: Decimal | None = None,
         peak_equity: Decimal | None = None,
@@ -216,6 +216,8 @@ class RiskEngine:
             return fail("MAX_DAILY_LOSS")
         checks["max_daily_loss"] = True
 
+        if drawdown is None:
+            return fail("DRAWDOWN_UNAVAILABLE")
         if drawdown < -abs(self.config.max_drawdown):
             return fail("MAX_DRAWDOWN")
         checks["max_drawdown"] = True
