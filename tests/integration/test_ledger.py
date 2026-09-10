@@ -6,9 +6,10 @@ from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType, OrderSide
 from crypto_trader.domain.errors import JournalUnbalanced
+from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
-from crypto_trader.persistence.models import LedgerEntryORM
+from crypto_trader.persistence.models import LedgerEntryORM, TradeEpisodeORM
 from crypto_trader.portfolio.service import PortfolioService
 
 
@@ -212,3 +213,57 @@ async def test_equity_peak_is_durable_across_service_restart(database):
     dd2, peak2, _, _ = await second.record_equity_drawdown(Decimal("94000"))
     assert dd2 == Decimal("-6000")
     assert peak2 == Decimal("100000")
+
+
+async def test_earliest_factual_closed_episode_date_ignores_non_factual(database):
+    from datetime import UTC, datetime
+
+    async with database.session_factory() as session:
+        session.add(
+            TradeEpisodeORM(
+                episode_id="ep_factual_early",
+                trade_plan_id="plan_early",
+                symbol="BTCUSDT",
+                direction="LONG",
+                entry_decision_id="d1",
+                entry_price=Decimal("100"),
+                exit_price=Decimal("101"),
+                opened_quantity=Decimal("1"),
+                closed_quantity=Decimal("1"),
+                leverage=Decimal("1"),
+                gross_pnl=Decimal("1"),
+                net_pnl=Decimal("1"),
+                holding_time_seconds=1.0,
+                entry_market_regime="TREND",
+                terminal_reason="EXIT",
+                factual=True,
+                opened_at=datetime(2026, 9, 7, tzinfo=UTC),
+                closed_at=datetime(2026, 9, 8, tzinfo=UTC),
+            )
+        )
+        session.add(
+            TradeEpisodeORM(
+                episode_id="ep_non_factual",
+                trade_plan_id="plan_non_factual",
+                symbol="BTCUSDT",
+                direction="LONG",
+                entry_decision_id="d2",
+                entry_price=Decimal("100"),
+                exit_price=Decimal("101"),
+                opened_quantity=Decimal("1"),
+                closed_quantity=Decimal("1"),
+                leverage=Decimal("1"),
+                gross_pnl=Decimal("1"),
+                net_pnl=Decimal("1"),
+                holding_time_seconds=1.0,
+                entry_market_regime="TREND",
+                terminal_reason="EXIT",
+                factual=False,
+                opened_at=datetime(2026, 9, 1, tzinfo=UTC),
+                closed_at=datetime(2026, 9, 2, tzinfo=UTC),
+            )
+        )
+        await session.commit()
+
+    store = TradeEpisodeStore(database.session_factory)
+    assert await store.earliest_factual_closed_date() == "2026-09-08"
