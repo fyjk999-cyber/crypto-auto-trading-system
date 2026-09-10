@@ -56,6 +56,11 @@ class RiskEngine:
         daily_pnl_source: str = "UNSPECIFIED",
         drawdown: Decimal = Decimal("0"),
         drawdown_source: str = "UNSPECIFIED",
+        current_equity: Decimal | None = None,
+        peak_equity: Decimal | None = None,
+        valuation_as_of: str | None = None,
+        valuation_currency: str = "USDT",
+        valuation_source: str = "UNSPECIFIED",
         consecutive_failures: int = 0,
         run_id: str | None = None,
         order_id: str | None = None,
@@ -191,6 +196,11 @@ class RiskEngine:
                 "daily_pnl_source": daily_pnl_source,
                 "drawdown": str(drawdown),
                 "drawdown_source": drawdown_source,
+                "current_equity": str(current_equity) if current_equity is not None else None,
+                "peak_equity": str(peak_equity) if peak_equity is not None else None,
+                "valuation_as_of": valuation_as_of,
+                "valuation_currency": valuation_currency,
+                "valuation_source": valuation_source,
             }
         )
 

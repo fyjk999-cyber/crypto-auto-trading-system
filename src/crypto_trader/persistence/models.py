@@ -220,6 +220,23 @@ class AccountProjectionORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class EquitySnapshotORM(Base):
+    """Durable factual equity/drawdown history used by canonical Risk."""
+
+    __tablename__ = "equity_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_id: Mapped[str] = mapped_column(String(64), default="default")
+    currency: Mapped[str] = mapped_column(String(16))
+    current_equity: Mapped[Decimal] = mapped_column(ExactDecimal())
+    peak_equity: Mapped[Decimal] = mapped_column(ExactDecimal())
+    drawdown: Mapped[Decimal] = mapped_column(ExactDecimal())
+    valuation_source: Mapped[str] = mapped_column(String(64), default="LEDGER_PROJECTION")
+    valuation_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+
 class PositionProjectionORM(Base):
     __tablename__ = "positions_projection"
     __table_args__ = (

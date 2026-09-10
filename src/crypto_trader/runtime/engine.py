@@ -713,6 +713,9 @@ class TradingEngine:
 
         await self._refresh_execution_market(symbol)
         account = await self.portfolio.get_account(self.settings.effective_mode())
+        drawdown, peak_equity, valuation_as_of, drawdown_source = (
+            await self.portfolio.record_equity_drawdown(account.equity)
+        )
         book = self.market_data.books.get(symbol)
         market_price = D("0")
         if book is not None:
@@ -741,6 +744,13 @@ class TradingEngine:
             open_order_count=open_orders,
             daily_pnl=daily_pnl,
             daily_pnl_source=daily_pnl_source,
+            drawdown=drawdown,
+            drawdown_source=drawdown_source,
+            current_equity=account.equity,
+            peak_equity=peak_equity,
+            valuation_as_of=valuation_as_of.isoformat(),
+            valuation_currency="USDT",
+            valuation_source=drawdown_source,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
         )

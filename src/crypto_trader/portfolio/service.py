@@ -10,7 +10,11 @@ from sqlalchemy import select
 from crypto_trader.domain.enums import TradingMode
 from crypto_trader.domain.models import Account, Balance, Position
 from crypto_trader.ledger.projections import rebuild_projections, replay_projections
-from crypto_trader.persistence.models import AccountProjectionORM, PositionProjectionORM
+from crypto_trader.persistence.models import (
+    AccountProjectionORM,
+    EquitySnapshotORM,
+    PositionProjectionORM,
+)
 
 
 class PortfolioService:
@@ -39,6 +43,46 @@ class PortfolioService:
                 equity=snap.equity,
                 updated_at=datetime.now(UTC),
             )
+
+
+
+    async def record_equity_drawdown(
+        self,
+        current_equity: Decimal,
+        *,
+        currency: str = "USDT",
+        source: str = "LEDGER_PROJECTION",
+    ) -> tuple[Decimal, Decimal, datetime, str]:
+        """Persist a factual equity point and return canonical drawdown.
+
+        Convention: drawdown <= 0, where drawdown = current_equity - peak_equity.
+        Peak is durably retained across restarts.
+        """
+        as_of = datetime.now(UTC)
+        async with self.session_factory() as session:
+            latest = (
+                await session.execute(
+                    select(EquitySnapshotORM)
+                    .order_by(EquitySnapshotORM.id.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            prior_peak = latest.peak_equity if latest is not None else current_equity
+            peak = max(prior_peak, current_equity)
+            drawdown = current_equity - peak
+            session.add(
+                EquitySnapshotORM(
+                    account_id="default",
+                    currency=currency,
+                    current_equity=current_equity,
+                    peak_equity=peak,
+                    drawdown=drawdown,
+                    valuation_source=source,
+                    valuation_as_of=as_of,
+                )
+            )
+            await session.commit()
+        return drawdown, peak, as_of, source
 
     async def get_positions(self) -> dict[str, Position]:
         async with self.session_factory() as session:

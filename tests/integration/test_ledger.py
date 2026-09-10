@@ -9,6 +9,7 @@ from crypto_trader.domain.errors import JournalUnbalanced
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
 from crypto_trader.persistence.models import LedgerEntryORM
+from crypto_trader.portfolio.service import PortfolioService
 
 
 @pytest.fixture
@@ -196,3 +197,18 @@ async def test_ledger_realized_pnl_since_utc_boundary(ledger, database):
     assert await ledger.realized_pnl_since(start) == Decimal("6")
     # Future start returns zero
     assert await ledger.realized_pnl_since(start + timedelta(days=1)) == Decimal("0")
+
+
+async def test_equity_peak_is_durable_across_service_restart(database):
+    first = PortfolioService(database.session_factory)
+    dd0, peak0, _, _ = await first.record_equity_drawdown(Decimal("100000"))
+    assert dd0 == Decimal("0")
+    assert peak0 == Decimal("100000")
+    dd1, peak1, _, _ = await first.record_equity_drawdown(Decimal("95000"))
+    assert dd1 == Decimal("-5000")
+    assert peak1 == Decimal("100000")
+
+    second = PortfolioService(database.session_factory)
+    dd2, peak2, _, _ = await second.record_equity_drawdown(Decimal("94000"))
+    assert dd2 == Decimal("-6000")
+    assert peak2 == Decimal("100000")
