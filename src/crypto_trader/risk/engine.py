@@ -63,6 +63,7 @@ class RiskEngine:
         valuation_source: str = "UNSPECIFIED",
         valuation_id: str | None = None,
         funding_status: str = "UNKNOWN",
+        pnl_provenance: dict | None = None,
         risk_equity: Decimal | None = None,
         available_margin: Decimal | None = None,
         consecutive_failures: int = 0,
@@ -215,6 +216,7 @@ class RiskEngine:
                 "valuation_source": valuation_source,
                 "valuation_id": valuation_id,
                 "funding_status": funding_status,
+                "pnl_provenance": pnl_provenance or {},
                 "risk_equity": str(effective_equity),
                 "available_margin": str(effective_margin),
             }

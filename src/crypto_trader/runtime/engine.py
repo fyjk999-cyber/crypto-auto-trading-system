@@ -859,6 +859,9 @@ class TradingEngine:
         daily_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         daily_pnl, daily_pnl_source = await self.ledger.net_pnl_since(daily_start)
         funding_status = await self.ledger.funding_status_since(daily_start)
+        pnl_provenance = await self.ledger.net_pnl_provenance_since(
+            daily_start, funding_coverage_status=funding_status.value
+        )
         if (
             funding_status.value == "UNKNOWN"
             and any(position.quantity != 0 for position in positions.values())
@@ -888,6 +891,18 @@ class TradingEngine:
             valuation_source=drawdown_source,
             valuation_id=valuation_id,
             funding_status=funding_status.value,
+            pnl_provenance={
+                "realized_pnl": str(pnl_provenance.realized_pnl),
+                "fees": str(pnl_provenance.fees),
+                "funding_amount": (
+                    str(pnl_provenance.funding_amount)
+                    if pnl_provenance.funding_amount is not None
+                    else None
+                ),
+                "funding_status": pnl_provenance.funding_status,
+                "complete": pnl_provenance.complete,
+                "unknown_reasons": list(pnl_provenance.unknown_reasons),
+            },
             risk_equity=mtm_equity if valuation_available else account.equity,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,

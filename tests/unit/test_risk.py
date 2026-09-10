@@ -339,3 +339,23 @@ def test_risk_allows_reducing_action_when_daily_pnl_unknown():
     )
     assert decision.decision in {ExecutionDecision.APPROVE, ExecutionDecision.SCALE_DOWN}
     assert decision.checks["daily_pnl_unavailable"] is True
+
+
+def test_risk_evidence_persists_pnl_provenance():
+    provenance = {
+        "realized_pnl": "1",
+        "fees": "0.1",
+        "funding_amount": None,
+        "funding_status": "UNKNOWN",
+        "complete": False,
+        "unknown_reasons": ["FUNDING_UNKNOWN"],
+    }
+    decision = RiskEngine().check(
+        make_signal(),
+        account=make_account(),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        pnl_provenance=provenance,
+    )
+    assert decision.checks["pnl_provenance"] == provenance
