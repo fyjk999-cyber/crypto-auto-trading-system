@@ -336,6 +336,7 @@ function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
         <Metric label="DeepSeek 无因子决策" value={numberText(oppStats.directional_without_factor_evidence, 0)} />
       </div>
       <p className="muted-line">因子触发 ≠ 交易信号：候选仅代表 DeepSeek 优先复核的事实证据排序；DeepSeek 可在有/无因子证据的情况下自由决策方向（FACTOR_REQUIRED_FOR_TRADE = FALSE）。</p>
+        <p className="muted-line">EXECUTABLE_SCOPE = {text(opp.executable_scope, "UNKNOWN")}；SPOT / FUTURES / INVERSE = NOT_EXECUTABLE。</p>
       {candidates.length === 0
         ? <p className="muted-line">暂无因子候选（轮换扫描持续覆盖非候选交易对）。</p>
         : <div className="table-wrap"><table><thead><tr><th>交易对</th><th>候选来源</th><th>因子触发</th><th>最强因子强度</th><th>提名理由</th></tr></thead><tbody>{candidates.slice(0, 12).map((c) => {
