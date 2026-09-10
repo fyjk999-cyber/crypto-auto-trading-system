@@ -469,6 +469,21 @@ class DailyReviewRunORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     review_date: Mapped[str] = mapped_column(String(16), unique=True)
+    window_start_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    window_end_utc: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error_detail_sanitized: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    episode_count: Mapped[int] = mapped_column(Integer, default=0)
+    output_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
     daily_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     long_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     short_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))

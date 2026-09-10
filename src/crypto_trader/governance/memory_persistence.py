@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 
 from crypto_trader.governance.memory import TradeMemoryRecord
@@ -54,7 +56,58 @@ class MemoryPersistence:
             )
             return [_row_to_record(r) for r in rows]
 
-    async def save_daily_review(self, date: str, stats) -> None:
+    async def begin_daily_review(
+        self, date: str, window_start: datetime, window_end: datetime
+    ) -> bool:
+        """Transition a review date to RUNNING; False if already SUCCEEDED."""
+        now = datetime.now(UTC)
+        async with self.session_factory() as session:
+            existing = (
+                await session.execute(
+                    select(DailyReviewRunORM).where(DailyReviewRunORM.review_date == date)
+                )
+            ).scalar_one_or_none()
+            if existing is not None and existing.status == "SUCCEEDED":
+                return False
+            if existing is None:
+                existing = DailyReviewRunORM(
+                    review_date=date,
+                    window_start_utc=window_start,
+                    window_end_utc=window_end,
+                    status="RUNNING",
+                    attempt_count=1,
+                    started_at=now,
+                    last_attempt_at=now,
+                )
+                session.add(existing)
+            else:
+                existing.status = "RUNNING"
+                existing.attempt_count += 1
+                existing.started_at = now
+                existing.last_attempt_at = now
+                existing.last_error_type = None
+                existing.last_error_detail_sanitized = None
+            await session.commit()
+        return True
+
+    async def fail_daily_review(self, date: str, error_type: str, detail: str) -> None:
+        async with self.session_factory() as session:
+            existing = (
+                await session.execute(
+                    select(DailyReviewRunORM).where(DailyReviewRunORM.review_date == date)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                return
+            existing.status = "FAILED"
+            existing.last_error_type = error_type[:64]
+            existing.last_error_detail_sanitized = detail[:255]
+            existing.last_attempt_at = datetime.now(UTC)
+            await session.commit()
+
+    async def save_daily_review(
+        self, date: str, stats, *, episode_count: int = 0, output_ref: str | None = None
+    ) -> None:
         async with self.session_factory() as session:
             existing = (
                 await session.execute(
@@ -69,10 +122,22 @@ class MemoryPersistence:
                 existing.win_rate = stats.win_rate
                 existing.profit_factor = stats.profit_factor
                 existing.expectancy = stats.expectancy
+                existing.episode_count = episode_count
+                existing.output_ref = output_ref
+                existing.status = "SUCCEEDED"
+                existing.completed_at = datetime.now(UTC)
+                existing.last_attempt_at = datetime.now(UTC)
             else:
                 session.add(
                     DailyReviewRunORM(
                         review_date=date,
+                        status="SUCCEEDED",
+                        attempt_count=1,
+                        started_at=datetime.now(UTC),
+                        completed_at=datetime.now(UTC),
+                        last_attempt_at=datetime.now(UTC),
+                        episode_count=episode_count,
+                        output_ref=output_ref,
                         daily_pnl=stats.daily_pnl,
                         long_pnl=stats.long_pnl,
                         short_pnl=stats.short_pnl,
@@ -83,6 +148,30 @@ class MemoryPersistence:
                     )
                 )
             await session.commit()
+
+
+    async def get_daily_review(self, date: str) -> dict | None:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(DailyReviewRunORM).where(DailyReviewRunORM.review_date == date)
+                )
+            ).scalar_one_or_none()
+        if row is None:
+            return None
+        return {
+            "date": row.review_date,
+            "status": row.status,
+            "daily_pnl": str(row.daily_pnl),
+            "long_pnl": str(row.long_pnl),
+            "short_pnl": str(row.short_pnl),
+            "trade_count": row.trade_count,
+            "win_rate": str(row.win_rate),
+            "profit_factor": str(row.profit_factor),
+            "expectancy": str(row.expectancy),
+            "episode_count": row.episode_count,
+            "attempt_count": row.attempt_count,
+        }
 
     async def load_daily_reviews(self, limit: int = 60) -> list[dict]:
         async with self.session_factory() as session:

@@ -36,33 +36,56 @@ class DailyReviewScheduler:
         # supplied. A 00:05 scheduler call must cover [yesterday 00:00,
         # today 00:00), not the still-incomplete current day.
         date = date or (now - timedelta(days=1)).date().isoformat()
-        episodes = await self.episodes.load_closed_on(
-            date,
-            limit=1000,
-            timezone=now.tzinfo or UTC,
+        window_start = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=UTC)
+        window_end = window_start + timedelta(days=1)
+        should_run = await self.persistence.begin_daily_review(
+            date, window_start, window_end
         )
-        records = [_episode_record(episode) for episode in episodes]
-        if not self.canonical_only and not records:
-            records = await self.persistence.load_trade_memory(limit=1000)
-        trade_memory = TradeMemory()
-        for record in records:
-            trade_memory.record(record)
-        failure_memory = FailureMemory()
-        for record in records:
-            if record.failure_class is not None:
-                failure_memory.record(record.decision_id, record.failure_class)
-        stats = DailyReview(trade_memory, failure_memory).run(date)
-        await self.persistence.save_daily_review(date, stats)
-        for episode in episodes:
-            await self.learning.review(episode)
-        await self.episodes.mark_reviewed([episode.episode_id for episode in episodes])
-        return {
-            "date": date,
-            "daily_pnl": str(stats.daily_pnl),
-            "trade_count": stats.trade_count,
-            "win_rate": str(stats.win_rate),
-            "profit_factor": str(stats.profit_factor),
-        }
+        if not should_run:
+            prior = await self.persistence.get_daily_review(date) or {}
+            prior["idempotent"] = True
+            return prior
+        try:
+            episodes = await self.episodes.load_closed_on(
+                date,
+                limit=1000,
+                timezone=now.tzinfo or UTC,
+            )
+            records = [_episode_record(episode) for episode in episodes]
+            if not self.canonical_only and not records:
+                records = await self.persistence.load_trade_memory(limit=1000)
+            trade_memory = TradeMemory()
+            for record in records:
+                trade_memory.record(record)
+            failure_memory = FailureMemory()
+            for record in records:
+                if record.failure_class is not None:
+                    failure_memory.record(record.decision_id, record.failure_class)
+            stats = DailyReview(trade_memory, failure_memory).run(date)
+            for episode in episodes:
+                await self.learning.review(episode)
+            await self.episodes.mark_reviewed(
+                [episode.episode_id for episode in episodes]
+            )
+            await self.persistence.save_daily_review(
+                date,
+                stats,
+                episode_count=len(episodes),
+                output_ref=f"daily_review:{date}",
+            )
+            return {
+                "date": date,
+                "status": "SUCCEEDED",
+                "daily_pnl": str(stats.daily_pnl),
+                "trade_count": stats.trade_count,
+                "win_rate": str(stats.win_rate),
+                "profit_factor": str(stats.profit_factor),
+            }
+        except Exception as exc:
+            await self.persistence.fail_daily_review(
+                date, type(exc).__name__, str(exc)
+            )
+            raise
 
 
     async def run_missed_days(self, since_date: str, end_date: str | None = None) -> list[dict]:
