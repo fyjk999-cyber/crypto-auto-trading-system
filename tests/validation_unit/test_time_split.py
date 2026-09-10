@@ -48,3 +48,15 @@ def test_strict_time_order_rejects_future_leakage():
         assert_strict_time_order(
             train, val, [{"ts": 1}], key=lambda x: x["ts"]
         )
+
+
+def test_strict_time_order_rejects_non_monotonic_within_split():
+    from crypto_trader.validation.time_split import assert_strict_time_order
+
+    with pytest.raises(ValueError):
+        assert_strict_time_order(
+            [{"ts": 2}, {"ts": 1}],
+            [{"ts": 3}],
+            [{"ts": 4}],
+            key=lambda x: x["ts"],
+        )
