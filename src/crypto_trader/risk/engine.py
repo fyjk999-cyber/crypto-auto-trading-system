@@ -61,6 +61,7 @@ class RiskEngine:
         valuation_as_of: str | None = None,
         valuation_currency: str = "USDT",
         valuation_source: str = "UNSPECIFIED",
+        valuation_id: str | None = None,
         consecutive_failures: int = 0,
         run_id: str | None = None,
         order_id: str | None = None,
@@ -201,6 +202,7 @@ class RiskEngine:
                 "valuation_as_of": valuation_as_of,
                 "valuation_currency": valuation_currency,
                 "valuation_source": valuation_source,
+                "valuation_id": valuation_id,
             }
         )
 

@@ -804,6 +804,7 @@ class TradingEngine:
                 )
             else:
                 mtm_equity += (mark - position.avg_entry_price) * position.quantity
+        valuation_id = new_id("val") if valuation_available else None
         if valuation_available:
             drawdown, peak_equity, valuation_as_of, drawdown_source = (
                 await self.portfolio.record_equity_drawdown(
@@ -836,6 +837,7 @@ class TradingEngine:
             ),
             valuation_currency="USDT",
             valuation_source=drawdown_source,
+            valuation_id=valuation_id,
             consecutive_failures=self.consecutive_failures,
             run_id=run_id,
         )
