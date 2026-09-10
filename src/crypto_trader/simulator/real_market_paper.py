@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from crypto_trader.domain.errors import MarketDataUnhealthy
-from crypto_trader.domain.models import Instrument
+from crypto_trader.domain.errors import MarketDataUnhealthy, OrderRejected
+from crypto_trader.domain.models import Instrument, Order
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
@@ -27,6 +27,15 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
     ) -> None:
         super().__init__(initial_balances=initial_balances, instruments=instruments)
         self.feed = feed or OKXPublicMarketFeed(symbol="BTCUSDT")
+
+    @staticmethod
+    def _factual_size(symbol: str, side: str, value: Decimal | None) -> Decimal:
+        size = value or Decimal("0")
+        if size <= 0:
+            raise MarketDataUnhealthy(
+                f"OKX factual {side} size unavailable for {symbol}"
+            )
+        return size
 
     async def get_market_state(self, symbol: str) -> MarketState:
         return await self.feed.refresh(symbol)
@@ -82,30 +91,49 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             state = await self.feed.refresh(symbol)
             if state.health.value != "HEALTHY":
                 raise MarketDataUnhealthy(f"OKX public market unavailable for {symbol}")
+            if state.best_bid <= 0 or state.best_ask <= 0:
+                raise MarketDataUnhealthy(f"OKX factual price unavailable for {symbol}")
+            bid_size = self._factual_size(symbol, "bid", state.best_bid_size)
+            ask_size = self._factual_size(symbol, "ask", state.best_ask_size)
             book = OrderBook(symbol=symbol, exchange="OKX")
             book.apply_snapshot(
                 int(datetime.now(UTC).timestamp() * 1000),
-                [(state.best_bid, state.best_bid_size or Decimal("1"))],
-                [(state.best_ask, state.best_ask_size or Decimal("1"))],
+                [(state.best_bid, bid_size)],
+                [(state.best_ask, ask_size)],
                 now=datetime.now(UTC),
             )
             return book
+        except MarketDataUnhealthy:
+            raise
         except Exception as exc:
             raise MarketDataUnhealthy(f"OKX public market unavailable for {symbol}: {exc}") from exc
 
     async def refresh_market_state(self, symbol: str) -> MarketState:
         state = await self.feed.refresh(symbol)
-        # keep simulated book aligned to the real mid so paper fills reflect real levels
-        if state.best_bid > 0 and state.best_ask > 0:
-            book = OrderBook(symbol=symbol, exchange="OKX")
-            book.apply_snapshot(
-                int(datetime.now(UTC).timestamp()),
-                [(state.best_bid, state.best_bid_size or Decimal("1"))],
-                [(state.best_ask, state.best_ask_size or Decimal("1"))],
-            )
-            self.books[symbol] = book
-            self.sequence[symbol] = book.sequence or 0
+        if state.health.value != "HEALTHY":
+            raise MarketDataUnhealthy(f"OKX public market unavailable for {symbol}")
+        if state.best_bid <= 0 or state.best_ask <= 0:
+            raise MarketDataUnhealthy(f"OKX factual price unavailable for {symbol}")
+        bid_size = self._factual_size(symbol, "bid", state.best_bid_size)
+        ask_size = self._factual_size(symbol, "ask", state.best_ask_size)
+        # keep simulated book aligned to the real book so paper fills reflect
+        # factual OKX levels only; never seed a synthetic book here.
+        book = OrderBook(symbol=symbol, exchange="OKX")
+        book.apply_snapshot(
+            int(datetime.now(UTC).timestamp()),
+            [(state.best_bid, bid_size)],
+            [(state.best_ask, ask_size)],
+        )
+        self.books[symbol] = book
+        self.sequence[symbol] = book.sequence or 0
         return state
+
+    async def submit_order(self, order: Order) -> Order:
+        """Reject PAPER_REAL_MARKET orders without a factual same-symbol book."""
+        book = self.books.get(order.symbol)
+        if book is None or book.best_bid() is None or book.best_ask() is None:
+            raise OrderRejected("MARKET_DATA_UNAVAILABLE")
+        return await super().submit_order(order)
 
     async def disconnect(self) -> None:
         await self.feed.close()

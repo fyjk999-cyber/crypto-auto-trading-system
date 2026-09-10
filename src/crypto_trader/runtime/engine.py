@@ -419,21 +419,13 @@ class TradingEngine:
                     or market_state.best_ask <= 0
                 ):
                     raise ValueError("factual market state is not healthy")
+                bid_size = getattr(market_state, "best_bid_size", Decimal("0")) or Decimal("0")
+                ask_size = getattr(market_state, "best_ask_size", Decimal("0")) or Decimal("0")
+                if bid_size <= 0 or ask_size <= 0:
+                    raise ValueError("factual market depth is unavailable")
                 sequence = market_state.generation
-                bids = [
-                    (
-                        market_state.best_bid,
-                        getattr(market_state, "best_bid_size", Decimal("0"))
-                        or Decimal("1"),
-                    )
-                ]
-                asks = [
-                    (
-                        market_state.best_ask,
-                        getattr(market_state, "best_ask_size", Decimal("0"))
-                        or Decimal("1"),
-                    )
-                ]
+                bids = [(market_state.best_bid, bid_size)]
+                asks = [(market_state.best_ask, ask_size)]
             else:
                 fetched = await self.adapter.get_orderbook(symbol)
                 sequence = fetched.sequence
@@ -494,20 +486,12 @@ class TradingEngine:
                     or market_state.best_ask <= 0
                 ):
                     raise ValueError("factual market state is not healthy")
-                bids = [
-                    (
-                        market_state.best_bid,
-                        getattr(market_state, "best_bid_size", Decimal("0"))
-                        or Decimal("1"),
-                    )
-                ]
-                asks = [
-                    (
-                        market_state.best_ask,
-                        getattr(market_state, "best_ask_size", Decimal("0"))
-                        or Decimal("1"),
-                    )
-                ]
+                bid_size = getattr(market_state, "best_bid_size", Decimal("0")) or Decimal("0")
+                ask_size = getattr(market_state, "best_ask_size", Decimal("0")) or Decimal("0")
+                if bid_size <= 0 or ask_size <= 0:
+                    raise ValueError("factual market depth is unavailable")
+                bids = [(market_state.best_bid, bid_size)]
+                asks = [(market_state.best_ask, ask_size)]
                 await self.market_data.ingest_snapshot(
                     symbol,
                     market_state.generation,

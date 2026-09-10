@@ -11,7 +11,12 @@ from crypto_trader.domain.enums import (
     TimeInForce,
     TradingMode,
 )
-from crypto_trader.domain.errors import OrderRejected, RateLimited, UnknownExecutionState
+from crypto_trader.domain.errors import (
+    MarketDataUnhealthy,
+    OrderRejected,
+    RateLimited,
+    UnknownExecutionState,
+)
 from crypto_trader.domain.models import Instrument, Order
 from crypto_trader.market_data.state import DataHealth, MarketState
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
@@ -223,6 +228,67 @@ async def test_paper_real_market_uses_real_best_sizes():
     assert book.best_ask().quantity == Decimal("3.5")
     await adapter.disconnect()
 
+
+
+
+async def test_paper_real_market_missing_depth_does_not_use_quantity_one():
+    class NoDepthFeed:
+        async def close(self):
+            return None
+
+        async def refresh(self, symbol):
+            return MarketState(
+                symbol=symbol,
+                provider="OKX_PUBLIC",
+                data_source="REAL",
+                instrument_id="BTC-USDT-SWAP",
+                instrument_type="SWAP",
+                source="OKX_PUBLIC",
+                exchange="OKX",
+                health=DataHealth.HEALTHY,
+                best_bid=Decimal("100"),
+                best_ask=Decimal("101"),
+                best_bid_size=Decimal("0"),
+                best_ask_size=None,
+            )
+
+    adapter = PaperRealMarketAdapter(feed=NoDepthFeed())  # type: ignore[arg-type]
+    await adapter.connect()
+    with pytest.raises(MarketDataUnhealthy):
+        await adapter.get_orderbook("BTCUSDT")
+    await adapter.disconnect()
+
+
+async def test_paper_real_market_missing_book_does_not_seed_synthetic_book():
+    class MissingBookFeed:
+        async def close(self):
+            return None
+
+        async def refresh(self, symbol):
+            raise MarketDataUnhealthy("no factual book")
+
+    adapter = PaperRealMarketAdapter(feed=MissingBookFeed())  # type: ignore[arg-type]
+    await adapter.connect()
+    with pytest.raises(OrderRejected):
+        await adapter.submit_order(make_order(cid="no-book"))
+    assert "BTCUSDT" not in adapter.books
+    await adapter.disconnect()
+
+
+async def test_paper_real_market_stale_book_does_not_fill():
+    class StaleFeed:
+        async def close(self):
+            return None
+
+        async def refresh(self, symbol):
+            raise MarketDataUnhealthy("stale")
+
+    adapter = PaperRealMarketAdapter(feed=StaleFeed())  # type: ignore[arg-type]
+    await adapter.connect()
+    with pytest.raises(OrderRejected):
+        await adapter.submit_order(make_order(cid="stale"))
+    assert adapter.orders == {}
+    await adapter.disconnect()
 
 
 async def _noop():
