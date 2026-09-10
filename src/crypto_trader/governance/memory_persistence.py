@@ -150,6 +150,20 @@ class MemoryPersistence:
             await session.commit()
 
 
+
+
+    async def latest_succeeded_review_date(self) -> str | None:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(DailyReviewRunORM)
+                    .where(DailyReviewRunORM.status == "SUCCEEDED")
+                    .order_by(DailyReviewRunORM.review_date.desc())
+                    .limit(1)
+                )
+            ).scalars().all()
+        return rows[0].review_date if rows else None
+
     async def get_daily_review(self, date: str) -> dict | None:
         async with self.session_factory() as session:
             row = (

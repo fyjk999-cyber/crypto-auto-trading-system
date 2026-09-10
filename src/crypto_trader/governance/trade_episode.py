@@ -238,6 +238,58 @@ class TradeEpisodeStore:
             ).scalars().all()
             return [_to_domain(row) for row in rows]
 
+
+
+    async def load_all_closed_on(
+        self,
+        date: str,
+        *,
+        timezone: tzinfo = UTC,
+        page_size: int = 1000,
+    ) -> list[FactualTradeEpisode]:
+        """Return every factual episode closed in the full UTC day.
+
+        Keyset pagination avoids the old silent 1000-row truncation.
+        """
+        parsed = datetime.strptime(date, "%Y-%m-%d").date()
+        start = datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone)
+        end = start + timedelta(days=1)
+        start_utc = start.astimezone(UTC)
+        end_utc = end.astimezone(UTC)
+        cursor_time: datetime | None = None
+        cursor_id: str | None = None
+        out: list[FactualTradeEpisode] = []
+        while True:
+            async with self.session_factory() as session:
+                query = select(TradeEpisodeORM).where(
+                    TradeEpisodeORM.factual.is_(True),
+                    TradeEpisodeORM.closed_at >= start_utc,
+                    TradeEpisodeORM.closed_at < end_utc,
+                )
+                if cursor_time is not None and cursor_id is not None:
+                    from sqlalchemy import tuple_
+                    query = query.where(
+                        tuple_(TradeEpisodeORM.closed_at, TradeEpisodeORM.episode_id)
+                        > (cursor_time, cursor_id)
+                    )
+                rows = (
+                    await session.execute(
+                        query.order_by(
+                            TradeEpisodeORM.closed_at.asc(),
+                            TradeEpisodeORM.episode_id.asc(),
+                        ).limit(max(1, min(page_size, 5000)))
+                    )
+                ).scalars().all()
+            if not rows:
+                break
+            out.extend(_to_domain(row) for row in rows)
+            last = rows[-1]
+            cursor_time = last.closed_at
+            cursor_id = last.episode_id
+            if len(rows) < page_size:
+                break
+        return out
+
     async def mark_reviewed(self, episode_ids: list[str]) -> None:
         if not episode_ids:
             return

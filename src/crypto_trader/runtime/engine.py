@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -183,6 +183,7 @@ class TradingEngine:
                     after={"stale_run_ids": stale_runs},
                 )
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
+        await self._recover_missed_daily_reviews()
 
         self.state_machine.transition(RuntimeState.RUNNING)
         await self._persist_run(RuntimeState.RUNNING)
@@ -528,6 +529,32 @@ class TradingEngine:
         )
         self._lease_valid = valid
         return valid
+
+
+    async def _recover_missed_daily_reviews(self) -> None:
+        scheduler = self.daily_review_scheduler
+        if scheduler is None:
+            return
+        latest = await scheduler.persistence.latest_succeeded_review_date()
+        if latest is None:
+            # No factual history: do not invent dates.
+            return
+        start = datetime.strptime(latest, "%Y-%m-%d").date() + timedelta(days=1)
+        end = (datetime.now(UTC) - timedelta(days=1)).date()
+        if start > end:
+            return
+        results = await scheduler.run_missed_days(start.isoformat(), end.isoformat())
+        await self.audit.log(
+            "DAILY_REVIEW_BACKFILL",
+            target=self.run_id,
+            run_id=self.run_id,
+            after={
+                "from": start.isoformat(),
+                "to": end.isoformat(),
+                "results": results,
+            },
+        )
+
 
     async def _cancel_unsettled_entry_order(self, entry_order) -> None:
         """Cancel a non-terminal entry order before a later EXIT/REDUCE.

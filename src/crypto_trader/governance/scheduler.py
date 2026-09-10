@@ -46,9 +46,8 @@ class DailyReviewScheduler:
             prior["idempotent"] = True
             return prior
         try:
-            episodes = await self.episodes.load_closed_on(
+            episodes = await self.episodes.load_all_closed_on(
                 date,
-                limit=1000,
                 timezone=now.tzinfo or UTC,
             )
             records = [_episode_record(episode) for episode in episodes]
