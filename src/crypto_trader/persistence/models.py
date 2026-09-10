@@ -233,6 +233,12 @@ class EquitySnapshotORM(Base):
     external_cash_flow_adjustment: Mapped[Decimal] = mapped_column(
         ExactDecimal(), default=Decimal("0")
     )
+    period_external_cash_flow: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
+    cumulative_external_cash_flow: Mapped[Decimal] = mapped_column(
+        ExactDecimal(), default=Decimal("0")
+    )
     cash_flow_adjusted_equity: Mapped[Decimal] = mapped_column(
         ExactDecimal(), default=Decimal("0")
     )

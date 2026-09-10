@@ -14,7 +14,7 @@ from crypto_trader.ledger.projections import rebuild_projections, replay_project
 from crypto_trader.persistence.models import (
     AccountProjectionORM,
     EquitySnapshotORM,
-    LedgerEntryORM,
+    LedgerTransactionORM,
     PositionProjectionORM,
 )
 
@@ -69,27 +69,32 @@ class PortfolioService:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            external_flow = Decimal("0")
+            period_flow = Decimal("0")
             if latest is not None:
                 flow_rows = (
                     await session.execute(
-                        select(LedgerEntryORM).where(
-                            LedgerEntryORM.created_at > latest.valuation_as_of,
-                            LedgerEntryORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
+                        select(LedgerTransactionORM).where(
+                            LedgerTransactionORM.created_at > latest.valuation_as_of,
+                            LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
                         )
                     )
                 ).scalars().all()
-                for row in flow_rows:
-                    metadata = row.metadata_json or {}
-                    amount = D(metadata.get("amount") or metadata.get("quantity") or row.amount)
-                    external_flow += (
-                        amount if row.entry_type == "DEPOSIT" else -amount
+                for txn in flow_rows:
+                    metadata = txn.metadata_json or {}
+                    raw_amount = (
+                        metadata.get("amount")
+                        or metadata.get("quantity")
+                        or metadata.get("total")
+                        or "0"
                     )
-            cash_flow_adjusted = (
-                current_equity
-                if latest is None
-                else current_equity - external_flow
+                    amount = abs(D(raw_amount))
+                    period_flow += amount if txn.entry_type == "DEPOSIT" else -amount
+            cumulative_flow = (
+                latest.cumulative_external_cash_flow + period_flow
+                if latest is not None
+                else Decimal("0")
             )
+            cash_flow_adjusted = current_equity - cumulative_flow
             prior_peak = (
                 latest.peak_adjusted_equity
                 if latest is not None and latest.peak_adjusted_equity > 0
@@ -105,7 +110,9 @@ class PortfolioService:
                     currency=currency,
                     current_equity=current_equity,
                     raw_equity=current_equity,
-                    external_cash_flow_adjustment=external_flow,
+                    external_cash_flow_adjustment=period_flow,
+                    period_external_cash_flow=period_flow,
+                    cumulative_external_cash_flow=cumulative_flow,
                     cash_flow_adjusted_equity=cash_flow_adjusted,
                     peak_equity=peak_adjusted,
                     peak_adjusted_equity=peak_adjusted,
