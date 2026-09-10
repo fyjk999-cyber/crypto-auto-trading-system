@@ -127,7 +127,7 @@ class BacktestEngine:
                 max_dd = dd
         if position_side is not None:
             price = prices[-1]
-            pnl = (price - entry_price) if position_side == "LONG" else (entry_price - price)
+            pnl = close_pnl(position_side, price)
             fee = price * self.fee_rate
             equity += pnl - fee
             pnl_list.append(pnl - fee)
