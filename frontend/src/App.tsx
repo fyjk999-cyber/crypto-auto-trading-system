@@ -3,7 +3,7 @@ import { MarketChart } from "./components/MarketChart";
 import { API_BASE_URL, getJson, sendJson, WS_URL } from "./api/client";
 import { useKlines } from "./hooks/useKlines";
 import { useTradingSnapshot } from "./hooks/useTradingSnapshot";
-import type { ApiState, KlineInterval, Order, Position, TradingSnapshot } from "./types/api";
+import type { ApiState, DailyReviewRun, KlineInterval, Order, Position, TradingSnapshot, ValuationBatch } from "./types/api";
 
 type Page = "trade" | "ai" | "plans" | "risk" | "execution" | "orders" | "positions" | "episodes" | "review" | "system";
 type JsonRecord = Record<string, unknown>;
@@ -196,6 +196,93 @@ function WeightRows({ snapshot }: { snapshot: TradingSnapshot }) {
   })}</div>;
 }
 
+const valuationQualityLabels: Record<string, string> = {
+  HEALTHY: "可靠",
+  UNAVAILABLE: "不可用",
+  STALE: "延迟",
+  UNKNOWN: "未知",
+  FAILED: "失败",
+  OFFLINE: "离线",
+};
+
+const fundingStatusLabels: Record<string, string> = {
+  NOT_APPLICABLE: "不适用",
+  KNOWN_ZERO: "已知为零",
+  KNOWN_VALUE: "已知数值",
+  UNKNOWN: "未知",
+  ACCOUNTING_INCOMPLETE: "账务不完整",
+};
+
+const reviewStatusLabels: Record<string, string> = {
+  PENDING: "待复盘",
+  RUNNING: "复盘中",
+  FAILED: "复盘失败",
+  SUCCEEDED: "复盘完成",
+};
+
+function factValue(value: unknown, fallback = "—") {
+  if (value === undefined) return "未知";
+  if (value === null || value === "") return fallback;
+  return text(value, fallback);
+}
+
+function exactMoney(value: unknown) {
+  if (value === undefined) return "未知";
+  if (value === null || value === "") return "不可用";
+  return money(value);
+}
+
+function exactNumber(value: unknown, digits = 2) {
+  if (value === undefined) return "未知";
+  if (value === null || value === "") return "不可用";
+  return numberText(value, digits);
+}
+
+function markList(values: unknown, emptyLabel = "无") {
+  const rows = Array.isArray(values)
+    ? values.filter((item) => item !== undefined && item !== null && item !== "")
+    : [];
+  return rows.length ? rows.map((item) => String(item)).join("、") : emptyLabel;
+}
+
+function ValuationTruthPanel({ snapshot }: { snapshot: TradingSnapshot }) {
+  const risk = record(snapshot.optional["/risk"]?.data);
+  const valuation = ((snapshot.account.data as { valuation?: ValuationBatch | null } | undefined)?.valuation
+    ?? (risk.valuation as ValuationBatch | undefined)) as ValuationBatch | undefined;
+  const lastRisk = record(risk.last_risk_decision);
+  const provenance = record(lastRisk.pnl_provenance);
+  const quality = String(valuation?.quality ?? "UNAVAILABLE").toUpperCase();
+  const fundingStatus = String(provenance.funding_status ?? "UNKNOWN").toUpperCase();
+  const complete = provenance.complete;
+  const missing = markList(valuation?.missing_marks);
+  const stale = markList(valuation?.stale_marks);
+  return <Panel title="估值事实批次 Valuation Truth" source={snapshot.optional["/risk"]} className="span-2">
+    <div className="review-metrics">
+      <Metric label="valuation_id" value={factValue(valuation?.valuation_id)} />
+      <Metric label="质量" value={valuationQualityLabels[quality] ?? quality} tone={quality === "HEALTHY" ? "safe" : "danger"} />
+      <Metric label="原始 MTM 权益" value={exactMoney(valuation?.raw_mtm_equity)} />
+      <Metric label="可用保证金" value={exactMoney(valuation?.available_margin)} />
+      <Metric label="调整后权益" value={exactMoney(valuation?.adjusted_equity)} />
+      <Metric label="峰值权益" value={exactMoney(valuation?.peak_adjusted_equity)} />
+      <Metric label="回撤金额" value={exactMoney(valuation?.drawdown_amount)} />
+      <Metric label="回撤比例" value={valuation?.drawdown_ratio === null || valuation?.drawdown_ratio === undefined ? exactNumber(undefined) : percent(valuation.drawdown_ratio)} />
+    </div>
+    <dl className="system-list">
+      <div><dt>market_as_of</dt><dd>{factValue(valuation?.market_as_of)}</dd></div>
+      <div><dt>ledger_watermark</dt><dd>{factValue(valuation?.ledger_watermark)}</dd></div>
+      <div><dt>position_snapshot_ref</dt><dd>{factValue(valuation?.position_snapshot_ref)}</dd></div>
+      <div><dt>缺失行情</dt><dd className={missing === "无" ? "safe" : "danger"}>{missing}</dd></div>
+      <div><dt>过期行情</dt><dd className={stale === "无" ? "safe" : "danger"}>{stale}</dd></div>
+      <div><dt>Funding 状态</dt><dd className={["KNOWN_ZERO", "KNOWN_VALUE", "NOT_APPLICABLE"].includes(fundingStatus) ? "safe" : "danger"}>{fundingStatusLabels[fundingStatus] ?? fundingStatus}</dd></div>
+      <div><dt>PnL 完整性</dt><dd className={complete === true ? "safe" : "danger"}>{complete === true ? "完整" : complete === false ? "不完整（禁止新风险）" : "未知"}</dd></div>
+      <div><dt>今日 PnL</dt><dd>{lastRisk.daily_pnl === null || lastRisk.daily_pnl === undefined ? exactMoney(lastRisk.daily_pnl) : money(lastRisk.daily_pnl)}</dd></div>
+      <div><dt>PnL 来源</dt><dd>{factValue(lastRisk.daily_pnl_source)}</dd></div>
+      <div><dt>Risk 请求 / 批准数量</dt><dd>{factValue(lastRisk.requested_quantity)} / {factValue(lastRisk.approved_quantity)}</dd></div>
+      <div><dt>Risk 请求 / 批准杠杆</dt><dd>{factValue(lastRisk.requested_leverage)} / {factValue(lastRisk.approved_leverage)}</dd></div>
+    </dl>
+  </Panel>;
+}
+
 function CurrentPosition({ snapshot, compact = false }: { snapshot: TradingSnapshot; compact?: boolean }) {
   const positions = Object.values(snapshot.positions.data ?? {}).filter((item) => Number(item.quantity) !== 0);
   if (snapshot.positions.status !== "ready" || !positions.length) return <div className="position-empty">当前无持仓</div>;
@@ -253,6 +340,7 @@ function TradePage({ snapshot }: { snapshot: TradingSnapshot }) {
       </aside>
     </section>
     <section className="lower-workspace">
+      <ValuationTruthPanel snapshot={snapshot} />
       <Panel title="当前持仓" source={snapshot.positions}><CurrentPosition snapshot={snapshot} compact /></Panel>
       <Panel title="风险状态" source={snapshot.optional["/risk"]}><dl className="risk-grid"><div><dt>当前回撤</dt><dd>{percent(pick(risk, "current_drawdown", "drawdown"))}</dd></div><div><dt>风险乘数</dt><dd>{numberText(pick(risk, "risk_multiplier"))}</dd></div><div><dt>有效杠杆</dt><dd>{numberText(pick(risk, "effective_leverage"))}</dd></div><div><dt>保证金率</dt><dd>{percent(pick(risk, "margin_ratio"))}</dd></div><div><dt>爆仓距离</dt><dd>--</dd></div><div><dt>Kill Switch</dt><dd className={Boolean(record(risk.kill_switch).enabled ?? snapshot.killswitch.data?.enabled) ? "danger" : "safe"}>{Boolean(record(risk.kill_switch).enabled ?? snapshot.killswitch.data?.enabled) ? "交易已停止" : "安全"}</dd></div></dl><p className="risk-note">最大杠杆配置：{text(pick(riskConfig, "max_leverage"))}</p></Panel>
     </section>
@@ -280,7 +368,7 @@ function ReviewPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const fast = record(learning.fast_learning);
   const candidates = Array.isArray(learning.slow_learning_candidates) ? learning.slow_learning_candidates : [];
   const factual = record(learning.factual);
-  return <div className="review-layout"><Panel title="今日表现" source={dailyState}><div className="review-metrics"><Metric label="PnL" value={money(pick(daily, "daily_pnl", "pnl", "net_pnl"))} /><Metric label="胜率" value={percent(pick(daily, "win_rate"))} /><Metric label="Profit Factor" value={numberText(pick(daily, "profit_factor"))} /><Metric label="最大回撤" value={percent(pick(daily, "max_drawdown"))} /><Metric label="交易次数" value={numberText(pick(daily, "trade_count", "trades"), 0)} /><Metric label="手续费 / Funding" value={money(pick(daily, "fees", "funding"))} /></div></Panel><Panel title="策略表现" source={dailyState}>{dailyState.status === "ready" && Object.keys(daily).length ? <p className="muted-line">后端尚未提供结构化的分策略表现字段</p> : <EmptyBlock source={dailyState} unavailable="复盘接口暂未开放" />}</Panel><Panel title="系统学习" source={learningState}><dl className="learning-grid"><div><dt>快速学习</dt><dd>{Object.keys(fast).length ? "已更新" : "--"}</dd></div><div><dt>慢速学习候选模型</dt><dd>{candidates.length ? candidates.map(String).join("、") : "--"}</dd></div><div><dt>事实复盘</dt><dd>{text(pick(factual, "status"))}</dd></div><div><dt>已复盘 Episode</dt><dd>{numberText(pick(factual, "review_count"), 0)}</dd></div></dl></Panel><Panel title="失败记忆" source={dailyState}><p className="muted-line">本日主要问题暂无结构化统计</p><button className="text-button" type="button" disabled>查看全部</button></Panel></div>;
+  return <div className="review-layout"><Panel title="今日表现" source={dailyState}><div className="review-metrics"><Metric label="复盘状态" value={reviewStatusLabels[String((daily as DailyReviewRun).status ?? "PENDING").toUpperCase()] ?? String((daily as DailyReviewRun).status ?? "PENDING")} tone={String((daily as DailyReviewRun).status ?? "").toUpperCase() === "SUCCEEDED" ? "safe" : String((daily as DailyReviewRun).status ?? "").toUpperCase() === "FAILED" ? "danger" : ""} /><Metric label="PnL" value={money(pick(daily, "daily_pnl", "pnl", "net_pnl"))} /><Metric label="胜率" value={percent(pick(daily, "win_rate"))} /><Metric label="Profit Factor" value={numberText(pick(daily, "profit_factor"))} /><Metric label="交易次数" value={numberText(pick(daily, "trade_count", "trades"), 0)} /><Metric label="Episode 数" value={numberText(pick(daily, "episode_count"), 0)} /><Metric label="尝试次数" value={numberText(pick(daily, "attempt_count"), 0)} /></div><dl className="system-list"><div><dt>Owner</dt><dd>{factValue((daily as DailyReviewRun).owner)}</dd></div><div><dt>Claim 截止</dt><dd>{factValue((daily as DailyReviewRun).claim_deadline_at)}</dd></div><div><dt>最近错误</dt><dd>{factValue((daily as DailyReviewRun).last_error_type)}</dd></div></dl></Panel><Panel title="策略表现" source={dailyState}>{dailyState.status === "ready" && Object.keys(daily).length ? <p className="muted-line">后端尚未提供结构化的分策略表现字段</p> : <EmptyBlock source={dailyState} unavailable="复盘接口暂未开放" />}</Panel><Panel title="系统学习" source={learningState}><dl className="learning-grid"><div><dt>快速学习</dt><dd>{Object.keys(fast).length ? "已更新" : "--"}</dd></div><div><dt>慢速学习候选模型</dt><dd>{candidates.length ? candidates.map(String).join("、") : "--"}</dd></div><div><dt>事实复盘</dt><dd>{text(pick(factual, "status"))}</dd></div><div><dt>已复盘 Episode</dt><dd>{numberText(pick(factual, "review_count"), 0)}</dd></div></dl></Panel><Panel title="失败记忆" source={dailyState}><p className="muted-line">本日主要问题暂无结构化统计</p><button className="text-button" type="button" disabled>查看全部</button></Panel></div>;
 }
 
 function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
@@ -291,7 +379,7 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const execution = record(exchange.okx_demo_credentials ?? exchange.execution);
   const marketStatus = String(pick(record(exchange.market_data), "status") ?? source).toUpperCase();
   const okxOverview = execution.authenticated === true && execution.status === "HEALTHY" ? "已连接" : execution.configured === true ? "已配置" : execution.status === "DEGRADED" ? "异常" : "未配置";
-  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>K线行情</dt><dd>{source === "HEALTHY" ? "OKX 实时" : sourceLabels[source] ?? "状态未知"}</dd></div><div><dt>OKX 公开行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">{okxOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>Git SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
+  return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>K线行情</dt><dd>{source === "HEALTHY" ? "OKX 实时" : sourceLabels[source] ?? "状态未知"}</dd></div><div><dt>OKX 公开行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">{okxOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>RUNNING_SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>run_id</dt><dd>{text(pick(runtime, "run_id"))}</dd></div><div><dt>EXECUTABLE_SCOPE</dt><dd>{text(pick(record(snapshot.optional["/opportunity/stats"]?.data), "executable_scope"), "UNKNOWN")}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
 function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
@@ -390,6 +478,7 @@ function RiskPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const enabled = Boolean(kill.enabled ?? snapshot.killswitch.data?.enabled);
   const positions = Object.values(snapshot.positions.data ?? {}) as Position[];
   return <div className="system-grid">
+    <ValuationTruthPanel snapshot={snapshot} />
     <Panel title="Risk 独立安全层" source={riskState}>
       <p className="risk-note">Risk 不选择方向，只输出 APPROVE / SCALE_DOWN / REJECT。</p>
       <dl className="system-list"><div><dt>Kill Switch</dt><dd className={enabled ? "danger" : "safe"}>{enabled ? "已启用" : "关闭"}</dd></div><div><dt>原因</dt><dd>{text(kill.reason)}</dd></div><div><dt>当前回撤</dt><dd>{percent(pick(risk, "current_drawdown", "drawdown"))}</dd></div><div><dt>有效杠杆</dt><dd>{text(risk.effective_leverage)}</dd></div><div><dt>风险乘数</dt><dd>{numberText(risk.risk_multiplier)}</dd></div></dl>

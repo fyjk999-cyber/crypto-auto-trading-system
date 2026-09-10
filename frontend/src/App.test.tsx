@@ -368,4 +368,48 @@ describe("中文加密交易终端 V2", () => {
     expect(screen.getByText("暂无数据")).toBeTruthy();
   });
 
+  it("估值事实批次严格区分 NULL / UNKNOWN / UNAVAILABLE，不显示为 0 或健康", async () => {
+    const unavailableValuation = {
+      valuation_id: "val-p10",
+      account_id: "default",
+      currency: "USDT",
+      quality: "UNAVAILABLE",
+      raw_mtm_equity: null,
+      available_margin: null,
+      adjusted_equity: null,
+      peak_adjusted_equity: null,
+      drawdown_amount: null,
+      drawdown_ratio: null,
+      market_as_of: null,
+      ledger_watermark: null,
+      position_snapshot_ref: null,
+      missing_marks: ["BTC-USDT-SWAP"],
+      stale_marks: [],
+      components: [],
+      solvency: null,
+      reason_codes: ["VALUATION_UNAVAILABLE"],
+    };
+    setup(backend({
+      "/account": { account_id: "default", mode: "PAPER", balances: {}, equity: "0", margin_used: "0", valuation: unavailableValuation },
+      "/risk": {
+        risk_config: {},
+        kill_switch: { enabled: false },
+        valuation: unavailableValuation,
+        last_risk_decision: {
+          daily_pnl: null,
+          daily_pnl_source: "ACCOUNTING_INCOMPLETE:FUNDING_UNKNOWN",
+          requested_quantity: "0.1",
+          approved_quantity: "0",
+          funding_status: "UNKNOWN",
+          pnl_provenance: { complete: false, funding_status: "UNKNOWN" },
+        },
+      },
+    }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "估值事实批次 Valuation Truth" })).toBeTruthy());
+    expect(screen.getAllByText("不可用").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("未知").length).toBeGreaterThan(0);
+    expect(screen.getByText("不完整（禁止新风险）")).toBeTruthy();
+    expect(screen.queryByText("可靠")).toBeNull();
+  });
+
 });

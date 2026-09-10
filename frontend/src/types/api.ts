@@ -4,6 +4,28 @@ export type ApiState<T> = {
   message?: string;
 };
 
+export type ValuationBatch = {
+  valuation_id: string | null;
+  account_id: string;
+  currency: string;
+  quality: string;
+  raw_mtm_equity: string | null;
+  available_margin: string | null;
+  adjusted_equity: string | null;
+  peak_adjusted_equity: string | null;
+  drawdown_amount: string | null;
+  drawdown_ratio: string | null;
+  market_as_of: string | null;
+  valuation_as_of?: string | null;
+  ledger_watermark: string | null;
+  position_snapshot_ref: string | null;
+  missing_marks: string[];
+  stale_marks: string[];
+  components?: Array<Record<string, unknown>>;
+  solvency: string | null;
+  reason_codes: string[];
+};
+
 export type Account = {
   account_id: string;
   mode: string;
@@ -11,6 +33,21 @@ export type Account = {
   equity: string;
   margin_used: string;
   updated_at?: string | null;
+  valuation?: ValuationBatch | null;
+};
+
+export type DailyReviewRun = {
+  date: string;
+  status: "PENDING" | "RUNNING" | "FAILED" | "SUCCEEDED" | string;
+  daily_pnl: string;
+  trade_count: number;
+  episode_count: number;
+  attempt_count: number;
+  win_rate: string;
+  profit_factor: string;
+  owner?: string | null;
+  claim_deadline_at?: string | null;
+  last_error_type?: string | null;
 };
 
 export type Position = {

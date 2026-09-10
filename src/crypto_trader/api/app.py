@@ -32,6 +32,7 @@ from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.persistence.models import (
     LLMDecisionORM,
+    RiskDecisionORM,
     TradeEpisodeORM,
     TradePlanORM,
 )
@@ -686,12 +687,42 @@ def create_app(state: AppState) -> FastAPI:
         batch = await state.portfolio.latest_valuation_batch(
             account_id=account.account_id, currency="USDT"
         )
+        async with state.database.session_factory() as session:
+            last = (
+                await session.execute(
+                    select(RiskDecisionORM)
+                    .order_by(RiskDecisionORM.timestamp.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        checks = (last.checks_json or {}) if last is not None else {}
+        last_risk = None
+        if last is not None:
+            last_risk = {
+                "risk_decision_id": last.risk_decision_id,
+                "symbol": last.symbol,
+                "decision": last.decision,
+                "reason": last.reason,
+                "timestamp": last.timestamp.isoformat() if last.timestamp else None,
+                "requested_quantity": checks.get("original_quantity"),
+                "approved_quantity": checks.get("approved_quantity"),
+                "requested_leverage": checks.get("requested_leverage"),
+                "approved_leverage": checks.get("approved_leverage"),
+                "daily_pnl": checks.get("daily_pnl"),
+                "daily_pnl_source": checks.get("daily_pnl_source"),
+                "funding_status": checks.get("funding_status"),
+                "valuation_id": checks.get("valuation_id"),
+                "valuation_quality": checks.get("valuation_quality"),
+                "available_margin": checks.get("available_margin"),
+                "pnl_provenance": checks.get("pnl_provenance") or {},
+            }
         return {
             "trading_mode": state.settings.effective_mode().value,
             "live_trading_enabled": state.settings.live_trading_enabled,
             "kill_switch": state.risk.kill_switch.snapshot(),
             "risk_config": state.risk.config.model_dump(mode="json"),
             "valuation": serialize_valuation(batch),
+            "last_risk_decision": last_risk,
         }
 
     @app.get("/margin")

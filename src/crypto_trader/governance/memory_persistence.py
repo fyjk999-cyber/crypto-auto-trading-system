@@ -375,6 +375,16 @@ class MemoryPersistence:
                     "win_rate": str(r.win_rate),
                     "profit_factor": str(r.profit_factor),
                     "expectancy": str(r.expectancy),
+                    "status": r.status,
+                    "attempt_count": r.attempt_count,
+                    "episode_count": r.episode_count,
+                    "owner": r.owner,
+                    "claim_deadline_at": (
+                        r.claim_deadline_at.isoformat()
+                        if r.claim_deadline_at is not None
+                        else None
+                    ),
+                    "last_error_type": r.last_error_type,
                 }
                 for r in rows
             ]
