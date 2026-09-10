@@ -432,3 +432,23 @@ async def test_equity_snapshot_references_valuation_batch(database):
     assert batch.quality == "HEALTHY"
     assert batch.components_json == [{"instrument_id": "BTC-USDT-SWAP", "quantity": "1"}]
     assert snapshot.valuation_id == "val_test"
+
+
+async def test_incomplete_valuation_batch_keeps_known_facts(database):
+    from sqlalchemy import select
+
+    from crypto_trader.portfolio.service import PortfolioService
+
+    service = PortfolioService(database.session_factory)
+    await service.record_equity_drawdown(
+        Decimal("100"),
+        quality="UNAVAILABLE",
+        reason_codes=["VALUATION_UNAVAILABLE"],
+        missing_marks=["SOLUSDT"],
+    )
+    async with database.session_factory() as session:
+        batch = (await session.execute(select(ValuationBatchORM))).scalar_one()
+    assert batch.raw_mtm_equity is None
+    assert batch.quality == "UNAVAILABLE"
+    assert batch.reason_codes_json == ["VALUATION_UNAVAILABLE"]
+    assert batch.missing_marks_json == ["SOLUSDT"]

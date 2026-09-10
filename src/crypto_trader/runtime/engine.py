@@ -772,6 +772,8 @@ class TradingEngine:
                 await self._refresh_execution_market(position_symbol)
 
         valuation_available = True
+        valuation_marks_missing: list[str] = []
+        valuation_marks_stale: list[str] = []
         mtm_equity = account.equity
         for position_symbol, position in positions.items():
             if position.quantity == 0:
@@ -779,11 +781,13 @@ class TradingEngine:
             mark = market_prices.get(position_symbol)
             if mark is None or mark <= 0:
                 valuation_available = False
+                valuation_marks_missing.append(position_symbol)
                 break
             if not self.market_data.is_fresh(
                 position_symbol, self.settings.orderbook_max_age_seconds
             ):
                 valuation_available = False
+                valuation_marks_stale.append(position_symbol)
                 break
             instrument = self._instruments.get(position_symbol)
             contract_size = (
@@ -838,6 +842,15 @@ class TradingEngine:
                 )
             )
         else:
+            await self.portfolio.record_equity_drawdown(
+                account.equity,
+                source="VALUATION_UNAVAILABLE",
+                valuation_id=valuation_id,
+                quality="UNAVAILABLE",
+                reason_codes=["VALUATION_UNAVAILABLE"],
+                missing_marks=valuation_marks_missing,
+                stale_marks=valuation_marks_stale,
+            )
             drawdown = None
             peak_equity = None
             valuation_as_of = None
