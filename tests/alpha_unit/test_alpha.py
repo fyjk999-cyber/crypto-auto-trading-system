@@ -176,6 +176,12 @@ def test_market_data_engine_realized_vol_insufficient_returns_none():
     assert mde.realized_vol(10) is None
 
 
+
+def test_market_data_engine_closes_window_returns_latest_n():
+    mde = make_mde([Decimal("100"), Decimal("101"), Decimal("102")])
+    assert mde.closes(2) == [Decimal("101"), Decimal("102")]
+
+
 def test_ml_meta_not_a_directional_sub_strategy():
     assert "ml_meta" not in BASE_WEIGHTS
     assert sum(BASE_WEIGHTS.values()) == Decimal("1.00")
