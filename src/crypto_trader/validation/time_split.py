@@ -70,3 +70,11 @@ def assert_test_not_used_for_tuning(
     """Reject parameter selection that touched final test observations."""
     if test_indices & tuned_indices:
         raise ValueError("test observations used for parameter tuning")
+
+
+def assert_evidence_asof_not_future(
+    decision_ts, evidence_ts
+) -> None:
+    """Reject research/memory evidence published after the decision."""
+    if evidence_ts > decision_ts:
+        raise ValueError("evidence timestamp is after decision timestamp")

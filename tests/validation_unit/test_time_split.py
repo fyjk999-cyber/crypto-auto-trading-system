@@ -84,3 +84,11 @@ def test_test_observations_cannot_be_used_for_tuning():
     assert_test_not_used_for_tuning({1, 2}, {3, 4})
     with pytest.raises(ValueError):
         assert_test_not_used_for_tuning({1, 2}, {2, 3})
+
+
+def test_research_evidence_asof_must_not_be_future():
+    from crypto_trader.validation.time_split import assert_evidence_asof_not_future
+
+    assert_evidence_asof_not_future(10, 9)
+    with pytest.raises(ValueError):
+        assert_evidence_asof_not_future(10, 11)
