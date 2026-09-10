@@ -52,3 +52,13 @@ def assert_label_is_future(feature_ts, label_ts) -> None:
     """Reject future-label leakage in supervised validation data."""
     if label_ts <= feature_ts:
         raise ValueError("label timestamp must be after feature timestamp")
+
+
+def assert_embargo_gap(
+    train: list, test: list, *, key, min_gap: int = 1
+) -> None:
+    """Reject adjacent train/test windows without a purge/embargo gap."""
+    if not train or not test:
+        raise ValueError("train and test must be non-empty")
+    if key(test[0]) - key(train[-1]) < min_gap:
+        raise ValueError("train/test embargo gap too small")

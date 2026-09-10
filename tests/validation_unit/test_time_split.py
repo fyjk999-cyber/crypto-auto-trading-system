@@ -68,3 +68,11 @@ def test_label_must_be_future_of_feature():
     assert_label_is_future(1, 2)
     with pytest.raises(ValueError):
         assert_label_is_future(2, 1)
+
+
+def test_embargo_gap_rejects_adjacent_windows():
+    from crypto_trader.validation.time_split import assert_embargo_gap
+
+    assert_embargo_gap([{"ts": 1}], [{"ts": 3}], key=lambda x: x["ts"])
+    with pytest.raises(ValueError):
+        assert_embargo_gap([{"ts": 1}], [{"ts": 2}], key=lambda x: x["ts"])
