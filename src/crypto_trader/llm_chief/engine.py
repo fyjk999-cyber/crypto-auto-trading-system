@@ -70,7 +70,10 @@ class ChiefTraderEngine:
             await self.provider.complete_json(
                 prompt=prompt,
                 temperature=0.2,
-                timeout_seconds=30.0,
+                # DeepSeek reasoning responses observed at 20-30s; keep a
+                # bounded margin so transient slowness becomes retryable
+                # instead of a durable LLM_TIMEOUT fail-closed decision.
+                timeout_seconds=45.0,
                 retries=1,
                 max_tokens=2400,
                 thinking=True,
