@@ -60,3 +60,11 @@ def test_strict_time_order_rejects_non_monotonic_within_split():
             [{"ts": 4}],
             key=lambda x: x["ts"],
         )
+
+
+def test_label_must_be_future_of_feature():
+    from crypto_trader.validation.time_split import assert_label_is_future
+
+    assert_label_is_future(1, 2)
+    with pytest.raises(ValueError):
+        assert_label_is_future(2, 1)

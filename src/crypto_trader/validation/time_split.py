@@ -46,3 +46,9 @@ def assert_strict_time_order(
         raise ValueError("validation/test overlap")
     if train_keys[-1] >= test_keys[0]:
         raise ValueError("train/test overlap")
+
+
+def assert_label_is_future(feature_ts, label_ts) -> None:
+    """Reject future-label leakage in supervised validation data."""
+    if label_ts <= feature_ts:
+        raise ValueError("label timestamp must be after feature timestamp")
