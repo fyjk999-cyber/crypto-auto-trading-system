@@ -221,6 +221,34 @@ class AccountProjectionORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ValuationBatchORM(Base):
+    """Immutable equity valuation batch consumed by Risk/Sizing/API."""
+
+    __tablename__ = "valuation_batches"
+
+    valuation_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, default="default")
+    currency: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    valuation_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ledger_watermark: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    position_snapshot_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    policy_version: Mapped[str] = mapped_column(String(32), default="v1")
+    raw_mtm_equity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    available_margin: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    adjusted_equity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    peak_adjusted_equity: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    drawdown_amount: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    quality: Mapped[str] = mapped_column(String(16), default="HEALTHY")
+    reason_codes_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    solvency: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    missing_marks_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    stale_marks_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    allowed_time_skew_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    actual_skew_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    components_json: Mapped[list[Any] | None] = mapped_column(JSON)
+
+
 class EquitySnapshotORM(Base):
     """Durable factual equity/drawdown history used by canonical Risk."""
 
@@ -250,6 +278,7 @@ class EquitySnapshotORM(Base):
     drawdown: Mapped[Decimal] = mapped_column(ExactDecimal())
     valuation_status: Mapped[str] = mapped_column(String(16), default="HEALTHY")
     valuation_source: Mapped[str] = mapped_column(String(64), default="LEDGER_PROJECTION")
+    valuation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     valuation_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

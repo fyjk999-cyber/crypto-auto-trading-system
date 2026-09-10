@@ -824,6 +824,17 @@ class TradingEngine:
                     mtm_equity,
                     source="MARK_TO_MARKET_EQUITY",
                     valuation_as_of=market_as_of,
+                    valuation_id=valuation_id,
+                    quality="HEALTHY",
+                    components=[
+                        {
+                            "instrument_id": symbol_key,
+                            "quantity": str(position.quantity),
+                            "mark_price": str(market_prices.get(symbol_key)),
+                        }
+                        for symbol_key, position in positions.items()
+                        if position.quantity != 0
+                    ],
                 )
             )
         else:

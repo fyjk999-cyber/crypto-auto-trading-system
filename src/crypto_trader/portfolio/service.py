@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from crypto_trader.domain.enums import TradingMode
+from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Account, Balance, Position
 from crypto_trader.domain.money import D
 from crypto_trader.ledger.projections import rebuild_projections, replay_projections
@@ -16,6 +17,7 @@ from crypto_trader.persistence.models import (
     EquitySnapshotORM,
     LedgerTransactionORM,
     PositionProjectionORM,
+    ValuationBatchORM,
 )
 
 
@@ -64,6 +66,12 @@ class PortfolioService:
         currency: str = "USDT",
         source: str = "LEDGER_PROJECTION",
         valuation_as_of: datetime | None = None,
+        valuation_id: str | None = None,
+        quality: str = "HEALTHY",
+        reason_codes: list[str] | None = None,
+        missing_marks: list[str] | None = None,
+        stale_marks: list[str] | None = None,
+        components: list[dict] | None = None,
     ) -> tuple[Decimal, Decimal, datetime, str]:
         """Persist a factual equity point and return canonical drawdown.
 
@@ -127,6 +135,34 @@ class PortfolioService:
             )
             peak_adjusted = max(prior_peak, cash_flow_adjusted)
             drawdown = cash_flow_adjusted - peak_adjusted
+            valuation_id = valuation_id or new_id("val")
+            health = self.classify_equity_status(current_equity)
+            solvency = {
+                "HEALTHY": "POSITIVE",
+                "ZERO_EQUITY": "ZERO_EQUITY",
+                "INSOLVENT": "INSOLVENT",
+            }.get(health, "UNKNOWN")
+            session.add(
+                ValuationBatchORM(
+                    valuation_id=valuation_id,
+                    account_id=account_id,
+                    currency=currency,
+                    valuation_as_of=as_of,
+                    ledger_watermark=None,
+                    position_snapshot_ref=None,
+                    raw_mtm_equity=current_equity if quality == "HEALTHY" else None,
+                    available_margin=current_equity if quality == "HEALTHY" else None,
+                    adjusted_equity=cash_flow_adjusted,
+                    peak_adjusted_equity=peak_adjusted,
+                    drawdown_amount=drawdown,
+                    quality=quality,
+                    reason_codes_json=reason_codes or [],
+                    solvency=solvency,
+                    missing_marks_json=missing_marks or [],
+                    stale_marks_json=stale_marks or [],
+                    components_json=components or [],
+                )
+            )
             session.add(
                 EquitySnapshotORM(
                     account_id=account_id,
@@ -141,7 +177,8 @@ class PortfolioService:
                     peak_adjusted_equity=peak_adjusted,
                     drawdown=drawdown,
                     valuation_source=source,
-                    valuation_status=self.classify_equity_status(current_equity),
+                    valuation_status=health,
+                    valuation_id=valuation_id,
                     valuation_as_of=as_of,
                 )
             )

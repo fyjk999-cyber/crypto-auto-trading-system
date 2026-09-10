@@ -10,9 +10,11 @@ from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
 from crypto_trader.ledger.service import LedgerPosting, LedgerService, build_trade_entries
 from crypto_trader.persistence.models import (
+    EquitySnapshotORM,
     LedgerEntryORM,
     LedgerTransactionORM,
     TradeEpisodeORM,
+    ValuationBatchORM,
 )
 from crypto_trader.portfolio.service import PortfolioService
 
@@ -410,3 +412,23 @@ async def test_ledger_transaction_account_id_is_formal(ledger, database):
         ("A", "txn_A"),
         ("B", "txn_B"),
     ]
+
+
+async def test_equity_snapshot_references_valuation_batch(database):
+    from sqlalchemy import select
+
+    from crypto_trader.portfolio.service import PortfolioService
+
+    service = PortfolioService(database.session_factory)
+    await service.record_equity_drawdown(
+        Decimal("100"), valuation_id="val_test", quality="HEALTHY",
+        components=[{"instrument_id": "BTC-USDT-SWAP", "quantity": "1"}],
+    )
+    async with database.session_factory() as session:
+        batch = (await session.execute(select(ValuationBatchORM))).scalar_one()
+        snapshot = (await session.execute(select(EquitySnapshotORM))).scalar_one()
+    assert batch.valuation_id == "val_test"
+    assert batch.raw_mtm_equity == Decimal("100")
+    assert batch.quality == "HEALTHY"
+    assert batch.components_json == [{"instrument_id": "BTC-USDT-SWAP", "quantity": "1"}]
+    assert snapshot.valuation_id == "val_test"
