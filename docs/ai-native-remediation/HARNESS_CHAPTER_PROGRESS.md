@@ -76,3 +76,27 @@ CURRENT_PHASE = CORRECTION_AND_CONVERGENCE
 AUTO_CORRECTION_MODE = TRUE
 CODEX_REVIEW_REQUIRED_FOR_NEXT_STEP = FALSE
 USER_CONFIRMATION_REQUIRED_BETWEEN_CHAPTERS = FALSE
+
+## MASTER CORRECTION PROGRESS (auto-correction)
+
+Latest HEAD: 732d661
+Backend gate: 686 passed
+Ruff: PASS
+
+| Ch | Status | Evidence |
+|----|--------|----------|
+| 01 | FIXED_PENDING_REGRESSION | cancel mutation fenced by current lease/fence |
+| 02 | FIXED_PENDING_REGRESSION | full factual USDT linear-SWAP registry, no forced LINEAR_PERP |
+| 03 | FIXED_PENDING_REGRESSION | no `or Decimal("1")`; missing real depth fails closed; no synthetic book seed |
+| 04 | PARTIAL_PASS | existing indicator tests green |
+| 05 | CHANGES_REQUESTED | execution scope still must be declared/scoped truthfully |
+| 06 | PARTIAL_PASS | factual daily net PnL into Risk; drawdown history still pending |
+| 07 | FIXED_PENDING_REGRESSION | missing volatility rejects; factual orderbook size used as liquidity |
+| 08 | NOT_FULLY_REVIEWED | targeted verification pending after P0/P1 |
+| 09 | NOT_FULLY_REVIEWED | targeted verification pending after P0/P1 |
+| 10 | BLOCKED_BY_UPSTREAM | full lifecycle regression after upstream fixes |
+| 11 | PARTIAL_PASS | reversal PnL + periodic equity returns; more hand-calc cases pending |
+| 12 | PARTIAL_PASS | ordered split complete; OOS/ablation still pending |
+| 13 | PARTIAL_PASS | UTC-only bootstrap; durable run-state table still pending |
+| 14 | PROVISIONAL_PASS | frontend green |
+| 15 | BLOCKED | fixed-SHA natural acceptance requires engineering acceptance first |
