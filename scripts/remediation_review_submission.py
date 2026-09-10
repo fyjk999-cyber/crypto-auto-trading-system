@@ -51,6 +51,7 @@ def create_request(
     unverified_items: list[str],
     pre_existing_dirty: list[dict],
     request_id: str | None = None,
+    supersedes_request_id: str | None = None,
 ) -> Path:
     if not VALID_CHAPTER.match(chapter_id):
         raise ValueError("chapter_id must be 00-15")
@@ -90,6 +91,7 @@ def create_request(
         "migration_validation": migration_validation,
         "rollback": rollback,
         "unverified_items": unverified_items,
+        "supersedes_request_id": supersedes_request_id,
         "prior_approval": None,
         "state": "SUBMITTED",
     }
@@ -126,6 +128,7 @@ def main() -> int:
     parser.add_argument("--rollback", required=True)
     parser.add_argument("--unverified-items", nargs="*", default=[])
     parser.add_argument("--dirty", nargs="*", default=[])
+    parser.add_argument("--supersedes-request-id", default=None)
     args = parser.parse_args()
     try:
         dirty = []
@@ -146,6 +149,7 @@ def main() -> int:
             rollback=args.rollback,
             unverified_items=args.unverified_items,
             pre_existing_dirty=dirty,
+            supersedes_request_id=args.supersedes_request_id,
         )
     except (ValueError, FileExistsError, FileNotFoundError, ImportError) as exc:
         print(f"SUBMISSION_FAILED: {exc}", file=sys.stderr)

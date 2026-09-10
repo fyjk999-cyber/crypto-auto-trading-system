@@ -192,6 +192,13 @@
     },
     "state": {
       "const": "SUBMITTED"
+    },
+    "supersedes_request_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^req-[A-Za-z0-9_-]+$"
     }
   },
   "required": [
