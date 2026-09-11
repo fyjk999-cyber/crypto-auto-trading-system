@@ -66,3 +66,44 @@ async def test_execution_market_refresh_failure_marks_health_false():
     engine.adapter = BrokenAdapter()
     assert await engine._refresh_execution_market("BTCUSDT") is False
     assert engine.health.snapshot()["components"]["market_data"]["ok"] is False
+
+
+async def test_ready_rejects_synthetic_runtime_even_when_process_is_running(database):
+    import httpx
+
+    from crypto_trader.api.app import create_app
+    from crypto_trader.config import Settings
+    from crypto_trader.runtime.bootstrap import build_system
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=True,
+        paper_mode="PAPER_SYNTHETIC",
+        engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600,
+        run_lease_renew_interval_seconds=3600,
+    )
+    bundle = await build_system(settings)
+    await bundle.engine.start("ready-synthetic-rejected")
+    bundle.app_state.llm_runtime.provider = "deepseek"
+    bundle.app_state.llm_runtime.model = "test-model"
+    bundle.app_state.llm_runtime.configured = True
+    bundle.app_state.llm_runtime.reachable = True
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(bundle.app_state)),
+            base_url="http://test",
+        ) as client:
+            response = await client.get("/ready")
+        assert response.status_code == 503
+        payload = response.json()
+        assert payload["ready"] is False
+        assert "PAPER_REAL_MARKET_REQUIRED" in payload["reasons"]
+        assert "OKX_PUBLIC_MARKET_NOT_READY" in payload["reasons"]
+    finally:
+        await bundle.engine.stop()
+        await bundle.database.close()
