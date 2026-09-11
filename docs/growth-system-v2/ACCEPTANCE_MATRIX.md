@@ -20,11 +20,11 @@ Worktree: `/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth`
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| V2 focused | `pytest tests/growth_system_v2 -q` | 46 passed |
-| Focused integration bundle | V2 + v1 growth + p8 daily review + memory persistence + migrations + governance | 140 passed |
-| Full backend pytest | `.venv/bin/python -m pytest -q -p no:cacheprovider` | see `.ops-growth-v2/full_pytest.log` |
-| Ruff | `.venv/bin/python -m ruff check .` | see `.ops-growth-v2/ruff.log` |
-| Migration validation | legacy upgrade/repeat/downgrade/re-upgrade + SQLite/PostgreSQL dialect compile | passed in `test_card_schema_and_migration.py` and v1 migration-matrix test |
+| V2 focused (hardening) | `pytest tests/growth_system_v2 -q` | 63 passed, 1 skipped |
+| Focused hardening bundle | V2 + v1 growth + p8 daily review + p8 migrations + memory persistence + llm_chief + risk + governance | 224 passed, 1 skipped |
+| Full backend pytest (hardening) | `.venv/bin/python -m pytest -q -p no:cacheprovider` | 1029 passed, 1 skipped, 2 warnings in 137.28s |
+| Ruff (hardening) | `.venv/bin/python -m ruff check .` | All checks passed |
+| Migration validation (hardening) | Alembic 0039→0040 upgrade/repeat/downgrade/re-upgrade + PostgreSQL offline SQL compile | 7 passed, 1 skipped (real PostgreSQL URL absent) |
 | agent-project-test | entry not present | NOT_AVAILABLE |
 | Frontend | not modified; environment has no node/npm | NOT_APPLICABLE (no frontend change) |
 
@@ -47,7 +47,15 @@ NO_FAKE_EVIDENCE=YES
 DECISION_CARD_LINEAGE=YES (growth_card_decision_traces)
 CARD_VERSION_LINEAGE=YES (growth_card_versions)
 CONTRADICTION_HANDLING=YES
-GROWTH_SYSTEM_V2_ENGINEERING_READY=YES
+
+CORE_ENGINE_COMPLETE=YES
+MIGRATION_INTEGRATED=YES (Alembic 0040_growth_v2_cards; not deployed)
+CANONICAL_RUNTIME_WIRED=YES (build_system composition root; not started)
+CANONICAL_SCHEDULER_WIRED=YES (DailyReviewScheduler + DailyCardLearner)
+REAL_PROVIDER_VERIFIED=NO (NOT_VERIFIED: no approved provider credential)
+NATURAL_PAPER_LOOP_VERIFIED=PENDING (no natural PAPER window; no runtime started)
+REMOTE_REPRODUCIBLE=see final receipt
+DEPLOYABLE=ENGINEERING_READY
 RUNTIME_AUTHORIZED=false
 DEPLOYED=false
 ```
@@ -55,9 +63,11 @@ DEPLOYED=false
 ## Fact boundary
 
 * `production_db_written=false`, `runtime_authorized=false`, `deployed=false`.
-* `migration_status=DRAFT`; no Alembic revision claimed; the extended
-  `ai_compressed_experience` columns and the two journals are covered by a
-  portable, reversible draft helper and tests.
+* `MIGRATION_INTEGRATED=YES`: real Alembic revision
+  `0040_growth_v2_cards` (`down_revision=0039_applicability`) with
+  upgrade/repeat/downgrade/re-upgrade SQLite tests and PostgreSQL offline SQL
+  compilation.  A real PostgreSQL execution is NOT_VERIFIED because
+  `GROWTH_V2_POSTGRES_URL` was not provided.
 * Closed-loop evidence is an isolated simulation with a deterministic test
   provider.  It proves the code chain and invariants, not that a production
   provider/runtime has executed it.

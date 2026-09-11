@@ -177,36 +177,34 @@ requires compatible trigger/context/guidance and retires sources.  Rollback:
 draft downgrade drops only the added columns/journals; knowledge retirement is
 append-only and canonical tables are never dropped.
 
-## TEST_RESULTS
+## TEST_RESULTS (integration hardening, current branch)
 
 ```text
-final focused bundle on FINAL_SHA
-  = 144 passed in 30.42s
-V2 suite                     = 46 passed
-full backend pytest run #1   = 1011 passed, 1 failed (position-lifecycle timing test)
-  failed test isolation      = passed 5/5 consecutive isolated runs
-full backend pytest run #2   = 1012 passed, 2 warnings in 164.52s (0 failed)
-full backend pytest FINAL    = 1012 passed, 2 warnings in 163.72s (0 failed) on 3907b1a
-ruff FINAL                   = All checks passed (whole repo)
-migration FINAL              = 8 passed; alembic head remains 0039_applicability
-                               (draft V2 revision intentionally not on the chain)
+focused hardening bundle (V2 + v1 growth + p8 daily review + p8 migrations +
+memory persistence + llm_chief + risk + governance)
+  = 224 passed, 1 skipped in 31.96s
+V2 suite                     = 63 passed, 1 skipped (real PostgreSQL URL absent)
+full backend pytest          = 1029 passed, 1 skipped, 2 warnings in 137.28s
+ruff (whole repo)            = All checks passed
+migration tests              = 7 passed, 1 skipped
+                               (0039→0040 upgrade/repeat/downgrade/re-upgrade;
+                                PostgreSQL offline SQL compile)
+alembic head                 = 0040_growth_v2_cards
 agent-project-test           = NOT_AVAILABLE (entry does not exist)
 frontend                     = NOT_APPLICABLE (no frontend files changed; no node/npm)
 ```
 
-The run #1 position-lifecycle failure is reported as order/timing-sensitive:
-it passes 5/5 in isolation and both reruns are green.  It is not silently
-marked PASS and it is unrelated to card code.
+The previously observed position-lifecycle failure ran in this full suite and
+did not recur; it remains monitored, not auto-labelled flaky.
 
 Evidence logs (ignored `.ops-growth-v2/`, SHA-256):
 
 ```text
-f7dd325af8f0ee813426c385b5d2fac311ad381521b1e1e99be51aab587cc795  full_pytest_final_sha.log (1012 passed, final SHA)
-800ee622df5ac7437da16e7e7ebb72463a5bee2e1c7a006945ada1a4b3e3fe6d  full_pytest_rerun.log
-740e4f993a5d0639810f7cd441e66160417cb60ccad09ead3d52948f7632d19a  full_pytest.log (run #1)
-8c9757571062021509bed2a7f8d48c2497d01c5bac6ad65067b40c0f5acb1591  final_focused_final_sha.log (144 passed)
-82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18  ruff_final.log
-5542e215ec43e2fad8f4902be960be83ed7dc3a9900e269af12a75613343dbfd  migration_validation.log
+174aec0a113b95640efb76dd522fc899249cf054e6a80fe8ab8e76360e02db73  hardening_full_pytest.log (1029 passed)
+1ec5d00a874d886d55ed90f088bbb5ea871789ebc61469cee6618fb747ce088f  hardening_focused.log (224 passed)
+82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18  hardening_ruff.log
+ba1122be5eb405b7106b23a451b25a8a699ebbea335d92884f0a45712d9ea253  hardening_migration.log
+f7dd325af8f0ee813426c385b5d2fac311ad381521b1e1e99be51aab587cc795  full_pytest_final_sha.log (previous phase)
 ```
 
 ## DEFINITION_OF_DONE (12)
@@ -247,26 +245,43 @@ Historical as_of uses the visible journal snapshot, not the latest row          
 
 ## KNOWN_LIMITATIONS
 
-* `migration_status=DRAFT`: the extended canonical table and journals are not
-  yet an Alembic revision; integration owner must assign head/`down_revision`.
+* Real Alembic revision `0040_growth_v2_cards` is integrated and tested on
+  SQLite (upgrade/repeat/downgrade/re-upgrade) plus PostgreSQL offline SQL
+  compilation.  A real PostgreSQL execution is `NOT_VERIFIED` because
+  `GROWTH_V2_POSTGRES_URL` was not provided.
 * Card closed loop was proven with deterministic test providers on temp DBs;
-  no real DeepSeek call, production backfill, scheduler enablement or runtime
-  retrieval was executed.
-* Legacy `growth_compressions` still exists for v1 tests and is marked
-  DEPRECATE; runtime reads only the canonical card table.
-* Full-suite run #1 had one order/timing-sensitive position-lifecycle failure
-  that passes in isolation (5/5); full-suite run #2 is 1012 passed / 0 failed.
-  Reported as a flaky/non-card test, not silently marked PASS.
+  `REAL_PROVIDER_SMOKE=NOT_VERIFIED` (no approved credential in this
+  environment) and `NATURAL_PAPER_GROWTH_LOOP=PENDING` (no runtime started, no
+  natural closed lifecycle in the window).
+* Legacy `growth_compressions` remains for v1 metrics/tests and is classified
+  LEGACY_WRITE/READ/TEST_ONLY; `LEGACY_RUNTIME_CARD_READS=0` and
+  `LEGACY_RUNTIME_CARD_WRITES=0` are enforced by
+  `test_legacy_path_audit.py`.
+* Full-suite run #1 in the previous phase had one order/timing-sensitive
+  position-lifecycle failure that passed 5/5 in isolation; the current
+  integration-hardening full suite is 1029 passed / 0 failed and the test is
+  monitored on every run.
 * `agent-project-test` is unavailable in this environment.
+* No deployment, runtime start/restart or production backfill was performed.
 
 ## BLOCKERS
 
 ```text
-none for engineering completion
-production migration/deploy/real-provider smoke require separate authorization
+engineering: none
+REAL_PROVIDER_SMOKE: no approved DeepSeek/provider credential in this environment
+NATURAL_PAPER_GROWTH_LOOP: no runtime authorization and no natural closed lifecycle
+PRODUCTION_DEPLOY: separate authorization required
+REMOTE_PUSH: see final receipt (push attempted after tests)
 ```
 
 ```text
+CORE_ENGINE_COMPLETE = YES
+MIGRATION_INTEGRATED = YES (not deployed)
+CANONICAL_RUNTIME_WIRED = YES (composition root wired; not started)
+CANONICAL_SCHEDULER_WIRED = YES
+REAL_PROVIDER_VERIFIED = NO (NOT_VERIFIED)
+NATURAL_PAPER_LOOP_VERIFIED = PENDING
+DEPLOYABLE = ENGINEERING_READY
 RUNTIME_AUTHORIZED = false
 DEPLOYED = false
 ```

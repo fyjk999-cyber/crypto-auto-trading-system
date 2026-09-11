@@ -43,19 +43,24 @@ in `LLMDecisionORM` / `DynamicEvidencePackage`.
 
 ## 4. Migration
 
-Draft helper `growth_v2_migration.py` (`upgrade_experience_card_schema` /
-`downgrade_experience_card_schema`):
+Production migration truth: Alembic revision
+`migrations/versions/0040_growth_v2_cards.py`
+(`revision=0040_growth_v2_cards`, `down_revision=0039_applicability`).
 
-* fresh DB: ORM `create_all` already contains the extended columns;
-* upgrade: additive `ALTER TABLE ... ADD COLUMN` only for missing columns;
-* repeat upgrade: no-op, existing data untouched;
+* fresh DB / previous head → new head: adds the V2 columns in place, creates
+  `growth_card_versions` + `growth_card_decision_traces` and the account/mode/
+  status/scope indexes;
 * legacy rows: backfilled to `experience_type='COMPRESSED_EXPERIENCE'`,
-  `status='WATCH'`, `known_at=created_at`, never silently ACTIVE;
-* downgrade / re-upgrade: drops only the columns/journals this helper added.
+  `status='WATCH'`, `share_scope='ACCOUNT_MODE'`, `known_at=created_at`; data
+  is never deleted;
+* repeat upgrade: no-op; downgrade removes only V2 columns/journals;
+* PostgreSQL offline SQL compilation is tested; a real PostgreSQL run requires
+  `GROWTH_V2_POSTGRES_URL` and is otherwise reported NOT_VERIFIED.
 
-`migration_status = DRAFT`; no Alembic revision is claimed and the shared
-`down_revision` is integration-owned.  Tests:
-`tests/growth_system_v2/test_card_schema_and_migration.py`.
+`growth_v2_migration.py` is now TEST/SUPPORT only (isolated unit tests that do
+not run the complete migration chain).  Tests:
+`tests/growth_system_v2/test_alembic_migration.py` and
+`test_card_schema_and_migration.py`.
 
 ## 5. Backward compatibility
 
