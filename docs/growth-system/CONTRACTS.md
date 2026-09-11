@@ -31,9 +31,24 @@ explanations (G02/G04 supersede them).
 
 ## C2 — Structured Review (G02)
 
-Status: implemented in `src/crypto_trader/learning/growth_review.py`.
-See the module docstring and `tests/growth_system/test_review_schema_and_refs.py`
-for the exact schema/ref rules.
+Implementation: `src/crypto_trader/learning/growth_contracts.py`,
+`src/crypto_trader/learning/growth_review.py`,
+`src/crypto_trader/learning/growth_models.py`.
+Tests: `tests/growth_system/test_review_schema_and_refs.py`.
+
+| Rule | Contract |
+| --- | --- |
+| Transport | Existing `LLMProvider.complete_json` protocol; no second trading brain |
+| Inputs | Raw thesis, selected tool evidence, TradePlan, Risk adjustments, position HOLD/REDUCE/EXIT, fills/fees/funding, market changes and missing evidence |
+| Output | Observation facts, candidate explanations, support/contrary refs, testable lessons, scope, uncertainty, data gaps |
+| Refs | Every ref must be in the allowed set derived from this episode's input; `allowed_refs` may not contain refs absent from the input; violations become `REF_NOT_ALLOWED` with no success row |
+| Authority | `extra="forbid"`; an authoritative `net_pnl` field is a schema failure; `risk_rule_changes` must be empty; the model never mutates risk/leverage/execution |
+| Attempt persistence | provider, model, profile/prompt/schema versions, prompt hash, schema hash, input hash, attempt number, result or safe error, latency, usage; missing usage becomes `usage_status=UNKNOWN` |
+| Provider failure | Recorded as `FAILED` with `PROVIDER_*`; never written as a successful review |
+| Idempotency | Fingerprint `(review_date, episode_id, profile_version, input_hash)`; an existing `SUCCEEDED` attempt returns `idempotent=True` without a second provider call |
+| Claim fence | Optional `claim_checker` is re-checked after the provider call; a lost claim persists `CLAIM_LOST` and no visible success |
+| Cost honesty | At-least-once provider call; crash-before-save can duplicate a request. Publication is idempotent, billing is not claimed as exactly-once |
+| Prompt injection | Episode text is embedded inside `<untrusted_episode_data>` and treated as data; instruction-like text is never promoted to a system rule |
 
 ## C3 — Idempotent stages (G03)
 
