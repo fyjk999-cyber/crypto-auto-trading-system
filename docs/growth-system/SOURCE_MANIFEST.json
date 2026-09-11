@@ -1,0 +1,635 @@
+{
+  "manifest_version": "growth-source-manifest-v1",
+  "generated_at": "2026-09-11T09:17:31.459909+00:00",
+  "harness": {
+    "task_id": "growth-learning-pipeline",
+    "base_sha": "df55b11bcde5d50670ef92d05ba2166feb4735d9",
+    "worktree": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth",
+    "candidate_sha": null,
+    "note": "candidate_sha is bound in the review receipt after commit"
+  },
+  "databases": [
+    {
+      "label": "fullmarket",
+      "path": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-fullmarket/data/crypto_trader.db",
+      "exists": true,
+      "size_bytes": 761856,
+      "mtime_utc": "2026-09-11T09:08:51.950259+00:00",
+      "sha256_main": "7b74c929ba7e20006c2c1118f3c653211b53d7968d881cf36a56f1980ebbf756",
+      "snapshot_method": "sqlite_backup_api_from_readonly_connection",
+      "wal": {
+        "present": true,
+        "size_bytes": 4120032,
+        "sha256_at_read_time": "cd388cafb1bf516b3fc6fc28ded6ffb5b67b6a1132b82222c0ad135926022a04"
+      },
+      "shm_present": true,
+      "table_count": 66,
+      "alembic_revision": [
+        "0040_runtime_settings"
+      ],
+      "key_table_counts": {
+        "trade_episodes": 0,
+        "ai_trade_episodes": 0,
+        "trade_memory_records": 0,
+        "ai_trade_reviews": 0,
+        "ai_market_patterns": 0,
+        "ai_coin_profiles": 0,
+        "ai_compressed_experience": 0,
+        "daily_review_runs": 0,
+        "daily_review_results": null,
+        "learning_lessons": null,
+        "learning_pattern_candidates": null,
+        "learning_review_jobs": null,
+        "llm_decisions": 0,
+        "llm_usage": null,
+        "decision_evidence": null,
+        "engine_runs": 3,
+        "fills": 0,
+        "orders": 0,
+        "trade_plans": 0,
+        "risk_decisions": 0,
+        "runtime_leases": 1,
+        "accounts_projection": 1
+      },
+      "trade_episodes": {
+        "total": 0,
+        "factual": 0,
+        "review_status": {},
+        "closed_at_min": null,
+        "closed_at_max": null,
+        "duplicate_trade_plan_ids": 0,
+        "null_closed_at": 0,
+        "direction_counts": {}
+      },
+      "daily_review_runs": {
+        "count": 0,
+        "status_column_present": true,
+        "status": {},
+        "min_review_date": null,
+        "max_review_date": null,
+        "recent": []
+      },
+      "accounts_projection": [
+        [
+          "default",
+          "USDT",
+          "200000",
+          1,
+          "2026-09-11 07:48:42.285126"
+        ]
+      ],
+      "engine_runs_recent": [
+        [
+          "run_da0fc3d9f41e45ab81093ea74f63ae05",
+          "RUNNING",
+          "PAPER",
+          "dummy",
+          "2026-09-11 08:08:39.994794",
+          null
+        ],
+        [
+          "run_bb108167a91446b4b230af03bb2b86a5",
+          "STOPPED",
+          "PAPER",
+          "dummy",
+          "2026-09-11 08:07:32.429940",
+          "2026-09-11 08:08:32.731877"
+        ],
+        [
+          "run_f7c488072efa4c90ba2cf1c469e13abc",
+          "STOPPED",
+          "PAPER",
+          "dummy",
+          "2026-09-11 07:48:42.241621",
+          "2026-09-11 08:07:25.236186"
+        ]
+      ],
+      "runtime_leases": [
+        [
+          "crypto_engine_execution",
+          "engine_run_da0fc3d9f41e45ab81093ea74f63ae05",
+          1789114120.512618,
+          1789118255.681996,
+          3
+        ]
+      ]
+    },
+    {
+      "label": "canonical-clean",
+      "path": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-canonical-clean/data/crypto_trader.db",
+      "exists": true,
+      "size_bytes": 81227776,
+      "mtime_utc": "2026-09-11T04:05:16.300232+00:00",
+      "sha256_main": "6e627ac2d304031d3f585902dfcdadac5d2d815f228ef494d4f7af01602be26c",
+      "snapshot_method": "sqlite_backup_api_from_readonly_connection",
+      "wal": {
+        "present": true,
+        "size_bytes": 4190072,
+        "sha256_at_read_time": "204db634477615ae0ab3adb1b362e53e8a212bb8420cf09c19fb5690cc3a429e"
+      },
+      "shm_present": true,
+      "table_count": 61,
+      "alembic_revision": [
+        "0023_opportunity_lineage"
+      ],
+      "key_table_counts": {
+        "trade_episodes": 33,
+        "ai_trade_episodes": 0,
+        "trade_memory_records": 0,
+        "ai_trade_reviews": 0,
+        "ai_market_patterns": 0,
+        "ai_coin_profiles": 0,
+        "ai_compressed_experience": 0,
+        "daily_review_runs": 2,
+        "daily_review_results": null,
+        "learning_lessons": null,
+        "learning_pattern_candidates": null,
+        "learning_review_jobs": null,
+        "llm_decisions": 13271,
+        "llm_usage": null,
+        "decision_evidence": null,
+        "engine_runs": 11,
+        "fills": 434,
+        "orders": 205,
+        "trade_plans": 167,
+        "risk_decisions": 3388,
+        "runtime_leases": 1,
+        "accounts_projection": 1
+      },
+      "trade_episodes": {
+        "total": 33,
+        "factual": 33,
+        "review_status": {
+          "PENDING": 33
+        },
+        "closed_at_min": "2026-09-09 09:52:57.302842",
+        "closed_at_max": "2026-09-10 08:29:35.842726",
+        "duplicate_trade_plan_ids": 0,
+        "null_closed_at": 0,
+        "direction_counts": {
+          "LONG": 14,
+          "SHORT": 19
+        }
+      },
+      "daily_review_runs": {
+        "count": 2,
+        "status_column_present": false,
+        "status": null,
+        "min_review_date": "2026-09-10",
+        "max_review_date": "2026-09-11",
+        "recent": [
+          [
+            "2026-09-11",
+            "LEGACY_SCHEMA",
+            0,
+            "0",
+            "999"
+          ],
+          [
+            "2026-09-10",
+            "LEGACY_SCHEMA",
+            0,
+            "0",
+            "999"
+          ]
+        ]
+      },
+      "accounts_projection": [
+        [
+          "default",
+          "USDT",
+          "182351.5772802690937411498162",
+          1,
+          "2026-09-10 09:20:19.880376"
+        ]
+      ],
+      "engine_runs_recent": [
+        [
+          "run_658924ea2c5b46a38121e130240ef2c9",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-09 11:45:11.009059",
+          "2026-09-11 04:05:57.607984"
+        ],
+        [
+          "run_e83a60ea4f134fa49fd2781f71053ae5",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-09 11:32:10.099605",
+          "2026-09-09 11:45:06.195897"
+        ],
+        [
+          "run_69b6e6eeab5c42f08422cfcf55a4d27c",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-09 11:10:25.796760",
+          "2026-09-09 11:32:05.269420"
+        ],
+        [
+          "run_536a63cd43ca4e64ba4daec189a94bac",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-09 11:00:15.130426",
+          "2026-09-09 11:10:20.772375"
+        ],
+        [
+          "run_9dc64f92ddce4a75ad94bf231db26f20",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-09 10:41:17.678685",
+          "2026-09-09 11:00:10.519553"
+        ]
+      ],
+      "runtime_leases": [
+        [
+          "crypto_engine_execution",
+          "engine_run_658924ea2c5b46a38121e130240ef2c9",
+          1788954311.652638,
+          0.0,
+          11
+        ]
+      ]
+    },
+    {
+      "label": "canonical",
+      "path": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-canonical/data/crypto_trader.db",
+      "exists": true,
+      "size_bytes": 581632,
+      "mtime_utc": "2026-09-04T10:28:20.100634+00:00",
+      "sha256_main": "40bff3ae4e6259a28d72523ad56a24380b2b0cd3987839a31e1b1134a8a7f743",
+      "snapshot_method": "sqlite_backup_api_from_readonly_connection",
+      "wal": {
+        "present": false,
+        "size_bytes": 0,
+        "sha256_at_read_time": null
+      },
+      "shm_present": false,
+      "table_count": 59,
+      "alembic_revision": [
+        "0014_trade_plans"
+      ],
+      "key_table_counts": {
+        "trade_episodes": null,
+        "ai_trade_episodes": 0,
+        "trade_memory_records": 0,
+        "ai_trade_reviews": 0,
+        "ai_market_patterns": 0,
+        "ai_coin_profiles": 0,
+        "ai_compressed_experience": 0,
+        "daily_review_runs": 0,
+        "daily_review_results": null,
+        "learning_lessons": null,
+        "learning_pattern_candidates": null,
+        "learning_review_jobs": null,
+        "llm_decisions": null,
+        "llm_usage": null,
+        "decision_evidence": null,
+        "engine_runs": 5,
+        "fills": 0,
+        "orders": 0,
+        "trade_plans": 0,
+        "risk_decisions": 0,
+        "runtime_leases": 2,
+        "accounts_projection": 1
+      },
+      "daily_review_runs": {
+        "count": 0,
+        "status_column_present": false,
+        "status": null,
+        "min_review_date": null,
+        "max_review_date": null,
+        "recent": []
+      },
+      "accounts_projection": [
+        [
+          "default",
+          "USDT",
+          "200000",
+          1,
+          "2026-09-04 10:14:34.935535"
+        ]
+      ],
+      "engine_runs_recent": [
+        [
+          "run_5aad08ebb2a142fb8c01c423cdef03cb",
+          "RUNNING",
+          "PAPER",
+          "multi_strategy_alpha",
+          "2026-09-04 10:28:17.506851",
+          null
+        ],
+        [
+          "run_46f1c2d7c14a4d3ba5e276e44f6c398d",
+          "RUNNING",
+          "PAPER",
+          "multi_strategy_alpha",
+          "2026-09-04 10:20:06.785463",
+          null
+        ],
+        [
+          "run_d9cd2f36dbda46ca86e59a9efe171c62",
+          "RUNNING",
+          "PAPER",
+          "multi_strategy_alpha",
+          "2026-09-04 10:18:49.606374",
+          null
+        ],
+        [
+          "run_37a7c3b7f1a740f99a93ad1c82dafc93",
+          "RUNNING",
+          "PAPER",
+          "multi_strategy_alpha",
+          "2026-09-04 10:16:05.794156",
+          null
+        ],
+        [
+          "run_21cca50884094e21b3e3c746aaf35cc7",
+          "STOPPED",
+          "PAPER",
+          "multi_strategy_alpha",
+          "2026-09-04 10:14:34.902616",
+          "2026-09-04 10:14:34.957959"
+        ]
+      ],
+      "runtime_leases": [
+        [
+          "crypto_ai_position_runtime",
+          "crypto-trading-primary",
+          1788517697.540579,
+          1788517730.097166,
+          4
+        ],
+        [
+          "crypto_engine_execution",
+          "engine_run_5aad08ebb2a142fb8c01c423cdef03cb",
+          1788517697.510255,
+          1788517707.510255,
+          4
+        ]
+      ]
+    },
+    {
+      "label": "p0p1",
+      "path": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-p0p1/data/crypto_trader.db",
+      "exists": true,
+      "size_bytes": 6057984,
+      "mtime_utc": "2026-09-08T08:18:19.255370+00:00",
+      "sha256_main": "10b873b9597425fd0441b3f866700885a4f933609e1ae2dba3aa2c69a30726e3",
+      "snapshot_method": "sqlite_backup_api_from_readonly_connection",
+      "wal": {
+        "present": false,
+        "size_bytes": 0,
+        "sha256_at_read_time": null
+      },
+      "shm_present": false,
+      "table_count": 61,
+      "alembic_revision": [
+        "0022_episode_risk_lineage"
+      ],
+      "key_table_counts": {
+        "trade_episodes": 0,
+        "ai_trade_episodes": 0,
+        "trade_memory_records": 0,
+        "ai_trade_reviews": 0,
+        "ai_market_patterns": 0,
+        "ai_coin_profiles": 0,
+        "ai_compressed_experience": 0,
+        "daily_review_runs": 1,
+        "daily_review_results": null,
+        "learning_lessons": null,
+        "learning_pattern_candidates": null,
+        "learning_review_jobs": null,
+        "llm_decisions": 1710,
+        "llm_usage": null,
+        "decision_evidence": null,
+        "engine_runs": 37,
+        "fills": 0,
+        "orders": 0,
+        "trade_plans": 4,
+        "risk_decisions": 4,
+        "runtime_leases": 1,
+        "accounts_projection": 1
+      },
+      "trade_episodes": {
+        "total": 0,
+        "factual": 0,
+        "review_status": {},
+        "closed_at_min": null,
+        "closed_at_max": null,
+        "duplicate_trade_plan_ids": 0,
+        "null_closed_at": 0,
+        "direction_counts": {}
+      },
+      "daily_review_runs": {
+        "count": 1,
+        "status_column_present": false,
+        "status": null,
+        "min_review_date": "2026-09-08",
+        "max_review_date": "2026-09-08",
+        "recent": [
+          [
+            "2026-09-08",
+            "LEGACY_SCHEMA",
+            0,
+            "0",
+            "999"
+          ]
+        ]
+      },
+      "accounts_projection": [
+        [
+          "default",
+          "USDT",
+          "200000",
+          1,
+          "2026-09-05 10:07:34.689439"
+        ]
+      ],
+      "engine_runs_recent": [
+        [
+          "run_f2ce520bc5be49d9abb2cb8434cead29",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-08 00:59:55.983533",
+          "2026-09-08 08:18:19.248685"
+        ],
+        [
+          "run_4b5bbc47033944dfa98764218e89b654",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-08 00:55:30.667736",
+          "2026-09-08 00:59:37.976852"
+        ],
+        [
+          "run_0ecad2603d9b436d82b03f326b73b015",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-08 00:18:38.802012",
+          "2026-09-08 00:55:13.382516"
+        ],
+        [
+          "run_c1ce1942a48c4d79bd9cd3acf7b76d45",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-08 00:10:09.121297",
+          "2026-09-08 00:18:15.773873"
+        ],
+        [
+          "run_2fed35fcd202473b8766db6bd3ad7cb3",
+          "STOPPED",
+          "PAPER",
+          "live_llm",
+          "2026-09-07 07:38:30.339275",
+          "2026-09-08 00:09:35.905203"
+        ]
+      ],
+      "runtime_leases": [
+        [
+          "crypto_engine_execution",
+          "engine_run_f2ce520bc5be49d9abb2cb8434cead29",
+          1788829195.995414,
+          0.0,
+          27
+        ]
+      ]
+    },
+    {
+      "label": "local-current",
+      "path": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-local-current/data/crypto_trader.db",
+      "exists": true,
+      "size_bytes": 687202304,
+      "mtime_utc": "2026-09-09T08:25:34.360290+00:00",
+      "sha256_main": "5a27b42b0ebdbc16bad30b3bdd45f1c7575374c2d5fe221ed6887a24a5a1802a",
+      "snapshot_method": "sqlite_backup_api_from_readonly_connection",
+      "wal": {
+        "present": true,
+        "size_bytes": 0,
+        "sha256_at_read_time": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "shm_present": true,
+      "table_count": 77,
+      "alembic_revision": [
+        "0027_trade_plan_decision_unique"
+      ],
+      "key_table_counts": {
+        "trade_episodes": null,
+        "ai_trade_episodes": 318,
+        "trade_memory_records": 419,
+        "ai_trade_reviews": 0,
+        "ai_market_patterns": 0,
+        "ai_coin_profiles": 0,
+        "ai_compressed_experience": 0,
+        "daily_review_runs": 1,
+        "daily_review_results": 0,
+        "learning_lessons": 1,
+        "learning_pattern_candidates": 0,
+        "learning_review_jobs": 0,
+        "llm_decisions": null,
+        "llm_usage": 11613,
+        "decision_evidence": 26115,
+        "engine_runs": 81,
+        "fills": 663,
+        "orders": 671,
+        "trade_plans": 2905,
+        "risk_decisions": 229069,
+        "runtime_leases": 0,
+        "accounts_projection": 1
+      },
+      "daily_review_runs": {
+        "count": 1,
+        "status_column_present": false,
+        "status": null,
+        "min_review_date": "2026-08-28",
+        "max_review_date": "2026-08-28",
+        "recent": [
+          [
+            "2026-08-28",
+            "LEGACY_SCHEMA",
+            0,
+            "0",
+            "999"
+          ]
+        ]
+      },
+      "accounts_projection": [
+        [
+          "default",
+          "USDT",
+          "200007.387369031755",
+          1,
+          "2026-09-09 08:21:23.424076"
+        ]
+      ],
+      "engine_runs_recent": [
+        [
+          "run_2825a5dd9180414b9d7add73d99fa59b",
+          "STOPPED",
+          "PAPER",
+          "llm_chief_trader",
+          "2026-09-09 07:59:33.954709",
+          "2026-09-09 08:23:22.550487"
+        ],
+        [
+          "run_969a70bc9e894bfa857f29fbaa9bc3da",
+          "STOPPED",
+          "PAPER",
+          "multi_strategy_alpha,live_llm",
+          "2026-09-09 07:38:41.053772",
+          "2026-09-09 07:59:16.012479"
+        ],
+        [
+          "run_02f06ae1009e4477879eb299a91bc8e1",
+          "STOPPED",
+          "PAPER",
+          "llm_chief_trader",
+          "2026-09-09 07:29:49.834626",
+          "2026-09-09 07:36:22.841611"
+        ],
+        [
+          "run_a06682a087da4afc8f551704efd26377",
+          "RUNNING",
+          "PAPER",
+          "llm_chief_trader",
+          "2026-09-04 06:27:16.004751",
+          null
+        ],
+        [
+          "run_fcf751b927624b4d9fd05e612dfd5620",
+          "RUNNING",
+          "PAPER",
+          "llm_chief_trader",
+          "2026-09-02 13:36:42.327085",
+          null
+        ]
+      ],
+      "runtime_leases": [],
+      "llm_usage_range": [
+        [
+          "ERR",
+          "OperationalError: no such column: created_at"
+        ]
+      ],
+      "decision_evidence_range": [
+        [
+          "2026-08-28 04:54:53.199237",
+          "2026-09-09 08:23:11.509756",
+          26115
+        ]
+      ]
+    }
+  ],
+  "claims_not_verified_by_this_manifest": [
+    "provider request totals must be defined table-by-table (attempts vs tool calls vs successful calls)",
+    "worktree SHA does not prove the SHA of the running process",
+    "cross-database counts must never be added into one case count"
+  ]
+}
