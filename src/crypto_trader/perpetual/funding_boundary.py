@@ -16,6 +16,8 @@ class FundingSymbolMappingError(ValueError):
 
 class FundingPublicDataBoundary:
     def __init__(self, client, symbol_mapper: SymbolMapper | None = None) -> None:
+        if isinstance(client, FundingPublicDataBoundary):
+            client = client.client
         self.client = client
         self.symbol_mapper = symbol_mapper or SymbolMapper()
 
@@ -52,7 +54,13 @@ class FundingPublicDataBoundary:
         )
 
     async def get_mark_price_candles(
-        self, canonical_symbol: str, *, bar: str, limit: int = 100
+        self,
+        canonical_symbol: str,
+        *,
+        bar: str,
+        limit: int = 100,
+        before: str | None = None,
+        after: str | None = None,
     ) -> list[list[str]]:
         method = getattr(self.client, "get_mark_price_candles", None)
         if not callable(method):
@@ -64,7 +72,32 @@ class FundingPublicDataBoundary:
             if getattr(self.client, "expects_canonical_symbols", False)
             else self.venue_symbol(canonical_symbol)
         )
-        return await method(venue_symbol, bar=bar, limit=limit)
+        return await method(
+            venue_symbol, bar=bar, limit=limit, before=before, after=after
+        )
+
+    async def get_history_mark_price_candles(
+        self,
+        canonical_symbol: str,
+        *,
+        bar: str,
+        limit: int = 100,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[list[str]]:
+        method = getattr(self.client, "get_history_mark_price_candles", None)
+        if not callable(method):
+            raise FundingSymbolMappingError(
+                f"history mark-price candle client missing for {canonical_symbol}"
+            )
+        venue_symbol = (
+            canonical_symbol
+            if getattr(self.client, "expects_canonical_symbols", False)
+            else self.venue_symbol(canonical_symbol)
+        )
+        return await method(
+            venue_symbol, bar=bar, limit=limit, before=before, after=after
+        )
 
 
 def as_funding_boundary(

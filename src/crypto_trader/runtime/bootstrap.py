@@ -38,7 +38,6 @@ from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
-from crypto_trader.perpetual.funding_boundary import FundingPublicDataBoundary
 from crypto_trader.perpetual.funding_coverage import (
     FundingCoverageService,
     FundingHistoryIngestor,
@@ -169,11 +168,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     funding_settlement = FundingSettlementService(ledger)
     valuation_service = ValuationService(portfolio=portfolio, ledger=ledger)
     funding_supervisor = FundingAccountingSupervisor(
-        adapter=(
-            FundingPublicDataBoundary(funding_adapter)
-            if funding_adapter is not None
-            else None
-        ),
+        adapter=funding_adapter,
         ingestor=funding_ingestor,
         settlement_service=funding_settlement,
         portfolio=portfolio,

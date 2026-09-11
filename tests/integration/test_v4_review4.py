@@ -104,12 +104,21 @@ class MarkOnlyAdapter:
         self.funding_rows = funding_rows or []
         self.ordinary_calls = []
         self.ordinary_rows = ordinary_rows or []
+        self.history_calls = []
         self.expects_canonical_symbols = expects_canonical_symbols
 
     async def get_funding_rate_history(self, symbol, *, before=None, after=None, limit=100):
         return list(self.funding_rows)
 
-    async def get_mark_price_candles(self, symbol, *, bar="1H", limit=100):
+    async def get_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
+        return list(self.rows)
+
+    async def get_history_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
+        self.history_calls.append((symbol, bar, before, after))
         return list(self.rows)
 
     async def get_candles(self, *args, **kwargs):
@@ -312,9 +321,6 @@ def _candle_row(open_at: datetime, close: str, confirm: str = "1") -> list[str]:
         "1",
         "1",
         close,
-        "0",
-        "0",
-        "0",
         confirm,
     ]
 

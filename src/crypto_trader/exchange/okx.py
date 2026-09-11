@@ -515,31 +515,50 @@ class OKXAdapter(ExchangeAdapter):
         return rows
 
     async def get_mark_price_candles(
-        self, inst_id: str, bar: str, limit: int = 100
+        self,
+        inst_id: str,
+        *,
+        bar: str,
+        limit: int = 100,
+        before: str | None = None,
+        after: str | None = None,
     ) -> list[list[str]]:
-        """OKX public historical mark-price candles, never ordinary candles.
+        """OKX recent Mark Price Candlesticks.
 
-        Row layout is OKX candle layout with ``confirm`` at index 8; funding
-        settlement only consumes rows whose confirm flag is "1".
+        OKX row contract: [ts, open, high, low, close, confirm].
         """
+        params: dict[str, object] = {"instId": inst_id, "bar": bar, "limit": limit}
+        if before is not None:
+            params["before"] = before
+        if after is not None:
+            params["after"] = after
         data = await self._public_request(
-            "GET",
-            "/api/v5/public/mark-price-candles",
-            params={"instId": inst_id, "bar": bar, "limit": limit},
+            "GET", "/api/v5/market/mark-price-candles", params=params
         )
-        rows = data.get("data")
-        if not isinstance(rows, list):
-            raise OKXDiagnosticError(
-                "MALFORMED_RESPONSE", "OKX mark-price candle response is invalid"
-            )
-        if not all(
-            isinstance(row, list) and len(row) >= 9 for row in rows
-        ):
-            raise OKXDiagnosticError(
-                "MALFORMED_RESPONSE",
-                "OKX mark-price candle response contains invalid rows",
-            )
-        return rows
+        return _validate_mark_price_candles(data)
+
+    async def get_history_mark_price_candles(
+        self,
+        inst_id: str,
+        *,
+        bar: str,
+        limit: int = 100,
+        before: str | None = None,
+        after: str | None = None,
+    ) -> list[list[str]]:
+        """OKX historical Mark Price Candlesticks for old-event recovery.
+
+        Same six-field schema as the recent endpoint.
+        """
+        params: dict[str, object] = {"instId": inst_id, "bar": bar, "limit": limit}
+        if before is not None:
+            params["before"] = before
+        if after is not None:
+            params["after"] = after
+        data = await self._public_request(
+            "GET", "/api/v5/market/history-mark-price-candles", params=params
+        )
+        return _validate_mark_price_candles(data)
 
     async def get_instruments(self, instrument_type: str) -> list[dict]:
         """Return factual public instrument metadata without execution credentials."""
@@ -697,3 +716,31 @@ class OKXAdapter(ExchangeAdapter):
         sub_id = f"okx_account_{self._sub_counter}"
         self._handlers[sub_id] = handler
         return sub_id
+
+
+def _validate_mark_price_candles(data: dict) -> list[list[str]]:
+    """Validate OKX mark-price candle contract: 6 fields, confirm == "1"."""
+    rows = data.get("data")
+    if not isinstance(rows, list):
+        raise OKXDiagnosticError(
+            "MALFORMED_RESPONSE", "OKX mark-price candle response is invalid"
+        )
+    for row in rows:
+        if not isinstance(row, list) or len(row) < 6:
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE",
+                "OKX mark-price candle row must contain ts/o/h/l/c/confirm",
+            )
+        try:
+            int(row[0])
+        except (TypeError, ValueError) as exc:
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX mark-price candle ts is invalid"
+            ) from exc
+        if str(row[5]) != "1":
+            raise OKXDiagnosticError(
+                "UNCONFIRMED_CANDLE", "OKX mark-price candle is not confirmed"
+            )
+    return rows
+
+

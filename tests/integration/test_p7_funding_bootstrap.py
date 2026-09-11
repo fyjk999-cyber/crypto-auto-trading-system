@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from crypto_trader.config import Settings
@@ -103,6 +104,7 @@ class PublicFactualAdapter:
             self._event(10, "0.002"),
         ]
         self.history_calls = 0
+        self.received_symbols = []
 
     @staticmethod
     def _event(hour: int, rate: str) -> dict:
@@ -115,10 +117,13 @@ class PublicFactualAdapter:
 
     async def get_funding_rate_history(self, symbol, *, before=None, after=None, limit=100):
         self.history_calls += 1
+        self.received_symbols.append(symbol)
         # Same factual page on every run, like a real exchange feed.
         return list(self.events)
 
-    async def get_mark_price_candles(self, symbol, bar="1H", limit=100):
+    async def get_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
         return [
             [
                 str(int(datetime(2026, 9, 10, hour, tzinfo=UTC).timestamp() * 1000)),
@@ -126,9 +131,6 @@ class PublicFactualAdapter:
                 "1",
                 "1",
                 close,
-                "0",
-                "0",
-                "0",
                 "1",
             ]
             # 07:00 closes at 08:00; 09:00 closes at 10:00 (no lookahead).
@@ -142,6 +144,8 @@ async def test_bootstrap_wraps_funding_adapter_in_okx_boundary(
     class FakeFeed:
         def __init__(self):
             self.client = PublicFactualAdapter()
+            # Raw production-style OKX client expects venue instIds.
+            self.client.expects_canonical_symbols = False
 
         async def warmup(self, *args, **kwargs):
             return None
@@ -169,6 +173,19 @@ async def test_bootstrap_wraps_funding_adapter_in_okx_boundary(
         assert supervisor is not None and supervisor.public_data is not None
         assert supervisor.public_data.venue_symbol("BTCUSDT") == "BTC-USDT-SWAP"
         assert supervisor.public_data.venue_symbol("SOLUSDT") == "SOL-USDT-SWAP"
+        assert supervisor.public_data.venue_symbol("DOGEUSDT") == "DOGE-USDT-SWAP"
+        await supervisor.public_data.get_funding_rate_history("BTCUSDT")
+        await supervisor.public_data.get_funding_rate_history("SOLUSDT")
+        await supervisor.public_data.get_funding_rate_history("DOGEUSDT")
+        assert supervisor.public_data.client.received_symbols == [
+            "BTC-USDT-SWAP",
+            "SOL-USDT-SWAP",
+            "DOGE-USDT-SWAP",
+        ]
+        before = len(supervisor.public_data.client.received_symbols)
+        with pytest.raises(ValueError):
+            supervisor.public_data.venue_symbol("UNMAPPABLE")
+        assert len(supervisor.public_data.client.received_symbols) == before
     finally:
         await bundle.database.close()
 

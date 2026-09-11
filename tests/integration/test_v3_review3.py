@@ -102,7 +102,14 @@ class FakeCandleAdapter:
     def __init__(self, candles: dict[str, list[list[str]]]):
         self.candles = candles
 
-    async def get_mark_price_candles(self, symbol, bar="1H", limit=100):
+    async def get_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
+        return self.candles.get(symbol, [])
+
+    async def get_history_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
         return self.candles.get(symbol, [])
 
 
@@ -113,9 +120,6 @@ def _candle(hour: int, close: str) -> list[str]:
         "1",
         "1",
         close,
-        "0",
-        "0",
-        "0",
         "1",
     ]
 

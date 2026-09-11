@@ -25,8 +25,8 @@ from crypto_trader.perpetual.contract_spec import (
     spec_from_order_metadata,
 )
 from crypto_trader.perpetual.funding_boundary import (
-    FundingPublicDataBoundary,
     FundingSymbolMappingError,
+    as_funding_boundary,
 )
 from crypto_trader.perpetual.funding_coverage import FundingHistoryIngestor
 from crypto_trader.perpetual.funding_settlement import (
@@ -69,10 +69,8 @@ class FundingAccountingSupervisor:
         symbol_mapper: SymbolMapper | None = None,
     ) -> None:
         self.adapter = adapter
-        self.public_data = (
-            FundingPublicDataBoundary(adapter, symbol_mapper=symbol_mapper)
-            if adapter is not None
-            else None
+        self.public_data = as_funding_boundary(
+            adapter, symbol_mapper=symbol_mapper
         )
         self.ingestor = ingestor
         self.settlement_service = settlement_service
@@ -202,6 +200,7 @@ class FundingAccountingSupervisor:
                     rate=_event_rate(event),
                     instruments=instruments,
                     existing_resolutions=existing_resolutions,
+                    now=now,
                 )
 
         # Durable recovery: rolling lookback only discovers recent lifecycles;
@@ -210,7 +209,7 @@ class FundingAccountingSupervisor:
         if coverage_service is not None:
             try:
                 await self._recover_unresolved(
-                    report, coverage_service, instruments
+                    report, coverage_service, instruments, now=now
                 )
             except Exception as exc:
                 report.errors.append(f"RECOVERY:{type(exc).__name__}")
@@ -234,7 +233,7 @@ class FundingAccountingSupervisor:
         }
 
     async def _recover_unresolved(
-        self, report, coverage_service, instruments
+        self, report, coverage_service, instruments, *, now: datetime
     ) -> None:
         queue = await coverage_service.retryable_unresolved()
         for resolution in queue:
@@ -278,30 +277,45 @@ class FundingAccountingSupervisor:
                 instruments=instruments,
                 existing_resolutions=existing,
                 recovery=True,
+                now=now,
             )
 
     async def _funding_rate_at(
-        self, symbol: str, settlement_time: datetime
+        self, symbol: str, settlement_time: datetime, max_pages: int = 5
     ) -> Decimal | None:
-        try:
-            target_ms = int(settlement_time.timestamp() * 1000)
-            rows = await self.public_data.get_funding_rate_history(
-                symbol,
-                before=str(target_ms + 1),
-                after=str(target_ms - 1000),
-                limit=10,
-            )
-        except Exception:
-            return None
-        for row in rows or []:
+        """One-direction backward paging; exact fundingTime is the only proof."""
+        target_ms = int(settlement_time.timestamp() * 1000)
+        cursor = target_ms + 1
+        for _ in range(max(1, max_pages)):
             try:
-                if int(row["fundingTime"]) == target_ms:
+                rows = await self.public_data.get_funding_rate_history(
+                    symbol, before=str(cursor), limit=100
+                )
+            except Exception:
+                return None
+            if not rows:
+                return None
+            for row in rows:
+                try:
+                    if int(row["fundingTime"]) != target_ms:
+                        continue
                     raw = row.get("realizedRate")
                     if raw in (None, ""):
                         return None
                     return D(raw)
-            except (KeyError, TypeError, ValueError):
-                continue
+                except (KeyError, TypeError, ValueError):
+                    continue
+            timestamps = [
+                int(row["fundingTime"])
+                for row in rows
+                if isinstance(row.get("fundingTime"), (int, str))
+            ]
+            if not timestamps:
+                return None
+            previous = min(timestamps)
+            if previous >= cursor:
+                return None
+            cursor = previous
         return None
 
     async def _resolve_event(
@@ -316,10 +330,22 @@ class FundingAccountingSupervisor:
         instruments: Mapping[str, Any],
         existing_resolutions: Mapping[datetime, str],
         recovery: bool = False,
+        now: datetime | None = None,
     ) -> None:
         if existing_resolutions.get(settlement_time) in {"SETTLED", "NO_OP"}:
             return
         plan_id = getattr(plan, "trade_plan_id", None)
+        if rate is None:
+            await self._record_unresolved(
+                coverage_service,
+                symbol,
+                settlement_time,
+                None,
+                plan_id,
+                "FUNDING_RATE_UNAVAILABLE",
+            )
+            report.skipped.append(f"{symbol}:FUNDING_RATE_UNAVAILABLE")
+            return
         if self.order_manager is None:
             await self._record_unresolved(
                 coverage_service,
@@ -393,7 +419,9 @@ class FundingAccountingSupervisor:
             )
             report.skipped.append(f"{symbol}:INSTRUMENT_CONTRACT_SPEC_UNPROVEN")
             return
-        mark_price = await self._factual_settlement_mark(symbol, settlement_time)
+        mark_price = await self._factual_settlement_mark(
+            symbol, settlement_time, recovery=recovery, now=now
+        )
         if mark_price is None:
             await coverage_service.record_event_resolution(
                 account_id=self.account_id,
@@ -456,7 +484,7 @@ class FundingAccountingSupervisor:
         coverage_service,
         symbol: str,
         settlement_time: datetime,
-        rate: Decimal,
+        rate: Decimal | None,
         plan_id: str | None,
         reason: str,
     ) -> None:
@@ -487,47 +515,120 @@ class FundingAccountingSupervisor:
         return spec_from_order_metadata(symbol, order)
 
     async def _factual_settlement_mark(
-        self, symbol: str, settlement_time: datetime
+        self,
+        symbol: str,
+        settlement_time: datetime,
+        *,
+        recovery: bool = False,
+        max_pages: int = 5,
+        now: datetime | None = None,
     ) -> Decimal | None:
-        """Use only OKX historical mark-price candles closed at settlement.
+        """Return only OKX mark-price candle close proven at settlement.
 
-        A candle must be confirmed, close no later than the settlement instant,
-        and close above zero. Ordinary candles are never a fallback.
+        Rolling discovery uses the recent mark-candle endpoint. Durable
+        unresolved recovery uses the historical endpoint and pages backward
+        from the target instant instead of hoping the latest page reaches it.
         """
         target_ms = int(settlement_time.timestamp() * 1000)
-        for bar, interval_ms, tolerance_ms in (
-            ("1m", 60_000, 60_000),
-            ("1H", 3_600_000, 3_600_000),
-        ):
-            try:
-                rows = await self.public_data.get_mark_price_candles(
-                    symbol, bar=bar, limit=100
-                )
-            except Exception:
-                continue
-            best: tuple[int, Decimal] | None = None
-            for row in rows or []:
+        if not recovery:
+            for bar, interval_ms, tolerance_ms in (
+                ("1m", 60_000, 60_000),
+                ("1H", 3_600_000, 3_600_000),
+            ):
                 try:
-                    open_time_ms = int(row[0])
-                    close = D(row[4])
-                    confirm = str(row[8])
-                except (IndexError, TypeError, ValueError):
+                    rows = await self.public_data.get_mark_price_candles(
+                        symbol, bar=bar, limit=100
+                    )
+                except Exception:
                     continue
-                if confirm != "1":
+                best = _best_mark_candle(
+                    rows, interval_ms=interval_ms, target_ms=target_ms
+                )
+                if best is None:
                     continue
-                if close <= 0:
+                close_time_ms, close = best
+                if target_ms - close_time_ms > tolerance_ms:
                     continue
-                close_time_ms = open_time_ms + interval_ms
-                if close_time_ms > target_ms:
-                    continue
-                if best is None or close_time_ms > best[0]:
-                    best = (close_time_ms, close)
-            if best is None:
-                continue
-            if target_ms - best[0] > tolerance_ms:
-                continue
-            return best[1]
+                return close
+            return None
+        return await self._historical_mark_candle(
+            symbol,
+            settlement_time,
+            max_pages=max_pages,
+            now=now or datetime.now(UTC),
+        )
+
+    async def _historical_mark_candle(
+        self,
+        symbol: str,
+        settlement_time: datetime,
+        *,
+        max_pages: int = 5,
+        now: datetime | None = None,
+    ) -> Decimal | None:
+        target_ms = int(settlement_time.timestamp() * 1000)
+        now = now or datetime.now(UTC)
+        if now - settlement_time <= timedelta(minutes=100):
+            bars = (("1m", 60_000, 60_000), ("1H", 3_600_000, 3_600_000))
+        else:
+            bars = (("1H", 3_600_000, 3_600_000),)
+        for bar, interval_ms, tolerance_ms in bars:
+            cursor = target_ms + interval_ms
+            for _ in range(max(1, max_pages)):
+                try:
+                    rows = await self.public_data.get_history_mark_price_candles(
+                        symbol,
+                        bar=bar,
+                        limit=100,
+                        before=str(cursor),
+                        after=None,
+                    )
+                except Exception:
+                    break
+                if not rows:
+                    break
+                best = _best_mark_candle(
+                    rows, interval_ms=interval_ms, target_ms=target_ms
+                )
+                if best is not None:
+                    close_time_ms, close = best
+                    if target_ms - close_time_ms <= tolerance_ms:
+                        return close
+                earliest_open = min(
+                    int(row[0])
+                    for row in rows
+                    if isinstance(row, list) and len(row) >= 6
+                )
+                if earliest_open >= cursor:
+                    break
+                cursor = earliest_open
         return None
+
+def _best_mark_candle(
+    rows, *, interval_ms: int, target_ms: int
+) -> tuple[int, Decimal] | None:
+    """Latest confirmed, positive mark candle already closed at target."""
+    best: tuple[int, Decimal] | None = None
+    for row in rows or []:
+        if not isinstance(row, list) or len(row) < 6:
+            continue
+        try:
+            open_time_ms = int(row[0])
+            close = D(row[4])
+            confirm = str(row[5])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if confirm != "1":
+            continue
+        if close <= 0:
+            continue
+        close_time_ms = open_time_ms + interval_ms
+        if close_time_ms > target_ms:
+            continue
+        if best is None or close_time_ms > best[0]:
+            best = (close_time_ms, close)
+    return best
+
 
 def _as_utc(value: datetime | None) -> datetime | None:
     if value is None:
@@ -544,14 +645,18 @@ def _event_time(event: dict) -> datetime | None:
         return None
 
 
-def _event_rate(event: dict) -> Decimal:
+def _event_rate(event: dict) -> Decimal | None:
+    """0 means PROVEN ZERO; None means rate provenance is unavailable."""
     raw = event.get("realizedRate")
     if raw in (None, ""):
-        return Decimal("0")
+        return None
     try:
-        return D(raw)
+        rate = D(raw)
     except Exception:
-        return Decimal("0")
+        return None
+    if rate < 0:
+        return None
+    return rate
 
 
 def _canonical_event_id(

@@ -156,8 +156,16 @@ class FakeAdapter:
         self.candles = candles
         self.candle_calls = []
 
-    async def get_mark_price_candles(self, symbol, bar="1H", limit=100):
-        self.candle_calls.append((symbol, bar, limit))
+    async def get_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
+        self.candle_calls.append(("recent", symbol, bar, before, after))
+        return self.candles
+
+    async def get_history_mark_price_candles(
+        self, symbol, *, bar="1H", limit=100, before=None, after=None
+    ):
+        self.candle_calls.append(("history", symbol, bar, before, after))
         return self.candles
 
 
@@ -218,9 +226,6 @@ async def test_supervisor_settles_only_post_open_events_with_factual_mark():
             "1",
             "1",
             close,
-            "0",
-            "0",
-            "0",
             "1",
         ]
 
@@ -251,9 +256,6 @@ async def test_historical_quantity_is_used_for_each_settlement():
             "1",
             "1",
             close,
-            "0",
-            "0",
-            "0",
             "1",
         ]
 
@@ -285,9 +287,6 @@ async def test_settlement_never_uses_lookahead_candle():
             "1",
             "1",
             close,
-            "0",
-            "0",
-            "0",
             "1",
         ]
 
