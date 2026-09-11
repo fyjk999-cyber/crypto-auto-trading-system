@@ -45,16 +45,16 @@ Additional observed facts:
 
 | Fact | Value |
 |---|---|
-| `selection_id` | `mkt_sel_7a3f2e19...` |
+| `selection_id` | `mkt_sel_48615d6b...` |
 | `scan_id` | `scan_de8b3189a85...` (matches the snapshot) |
 | status | `SUCCESS` |
 | selection_state | `SELECT` |
 | provider / model | `deepseek` / `deepseek-flash` |
-| latency_ms | 1617 |
-| input / output tokens | 6336 / 191 |
+| latency_ms | 2217 |
+| input / output tokens | 6376 / 188 |
 | pool size | 30 (bounded) |
 | directory pages in phase 1 | NONE (duplicate/bounded pages are fetched only on REQUEST_DIRECTORY) |
-| selected symbols | `CNPYUSDT`, `BZUSDT`, `EGLDUSDT` |
+| selected symbols | `CNPYUSDT`, `IOSTUSDT`, `BZUSDT` |
 | persisted to `market_selections` | YES |
 | duplicate guard (`scan_id` re-request) | YES — same `selection_id`, no second model call |
 
@@ -85,6 +85,58 @@ real**:
 
 So the system can answer, from persisted lineage, whether a symbol came from the
 initial pool or from the ChiefTrader's own bounded exploration.
+
+## 2c. Research-attention authority — END-TO-END through TradingEngine
+
+`TradingEngine.tick()` is the real production path. The OpportunityBoard always
+had a programmatic candidate (`SNDKUSDT`) and the strategy has a default
+symbol (`BTCUSDT`), so any strategy invocation in a blocked
+state would prove a fallback.
+
+```
+END_TO_END_PROGRAMMATIC_FALLBACK_WHEN_SELECTION_ENABLED = NO
+```
+
+| Selection state | engine strategy invocations | context requests |
+|---|---|---|
+| `NO_RESEARCH` | 0 | [] |
+| `LLM_UNAVAILABLE` | 0 | [] |
+| `TIMEOUT` | 0 | [] |
+| `FAILED` | 0 | [] |
+| `SKIPPED_BUDGET` | 0 | [] |
+| `DEFERRED` | 0 | [] |
+| `QUEUE_EXHAUSTED` | 0 | [] |
+| `MISMATCHED_SCAN_ID` | 0 | [] |
+| `EXPIRED_SELECTION` | 0 | [] |
+
+```
+NO_RESEARCH_ENGINE_STRATEGY_INVOCATIONS = 0
+SELECTION_FAILURE_ENGINE_STRATEGY_INVOCATIONS = 0
+SELECTION_BUDGET_DEFER_ENGINE_STRATEGY_INVOCATIONS = 0
+QUEUE_EXHAUSTED_ENGINE_STRATEGY_INVOCATIONS = 0
+STALE_SELECTION_ENGINE_STRATEGY_INVOCATIONS = 0
+
+VALID_SELECTION_REACHES_SELECTED_SYMBOL = YES
+    EXPECTED_SELECTED_SYMBOL        = ETHUSDT
+    ACTUAL_STRATEGY_CONTEXT_SYMBOL  = ETHUSDT
+
+NO_RESEARCH_POSITION_REVIEW_CONTINUES = YES
+    NEW_ENTRY_RESEARCH_INVOCATIONS = 0
+    POSITION_REVIEW_INVOCATIONS    = 1
+```
+
+## 2d. OI factual timing
+
+```
+OI_SOURCE = OKX /api/v5/public/open-interest
+OI_PROVIDER_TIMESTAMP_PRESERVED = YES
+    symbol           = BTCUSDT
+    provider_ts      = 2026-09-11T14:15:26.314000+00:00
+    stored_sample_ts = 2026-09-11T14:15:26.314000+00:00
+
+OI_INSUFFICIENT_HISTORY_QUALITY = MISSING   (reason: OI_CHANGE_UNAVAILABLE:INSUFFICIENT_HISTORY: fewer than two timestamped samples)
+OI_UNKNOWN_WINDOW_QUALITY      = UNSUPPORTED
+```
 
 ## 2c. Research-attention authority (deterministic, production path)
 
