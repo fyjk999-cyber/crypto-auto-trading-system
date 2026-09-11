@@ -89,17 +89,19 @@ class LLMRuntimeStatus:
 
         from crypto_trader.llm_chief.provider import DeepSeekProvider
 
-        self.provider = os.environ.get("LLM_PROVIDER", "none").lower()
-        self.model = os.environ.get("LLM_MODEL")
+        provider = self.provider_instance or DeepSeekProvider()
+        self.provider = os.environ.get(
+            "LLM_PROVIDER", getattr(provider, "name", "none")
+        ).lower()
+        self.model = os.environ.get("LLM_MODEL") or getattr(provider, "model", None)
         self.configured = self.provider == "deepseek" and bool(
-            os.environ.get("DEEPSEEK_API_KEY")
+            getattr(provider, "api_key", None) or os.environ.get("DEEPSEEK_API_KEY")
         )
         self.reachable = False
         self.last_error = None
         if not self.configured:
             self.last_error = "NOT_CONFIGURED"
             return
-        provider = self.provider_instance or DeepSeekProvider()
         result = await provider.complete_json(
             prompt='Return only valid JSON: {"runtime_health":"ok"}',
             temperature=0.0,
