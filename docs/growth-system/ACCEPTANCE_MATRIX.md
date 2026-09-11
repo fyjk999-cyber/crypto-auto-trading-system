@@ -35,8 +35,8 @@ All commands ran inside the task worktree with `.venv`; raw logs are in
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Full unit/component/integration pytest | `.venv/bin/python -m pytest -q -p no:cacheprovider` | **964 passed** in 128.04s, 2 pre-existing SQLAlchemy warnings |
-| Growth-system suite | `.venv/bin/python -m pytest tests/growth_system -q` | **64 passed** |
+| Full unit/component/integration pytest | `.venv/bin/python -m pytest -q -p no:cacheprovider` on final candidate `99c744c` | **966 passed** in 147.18s, 2 pre-existing SQLAlchemy warnings |
+| Growth-system suite | `.venv/bin/python -m pytest tests/growth_system -q` on final candidate | **66 passed** |
 | Directly affected governance/integration tests | `pytest tests/integration/test_p8_daily_review_concurrency.py tests/integration/test_memory_persistence.py tests/integration/test_p8_migrations.py tests/governance_unit/test_governance.py -q` | **28 passed** |
 | Ruff (whole repo) | `.venv/bin/python -m ruff check .` | **All checks passed** |
 | Migration matrix (draft) | `test_growth_schema_is_additive_and_compiles_for_both_dialects`; `alembic heads` | SQLite + PostgreSQL dialect compile passed; Alembic head remains `0039_applicability`; no new revision claimed |
@@ -61,7 +61,7 @@ All commands ran inside the task worktree with `.venv`; raw logs are in
 
 ```
 IMPLEMENTATION:                                 DONE for G00–G07 on candidate SHA
-INDEPENDENT_REVIEW:                             PENDING (dispatch record in REVIEW_RECEIPT.md)
+INDEPENDENT_REVIEW:                             ROUND-1 CHANGES ADDRESSED; ROUND-2 DELIVERY_FAILED; RETRY SCHEDULED (cron-16, 2026-09-11T13:35Z)
 MIGRATION_AUTHORIZATION:                        NOT_GRANTED (draft only)
 DEPLOYMENT:                                     NOT_PERFORMED
 FACTUAL_LEARNING_AND_RETRIEVAL_EVIDENCE:        NOT_PROVEN (no real provider run, no deployed loop)

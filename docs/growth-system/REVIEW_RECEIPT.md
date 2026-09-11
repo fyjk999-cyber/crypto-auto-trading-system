@@ -5,14 +5,15 @@ task_id = growth-learning-pipeline
 chapter_id = G00–G07
 request_id = d9e58e0a-ef86-456c-85a4-062ecf1fc98a
 base_sha = df55b11bcde5d50670ef92d05ba2166feb4735d9
-candidate_sha = BOUND_IN_DISPATCH_RECORD (see §5; commit created after this file)
+candidate_sha = 99c744cbb169ebaf01238d23f26d1ff9a35df2a5 (implementation commit; this receipt is a later docs-only metadata commit)
 worktree = /Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth
 other_task_conflict = OTHER_TASK_FULLMARKET_DIRTY_FILES (list below; not copied/staged/committed/reverted)
 pre_existing_dirty = fullmarket 16 dirty/untracked items recorded in ROOT_CAUSE.md §1
 migration_status = DRAFT (no Alembic revision; current committed head remains 0039_applicability)
 production_db_written = false
 runtime_authorized = false
-next_stage_requested = independent Codex review of candidate SHA; then serial integration package (bootstrap/engine wiring) under separate authorization
+next_stage_requested = independent Codex review round 2 (delivery retry scheduled); then serial integration package (bootstrap/engine wiring) under separate authorization
+independent_review_status = ROUND1_CHANGES_REQUIRED_ADDRESSED / ROUND2_DELIVERY_FAILED_RETRY_SCHEDULED
 ```
 
 ## 1. Baseline / isolation
@@ -83,8 +84,8 @@ conftest refuses known runtime/production DB paths.
 
 | # | Command | Result |
 | --- | --- | --- |
-| 1 | `.venv/bin/python -m pytest -q -p no:cacheprovider` | `964 passed, 2 warnings in 128.04s` |
-| 2 | `.venv/bin/python -m pytest tests/growth_system -q` | `64 passed in 11.76s` |
+| 1 | `.venv/bin/python -m pytest -q -p no:cacheprovider` on final candidate `99c744c` | `966 passed, 2 warnings in 147.18s` |
+| 2 | `.venv/bin/python -m pytest tests/growth_system -q` | `66 passed in 16.40s` |
 | 3 | `pytest tests/integration/test_p8_daily_review_concurrency.py tests/integration/test_memory_persistence.py tests/integration/test_p8_migrations.py tests/governance_unit/test_governance.py -q` | `28 passed in 6.19s` |
 | 4 | `.venv/bin/python -m ruff check .` | `All checks passed!` |
 | 5 | `test_growth_schema_is_additive_and_compiles_for_both_dialects` | `1 passed` (SQLite + PostgreSQL dialect compile; tables disjoint from shared metadata) |
@@ -99,7 +100,11 @@ Evidence lives in the ignored `.ops-growth/` directory of the task worktree
 content; the full `SHA256SUMS` file is included.
 
 ```text
-62b8eb7c2c5d6d7a1264355e56895a070d358d59fee7e27ecdb9db535355c8cb  full_pytest.log
+744b5488ba23285d0b790603ad5f5b6d2d06fadb719328db73b5b1879e4f29e3  full_pytest_final2.log   (candidate 99c744c)
+82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18  ruff_full_final2.log
+d3fc3fc07756c9a4f31c98a2ab6fddb63de9f1f3e73c943aad6801d6c379f3aa  review_dispatch.json (round 1)
+f1b780ee85d41a871ab145271a8d4a32430d639f52ff4074b3c3bfeb09ee1bdf  review_dispatch_round2.json (round 2 delivery failure)
+62b8eb7c2c5d6d7a1264355e56895a070d358d59fee7e27ecdb9db535355c8cb  full_pytest.log (previous candidate 119752e)
 4988d271343a3454122361dfba768979a7decef36b9d391bdfbac27bac78b28e  growth_system_pytest.log
 32c69d65ff416f49b6532fcd8d50e768410d59409cfc17b369d7a7bb171f018d  affected_integration_pytest.log
 82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18  ruff_full.log
@@ -120,17 +125,39 @@ db8158d2e9aa00958a39b6303900e102da2272bc60a86965ab10a58514921ece  production_wri
 `~/.dsh/bin/codex-dispatch --help` → usage with sandbox `read-only|workspace-write|danger-full-access`,
 `--session`, `--name`, `--out`.
 
-Dispatch record (fill after execution):
+### Round 1 (candidate `119752e`, delivered)
 
 ```text
-dispatch_version_help_verified = YES (usage text captured; tool has no --version flag)
-dispatch_command = ~/.dsh/bin/codex-dispatch --name growth-pipeline-review --workdir <worktree> --sandbox read-only --out .ops-growth/review_dispatch.json "<review request; candidate SHA>"
-dispatch_thread_id = PENDING
-dispatch_status = PENDING
-review_verdict = PENDING
-review_source = PENDING
-notes = A queue acceptance is delivery only; exit code 0 is not APPROVED. No self-approval.
+dispatch_command = ~/.dsh/bin/codex-dispatch --name growth-pipeline-review-119752e --workdir <worktree> --sandbox read-only --timeout 1800 --effort high --prompt-file .ops-growth/review_request.txt --out .ops-growth/review_dispatch.json
+dispatch_thread_id = 01a08fcf-d919-7983-b7aa-00d58cab0c30
+dispatch_status = error (exit=1; the read-only sandbox prevented pytest temp dirs, so the reviewer could not complete a formal verdict)
+review_findings = CHANGES_REQUIRED:
+  1) G03 publish retry skipped the already-SUCCEEDED review stage without reloading
+     durable attempts, so an empty review list could mark publish SUCCEEDED;
+  2) G02 cache-hit path returned a stored review without revalidating its refs
+     against THIS call's allowed_refs.
+fixes = commit 99c744cbb169ebaf01238d23f26d1ff9a35df2a5
+  - GrowthLearningPipeline reloads ReviewAttemptStore.load_succeeded_for_date for
+    the publish retry; empty publish input becomes SKIPPED_INCOMPLETE/NO_PUBLISH_INPUT,
+    never SUCCEEDED (test_publish_retry_reloads_durable_review_attempts);
+  - StructuredReviewService re-runs validate_review on a cache hit and falls back to a
+    new provider attempt when the current allowed_refs do not cover the cached refs
+    (test_cache_hit_must_satisfy_current_allowed_refs).
 ```
+
+### Round 2 (candidate `99c744c`, DELIVERY_FAILED)
+
+```text
+dispatch_command = ~/.dsh/bin/codex-dispatch --session 01a08fcf-d919-7983-b7aa-00d58cab0c30 --name growth-pipeline-review-round2 --workdir <worktree> --sandbox workspace-write --timeout 1800 --effort high --prompt-file .ops-growth/review_request_round2.txt --out .ops-growth/review_dispatch_round2.json
+dispatch_status = DELIVERY_FAILED
+error = "You've hit your usage limit ... try again at 9:32 PM" (Codex account usage limit, not a code verdict)
+review_verdict = NONE (delivery failure; cannot be treated as approval)
+retry = cron-16 one-shot at 2026-09-11T13:35:00Z (21:35 +08:00); it resumes the verified
+        thread, updates this receipt with the verdict and commits docs-only metadata.
+```
+
+A queue acceptance is delivery only; exit code 0 is not APPROVED. No self-approval
+and no concurrent resume of an active writer thread was performed.
 
 ## 6. Explicit non-claims
 
