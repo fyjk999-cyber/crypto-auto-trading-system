@@ -2,7 +2,7 @@
 
 ```text
 BASE_SHA = 2561e4fdce2cd4b44e0f30d73e427be2e7eded8b
-FINAL_SHA = PENDING_IMPLEMENTATION_COMMIT (bound in the review receipt after commit)
+FINAL_SHA = 3907b1a4ed5c48ff23829de20f077db40533c572 (implementation commit; the report commit is docs-only metadata)
 BRANCH = codex/growth-learning-pipeline
 WORKTREE = /Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth
 REMOTE = https://github.com/fyjk999-cyber/crypto-auto-trading-system.git
@@ -180,25 +180,34 @@ append-only and canonical tables are never dropped.
 ## TEST_RESULTS
 
 ```text
-final focused bundle (V2 + p8 daily review + p9 lifecycle + memory persistence
-                      + llm_chief + risk + governance)
-  = 144 passed in 25.38s
+final focused bundle on FINAL_SHA
+  = 144 passed in 30.42s
 V2 suite                     = 46 passed
-full backend pytest run #1   = 1011 passed, 1 failed
-  failed test: tests/integration/test_live_llm_position_lifecycle.py::
-               test_partial_exit_fill_stays_active_until_factual_remaining_position_closes
-  isolation check            = passed 5/5 consecutive isolated runs
+full backend pytest run #1   = 1011 passed, 1 failed (position-lifecycle timing test)
+  failed test isolation      = passed 5/5 consecutive isolated runs
 full backend pytest run #2   = 1012 passed, 2 warnings in 164.52s (0 failed)
-ruff                         = All checks passed (whole repo)
-migration validation         = 8 passed; alembic head remains 0039_applicability
+full backend pytest FINAL    = 1012 passed, 2 warnings in 163.72s (0 failed) on 3907b1a
+ruff FINAL                   = All checks passed (whole repo)
+migration FINAL              = 8 passed; alembic head remains 0039_applicability
                                (draft V2 revision intentionally not on the chain)
 agent-project-test           = NOT_AVAILABLE (entry does not exist)
-frontend                     = NOT_APPLICABLE (no frontend files changed; environment has no node/npm)
+frontend                     = NOT_APPLICABLE (no frontend files changed; no node/npm)
 ```
 
 The run #1 position-lifecycle failure is reported as order/timing-sensitive:
-it passes 5/5 in isolation and the full suite is green on rerun.  It is not
-silently marked PASS and it is unrelated to card code.
+it passes 5/5 in isolation and both reruns are green.  It is not silently
+marked PASS and it is unrelated to card code.
+
+Evidence logs (ignored `.ops-growth-v2/`, SHA-256):
+
+```text
+f7dd325af8f0ee813426c385b5d2fac311ad381521b1e1e99be51aab587cc795  full_pytest_final_sha.log (1012 passed, final SHA)
+800ee622df5ac7437da16e7e7ebb72463a5bee2e1c7a006945ada1a4b3e3fe6d  full_pytest_rerun.log
+740e4f993a5d0639810f7cd441e66160417cb60ccad09ead3d52948f7632d19a  full_pytest.log (run #1)
+8c9757571062021509bed2a7f8d48c2497d01c5bac6ad65067b40c0f5acb1591  final_focused_final_sha.log (144 passed)
+82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18  ruff_final.log
+5542e215ec43e2fad8f4902be960be83ed7dc3a9900e269af12a75613343dbfd  migration_validation.log
+```
 
 ## DEFINITION_OF_DONE (12)
 
