@@ -7,6 +7,10 @@ THREAD = 01a08fcf-d919-7983-b7aa-00d58cab0c30
 INTEGRATION_BASE = b3873d015b40916066dc19243e7d005be5ae3f5b
 REPAIR_BRANCH = codex/core-growth-v2-review2-fixes
 REPAIR_WORKTREE = /Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth-r2-fix
+REPAIR_IMPLEMENTATION_SHA = a7ddf5ae0c91a42c7edfcf33cc1afd58abfb0386
+PR = https://github.com/fyjk999-cyber/crypto-auto-trading-system/pull/4 (draft)
+FINAL_BRANCH_SHA = docs-only receipt commit after the implementation SHA
+REMOTE_BRANCH = codex/core-growth-v2-review2-fixes
 ```
 
 This receipt records remediation of the 13 findings from the independent
@@ -70,7 +74,7 @@ Phase C core constraints           = valuation scope + orphan recovery + opportu
 Phase D migration                  = alembic 0042→0043 upgrade/repeat/downgrade/re-upgrade
                                      + PostgreSQL offline compile
                                      = 4 passed, 1 skipped (real PG NOT_VERIFIED)
-Phase E full backend               = 1179 passed, 1 skipped, 2 warnings in 180.44s
+Phase E full backend               = 1179 passed, 1 skipped, 2 warnings in 198.01s
 Phase F ruff                       = All checks passed
 Migration head                     = 0043_growth_review_job_binding (single head)
 REAL_PROVIDER_SMOKE                = NOT_VERIFIED (no provider run in this task)

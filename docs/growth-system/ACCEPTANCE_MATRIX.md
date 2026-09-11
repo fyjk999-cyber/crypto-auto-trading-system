@@ -60,7 +60,7 @@ All commands ran inside the task worktree with `.venv`; raw logs are in
   reported separately and are not interchangeable.
 
 ```
-IMPLEMENTATION:                                 ROUND-2 FINDINGS IMPLEMENTED on repair branch (see ROUND2_FIX_RECEIPT.md)
+IMPLEMENTATION:                                 ROUND-2 FINDINGS IMPLEMENTED; REPAIR_IMPLEMENTATION_SHA=a7ddf5a (see ROUND2_FIX_RECEIPT.md)
 INDEPENDENT_REVIEW:                             ROUND-2 VERDICT CHANGES_REQUIRED (99c744c); NEW REVIEW PENDING for the repair SHA
 ROUND2_FINDINGS_ADDRESSED:                      YES (R01–R15; each has code + regression evidence)
 MIGRATION_AUTHORIZATION:                        NOT_GRANTED; 0043 single head is an engineering revision only
