@@ -65,14 +65,24 @@ payload = json.loads(os.environ["READY_PAYLOAD"])
 runtime = payload.get("runtime") or {}
 lease = runtime.get("execution_lease") or {}
 kill_switch = runtime.get("kill_switch") or {}
+llm = payload.get("llm") or {}
+market = payload.get("market") or {}
 healthy = (
     payload.get("ready") is True
     and payload.get("mode") == "PAPER"
+    and payload.get("paper_mode") == "PAPER_REAL_MARKET"
     and payload.get("live_trading_enabled") is False
     and runtime.get("state") == "RUNNING"
     and lease.get("held") is True
     and lease.get("single_writer") is True
     and kill_switch.get("enabled") is False
+    and llm.get("provider") == "deepseek"
+    and llm.get("configured") is True
+    and llm.get("reachable") is True
+    and bool(llm.get("model"))
+    and market.get("provider") == "OKX_PUBLIC"
+    and market.get("data_source") == "REAL"
+    and market.get("healthy") is True
 )
 raise SystemExit(0 if healthy else 1)
 PY
