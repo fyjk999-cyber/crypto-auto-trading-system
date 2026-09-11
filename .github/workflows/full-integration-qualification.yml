@@ -1,0 +1,28 @@
+name: full-integration-qualification
+
+on:
+  pull_request:
+
+jobs:
+  full-qualification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --dev
+      - name: Growth focused suites
+        run: uv run pytest tests/growth_system tests/growth_system_v2 tests/governance_unit -q
+      - name: Core constraint regression
+        run: uv run pytest tests/integration/test_core_constraint_valuation_scope.py tests/integration/test_orphan_position_recovery.py tests/opportunity tests/unit/test_risk.py tests/unit/test_risk_scale_down.py -q
+      - name: Migration qualification
+        run: uv run pytest tests/growth_system_v2/test_alembic_migration.py -q
+      - name: Alembic single head
+        run: |
+          HEADS="$(uv run alembic heads)"
+          echo "$HEADS"
+          test "$(printf '%s\n' "$HEADS" | sed '/^$/d' | wc -l | tr -d ' ')" = "1"
+          printf '%s\n' "$HEADS" | grep -q "0042_growth_v2_cards"
+      - name: Full backend regression
+        run: uv run pytest -q
+      - name: Ruff
+        run: uv run ruff check src tests
