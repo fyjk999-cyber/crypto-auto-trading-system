@@ -87,7 +87,10 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     strict_migrations = settings.auto_start_runtime and settings.app_env != "test"
     if strict_migrations:
         await _verify_migrations(database)
-    await database.init_schema()
+    else:
+        # Ephemeral/test tooling may create its schema directly. Formal runtime
+        # startup must be migration-owned and never repaired by create_all().
+        await database.init_schema()
 
     ledger = LedgerService(database.session_factory)
     portfolio = PortfolioService(database.session_factory)
