@@ -28,7 +28,6 @@ from crypto_trader.llm_chief.budget import BudgetConfig, GlobalLLMBudget
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
-from crypto_trader.llm_chief.model_control import LLMModelControl
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
@@ -208,12 +207,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief_context = ChiefContextLoader(database.session_factory)
     llm_provider = DeepSeekProvider()
-    # Operator model selection (frontend-switchable, persisted, audited).
-    # A stored override wins over LLM_MODEL so the UI choice survives restarts.
-    model_control = LLMModelControl(
-        database.session_factory, provider=llm_provider, audit=audit
-    )
-    await model_control.apply_persisted()
     # Single logical global model-budget authority (8): created
     # before the engine so every model call site shares it.
     llm_budget = GlobalLLMBudget(
@@ -343,7 +336,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
         opportunity_board=opportunity_board,
-        model_control=model_control,
         market_selection_service=market_selection_service,
         llm_budget=llm_budget,
         market_directory=market_directory,
