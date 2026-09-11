@@ -1,5 +1,5 @@
 {
-  "started_at": "2026-09-11T11:28:47.458932+00:00",
+  "started_at": "2026-09-11T11:45:13.954386+00:00",
   "llm_credential_available": true,
   "paper_only": true,
   "orders_submitted": 0,
@@ -7,7 +7,7 @@
     "cycles": [
       {
         "cycle": 1,
-        "scan_id": "scan_2ce5d6abfaf74dedb5bcfedf767dc0be",
+        "scan_id": "scan_29f3c6c8b71e486f9e12ac9ab8f0db3d",
         "status": "PARTIAL",
         "counts": {
           "discovered_count": 463,
@@ -30,12 +30,14 @@
           "min_contiguous_candles": 2
         },
         "candidate_symbols": [
-          "0GUSDT",
+          "SNDKUSDT",
           "AAOIUSDT",
           "SOLUSDT",
-          "AAPLUSDT",
-          "ZECUSDT",
+          "0GUSDT",
+          "ACTUSDT",
           "BTCUSDT",
+          "ZECUSDT",
+          "AAVEUSDT",
           "XAUUSDT"
         ],
         "rotation_symbols": [
@@ -65,6 +67,7 @@
           "ASTERUSDT",
           "ATOMUSDT",
           "AVAXUSDT",
+          "AVGOUSDT",
           "AXTIUSDT",
           "BCHUSDT",
           "BEATUSDT",
@@ -79,7 +82,6 @@
           "CPUSDT",
           "CRCLUSDT",
           "CRVUSDT",
-          "CXMTUSDT",
           "DASHUSDT",
           "DGAIUSDT",
           "DOGEUSDT",
@@ -177,7 +179,7 @@
       },
       {
         "cycle": 2,
-        "scan_id": "scan_6417b3fa1ee2481ea449199bdf9fa58c",
+        "scan_id": "scan_ae1e4b35c0634b3bb6bbfab25f1dcbf4",
         "status": "PARTIAL",
         "counts": {
           "discovered_count": 463,
@@ -200,10 +202,13 @@
           "min_contiguous_candles": 2
         },
         "candidate_symbols": [
-          "AEROUSDT",
-          "ZECUSDT",
+          "SNDKUSDT",
+          "ALGOUSDT",
           "SOLUSDT",
           "ETHUSDT",
+          "XAUUSDT",
+          "ZECUSDT",
+          "AEROUSDT",
           "AEONUSDT",
           "AIUSDT",
           "ALLOUSDT"
@@ -235,7 +240,6 @@
           "ARMUSDT",
           "ARUSDT",
           "ARXUSDT",
-          "AVGOUSDT",
           "AXSUSDT",
           "BASEDUSDT",
           "BEUSDT",
@@ -256,6 +260,7 @@
           "COMPUSDT",
           "CRDOUSDT",
           "CRWVUSDT",
+          "CXMTUSDT",
           "DATAUSDT",
           "DELLUSDT",
           "DOODUSDT",
@@ -357,38 +362,39 @@
     "snapshot_immutable_ids_unique": true
   },
   "selection": {
-    "selection_id": "mkt_sel_77c5d0fd415f41e789432217a098b6a7",
-    "scan_id": "scan_6417b3fa1ee2481ea449199bdf9fa58c",
+    "selection_id": "mkt_sel_0fecdaed660b430a8186f7233c64a0f1",
+    "scan_id": "scan_ae1e4b35c0634b3bb6bbfab25f1dcbf4",
     "status": "SUCCESS",
     "selection_state": "SELECTED",
     "provider": "deepseek",
     "model": "deepseek-flash",
-    "latency_ms": 2161,
-    "input_tokens": 15115,
-    "output_tokens": 216,
+    "latency_ms": 1565,
+    "input_tokens": 15059,
+    "output_tokens": 208,
     "pool_size": 30,
     "selected_symbols": [
       {
-        "symbol": "ANIMEUSDT",
-        "brief_reason": "Large -11.7% move with extreme negative funding (-0.00164) and high open interest; possible squeeze/positioning stress.",
+        "symbol": "ZECUSDT",
+        "brief_reason": "Large -11% move with high turnover (~1.68B) and active-turnover flag; worth factual review.",
         "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_history_24h",
-          "recent_candles_1h"
+          "candles_1h_24h",
+          "open_interest_history",
+          "funding_rate_history"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
+          "factor candidate",
           "large absolute move",
-          "funding anomaly"
+          "active turnover"
         ]
       },
       {
         "symbol": "CNPYUSDT",
-        "brief_reason": "Top gainer +31.4% on notable turnover with strongly negative funding; unusual move worth factual context.",
+        "brief_reason": "Top absolute mover +33.3% with ~39M turnover and negative funding; needs factual context.",
         "requested_additional_data": [
-          "funding_rate_history_24h",
-          "recent_candles_1h",
-          "turnover_breakdown"
+          "candles_1h_24h",
+          "funding_rate_history",
+          "recent_news_or_listings"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
@@ -396,18 +402,16 @@
         ]
       },
       {
-        "symbol": "ZECUSDT",
-        "brief_reason": "Large -11.0% move on high turnover; notable absolute move candidate for deeper review.",
+        "symbol": "ANIMEUSDT",
+        "brief_reason": "Funding anomaly (-0.00155) with -9.8% move and 19.75M open interest; verify driver.",
         "requested_additional_data": [
-          "recent_candles_1h",
-          "open_interest_history_24h",
-          "funding_rate_history_24h"
+          "funding_rate_history",
+          "open_interest_history",
+          "candles_1h_24h"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
-          "factor candidate",
-          "large absolute move",
-          "active turnover"
+          "funding anomaly"
         ]
       }
     ],
@@ -419,37 +423,37 @@
   },
   "research": {
     "executed": true,
-    "symbol": "ANIMEUSDT",
+    "symbol": "ZECUSDT",
     "decision_action": "NO_TRADE",
     "selected_tools": [
+      "orderbook",
       "multi_timeframe_history",
       "momentum",
-      "trend",
+      "mean_reversion",
       "volatility",
       "liquidity",
-      "orderbook",
       "funding",
-      "market_regime"
+      "open_interest"
     ],
     "tool_versions": {
+      "orderbook": "v1",
       "multi_timeframe_history": "v1",
       "momentum": "v1",
-      "trend": "v1",
+      "mean_reversion": "v1",
       "volatility": "v1",
       "liquidity": "v1",
-      "orderbook": "v1",
       "funding": "v1",
-      "market_regime": "v1"
+      "open_interest": "v1"
     },
     "evidence_items": 8,
     "tool_symbols_match_research_target": true,
-    "stored_scan_id": "scan_6417b3fa1ee2481ea449199bdf9fa58c",
-    "stored_selection_id": "mkt_sel_77c5d0fd415f41e789432217a098b6a7",
+    "stored_scan_id": "scan_ae1e4b35c0634b3bb6bbfab25f1dcbf4",
+    "stored_selection_id": "mkt_sel_0fecdaed660b430a8186f7233c64a0f1",
     "lineage_matches_selection": true,
     "risk_engine_downstream_authority": "UNCHANGED (no order submitted by qualification)"
   },
   "natural_trade": "NO_NATURAL_TRADE_OBSERVED",
-  "elapsed_seconds": 33.7,
+  "elapsed_seconds": 54.1,
   "readiness": {
     "real_okx_discovery_universe_obtained": "YES",
     "market_snapshots_repeatedly_created": "YES",
