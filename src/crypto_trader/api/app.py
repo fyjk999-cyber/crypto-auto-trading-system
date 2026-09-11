@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from starlette.websockets import WebSocketDisconnect
@@ -359,18 +360,101 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/ready")
     async def ready():
+        """Strict PAPER runtime readiness for acceptance and automation.
+
+        A process being alive is not enough. Readiness requires the canonical
+        PAPER mode, single-writer execution lease, an untripped kill switch,
+        a reachable configured DeepSeek provider, and factual OKX public
+        market data for the baseline instrument. No synthetic fallback is
+        accepted here.
+        """
+
+        reasons: list[str] = []
+        database_ok = True
         try:
             async with state.database.session_factory() as session:
                 await session.execute(text("SELECT 1"))
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"database not ready: {exc}") from exc
+        except Exception:
+            database_ok = False
+            reasons.append("DATABASE_UNAVAILABLE")
+
         runtime = state.engine.runtime_snapshot() if state.engine is not None else None
-        return {
-            "ready": True,
+        execution_lease = (runtime or {}).get("execution_lease") or {}
+        kill_switch = (runtime or {}).get("kill_switch") or {}
+        mode_ok = (
+            state.settings.effective_mode().value == "PAPER"
+            and state.settings.live_trading_enabled is False
+            and state.settings.paper_mode == "PAPER_REAL_MARKET"
+        )
+        if not mode_ok:
+            reasons.append("PAPER_REAL_MARKET_REQUIRED")
+        runtime_ok = (
+            runtime is not None
+            and runtime.get("state") == "RUNNING"
+            and execution_lease.get("held") is True
+            and execution_lease.get("single_writer") is True
+            and kill_switch.get("enabled") is False
+        )
+        if not runtime_ok:
+            reasons.append("RUNTIME_NOT_EXECUTION_READY")
+
+        llm = state.llm_runtime.snapshot()
+        llm_ok = (
+            llm.get("provider") == "deepseek"
+            and llm.get("configured") is True
+            and llm.get("reachable") is True
+            and bool(llm.get("model"))
+        )
+        if not llm_ok:
+            reasons.append("DEEPSEEK_NOT_READY")
+
+        market = {
+            "provider": "OKX_PUBLIC",
+            "data_source": "REAL",
+            "symbol": "BTCUSDT",
+            "healthy": False,
+        }
+        market_ok = False
+        if state.engine is not None and state.settings.paper_mode == "PAPER_REAL_MARKET":
+            get_market_state = getattr(state.engine.adapter, "get_market_state", None)
+            if callable(get_market_state):
+                try:
+                    snapshot = await get_market_state("BTCUSDT")
+                    health = getattr(getattr(snapshot, "health", None), "value", None)
+                    provider = getattr(snapshot, "provider", None)
+                    data_source = getattr(snapshot, "data_source", None)
+                    best_bid = getattr(snapshot, "best_bid", Decimal("0"))
+                    best_ask = getattr(snapshot, "best_ask", Decimal("0"))
+                    market_ok = (
+                        health == "HEALTHY"
+                        and provider == "OKX_PUBLIC"
+                        and data_source == "REAL"
+                        and best_bid > 0
+                        and best_ask > 0
+                    )
+                    market = {
+                        "provider": provider,
+                        "data_source": data_source,
+                        "symbol": getattr(snapshot, "symbol", "BTCUSDT"),
+                        "healthy": market_ok,
+                    }
+                except Exception:
+                    market_ok = False
+        if not market_ok:
+            reasons.append("OKX_PUBLIC_MARKET_NOT_READY")
+
+        is_ready = database_ok and mode_ok and runtime_ok and llm_ok and market_ok
+        payload = {
+            "ready": is_ready,
             "mode": state.settings.effective_mode().value,
+            "paper_mode": state.settings.paper_mode,
             "live_trading_enabled": state.settings.live_trading_enabled,
             "runtime": runtime,
+            "llm": llm,
+            "market": market,
+            "reasons": reasons,
         }
+        return JSONResponse(payload, status_code=200 if is_ready else 503)
 
     def _alpha_from_state():
         if state.engine is None:
