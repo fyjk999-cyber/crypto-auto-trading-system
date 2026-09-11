@@ -2,7 +2,10 @@
 
 ```text
 BASE_SHA = 2561e4fdce2cd4b44e0f30d73e427be2e7eded8b
-FINAL_SHA = 3907b1a4ed5c48ff23829de20f077db40533c572 (implementation commit; the report commit is docs-only metadata)
+IMPLEMENTATION_SHA = 1624ddeb2adaa3f6897538d57706afaaf4a43468
+  (I01 migration commit 36b7b3ca6915912100430ed07a7ec64c9b3daad7 precedes it)
+FINAL_BRANCH_SHA = this docs-only receipt commit (pushed; see INTEGRATION_HARDENING.md I11)
+REMOTE_BRANCH_SHA = same as FINAL_BRANCH_SHA after final push
 BRANCH = codex/growth-learning-pipeline
 WORKTREE = /Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth
 REMOTE = https://github.com/fyjk999-cyber/crypto-auto-trading-system.git

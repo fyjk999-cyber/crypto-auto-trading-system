@@ -189,5 +189,16 @@ The previously observed position-lifecycle test ran in this full suite and did
 
 ## I11 — remote reproducibility
 
-Push attempted after tests; local/remote SHA recorded in the final receipt.
-If push is unavailable, `REMOTE_REPRODUCIBLE=NO` with the exact blocker.
+```text
+IMPLEMENTATION_SHA=1624ddeb2adaa3f6897538d57706afaaf4a43468
+  (I01 migration commit 36b7b3ca6915912100430ed07a7ec64c9b3daad7 precedes it)
+FINAL_BRANCH_SHA=c0c4be51ffdee89c27d7034354062a6528a708c8 (docs status commit)
+REMOTE_BRANCH_SHA=c0c4be51ffdee89c27d7034354062a6528a708c8
+push command: git push -u origin codex/growth-learning-pipeline
+push result: SUCCESS (new branch created)
+  remote: https://github.com/fyjk999-cyber/crypto-auto-trading-system/pull/new/codex/growth-learning-pipeline
+```
+
+The final docs-only commit that records this receipt is pushed afterwards so
+local and remote branch SHAs remain identical; `IMPLEMENTATION_SHA` remains the
+code SHA above.
