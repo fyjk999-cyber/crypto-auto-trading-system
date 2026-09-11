@@ -1,9 +1,10 @@
-"""G09 draft migration: extend ``ai_compressed_experience`` for Adaptive Cards.
+"""I01 support helper for isolated V2 card-schema unit tests.
 
-This is a **draft migration helper**, deliberately not added to
-``migrations/versions/``: the integration owner has not assigned an Alembic
-head, and the other task's untracked ``0040`` must not be reused or assumed.
-The helper is portable across SQLite/PostgreSQL and is fully covered by tests:
+The production migration truth is the real Alembic revision
+``0040_growth_v2_cards`` (``migrations/versions/0040_growth_v2_cards.py``).
+This module remains only as a **test/support** helper so isolated unit tests
+can create the extended canonical columns without running the full migration
+chain.  It must not be used as an alternative production migration path.
 
 * fresh database: the ORM ``create_all`` path already includes the columns;
 * upgrade from an older schema: additive ``ALTER TABLE ... ADD COLUMN``;
@@ -11,8 +12,8 @@ The helper is portable across SQLite/PostgreSQL and is fully covered by tests:
 * downgrade / re-upgrade: drops only V2 journals and the columns this helper
   added.
 
-No production database is touched by this module during tests; the test
-conftest refuses known runtime/production paths.
+No production database is touched by this module; the test conftest refuses
+known runtime/production paths.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ CARD_COLUMN_PLAN: tuple[tuple[str, str], ...] = (
     ("experience_type", "VARCHAR(32) DEFAULT 'COMPRESSED_EXPERIENCE'"),
     ("account_id", "VARCHAR(64) DEFAULT 'default'"),
     ("mode", "VARCHAR(16) DEFAULT 'PAPER'"),
+    ("share_scope", "VARCHAR(32) DEFAULT 'ACCOUNT_MODE'"),
     ("trigger_signature_json", "TEXT"),
     ("context_signature_json", "TEXT"),
     ("factor_refs_json", "TEXT"),
@@ -86,6 +88,12 @@ def _sync_upgrade(connection) -> dict[str, int]:
         text(f"UPDATE {CARD_TABLE} SET account_id='default' WHERE account_id IS NULL")
     )
     connection.execute(text(f"UPDATE {CARD_TABLE} SET mode='PAPER' WHERE mode IS NULL"))
+    connection.execute(
+        text(
+            f"UPDATE {CARD_TABLE} SET share_scope='ACCOUNT_MODE' "
+            "WHERE share_scope IS NULL"
+        )
+    )
     connection.execute(
         text(f"UPDATE {CARD_TABLE} SET status='WATCH' WHERE status IS NULL")
     )
