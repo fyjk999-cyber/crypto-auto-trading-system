@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -313,7 +314,7 @@ def test_factor_layer_never_imports_execution_surfaces():
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        cwd="/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-fullmarket",
+        cwd=Path(__file__).resolve().parents[2],
     )
     assert out.returncode == 0, out.stderr
     assert "CLEAN" in out.stdout
