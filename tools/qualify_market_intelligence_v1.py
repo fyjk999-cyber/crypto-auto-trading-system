@@ -499,7 +499,10 @@ async def _engine_authority_semantics(bundle, selection_service) -> dict:
     for arbitrary symbols). Both the board candidate and the strategy's default
     symbol are available in every case, so a fallback would be observable.
     """
+    from datetime import timedelta
+
     from crypto_trader.market_data.opportunity.selection import MarketSelectionRecord
+    from crypto_trader.market_data.opportunity.snapshot import MarketObservationSnapshot
 
     engine = bundle.engine
     strategy = None
@@ -567,10 +570,11 @@ async def _engine_authority_semantics(bundle, selection_service) -> dict:
                 }
             )
 
-        # stale selection (expired snapshot)
+        # --- scan_id mismatch: the selection belongs to another scan --------
+        real_snapshot = board.current_snapshot()
         selection_service.last_record = MarketSelectionRecord(
-            selection_id="mkt_sel_e2e_stale",
-            scan_id=board.current_snapshot().scan_id,
+            selection_id="mkt_sel_e2e_mismatch",
+            scan_id="scan-does-not-match",
             status="SUCCESS",
             selection_state="SELECT",
             selected_symbols=[{"symbol": "ETHUSDT"}],
@@ -581,15 +585,53 @@ async def _engine_authority_semantics(bundle, selection_service) -> dict:
         await engine.tick(include_position_reviews=False)
         cases.append(
             {
-                "case": "EXPIRED_OR_MISMATCHED_SELECTION",
+                "case": "MISMATCHED_SCAN_ID",
                 "record_status": "SUCCESS",
                 "new_strategy_invocations": len(invocations) - before,
                 "context_requests": list(context_requests),
                 "default_symbol": default_symbol,
                 "board_candidate_available": board_candidate,
-                "note": "validated by clearing the board snapshot scan binding",
             }
         )
+
+        # --- expired snapshot: same scan_id but past its validity window -----
+        expired = MarketObservationSnapshot(
+            scan_id=real_snapshot.scan_id,
+            started_at=real_snapshot.started_at - timedelta(seconds=600),
+            completed_at=real_snapshot.completed_at - timedelta(seconds=600),
+            expires_at=real_snapshot.expires_at - timedelta(seconds=600),
+            status=real_snapshot.status,
+            discovered_count=real_snapshot.discovered_count,
+            observable_count=real_snapshot.observable_count,
+            execution_supported_count=real_snapshot.execution_supported_count,
+            factor_candidates=real_snapshot.factor_candidates,
+            observable_rows=real_snapshot.observable_rows,
+            feature_coverage=dict(real_snapshot.feature_coverage),
+        )
+        board.publish_snapshot(expired)
+        selection_service.last_record = MarketSelectionRecord(
+            selection_id="mkt_sel_e2e_expired",
+            scan_id=real_snapshot.scan_id,
+            status="SUCCESS",
+            selection_state="SELECT",
+            selected_symbols=[{"symbol": "ETHUSDT"}],
+            requested_at=real_record.requested_at if real_record else None,
+        )
+        before = len(invocations)
+        context_requests.clear()
+        await engine.tick(include_position_reviews=False)
+        cases.append(
+            {
+                "case": "EXPIRED_SELECTION",
+                "record_status": "SUCCESS",
+                "new_strategy_invocations": len(invocations) - before,
+                "context_requests": list(context_requests),
+                "default_symbol": default_symbol,
+                "board_candidate_available": board_candidate,
+            }
+        )
+        # restore the live snapshot before the valid-routing case
+        board.publish_snapshot(real_snapshot)
         # a valid selection must still route the exact selected symbol
         selection_service.last_record = MarketSelectionRecord(
             selection_id="mkt_sel_e2e_valid",
@@ -608,7 +650,7 @@ async def _engine_authority_semantics(bundle, selection_service) -> dict:
         engine._strategy_context = real_context  # type: ignore[assignment]
         selection_service.last_record = real_record
 
-    blocked = [case for case in cases if case["case"] != "EXPIRED_OR_MISMATCHED_SELECTION"]
+    blocked = [case for case in cases if case["case"] != "VALID_SELECTION"]
     total_blocked_invocations = sum(case["new_strategy_invocations"] for case in cases)
     return {
         "available": True,
@@ -634,13 +676,10 @@ async def _engine_authority_semantics(bundle, selection_service) -> dict:
             (c["new_strategy_invocations"] for c in blocked if c["case"] == "QUEUE_EXHAUSTED"),
             None,
         ),
-        "stale_selection_engine_strategy_invocations": next(
-            (
-                c["new_strategy_invocations"]
-                for c in cases
-                if c["case"] == "EXPIRED_OR_MISMATCHED_SELECTION"
-            ),
-            None,
+        "stale_selection_engine_strategy_invocations": sum(
+            c["new_strategy_invocations"]
+            for c in cases
+            if c["case"] in ("MISMATCHED_SCAN_ID", "EXPIRED_SELECTION")
         ),
         "expected_selected_symbol": "ETHUSDT",
         "actual_strategy_context_symbol": valid_routed[0] if valid_routed else None,
@@ -656,6 +695,7 @@ async def _engine_authority_semantics(bundle, selection_service) -> dict:
 
 async def _position_isolation(bundle, strategy) -> dict:
     """NO_RESEARCH + existing position: no new research, review still runs."""
+
     from crypto_trader.market_data.opportunity.selection import MarketSelectionRecord
 
     engine = bundle.engine
