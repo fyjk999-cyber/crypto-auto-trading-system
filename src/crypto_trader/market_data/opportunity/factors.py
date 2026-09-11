@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from crypto_trader.market_data.quality import MISSING
+
 TRIGGERED = "TRIGGERED"
 NOT_TRIGGERED = "NOT_TRIGGERED"
 UNAVAILABLE = "UNAVAILABLE"
@@ -62,7 +64,20 @@ class FactorThresholds:
 
 @dataclass(slots=True)
 class SymbolFacts:
-    """Bounded factual per-symbol market facts for one scan cycle."""
+    """Bounded factual per-symbol market facts for one scan cycle.
+
+    ``bid_qty`` / ``ask_qty`` are TOP-OF-BOOK sizes from the batch ticker
+    (best bid/ask price + size). Deeper depth remains an explicit read-only
+    tool request, so factor semantics stay top-of-book only (§5.6).
+
+    ``volume_24h_usd`` is a DERIVED ESTIMATE (base volume x latest price), not
+    an exact OKX USD turnover field; it is also exposed as
+    ``estimated_quote_turnover_24h`` with ``quality=ESTIMATED`` (§5.8).
+
+    Quality facts distinguish a VALID zero funding rate from MISSING /
+    REQUEST_FAILED funding (§5.2), and per-source observed times are retained
+    independently (ticker / funding / OI / candles) (§5.3).
+    """
 
     symbol: str
     candles: list[Candle] = field(default_factory=list)  # ascending, closed
@@ -75,10 +90,58 @@ class SymbolFacts:
     price_change_24h_pct: float | None = None
     funding_rate: float | None = None
     open_interest: float | None = None
-    oi_change_pct: float | None = None  # computed by scanner over rolling history
+    oi_change_pct: float | None = None  # computed over a fixed timestamped window
     oi_samples: int = 0
+    oi_change_quality: str = MISSING
+    oi_change_reason: str | None = None
+    oi_window_changes: dict = field(default_factory=dict)
     cohort_median_turnover_usd: float | None = None
     observed_at: datetime | None = None
+    # per-source observation times (never collapsed into one timestamp)
+    ticker_observed_at: datetime | None = None
+    funding_observed_at: datetime | None = None
+    oi_observed_at: datetime | None = None
+    candles_observed_at: datetime | None = None
+    # quality contract
+    funding_quality: str = MISSING
+    funding_reason: str | None = None
+    ticker_quality: str = MISSING
+    ticker_reason: str | None = None
+    turnover_quality: str = MISSING
+    turnover_source: str | None = None
+    candle_quality: str = MISSING
+    candle_reason: str | None = None
+    candle_truth: dict = field(default_factory=dict)
+
+    @property
+    def estimated_quote_turnover_24h(self) -> float | None:
+        return self.volume_24h_usd
+
+    def observation_times(self) -> dict:
+        return {
+            "ticker": _iso(self.ticker_observed_at),
+            "funding": _iso(self.funding_observed_at),
+            "open_interest": _iso(self.oi_observed_at),
+            "candles": _iso(self.candles_observed_at),
+        }
+
+    def quality_summary(self) -> dict:
+        return {
+            "funding": {"quality": self.funding_quality, "reason": self.funding_reason},
+            "ticker": {"quality": self.ticker_quality, "reason": self.ticker_reason},
+            "turnover": {"quality": self.turnover_quality, "source": self.turnover_source},
+            "candles": {"quality": self.candle_quality, "reason": self.candle_reason},
+            "open_interest": {
+                "change_quality": self.oi_change_quality,
+                "reason": self.oi_change_reason,
+            },
+        }
+
+
+def _iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return (dt if dt.tzinfo else dt.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
 
 
 @dataclass(slots=True)
@@ -382,7 +445,7 @@ class FundingFactor:
                 symbol=facts.symbol,
                 factor=self.name,
                 status=UNAVAILABLE,
-                unavailable_reason="NO_FUNDING_FACT",
+                unavailable_reason=f"NO_FUNDING_FACT:{facts.funding_quality}",
                 observed_at=_ts(),
             )
         fr = facts.funding_rate
@@ -392,7 +455,11 @@ class FundingFactor:
             factor=self.name,
             status=TRIGGERED if triggered else NOT_TRIGGERED,
             strength=round(_strength(fr, self.t.funding_extreme), 4) if triggered else None,
-            facts={"funding_rate": fr},
+            facts={
+                # a VALID zero is a fact; MISSING/REQUEST_FAILED never reach here
+                "funding_rate": fr,
+                "funding_quality": facts.funding_quality,
+            },
             observed_at=_ts(),
         )
 
@@ -409,7 +476,9 @@ class OpenInterestFactor:
                 symbol=facts.symbol,
                 factor=self.name,
                 status=UNAVAILABLE,
-                unavailable_reason="INSUFFICIENT_OI_SAMPLES",
+                unavailable_reason=(
+                    facts.oi_change_reason or "OI_CHANGE_UNAVAILABLE"
+                ),
                 observed_at=_ts(),
             )
         chg = facts.oi_change_pct
@@ -419,7 +488,13 @@ class OpenInterestFactor:
             factor=self.name,
             status=TRIGGERED if triggered else NOT_TRIGGERED,
             strength=round(_strength(chg, self.t.oi_change_pct), 4) if triggered else None,
-            facts={"oi_change_pct": round(chg, 4), "samples": facts.oi_samples},
+            facts={
+                "oi_change_pct": round(chg, 4),
+                "samples": facts.oi_samples,
+                "oi_change_quality": facts.oi_change_quality,
+                "oi_change_reason": facts.oi_change_reason,
+                "window_semantics": "fixed timestamped window (default 15m), not last-N-calls",
+            },
             observed_at=_ts(),
         )
 
@@ -436,7 +511,7 @@ class OrderbookImbalanceFactor:
                 symbol=facts.symbol,
                 factor=self.name,
                 status=UNAVAILABLE,
-                unavailable_reason="NO_BOOK_QUANTITIES",
+                unavailable_reason="NO_TOP_OF_BOOK_QUANTITIES",
                 observed_at=_ts(),
             )
         ratio = facts.bid_qty / facts.ask_qty
@@ -451,9 +526,14 @@ class OrderbookImbalanceFactor:
             if triggered
             else None,
             facts={
+                # explicit semantics: TOP-OF-BOOK only, NOT full depth
+                "imbalance_scope": "TOP_OF_BOOK",
+                "depth_semantics": "best bid/ask size only; full depth is an explicit tool request",
                 "bid_ask_qty_ratio": round(ratio, 4),
-                "bid_qty": facts.bid_qty,
-                "ask_qty": facts.ask_qty,
+                "best_bid_price": facts.bid,
+                "best_bid_size": facts.bid_qty,
+                "best_ask_price": facts.ask,
+                "best_ask_size": facts.ask_qty,
             },
             observed_at=_ts(),
         )
@@ -483,7 +563,13 @@ class LiquidityAnomalyFactor:
             strength=round(_strength(1.0 - ratio, 1.0 - self.t.liquidity_anomaly_ratio), 4)
             if triggered
             else None,
-            facts={"turnover_vs_cohort": round(ratio, 6), "volume_24h_usd": facts.volume_24h_usd},
+            facts={
+                "turnover_vs_cohort": round(ratio, 6),
+                # §5.8: this is a DERIVED estimate, never an exact OKX field
+                "estimated_quote_turnover_24h": facts.estimated_quote_turnover_24h,
+                "turnover_quality": facts.turnover_quality or "ESTIMATED",
+                "turnover_source": facts.turnover_source,
+            },
             observed_at=_ts(),
         )
 

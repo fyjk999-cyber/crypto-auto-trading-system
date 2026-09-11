@@ -48,6 +48,7 @@ class EligibilityFilter:
         volume_24h_usd: float | None,
         ticker_age_seconds: float | None,
         candle_count: int,
+        ticker_timestamp_quality: str | None = None,
     ) -> EligibilityResult:
         reasons: list[str] = []
         lim = self.limits
@@ -66,6 +67,12 @@ class EligibilityFilter:
                     reasons.append("WIDE_SPREAD")
         else:
             reasons.append("NO_BOOK_FACTS")
+        # §5.3: a future / malformed / missing ticker timestamp must never be
+        # treated as proof of freshness. Only an explicitly VALID timestamp
+        # quality is accepted; callers that pass no quality keep the legacy
+        # age-only behaviour.
+        if ticker_timestamp_quality is not None and ticker_timestamp_quality != "VALID":
+            reasons.append(f"TICKER_TIMESTAMP_{ticker_timestamp_quality}")
         if ticker_age_seconds is not None and ticker_age_seconds > lim.max_ticker_age_seconds:
             reasons.append("STALE_TICKER")
         if candle_count < lim.min_candles_for_scan:

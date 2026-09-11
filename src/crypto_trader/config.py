@@ -53,6 +53,28 @@ class Settings(BaseSettings):
     opportunity_scan_interval_seconds: float = 90.0
     opportunity_active_set_size: int = 40
     opportunity_rotation_size: int = 10
+    # Bounded per-symbol work: concurrency + per-request timeout + whole-scan
+    # deadline. One slow symbol must never hang the scanner (§6.5).
+    opportunity_max_concurrency: int = 8
+    opportunity_request_timeout_seconds: float = 8.0
+    opportunity_scan_deadline_seconds: float = 120.0
+    opportunity_candidate_ttl_seconds: float = 180.0
+    # OKX has no batch OI endpoint: OI is sampled per instrument within
+    # provider limits, rotating across the broad observable set.
+    opportunity_oi_sample_max_symbols: int = 120
+
+    # ChiefTrader ACTIVE market selection (research attention ONLY).
+    market_selection_enabled: bool = True
+    market_selection_min_interval_seconds: float = 300.0
+    market_selection_pool_size: int = 30
+    market_selection_timeout_seconds: float = 40.0
+    market_selection_loop_interval_seconds: float = 30.0
+    market_directory_page_size: int = 20
+    market_directory_max_pages: int = 2
+
+    # Global LLM budget (P0 safety .. P5 background research).
+    llm_budget_window_seconds: float = 3600.0
+    llm_budget_max_calls_per_window: int = 120
 
     # Runtime
     run_lease_ttl_seconds: int = 10

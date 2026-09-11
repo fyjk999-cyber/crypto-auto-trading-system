@@ -518,24 +518,58 @@ class OKXAdapter(ExchangeAdapter):
         return rows
 
     async def get_open_interests(self, inst_type: str = "SWAP") -> list[dict]:
-        """Batch factual open interest for a whole instrument type."""
-        data = await self._public_request(
-            "GET", "/api/v5/public/open-interests", params={"instType": inst_type}
+        """OKX has NO batch open-interest endpoint — fail closed.
+
+        Verified against the live public API:
+
+        * ``/api/v5/public/open-interests`` (plural)  -> HTTP 404
+        * ``/api/v5/public/open-interest?instType=SWAP&instId=ANY`` -> code 51001
+          ("Instrument ID ... doesn't exist")
+        * ``/api/v5/public/open-interest?instId=<instId>`` -> works (single).
+
+        The scanner therefore samples OI per instrument through a bounded,
+        rate-limited path. This method stays explicit so a caller can never
+        mistake "unsupported" for "zero open interest".
+        """
+        raise OKXDiagnosticError(
+            "UNSUPPORTED",
+            "OKX exposes open interest per instrument only; batch is unsupported",
         )
-        rows = data.get("data")
-        if not isinstance(rows, list):
-            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX open-interests response is invalid")
-        return rows
 
     async def get_funding_rates(self, inst_type: str = "SWAP") -> list[dict]:
-        """Batch factual current funding rates for a whole instrument type."""
+        """Batch factual current funding rates for a whole instrument type.
+
+        OKX contract (verified against the live public endpoint): ``instId`` is
+        REQUIRED. Batch mode is ``instId=ANY&instType=<type>``. Sending
+        ``instType`` alone returns HTTP 400 / code 50014 ("Parameter instId can
+        not be empty"), which previously collapsed into an empty list and made
+        every funding fact look missing. Provider failure must stay a failure.
+        """
         data = await self._public_request(
-            "GET", "/api/v5/public/funding-rate", params={"instType": inst_type}
+            "GET",
+            "/api/v5/public/funding-rate",
+            params={"instId": "ANY", "instType": inst_type},
         )
         rows = data.get("data")
         if not isinstance(rows, list):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX funding rates response is invalid")
         return rows
+
+    async def get_funding_rate_fallback(self, inst_id: str) -> dict:
+        """Bounded per-instrument factual funding fallback.
+
+        Used when a specific instrument is absent from the batch response.
+        Raises (never invents a rate) when OKX rejects or omits the instrument.
+        """
+        data = await self._public_request(
+            "GET", "/api/v5/public/funding-rate", params={"instId": inst_id}
+        )
+        rows = data.get("data") or []
+        if not isinstance(rows, list) or not rows:
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", f"OKX funding response empty for {inst_id}"
+            )
+        return rows[0]
 
     async def get_funding_rate_history(
         self,
