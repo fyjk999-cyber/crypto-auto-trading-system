@@ -365,6 +365,73 @@ class GrowthToolSelectionORM(GrowthBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class GrowthCardVersionORM(GrowthBase):
+    """Append-only Adaptive Experience Card version/operation journal.
+
+    Canonical current state stays in ``ai_compressed_experience``.  This table
+    answers: which version existed, what operation produced it, why, and from
+    which factual episode ids.
+    """
+
+    __tablename__ = "growth_card_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "card_rule_id",
+            "version",
+            "proposal_hash",
+            name="uq_growth_card_version_event",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    card_rule_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(16), nullable=False)
+    snapshot_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    proposal_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_episode_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    trigger_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    context_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    support_count: Mapped[int] = mapped_column(Integer, default=0)
+    contradiction_count: Mapped[int] = mapped_column(Integer, default=0)
+    quality_score: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    decay_score: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    status: Mapped[str | None] = mapped_column(String(16))
+    update_reason: Mapped[str | None] = mapped_column(String(255))
+    supersedes_rule_id: Mapped[str | None] = mapped_column(String(64))
+    supersedes_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GrowthCardDecisionTraceORM(GrowthBase):
+    """Per-decision Experience Card retrieval trace (audit, not a decision store)."""
+
+    __tablename__ = "growth_card_decision_traces"
+
+    trace_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    evidence_package_id: Mapped[str | None] = mapped_column(String(64))
+    account_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    trigger_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    context_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    candidate_card_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    selected_card_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    excluded_card_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    excluded_reasons_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    card_versions_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    retrieval_scores_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    applicability_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    filtered_count: Mapped[int] = mapped_column(Integer, default=0)
+    selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    retrieval_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    context_tokens_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 GROWTH_TABLES = (
     GrowthLearningJobORM,
     GrowthReviewAttemptORM,
@@ -376,6 +443,8 @@ GROWTH_TABLES = (
     GrowthImportItemORM,
     GrowthLegacyObservationORM,
     GrowthToolSelectionORM,
+    GrowthCardVersionORM,
+    GrowthCardDecisionTraceORM,
 )
 
 

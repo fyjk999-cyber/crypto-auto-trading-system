@@ -227,7 +227,7 @@ async def test_growth_schema_is_additive_and_compiles_for_both_dialects(database
     from crypto_trader.persistence.models import Base
 
     assert set(GrowthBase.metadata.tables).isdisjoint(set(Base.metadata.tables))
-    assert len(GROWTH_TABLES) == 10
+    assert len(GROWTH_TABLES) == 12
     sqlite_sql = growth_schema_sql("sqlite")
     postgres_sql = growth_schema_sql("postgresql")
     assert len(sqlite_sql) == len(postgres_sql) == len(GROWTH_TABLES)
