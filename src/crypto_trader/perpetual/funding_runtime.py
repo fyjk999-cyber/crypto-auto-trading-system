@@ -283,13 +283,18 @@ class FundingAccountingSupervisor:
     async def _funding_rate_at(
         self, symbol: str, settlement_time: datetime, max_pages: int = 5
     ) -> Decimal | None:
-        """One-direction backward paging; exact fundingTime is the only proof."""
+        """Exact fundingTime lookup using real OKX cursor semantics.
+
+        OKX v5: before returns records NEWER than the requested ts; after
+        returns records OLDER than the requested ts. Starting just above T and
+        paging older with after=earliest keeps the requested instant reachable.
+        """
         target_ms = int(settlement_time.timestamp() * 1000)
         cursor = target_ms + 1
         for _ in range(max(1, max_pages)):
             try:
                 rows = await self.public_data.get_funding_rate_history(
-                    symbol, before=str(cursor), limit=100
+                    symbol, before=None, after=str(cursor), limit=100
                 )
             except Exception:
                 return None
@@ -572,6 +577,10 @@ class FundingAccountingSupervisor:
             bars = (("1m", 60_000, 60_000), ("1H", 3_600_000, 3_600_000))
         else:
             bars = (("1H", 3_600_000, 3_600_000),)
+        # OKX v5 cursor semantics: before returns records NEWER than the
+        # requested ts; after returns records OLDER than the requested ts.
+        # Historical recovery therefore starts just above T and pages older
+        # with after=earliest_open.
         for bar, interval_ms, tolerance_ms in bars:
             cursor = target_ms + interval_ms
             for _ in range(max(1, max_pages)):
@@ -580,8 +589,8 @@ class FundingAccountingSupervisor:
                         symbol,
                         bar=bar,
                         limit=100,
-                        before=str(cursor),
-                        after=None,
+                        before=None,
+                        after=str(cursor),
                     )
                 except Exception:
                     break
@@ -603,7 +612,6 @@ class FundingAccountingSupervisor:
                     break
                 cursor = earliest_open
         return None
-
 def _best_mark_candle(
     rows, *, interval_ms: int, target_ms: int
 ) -> tuple[int, Decimal] | None:
@@ -653,8 +661,6 @@ def _event_rate(event: dict) -> Decimal | None:
     try:
         rate = D(raw)
     except Exception:
-        return None
-    if rate < 0:
         return None
     return rate
 

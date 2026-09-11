@@ -157,7 +157,14 @@ async def test_okx_mark_candle_endpoints_and_six_field_schema(monkeypatch):
                 }
             if self.mode == "malformed":
                 return {"data": [["1", "2", "3", "4", "5"]]}
-            return {"data": [["1", "2", "3", "4", "5", "0"]]}
+            if self.mode == "invalid_confirm":
+                return {"data": [["1", "2", "3", "4", "5", "x"]]}
+            return {
+                "data": [
+                    ["1789045200000", "1", "1", "1", "5", "0"],
+                    ["1789045140000", "1", "1", "1", "5", "1"],
+                ]
+            }
 
     adapter = HttpStub()
     rows = await OKXAdapter.get_mark_price_candles(
@@ -181,6 +188,12 @@ async def test_okx_mark_candle_endpoints_and_six_field_schema(monkeypatch):
         )
 
     adapter.mode = "unconfirmed"
+    rows = await OKXAdapter.get_mark_price_candles(
+        adapter, "BTC-USDT-SWAP", bar="1H"
+    )
+    assert [row[5] for row in rows] == ["0", "1"]
+
+    adapter.mode = "invalid_confirm"
     with pytest.raises(OKXDiagnosticError):
         await OKXAdapter.get_mark_price_candles(
             adapter, "BTC-USDT-SWAP", bar="1H"
@@ -261,10 +274,10 @@ async def test_history_recovery_uses_second_page_and_cursor(database):
     report = await supervisor.run_once(now=NOW)
     assert report.settled == 1
     assert len(client.history_calls) == 2
-    first_before = int(client.history_calls[0][2])
-    second_before = int(client.history_calls[1][2])
-    assert first_before > int(event.timestamp() * 1000)
-    assert second_before < first_before
+    first_after = int(client.history_calls[0][3])
+    second_after = int(client.history_calls[1][3])
+    assert first_after > int(event.timestamp() * 1000)
+    assert second_after < first_after
 
 
 async def test_history_target_unavailable_stays_mark_unavailable(database):
@@ -313,7 +326,8 @@ async def test_funding_rate_exact_cursor_and_pagination(database):
     rate = await supervisor._funding_rate_at("BTCUSDT", target)
     assert rate == Decimal("0.001")
     assert len(client.funding_calls) == 2
-    assert client.funding_calls[0][2] is None  # after never passed
+    assert client.funding_calls[0][1] is None  # before not used
+    assert client.funding_calls[0][2] is not None  # older-than cursor
 
 
 async def test_funding_rate_missing_and_malformed_are_unproven(database):

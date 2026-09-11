@@ -225,14 +225,15 @@ def _event_instant(event: dict) -> datetime | None:
         return None
 
 
-def _event_rate(event: dict) -> Decimal:
+def _event_rate(event: dict) -> Decimal | None:
+    """0 is PROVEN ZERO; missing/malformed is UNPROVEN."""
     raw = event.get("realizedRate")
     if raw in (None, ""):
-        return Decimal("0")
+        return None
     try:
         return D(raw)
     except Exception:
-        return Decimal("0")
+        return None
 
 
 def _funding_event_in_scope(event: dict, scope: FundingScope) -> bool:
@@ -401,19 +402,21 @@ class LedgerService:
             elif not coverage_events:
                 reasons.append(f"FUNDING_EVENTS_UNPROVEN:{scope.instrument_id}")
             else:
-                required_events = [
-                    event
-                    for event in coverage_events
-                    if _funding_event_in_scope(event, scope)
-                    and _event_rate(event) != 0
-                ]
-                for event in required_events:
+                required_events = []
+                for event in coverage_events:
+                    if not _funding_event_in_scope(event, scope):
+                        continue
+                    rate = _event_rate(event)
                     instant = _event_instant(event)
-                    if instant is None:
+                    if rate is None or instant is None:
                         reasons.append(
-                            f"FUNDING_EVENT_MALFORMED:{scope.instrument_id}"
+                            f"FUNDING_EVENT_RATE_UNAVAILABLE:"
+                            f"{scope.instrument_id}"
                         )
                         continue
+                    if rate != 0:
+                        required_events.append((instant, event))
+                for instant, _event in required_events:
                     if instant not in resolved_instants:
                         reasons.append(
                             f"FUNDING_EVENT_UNRESOLVED:{instant.isoformat()}"

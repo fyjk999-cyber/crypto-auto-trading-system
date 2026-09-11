@@ -508,14 +508,15 @@ def _event_instant(event: dict) -> datetime | None:
         return None
 
 
-def _event_rate(event: dict) -> Decimal:
+def _event_rate(event: dict) -> Decimal | None:
+    """0 is PROVEN ZERO; missing/malformed is UNPROVEN."""
     raw = event.get("realizedRate")
     if raw in (None, ""):
-        return Decimal("0")
+        return None
     try:
         return D(raw)
     except Exception:
-        return Decimal("0")
+        return None
 
 
 async def _lifecycle_funding_complete(
@@ -565,13 +566,16 @@ async def _lifecycle_funding_complete(
         return False, "FUNDING_EVENT_MALFORMED"
     if (row.window_event_count or 0) > len(events):
         return False, "FUNDING_EVENTS_UNPROVEN"
-    required = [
-        event
-        for event in events
-        if (instant := _event_instant(event)) is not None
-        and opened_at < instant <= closed_at
-        and _event_rate(event) != 0
-    ]
+    required = []
+    for event in events:
+        instant = _event_instant(event)
+        if instant is None or not (opened_at < instant <= closed_at):
+            continue
+        rate = _event_rate(event)
+        if rate is None:
+            return False, "FUNDING_EVENT_RATE_UNAVAILABLE"
+        if rate != 0:
+            required.append(event)
     if not required:
         return True, None
     resolution_rows = (

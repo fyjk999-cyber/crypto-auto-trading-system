@@ -737,9 +737,10 @@ def _validate_mark_price_candles(data: dict) -> list[list[str]]:
             raise OKXDiagnosticError(
                 "MALFORMED_RESPONSE", "OKX mark-price candle ts is invalid"
             ) from exc
-        if str(row[5]) != "1":
+        if str(row[5]) not in {"0", "1"}:
             raise OKXDiagnosticError(
-                "UNCONFIRMED_CANDLE", "OKX mark-price candle is not confirmed"
+                "MALFORMED_RESPONSE",
+                "OKX mark-price candle confirm flag must be 0 or 1",
             )
     return rows
 
