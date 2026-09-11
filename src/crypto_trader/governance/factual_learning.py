@@ -58,8 +58,13 @@ class FactualEpisodeLearning:
                 session.add(
                     AITradeReviewORM(
                         episode_id=episode.episode_id,
-                        success_factors_json=["POSITIVE_NET_PNL"] if result == "WIN" else [],
-                        failure_factors_json=["NON_POSITIVE_NET_PNL"]
+                        # Result descriptors, not causal claims.  G02 replaces
+                        # this row with a structured evidence-bound review;
+                        # until then the row must not look like a conclusion.
+                        success_factors_json=["DESCRIPTIVE_POSITIVE_NET_PNL"]
+                        if result == "WIN"
+                        else [],
+                        failure_factors_json=["DESCRIPTIVE_NON_POSITIVE_NET_PNL"]
                         if result == "LOSS"
                         else [],
                         mistakes_json=[],
@@ -67,9 +72,11 @@ class FactualEpisodeLearning:
                             f"FACTUAL_RESULT:{result}",
                             f"NET_PNL:{episode.net_pnl}",
                             f"MARKET_REGIME:{episode.entry_market_regime}",
+                            "CAUSAL_CLAIM:NONE",
+                            "PROMOTION:EVIDENCE_REQUIRED",
                         ],
                         future_rules_json=[],
-                        confidence=Decimal("1"),
+                        confidence=Decimal("0"),
                     )
                 )
                 existing_review_ids.add(episode.episode_id)
@@ -100,9 +107,13 @@ class FactualEpisodeLearning:
                 gross_loss = abs(
                     sum((row.net_pnl for row in rows if row.net_pnl <= 0), Decimal("0"))
                 )
-                profit_factor = (
-                    gross_profit / gross_loss if gross_loss > 0 else gross_profit
-                )
+                if gross_loss > 0:
+                    profit_factor: Decimal | None = gross_profit / gross_loss
+                    profit_factor_status = "OK"
+                else:
+                    # Never substitute an amount for a ratio.
+                    profit_factor = None
+                    profit_factor_status = "NO_LOSSES"
                 pattern_id = _pattern_id(symbol, regime, direction)
                 pattern = (
                     await session.execute(
@@ -117,9 +128,15 @@ class FactualEpisodeLearning:
                     "strategy": direction,
                     "sample_count": len(rows),
                     "win_rate": Decimal(len(wins)) / Decimal(len(rows)),
-                    "profit_factor": profit_factor,
-                    "success_drivers_json": ["POSITIVE_NET_PNL"] if wins else [],
-                    "failure_drivers_json": ["NON_POSITIVE_NET_PNL"]
+                    # Legacy non-null column stores 0 when undefined; the
+                    # explicit status lives in applicability_scope_json.
+                    "profit_factor": (
+                        profit_factor if profit_factor is not None else Decimal("0")
+                    ),
+                    "success_drivers_json": ["DESCRIPTIVE_POSITIVE_NET_PNL"]
+                    if wins
+                    else [],
+                    "failure_drivers_json": ["DESCRIPTIVE_NON_POSITIVE_NET_PNL"]
                     if len(wins) != len(rows)
                     else [],
                     "confidence": min(Decimal(len(rows)) / Decimal("20"), Decimal("1")),
@@ -127,6 +144,11 @@ class FactualEpisodeLearning:
                         "scope": "SYMBOL_REGIME",
                         "symbols": [symbol],
                         "regimes": [regime],
+                        "descriptive_only": True,
+                        "causal_claims": False,
+                        "promotion": "EVIDENCE_REQUIRED",
+                        "profit_factor_status": profit_factor_status,
+                        "confidence_basis": "SAMPLE_COUNT_ONLY",
                     },
                 }
                 if pattern is None:
