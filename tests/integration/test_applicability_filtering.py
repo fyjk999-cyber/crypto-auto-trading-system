@@ -10,6 +10,7 @@ from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.persistence.models import (
     AICompressedExperienceORM,
     AIMarketPatternORM,
+    AITradeReviewORM,
     ResearchReportORM,
     TradeEpisodeORM,
 )
@@ -197,3 +198,57 @@ async def test_loader_tool_memory_and_research_apply_same_scope_rules(database):
     assert evidence.data_quality == "NO_MATCHES"
     evidence = await loader.load_tool("factor_intelligence", context, as_of=AS_OF)
     assert evidence.data_quality == "NO_MATCHES"
+
+
+async def test_memory_reviews_inherit_episode_scope_and_reviewed_boundary(database):
+    future = AS_OF + timedelta(days=1)
+    episodes = [
+        _episode("review-keep", "BTCUSDT", SYMBOL_SCOPE),
+        _episode("review-wrong-regime", "BTCUSDT", {
+            "scope": "SYMBOL_REGIME",
+            "symbols": ["BTCUSDT"],
+            "regimes": ["RANGE"],
+        }),
+        _episode("review-missing-scope", "BTCUSDT", None),
+        _episode("review-global", "BTCUSDT", GLOBAL_SCOPE),
+    ]
+    future_episode = _episode("review-future", "BTCUSDT", SYMBOL_SCOPE)
+    future_episode.closed_at = future
+    future_episode.created_at = future
+    episodes.append(future_episode)
+    async with database.session_factory() as session:
+        session.add_all(episodes)
+        session.add_all(
+            [
+                AITradeReviewORM(
+                    episode_id=episode.episode_id,
+                    lessons_json=[f"lesson:{episode.episode_id}"],
+                    failure_factors_json=[],
+                    created_at=AS_OF - timedelta(minutes=30),
+                )
+                for episode in episodes
+            ]
+        )
+        await session.commit()
+
+    context = ChiefTraderContext(
+        symbol="BTCUSDT",
+        market_snapshot={},
+        regime="TREND",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+        prepared_at=AS_OF.isoformat(),
+    )
+    loader = ChiefContextLoader(database.session_factory, limit=10)
+    enriched = await loader.enrich(context)
+    assert {ref.split(":")[-1] for ref in enriched.memory_refs} == {
+        "review-keep",
+        "review-global",
+    }
+    evidence = await loader.load_tool("memory_search", context, as_of=AS_OF)
+    assert evidence.data_quality == "FACTUAL_REVIEWED"
+    review_ids = {row["episode_id"] for row in evidence.features["reviews"]}
+    assert review_ids == {"review-keep", "review-global"}
+    for row in evidence.features["reviews"]:
+        assert row["lessons"] == [f"lesson:{row['episode_id']}"]

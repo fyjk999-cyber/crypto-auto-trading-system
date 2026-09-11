@@ -404,8 +404,13 @@ class TradePlanService:
             row = await session.get(TradePlanORM, trade_plan_id)
             if row is None:
                 raise KeyError(f"unknown TradePlan: {trade_plan_id}")
-            if TradePlanState(row.state) != TradePlanState.ACTIVE:
-                raise ValueError("position decisions require an ACTIVE TradePlan")
+            if TradePlanState(row.state) not in {
+                TradePlanState.ACTIVE,
+                TradePlanState.RECOVERY,
+            }:
+                raise ValueError(
+                    "position decisions require an ACTIVE/RECOVERY TradePlan"
+                )
             row.latest_position_decision_id = decision_id
             row.updated_at = datetime.now(UTC)
             await session.commit()

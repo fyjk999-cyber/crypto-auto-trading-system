@@ -1048,7 +1048,8 @@ class TradingEngine:
             valid_reduction = (
                 plan is not None
                 and plan.symbol == signal.symbol
-                and plan.state == TradePlanState.ACTIVE
+                and plan.state
+                in {TradePlanState.ACTIVE, TradePlanState.RECOVERY}
                 and plan.latest_position_decision_id == signal.metadata.get("decision_id")
                 and action in {"REDUCE", "EXIT", "TIME_STOP_SAFETY_FALLBACK"}
                 and signal.metadata.get("reduce_only") is True
@@ -1069,12 +1070,20 @@ class TradingEngine:
                     after={"trade_plan_id": trade_plan_id},
                 )
                 return None
-            entry_order = (
-                await self.order_manager.get(plan.order_id)
-                if plan is not None and plan.order_id is not None
-                else None
-            )
-            if entry_order is None or entry_order.status not in TERMINAL_ORDER_STATUSES:
+            if plan.state == TradePlanState.RECOVERY:
+                # Orphan recovery has no entry order to wait for; the factual
+                # position is the lifecycle anchor and the plan closes at zero.
+                entry_order = None
+            else:
+                entry_order = (
+                    await self.order_manager.get(plan.order_id)
+                    if plan is not None and plan.order_id is not None
+                    else None
+                )
+            if (
+                plan.state == TradePlanState.ACTIVE
+                and (entry_order is None or entry_order.status not in TERMINAL_ORDER_STATUSES)
+            ):
                 await self.audit.log(
                     "POSITION_ACTION_BLOCKED_ENTRY_UNSETTLED",
                     target=client_order_id,

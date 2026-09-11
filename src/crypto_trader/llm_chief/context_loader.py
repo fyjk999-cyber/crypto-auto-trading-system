@@ -274,21 +274,33 @@ class ChiefContextLoader:
 
     async def _memory_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
-            reviews = (
+            review_rows = (
                 await session.execute(
-                    select(AITradeReviewORM)
+                    select(AITradeReviewORM, TradeEpisodeORM)
                     .join(
                         TradeEpisodeORM,
                         TradeEpisodeORM.episode_id == AITradeReviewORM.episode_id,
                     )
                     .where(
                         TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.factual.is_(True),
+                        TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.closed_at <= as_of,
                         AITradeReviewORM.created_at <= as_of,
                     )
                     .order_by(AITradeReviewORM.created_at.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
-            ).scalars().all()
+            ).all()
+            reviews = [
+                review
+                for review, episode in review_rows
+                if _scope_applies(
+                    episode.applicability_scope_json,
+                    context.symbol,
+                    context.regime,
+                )
+            ][: self.limit]
             compressed = (
                 await session.execute(
                     select(AICompressedExperienceORM)
