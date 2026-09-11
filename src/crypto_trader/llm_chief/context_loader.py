@@ -384,33 +384,15 @@ class ChiefContextLoader:
         return finding, [f"research:{row.research_id}" for row in rows], _latest(rows, "created_at")
 
     async def _coin_profile_evidence(self, context: ChiefTraderContext, as_of: datetime):
-        async with self.session_factory() as session:
-            row = (
-                await session.execute(
-                    select(AICoinProfileORM).where(
-                        AICoinProfileORM.symbol == context.symbol,
-                        AICoinProfileORM.updated_at <= as_of,
-                    )
-                )
-            ).scalar_one_or_none()
-        finding = (
-            {
-                "profile": {
-                    "symbol": row.symbol,
-                    "sample_count": row.sample_count,
-                    "summary": row.profile_summary,
-                    "tags": list(row.behavior_tags_json or []),
-                    "best_setups": list(row.best_setups_json or []),
-                    "worst_setups": list(row.worst_setups_json or []),
-                }
-            }
-            if row is not None
-            else {}
-        )
+        # R12 fail-closed: AICoinProfileORM has no account/mode provenance, so
+        # a symbol-only profile must not cross account/mode boundaries.  The
+        # canonical runtime path is the Growth V2 Adaptive Experience Card
+        # retriever; this v1 loader reports scope-unavailable instead of
+        # guessing a global profile.
         return (
-            finding,
-            [f"profile:{row.symbol}:v{row.version}"] if row else [],
-            row.updated_at if row else None,
+            {"scope_unavailable": True, "reason": "NO_ACCOUNT_MODE_PROVENANCE"},
+            [],
+            None,
         )
 
     async def _pattern_evidence(self, context: ChiefTraderContext, as_of: datetime):

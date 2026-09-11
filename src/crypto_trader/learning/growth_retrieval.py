@@ -39,6 +39,7 @@ from crypto_trader.learning.growth_knowledge import (
 )
 from crypto_trader.learning.growth_models import (
     GrowthCompressionORM,
+    GrowthEpisodeBindingORM,
     GrowthLessonORM,
     GrowthPatternORM,
     GrowthToolSelectionORM,
@@ -144,7 +145,14 @@ class GrowthContextLoader:
 
     def _serialized_cost(self, evidence: ToolEvidence) -> int:
         payload = {
+            "tool_name": evidence.tool_name,
+            "symbol": evidence.symbol,
+            "timestamp": evidence.timestamp,
             "features": evidence.features,
+            "supporting_evidence": evidence.supporting_evidence,
+            "contrary_evidence": evidence.contrary_evidence,
+            "confidence_of_measurement": evidence.confidence_of_measurement,
+            "data_quality": evidence.data_quality,
             "source_refs": evidence.source_refs,
         }
         return estimate_tokens(json.dumps(payload, sort_keys=True, default=str))
@@ -468,6 +476,15 @@ class GrowthContextLoader:
         return {"scope_unavailable": True, "reason": "NO_ACCOUNT_MODE_PROVENANCE"}, [], None
 
     async def _episode_evidence(self, context, as_of):
+        # R12: an episode is visible only through an explicit account/mode
+        # binding; symbol-only lookup is forbidden.
+        bound_ids = (
+            select(GrowthEpisodeBindingORM.episode_id)
+            .where(
+                GrowthEpisodeBindingORM.account_id == self.account_id,
+                GrowthEpisodeBindingORM.mode == self.mode,
+            )
+        )
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -477,6 +494,7 @@ class GrowthContextLoader:
                         TradeEpisodeORM.review_status == "REVIEWED",
                         TradeEpisodeORM.symbol == context.symbol,
                         TradeEpisodeORM.closed_at <= as_of,
+                        TradeEpisodeORM.episode_id.in_(bound_ids),
                     )
                     .order_by(TradeEpisodeORM.closed_at.desc())
                     .limit(self.budget.limit)

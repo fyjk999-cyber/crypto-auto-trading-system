@@ -152,3 +152,28 @@ async def test_t19_final_serialized_growth_evidence_respects_hard_budget(growth_
     assert loader._serialized_cost(evidence) <= 120
     assert len(evidence.features.get("lessons", [])) <= 5
     assert len(evidence.features.get("patterns", [])) <= 5
+
+
+
+async def test_t18b_official_v1_coin_profile_loader_fails_closed(growth_db):
+    from crypto_trader.llm_chief.context_loader import ChiefContextLoader
+
+    async with growth_db.session_factory() as session:
+        session.add(
+            AICoinProfileORM(
+                symbol=SYMBOL,
+                sample_count=3,
+                profile_summary="UNSCOPED PRIVATE PROFILE",
+                behavior_tags_json=[],
+                best_setups_json=[],
+                worst_setups_json=[],
+                version=1,
+                updated_at=AS_OF,
+            )
+        )
+        await session.commit()
+    evidence = await ChiefContextLoader(growth_db.session_factory).load_tool(
+        "coin_profile", _context(), as_of=AS_OF
+    )
+    assert evidence.source_refs == []
+    assert evidence.features["scope_unavailable"] is True

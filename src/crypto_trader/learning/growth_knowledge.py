@@ -125,7 +125,9 @@ def proposition_identity(statement: str, scope: dict[str, Any]) -> str:
     not part of the key so a contrary observation of the same proposition
     still lands in the same pattern.
     """
-    normalized = " ".join(re.sub(r"[^a-z0-9]+", " ", (statement or "").lower()).split())
+    normalized = " ".join(
+        re.sub(r"[^\w\u4e00-\u9fff]+", " ", (statement or "").casefold()).split()
+    )
     applicability = {
         key: scope.get(key)
         for key in ("scope", "symbols", "regimes", "directions")
@@ -680,28 +682,72 @@ class GrowthKnowledgePublisher:
                         .order_by(GrowthLessonORM.id.desc())
                     )
                 ).scalars().all()
+                proposition_key = str(
+                    (row.scope_json or {}).get("proposition_key")
+                    or (row.features_json or {}).get("proposition_key")
+                    or "legacy"
+                )
                 latest: dict[str, GrowthLessonORM] = {}
                 for lesson in lesson_rows:
                     latest.setdefault(lesson.lesson_id, lesson)
                 for lesson in latest.values():
+                    if (
+                        str(
+                            (lesson.scope_json or {}).get("proposition_key")
+                            or "legacy"
+                        )
+                        != proposition_key
+                    ):
+                        continue
                     if lesson.status in {
                         LESSON_REVOKED,
                         LESSON_EXPIRED,
                         LESSON_QUARANTINED,
                     }:
                         continue
-                    lesson.status = lesson_target
-                    lesson.status_reason = (
-                        "PATTERN_VALIDATED_INDEPENDENT_SAMPLES"
-                        if lesson_target == LESSON_VALIDATED
-                        else "PATTERN_CONTESTED_INDEPENDENT_SAMPLES"
+                    if lesson.status == lesson_target:
+                        continue
+                    # Append a new lesson version; never rewrite the historical
+                    # validated/contested row that an as_of query may still see.
+                    session.add(
+                        GrowthLessonORM(
+                            lesson_id=lesson.lesson_id,
+                            version=lesson.version + 1,
+                            source_kind=lesson.source_kind,
+                            source_id=lesson.source_id,
+                            review_attempt_id=lesson.review_attempt_id,
+                            episode_id=lesson.episode_id,
+                            account_id=lesson.account_id,
+                            mode=lesson.mode,
+                            symbol=lesson.symbol,
+                            direction=lesson.direction,
+                            regime=lesson.regime,
+                            statement=lesson.statement,
+                            observation_refs_json=lesson.observation_refs_json,
+                            support_refs_json=lesson.support_refs_json,
+                            contrary_refs_json=lesson.contrary_refs_json,
+                            scope_json=lesson.scope_json,
+                            content_hash=lesson.content_hash,
+                            status=lesson_target,
+                            status_reason=(
+                                "PATTERN_VALIDATED_INDEPENDENT_SAMPLES"
+                                if lesson_target == LESSON_VALIDATED
+                                else "PATTERN_CONTESTED_INDEPENDENT_SAMPLES"
+                            ),
+                            sample_count=lesson.sample_count,
+                            independent_sample_count=lesson.independent_sample_count,
+                            data_completeness=lesson.data_completeness,
+                            measurement_quality=lesson.measurement_quality,
+                            hypothesis_support=(
+                                "SUPPORTED"
+                                if lesson_target == LESSON_VALIDATED
+                                else "CONTESTED"
+                            ),
+                            confidence=lesson.confidence,
+                            known_at=item["known_at"],
+                            supersedes_version_id=lesson.id,
+                        )
                     )
-                    lesson.hypothesis_support = (
-                        "SUPPORTED"
-                        if lesson_target == LESSON_VALIDATED
-                        else "CONTESTED"
-                    )
-                    lesson.known_at = item["known_at"]
             await session.commit()
         return activated
 

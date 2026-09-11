@@ -286,3 +286,57 @@ async def test_t12_different_propositions_do_not_validate_each_other(
     b = [row for row in patterns if row.sample_count == 1][0]
     assert a.status == PATTERN_VALIDATED
     assert b.status == PATTERN_CANDIDATE
+
+
+
+async def test_staged_activation_does_not_promote_unrelated_proposition(
+    growth_db, publisher
+):
+    attempts = [_attempt(f"overlap_{index}") for index in range(3)]
+    attempts[0].review.testable_lessons.append(
+        _attempt("overlap_b", statement=STATEMENT_B).review.testable_lessons[0]
+    )
+    bindings = {attempt.review.episode_id: _binding() for attempt in attempts}
+    await publisher.publish_attempts(attempts, bindings=bindings, known_at=KNOWN_AT)
+    lessons = await publisher.store.current_lessons_for_scope(
+        account_id="default", mode="PAPER"
+    )
+    unrelated = [row for row in lessons if row.statement == STATEMENT_B]
+    assert unrelated
+    assert unrelated[0].status == PATTERN_CANDIDATE
+
+
+async def test_later_activation_preserves_historical_lesson_versions(
+    growth_db, publisher
+):
+    attempts = [_attempt(f"history_{index}") for index in range(3)]
+    bindings = {attempt.review.episode_id: _binding() for attempt in attempts}
+    await publisher.publish_attempts(attempts, bindings=bindings, known_at=KNOWN_AT)
+    as_of_before = KNOWN_AT + timedelta(hours=1)
+    before = await publisher.list_published_lessons(
+        account_id="default", mode="PAPER", as_of=as_of_before
+    )
+    assert len(before) == 3
+    contrary = _attempt("history_3", contrary_refs=["episode:history_3"])
+    await publisher.publish_attempts(
+        [contrary],
+        bindings={"history_3": _binding()},
+        known_at=KNOWN_AT + timedelta(days=1),
+    )
+    after = await publisher.list_published_lessons(
+        account_id="default", mode="PAPER", as_of=as_of_before
+    )
+    assert [
+        (row.lesson_id, row.version, row.status) for row in after
+    ] == [(row.lesson_id, row.version, row.status) for row in before]
+
+
+def test_chinese_propositions_have_distinct_identities():
+    from crypto_trader.learning.growth_knowledge import proposition_identity
+
+    assert proposition_identity("放量上涨预示趋势延续", {}) != proposition_identity(
+        "高资金费率预示拥挤风险", {}
+    )
+    assert proposition_identity("放量上涨预示趋势延续", {}) != proposition_identity(
+        "盘口失衡预示价格反转", {}
+    )

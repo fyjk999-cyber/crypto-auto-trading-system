@@ -380,3 +380,41 @@ async def test_provider_exception_leaves_one_failed_unknown_attempt(growth_db):
         str(value) for value in (row.error_type, row.error_detail_sanitized)
     )
     assert "SECRET-CANARY" not in serialized
+
+
+
+async def test_recovery_ignores_unbound_rows_when_job_identity_is_known(growth_db):
+    async with growth_db.session_factory() as session:
+        session.add_all(
+            [
+                _attempt_row(
+                    attempt_id="current",
+                    episode_id="ep-a",
+                    account_id="A",
+                    mode="PAPER",
+                    input_hash="hash-A",
+                    job_key="job-x",
+                    job_revision=1,
+                ),
+                _attempt_row(
+                    attempt_id="obsolete",
+                    episode_id="ep-a",
+                    account_id="A",
+                    mode="PAPER",
+                    input_hash="obsolete-input",
+                    job_key=None,
+                    job_revision=None,
+                ),
+            ]
+        )
+        await session.commit()
+    store = ReviewAttemptStore(growth_db.session_factory)
+    rows = await store.load_succeeded_for_date(
+        review_date=REVIEW_DATE,
+        profile_version=PROFILE,
+        account_id="A",
+        mode="PAPER",
+        job_key="job-x",
+        job_revision=1,
+    )
+    assert [row.attempt_id for row in rows] == ["current"]

@@ -378,8 +378,16 @@ async def test_publish_retry_reloads_durable_review_attempts(growth_db):
 
     from crypto_trader.learning.growth_contracts import ObservationFact, StructuredReview
     from crypto_trader.learning.growth_models import GrowthReviewAttemptORM
+    from crypto_trader.learning.growth_pipeline import identity_key
     from crypto_trader.learning.growth_review import STATUS_SUCCEEDED as REVIEW_SUCCEEDED
 
+    job_key = identity_key(
+        account_id=ACCOUNT,
+        mode=MODE,
+        review_date=REVIEW_DATE,
+        source_revision=SOURCE_REVISION,
+        profile_version=PROFILE,
+    )
     recorder = Recorder()
     recorder.fail_publish_once = 1
     pipeline = GrowthLearningPipeline(growth_db.session_factory, owner="worker-a")
@@ -418,6 +426,8 @@ async def test_publish_retry_reloads_durable_review_attempts(growth_db):
                         attempt_no=1,
                         result_json=review.model_dump(mode="json"),
                         usage_status="UNKNOWN",
+                        job_key=job_key,
+                        job_revision=1,
                     )
                 )
                 await session.commit()

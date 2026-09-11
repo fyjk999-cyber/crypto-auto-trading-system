@@ -63,14 +63,14 @@ SQLite upgrade/repeat/downgrade/re-upgrade = PASS
 ```text
 Phase A new regressions (R01-R15)  = 21 new test functions + existing suites updated
 Phase B growth suite               = tests/growth_system + tests/growth_system_v2 + tests/governance_unit
-                                     = 163 passed, 1 skipped
+                                     = 170 passed, 1 skipped
 Phase C core constraints           = valuation scope + orphan recovery + opportunity +
                                      risk/risk-scale-down + global budget
                                      = 174 passed
 Phase D migration                  = alembic 0042→0043 upgrade/repeat/downgrade/re-upgrade
                                      + PostgreSQL offline compile
                                      = 4 passed, 1 skipped (real PG NOT_VERIFIED)
-Phase E full backend               = 1172 passed, 1 skipped, 2 warnings in 159.69s
+Phase E full backend               = 1179 passed, 1 skipped, 2 warnings in 180.44s
 Phase F ruff                       = All checks passed
 Migration head                     = 0043_growth_review_job_binding (single head)
 REAL_PROVIDER_SMOKE                = NOT_VERIFIED (no provider run in this task)
@@ -97,3 +97,36 @@ decision-trace persistence evidence; `LEGACY_RUNTIME_CARD_READS=0` and
 `LEGACY_RUNTIME_CARD_WRITES=0` remain enforced by
 tests/growth_system_v2/test_legacy_path_audit.py.
 ```
+
+
+## Fresh-review counterexamples (interrupted dispatch)
+
+The new independent review dispatch (`core-growth-v2-round2-hardening`, thread
+`01a090ea-89c0-7633-b781-82a8afc48930`) hit the Codex account usage limit
+before producing a formal verdict, but it produced reproducible
+counterexamples.  All were fixed and re-tested:
+
+1. The v2 card tool counted only a partial token estimate; the final
+   serialized `ToolEvidence` could exceed the configured budget.
+   Fix: enforce the budget on the full serialized evidence object, dropping
+   whole cards then observability fields
+   (`test_round2_card_budget_trace.py::test_card_evidence_respects_full_serialized_budget`).
+2. Two accounts reading the same explicitly shared card reused one trace id.
+   Fix: `account_id`/`mode` are part of the deterministic trace identity
+   (`test_shared_card_trace_is_isolated_per_account`).
+3. v1 `episode_search` could return foreign account/mode episodes.
+   Fix: episode evidence is joined to `GrowthEpisodeBindingORM` for the exact
+   account/mode.
+4. The official v1 `ChiefContextLoader` coin-profile tool still leaked
+   symbol-only profiles.  Fix: fail closed there as well
+   (`test_t18b_official_v1_coin_profile_loader_fails_closed`).
+5. Staged activation could promote an unrelated-proposition lesson, rewrite
+   historical lesson rows, and collapsed Chinese statements to one identity.
+   Fix: activation filters by `proposition_key`, appends a new lesson version,
+   and uses Unicode-safe normalization (publication semantics additions).
+6. Recovery could admit unbound obsolete attempts when a job identity was
+   known.  Fix: strict `job_key`/`job_revision` matching, no unbound fallback
+   (`test_recovery_ignores_unbound_rows_when_job_identity_is_known`).
+
+Formal independent verdict for the final repair SHA remains pending a retry
+after the usage limit resets.  This receipt does not claim approval.

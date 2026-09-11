@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from pydantic import ValidationError
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.learning.growth_contracts import (
@@ -160,20 +160,10 @@ class ReviewAttemptStore:
             if input_hash is not None:
                 query = query.where(GrowthReviewAttemptORM.input_hash == input_hash)
             if job_key is not None:
-                # Exact-match bound rows; unbound legacy/test rows remain
-                # eligible because they cannot prove a different revision.
-                query = query.where(
-                    or_(
-                        GrowthReviewAttemptORM.job_key == job_key,
-                        GrowthReviewAttemptORM.job_key.is_(None),
-                    )
-                )
+                query = query.where(GrowthReviewAttemptORM.job_key == job_key)
             if job_revision is not None:
                 query = query.where(
-                    or_(
-                        GrowthReviewAttemptORM.job_revision == job_revision,
-                        GrowthReviewAttemptORM.job_key.is_(None),
-                    )
+                    GrowthReviewAttemptORM.job_revision == job_revision
                 )
             if episode_ids:
                 query = query.where(
