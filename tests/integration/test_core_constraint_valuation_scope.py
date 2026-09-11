@@ -33,7 +33,11 @@ from crypto_trader.domain.enums import (
 )
 from crypto_trader.domain.models import Account, Instrument, Position, SignalIntent
 from crypto_trader.ledger.service import LedgerPosting, LedgerService
-from crypto_trader.persistence.models import EquitySnapshotORM, ValuationBatchORM
+from crypto_trader.persistence.models import (
+    EquitySnapshotORM,
+    LedgerTransactionORM,
+    ValuationBatchORM,
+)
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.valuation.domain import (
@@ -531,6 +535,9 @@ def test_future_mark_timestamp_is_not_complete(database):
 # --------------------------------------------------------------------------
 
 
+_UNSET = object()
+
+
 async def _record_flow(
     database,
     *,
@@ -539,30 +546,71 @@ async def _record_flow(
     account_id: str = "A",
     amount: str | None = "100",
     currency: str | None = "USDT",
+    posting_currency: object = _UNSET,
+    ownership_status: str | None = None,
 ) -> None:
-    """Write one VERIFIED external flow, optionally WITHOUT a proven currency."""
+    """Write one external flow through the canonical ledger writer.
+
+    ``currency`` is the explicit metadata currency; ``posting_currency`` is the
+    schema-level currency recorded on the ledger postings (defaults to the same
+    value, or to an EMPTY currency when no metadata currency is given at all —
+    i.e. a flow whose currency was never recorded anywhere).
+    """
     metadata: dict[str, str] = {}
     if amount is not None:
         metadata["amount"] = amount
     if currency is not None:
         metadata["currency"] = currency
+    posting_ccy = (
+        (currency or "") if posting_currency is _UNSET else str(posting_currency or "")
+    )
+    magnitude = Decimal(amount) if amount else Decimal("0")
     if entry_type == LedgerEntryType.DEPOSIT:
         postings = [
-            LedgerPosting("CASH", LedgerDirection.DEBIT, Decimal(amount or "0")),
-            LedgerPosting("EQUITY", LedgerDirection.CREDIT, Decimal(amount or "0")),
+            LedgerPosting("CASH", LedgerDirection.DEBIT, magnitude, posting_ccy),
+            LedgerPosting("EQUITY", LedgerDirection.CREDIT, magnitude, posting_ccy),
         ]
     else:
         postings = [
-            LedgerPosting("CASH", LedgerDirection.CREDIT, Decimal(amount or "0")),
-            LedgerPosting("EQUITY", LedgerDirection.DEBIT, Decimal(amount or "0")),
+            LedgerPosting("CASH", LedgerDirection.CREDIT, magnitude, posting_ccy),
+            LedgerPosting("EQUITY", LedgerDirection.DEBIT, magnitude, posting_ccy),
         ]
     await LedgerService(database.session_factory).record(
         entry_type,
         postings,
         transaction_id=transaction_id,
         account_id=account_id,
+        ownership_status=ownership_status,
         metadata=metadata,
     )
+
+
+async def _insert_legacy_flow(
+    database,
+    *,
+    transaction_id: str,
+    account_id: str | None,
+    currency: str,
+    amount: str,
+    ownership_status: str,
+    entry_type: str = "DEPOSIT",
+    metadata: dict | None = None,
+) -> None:
+    """Raw row (legacy/backfilled shape), bypassing the canonical writer."""
+    async with database.session_factory() as session:
+        session.add(
+            LedgerTransactionORM(
+                transaction_id=transaction_id,
+                account_id=account_id,
+                ownership_status=ownership_status,
+                entry_type=entry_type,
+                created_at=datetime.now(UTC),
+                metadata_json=metadata
+                if metadata is not None
+                else {"amount": amount, "currency": currency},
+            )
+        )
+        await session.commit()
 
 
 async def _latest_snapshot(database, *, account_id: str = "A", currency: str = "USDT"):
@@ -817,3 +865,451 @@ async def test_incomplete_cash_flow_scope_still_allows_reduce_only(database):
     assert decision.decision == ExecutionDecision.APPROVE
     assert decision.checks["reduce_only"] is True
     assert decision.checks["valuation_completeness"] == "INCOMPLETE"
+
+
+# --------------------------------------------------------------------------
+# AUDIT BATCH: full required matrix (account / currency / amount / ownership)
+# --------------------------------------------------------------------------
+
+
+async def test_account_a_deposit_cannot_affect_account_b_valuation(database):
+    """TEST 1: another account's DEPOSIT is never attributed to this scope."""
+    await _record_flow(
+        database, transaction_id="txn_a_deposit", account_id="A", amount="500",
+        currency="USDT",
+    )
+    service = PortfolioService(database.session_factory)
+    a = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    b = await service.record_valuation_batch(
+        account_id="B", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert a.adjusted_equity == Decimal("500")  # A's own deposit applies
+    assert b.adjusted_equity == Decimal("1000")  # untouched by A's DEPOSIT
+    assert b.peak_adjusted_equity == Decimal("1000")
+    assert b.quality == VALUATION_QUALITY_HEALTHY
+    b_snapshot = await _latest_snapshot(database, account_id="B", currency="USDT")
+    assert b_snapshot.cumulative_external_cash_flow == Decimal("0")
+
+
+async def test_account_a_withdrawal_cannot_affect_account_b_valuation(database):
+    """TEST 2: another account's WITHDRAWAL is never attributed to this scope."""
+    await _record_flow(
+        database,
+        transaction_id="txn_a_withdrawal",
+        entry_type=LedgerEntryType.WITHDRAWAL,
+        account_id="A",
+        amount="500",
+        currency="USDT",
+    )
+    service = PortfolioService(database.session_factory)
+    a = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    b = await service.record_valuation_batch(
+        account_id="B", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert a.adjusted_equity == Decimal("1500")  # 1000 - (-500) for A
+    assert b.adjusted_equity == Decimal("1000")
+    assert b.drawdown_amount == Decimal("0")
+    b_snapshot = await _latest_snapshot(database, account_id="B", currency="USDT")
+    assert b_snapshot.cumulative_external_cash_flow == Decimal("0")
+    assert b_snapshot.period_external_cash_flow == Decimal("0")
+
+
+async def test_usdt_flow_cannot_affect_other_currency_valuations(database):
+    """TEST 3: a USDT flow never leaks into USD/USDC scopes."""
+    await _record_flow(
+        database, transaction_id="txn_usdt_flow", amount="250", currency="USDT"
+    )
+    service = PortfolioService(database.session_factory)
+    for other in ("USD", "USDC", "BTC"):
+        batch = await service.record_valuation_batch(
+            account_id="A", currency=other, quality=VALUATION_QUALITY_HEALTHY,
+            raw_mtm_equity=Decimal("1000"),
+        )
+        assert batch.quality == VALUATION_QUALITY_HEALTHY
+        assert batch.adjusted_equity == Decimal("1000")
+        assert batch.peak_adjusted_equity == Decimal("1000")
+        snapshot = await _latest_snapshot(database, currency=other)
+        assert snapshot.cumulative_external_cash_flow == Decimal("0")
+
+
+async def test_schema_posting_currency_is_used_without_metadata_claims(database):
+    """FIX 2: prefer the recorded schema currency; no metadata needed."""
+    await _record_flow(
+        database,
+        transaction_id="txn_posting_only_usdc",
+        amount="300",
+        currency=None,  # no metadata currency at all
+        posting_currency="USDC",  # schema-level fact
+    )
+    service = PortfolioService(database.session_factory)
+    usdt = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert usdt.quality == VALUATION_QUALITY_HEALTHY
+    assert usdt.adjusted_equity == Decimal("1000")  # foreign scope excluded
+    usdc = await service.record_valuation_batch(
+        account_id="A", currency="USDC", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert usdc.adjusted_equity == Decimal("700")  # included in its own scope
+
+
+async def test_contradictory_currency_sources_are_never_resolved_by_guessing(database):
+    """Ambiguity between metadata and the schema is incomplete, not a choice."""
+    await _record_flow(
+        database,
+        transaction_id="txn_ambiguous_ccy",
+        amount="300",
+        currency="USDT",  # metadata says USDT
+        posting_currency="USDC",  # schema says USDC
+    )
+    service = PortfolioService(database.session_factory)
+    batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert batch.quality == VALUATION_QUALITY_UNAVAILABLE
+    assert "CASH_FLOW_CURRENCY_AMBIGUOUS" in batch.reason_codes
+    assert batch.adjusted_equity is None
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.cumulative_external_cash_flow == Decimal("0")  # never guessed
+
+
+async def test_non_finite_amount_is_not_a_factual_flow(database):
+    """TEST 5 (non-finite): NaN/Infinity amounts are incomplete accounting.
+
+    The canonical ledger writer already refuses to post a non-finite amount
+    (journal_balanced rejects NaN postings); this proves the valuation path
+    independently refuses to read such an amount as a factual cash flow.
+    """
+    for index, raw in enumerate(("NaN", "Infinity", "-Infinity", "not-a-number")):
+        await _insert_legacy_flow(
+            database,
+            transaction_id=f"txn_nonfinite_{index}",
+            account_id="A",
+            currency="USDT",
+            amount=raw,
+            ownership_status="VERIFIED",
+        )
+    service = PortfolioService(database.session_factory)
+    batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert batch.quality == VALUATION_QUALITY_UNAVAILABLE
+    assert "CASH_FLOW_AMOUNT_UNPROVEN" in batch.reason_codes
+    assert batch.adjusted_equity is None
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.cumulative_external_cash_flow == Decimal("0")
+    assert snapshot.peak_adjusted_equity is None
+
+
+async def test_unverified_ownership_claim_cannot_affect_valuation(database):
+    """TEST 6: an unverified claim on this account is not a factual flow."""
+    await _record_flow(
+        database,
+        transaction_id="txn_unverified_claim",
+        account_id="A",
+        amount="500",
+        currency="USDT",
+        ownership_status="UNKNOWN",  # canonical writer strips the account claim
+    )
+    service = PortfolioService(database.session_factory)
+    a = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    # The 500 is never attributed, and the claim blocks a HEALTHY valuation.
+    assert a.quality == VALUATION_QUALITY_UNAVAILABLE
+    assert "CASH_FLOW_OWNERSHIP_UNVERIFIED" in a.reason_codes
+    assert a.adjusted_equity is None
+    assert a.peak_adjusted_equity is None
+    a_snapshot = await _latest_snapshot(database, account_id="A", currency="USDT")
+    assert a_snapshot.cumulative_external_cash_flow == Decimal("0")
+
+    # A different account with no claim on it stays unaffected and complete.
+    b = await service.record_valuation_batch(
+        account_id="B", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert b.quality == VALUATION_QUALITY_HEALTHY
+    assert b.adjusted_equity == Decimal("1000")
+
+
+async def test_legacy_unverified_row_bound_to_account_is_incomplete(database):
+    """TEST 6 (legacy shape): account set but ownership never verified."""
+    await _insert_legacy_flow(
+        database,
+        transaction_id="txn_legacy_unverified",
+        account_id="A",
+        currency="USDT",
+        amount="750",
+        ownership_status="UNKNOWN",
+    )
+    service = PortfolioService(database.session_factory)
+    batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert batch.quality == VALUATION_QUALITY_UNAVAILABLE
+    assert "CASH_FLOW_OWNERSHIP_UNVERIFIED" in batch.reason_codes
+    assert batch.adjusted_equity is None
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.cumulative_external_cash_flow == Decimal("0")
+
+
+async def test_unattributed_rows_are_never_attributed_to_an_account(database):
+    """Unattributed history stays unknown: it must not enter any scope."""
+    await _insert_legacy_flow(
+        database,
+        transaction_id="txn_unattributed",
+        account_id=None,
+        currency="USDT",
+        amount="999",
+        ownership_status="UNKNOWN",
+    )
+    service = PortfolioService(database.session_factory)
+    batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    # No claim on A => A's own accounting stays complete and the 999 is absent.
+    assert batch.quality == VALUATION_QUALITY_HEALTHY
+    assert batch.adjusted_equity == Decimal("1000")
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.cumulative_external_cash_flow == Decimal("0")
+    # ... and it was never backfilled into a USDT fact.
+    assert snapshot.valuation_status == VALUATION_QUALITY_HEALTHY
+
+
+async def test_incomplete_cash_flow_drawdown_is_unavailable_not_zero(database):
+    """TEST 11: drawdown is UNKNOWN (None), never a zero drawdown."""
+    service = PortfolioService(database.session_factory)
+    baseline = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("1000"),
+    )
+    assert baseline.drawdown_amount == Decimal("0")  # proven: truly at peak
+
+    await _record_flow(
+        database, transaction_id="txn_dd_incomplete", amount="100", currency=None
+    )
+    batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("400"),
+    )
+    assert batch.drawdown_amount is None
+    assert batch.drawdown_amount != Decimal("0")
+    assert batch.drawdown_ratio is None
+    assert batch.peak_adjusted_equity == Decimal("1000")
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.drawdown is None
+    assert snapshot.cash_flow_adjusted_equity is None
+
+
+async def test_incomplete_ownership_scope_does_not_advance_peak(database):
+    """TEST 10 (ownership variant): no peak advance without proven accounting."""
+    service = PortfolioService(database.session_factory)
+    baseline = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("800"),
+    )
+    assert baseline.peak_adjusted_equity == Decimal("800")
+    await _record_flow(
+        database,
+        transaction_id="txn_peak_ownership",
+        account_id="A",
+        amount="100",
+        currency="USDT",
+        ownership_status="UNKNOWN",
+    )
+    later = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("9000"),
+    )
+    assert later.peak_adjusted_equity == Decimal("800")
+    assert later.drawdown_amount is None
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.peak_adjusted_equity == Decimal("800")
+
+
+async def test_incomplete_ownership_scope_fails_closed_for_new_exposure(database):
+    """TEST 12 (ownership variant): incomplete accounting cannot fund risk."""
+    await _record_flow(
+        database,
+        transaction_id="txn_exposure_ownership",
+        account_id="A",
+        amount="100",
+        currency="USDT",
+        ownership_status="UNKNOWN",
+    )
+    service = PortfolioService(database.session_factory)
+    batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("10000"),
+    )
+    assert batch.usable_for_new_risk is False
+    decision = RiskEngine().check(
+        _signal(),
+        account=Account(equity=Decimal("10000")),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=Decimal("0"),
+        drawdown=batch.drawdown_amount,
+        valuation_id=batch.valuation_id,
+        valuation_quality=batch.quality,
+    )
+    assert decision.decision == ExecutionDecision.REJECT
+    assert decision.checks["valuation_completeness"] == "INCOMPLETE"
+    assert decision.checks["drawdown"] is None
+
+
+def test_reduction_cannot_cross_zero_or_reverse_under_incomplete_accounting():
+    """TEST 14: the accounting exemption never authorizes reversal/expansion."""
+    engine = RiskEngine()
+    position = _position(quantity="1")
+
+    crosses_zero = engine.check(
+        _signal(reduce_only=True, side=OrderSide.SELL, direction="LONG"),
+        account=Account(equity=Decimal("10000")),
+        positions={"BTC-USDT-SWAP": position},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=None,
+        drawdown=None,
+    )
+    # quantity == position is a full close (allowed); the crossing case below
+    assert crosses_zero.decision == ExecutionDecision.APPROVE
+
+    reversal = engine.check(
+        _signal(reduce_only=True, side=OrderSide.BUY, direction="LONG"),
+        account=Account(equity=Decimal("10000")),
+        positions={"BTC-USDT-SWAP": position},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=None,
+        drawdown=None,
+    )
+    assert reversal.decision == ExecutionDecision.REJECT
+    assert reversal.reason == "REDUCE_ONLY_DIRECTION_REVERSAL"
+
+    no_position = engine.check(
+        _signal(reduce_only=True, side=OrderSide.SELL, direction="LONG"),
+        account=Account(equity=Decimal("10000")),
+        positions={},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=None,
+        drawdown=None,
+    )
+    assert no_position.decision == ExecutionDecision.REJECT
+    assert no_position.reason == "REDUCE_ONLY_NO_POSITION"
+
+    oversized = engine.check(
+        SignalIntent(
+            signal_id="oversized-reduce",
+            strategy_id="test",
+            symbol="BTC-USDT-SWAP",
+            side=OrderSide.SELL,
+            quantity=Decimal("5"),  # > position: would cross zero
+            limit_price=Decimal("100"),
+            metadata={"direction": "LONG", "reduce_only": True},
+        ),
+        account=Account(equity=Decimal("10000")),
+        positions={"BTC-USDT-SWAP": position},
+        market_price=Decimal("100"),
+        open_order_count=0,
+        daily_pnl=None,
+        drawdown=None,
+    )
+    assert oversized.decision == ExecutionDecision.REJECT
+    assert oversized.reason in {
+        "REDUCE_ONLY_CROSSES_ZERO",
+        "REDUCE_QUANTITY_EXCEEDS_POSITION",
+    }
+
+
+async def test_no_synthetic_accounting_value_is_created(database):
+    """TEST 15: nothing is substituted for the unknown facts."""
+    await _record_flow(
+        database,
+        transaction_id="txn_no_synthetic",
+        account_id="A",
+        amount=None,  # unknown amount
+        currency=None,  # unknown currency
+    )
+    service = PortfolioService(database.session_factory)
+    batch = await service.record_valuation_batch(
+        account_id="A",
+        currency="USDT",
+        quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("0"),  # even a zero equity stays labelled
+    )
+    assert batch.quality == VALUATION_QUALITY_UNAVAILABLE
+    assert "CASH_FLOW_CURRENCY_UNPROVEN" in batch.reason_codes
+
+    # A second row proves the amount blocker independently (per-row blocking
+    # reports the first unprovable fact it encounters).
+    await _record_flow(
+        database,
+        transaction_id="txn_no_synthetic_amount",
+        account_id="A",
+        amount=None,  # amount unknown, currency proven
+        currency="USDT",
+    )
+    amount_batch = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("0"),
+    )
+    assert amount_batch.quality == VALUATION_QUALITY_UNAVAILABLE
+    assert "CASH_FLOW_AMOUNT_UNPROVEN" in amount_batch.reason_codes
+    assert amount_batch.adjusted_equity is None
+    # No synthetic flow, no synthetic adjusted equity, no synthetic drawdown.
+    assert batch.adjusted_equity is None
+    assert batch.peak_adjusted_equity is None
+    assert batch.drawdown_amount is None
+    assert batch.drawdown_ratio is None
+    assert batch.solvency is None
+    assert batch.components == ()
+    snapshot = await _latest_snapshot(database)
+    assert snapshot.cumulative_external_cash_flow == Decimal("0")
+    assert snapshot.external_cash_flow_adjustment == Decimal("0")
+    assert snapshot.cash_flow_adjusted_equity is None
+    assert snapshot.peak_adjusted_equity is None
+    assert snapshot.drawdown is None
+    assert snapshot.valuation_status == VALUATION_QUALITY_UNAVAILABLE
+
+
+async def test_same_scope_historical_peak_isolation_still_holds(database):
+    """TEST 16: peaks stay isolated per account+currency for proven flows."""
+    service = PortfolioService(database.session_factory)
+    await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("5000"),
+    )
+    await service.record_valuation_batch(
+        account_id="B", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("200"),
+    )
+    a = await service.record_valuation_batch(
+        account_id="A", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("4000"),
+    )
+    b = await service.record_valuation_batch(
+        account_id="B", currency="USDT", quality=VALUATION_QUALITY_HEALTHY,
+        raw_mtm_equity=Decimal("100"),
+    )
+    assert a.peak_adjusted_equity == Decimal("5000")
+    assert a.drawdown_amount == Decimal("-1000")
+    assert b.peak_adjusted_equity == Decimal("200")
+    assert b.drawdown_amount == Decimal("-100")

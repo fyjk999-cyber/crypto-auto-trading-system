@@ -15,6 +15,7 @@ from crypto_trader.ledger.projections import rebuild_projections, replay_project
 from crypto_trader.persistence.models import (
     AccountProjectionORM,
     EquitySnapshotORM,
+    LedgerEntryORM,
     LedgerTransactionORM,
     PositionProjectionORM,
     ValuationBatchORM,
@@ -109,6 +110,9 @@ class PortfolioService:
                     .limit(1)
                 )
             ).scalar_one_or_none()
+            # FACTUAL ACCOUNT SCOPE: only rows verifiably owned by THIS account
+            # may contribute a cash-flow fact. Rows bound to another account —
+            # or bound to no account at all — are never attributed here.
             flow_rows = (
                 await session.execute(
                     select(LedgerTransactionORM).where(
@@ -118,25 +122,72 @@ class PortfolioService:
                     )
                 )
             ).scalars().all()
+            # An UNVERIFIED ownership claim on this account is not a fact and
+            # must not be included, but it does mean this account's cash-flow
+            # window cannot be proven complete either (fail closed).
+            unverified_claim_rows = (
+                await session.execute(
+                    select(LedgerTransactionORM).where(
+                        LedgerTransactionORM.ownership_status != "VERIFIED",
+                        LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
+                    )
+                )
+            ).scalars().all()
+            unproven_flow_ownership = any(
+                txn.account_id == account_id
+                or (txn.metadata_json or {}).get("unverified_account_claim") == account_id
+                for txn in unverified_claim_rows
+            )
+            # FACTUAL CURRENCY SCOPE: the schema records each ledger posting's
+            # currency (ledger_entries.currency) — prefer that recorded fact,
+            # and reject any ambiguity between sources instead of guessing.
+            posting_currencies: dict[str, set[str]] = {}
+            if flow_rows:
+                entry_rows = (
+                    await session.execute(
+                        select(
+                            LedgerEntryORM.transaction_id, LedgerEntryORM.currency
+                        ).where(
+                            LedgerEntryORM.transaction_id.in_(
+                                [txn.transaction_id for txn in flow_rows]
+                            )
+                        )
+                    )
+                ).all()
+                for transaction_id, entry_currency in entry_rows:
+                    if entry_currency is None or not str(entry_currency).strip():
+                        continue
+                    posting_currencies.setdefault(transaction_id, set()).add(
+                        str(entry_currency).strip()
+                    )
             cumulative_flow = Decimal("0")
             unproven_flow_currency = False
+            ambiguous_flow_currency = False
             unproven_flow_amount = False
             for txn in flow_rows:
                 metadata = txn.metadata_json or {}
-                # CORE CONSTRAINT: the transaction's own PROVEN currency decides
-                # whether its cash flow belongs to this valuation scope. It is
-                # never assumed to be the valuation currency (no USDT, no
-                # quote-currency guess, no synthetic default): an unprovable
-                # currency makes cash-flow completeness INCOMPLETE instead.
-                row_currency = (
+                # The transaction's own PROVEN currency decides whether its
+                # cash flow belongs to this valuation scope. It is never
+                # assumed to be the valuation currency (no USDT, no
+                # quote-currency guess, no synthetic default): an unprovable or
+                # contradictory currency makes completeness INCOMPLETE instead.
+                currency_candidates = set(posting_currencies.get(txn.transaction_id, set()))
+                metadata_currency = (
                     metadata.get("currency")
                     or metadata.get("settleCcy")
                     or metadata.get("quote_currency")
                 )
-                if row_currency is None or not str(row_currency).strip():
+                if metadata_currency is not None and str(metadata_currency).strip():
+                    currency_candidates.add(str(metadata_currency).strip())
+                if not currency_candidates:
                     unproven_flow_currency = True
                     continue
-                if str(row_currency).strip() != currency:
+                if len(currency_candidates) > 1:
+                    # Sources disagree (metadata vs postings): never pick one.
+                    ambiguous_flow_currency = True
+                    continue
+                row_currency = next(iter(currency_candidates))
+                if row_currency != currency:
                     # A proven foreign-currency flow belongs to another scope.
                     continue
                 raw_amount = (
@@ -154,6 +205,10 @@ class PortfolioService:
                 except Exception:
                     unproven_flow_amount = True
                     continue
+                if not amount.is_finite():
+                    # Non-finite accounting is not a factual amount.
+                    unproven_flow_amount = True
+                    continue
                 cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
             account_row = (
                 await session.execute(
@@ -169,21 +224,24 @@ class PortfolioService:
             # (existing quality architecture) — no peak, no drawdown, no new
             # exposure. Proven foreign-currency flows were excluded above.
             cash_flow_complete = not (
-                unproven_flow_currency or unproven_flow_amount
+                unproven_flow_currency
+                or ambiguous_flow_currency
+                or unproven_flow_amount
+                or unproven_flow_ownership
             )
             healthy = claimed_healthy and cash_flow_complete
             effective_quality = (
                 VALUATION_QUALITY_HEALTHY if healthy else VALUATION_QUALITY_UNAVAILABLE
             )
             effective_reason_codes = list(reason_codes or [])
-            if unproven_flow_currency and (
-                "CASH_FLOW_CURRENCY_UNPROVEN" not in effective_reason_codes
+            for flag, code in (
+                (unproven_flow_currency, "CASH_FLOW_CURRENCY_UNPROVEN"),
+                (ambiguous_flow_currency, "CASH_FLOW_CURRENCY_AMBIGUOUS"),
+                (unproven_flow_amount, "CASH_FLOW_AMOUNT_UNPROVEN"),
+                (unproven_flow_ownership, "CASH_FLOW_OWNERSHIP_UNVERIFIED"),
             ):
-                effective_reason_codes.append("CASH_FLOW_CURRENCY_UNPROVEN")
-            if unproven_flow_amount and (
-                "CASH_FLOW_AMOUNT_UNPROVEN" not in effective_reason_codes
-            ):
-                effective_reason_codes.append("CASH_FLOW_AMOUNT_UNPROVEN")
+                if flag and code not in effective_reason_codes:
+                    effective_reason_codes.append(code)
             adjusted_equity = (
                 snapshot_equity - cumulative_flow if healthy else None
             )
