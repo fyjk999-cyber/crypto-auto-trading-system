@@ -31,10 +31,17 @@ def build_canonical_tool_registry(evidence) -> LLMToolRegistry:
         "basis",
         "orderbook",
         "liquidity",
+        "execution_cost",
     ):
         registry.register(
-            name, _tool(evidence, name),
+            name,
+            _tool(evidence, name),
             description=f"Read-only factual {name} evidence for the exact symbol and as-of time",
+            version="alpha-tools-1.1.0",
+            source="OKX_PUBLIC_AND_CANONICAL_ALPHA",
+            data_time_semantics=(
+                "closed-bar evidence and live observations must be at or before decision as_of"
+            ),
         )
     return registry
 

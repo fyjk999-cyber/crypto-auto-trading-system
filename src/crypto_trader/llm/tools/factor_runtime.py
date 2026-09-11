@@ -14,18 +14,30 @@ def register_factor_runtime_tools(registry: LLMToolRegistry, service) -> None:
     registry.register(
         "factor_snapshot", _snapshot(service),
         description="Latest stored factor snapshot",
+        version="factor-runtime-1.1.0",
+        source="CANONICAL_FACTOR_STORE",
+        data_time_semantics="stored observations must be timestamped at or before decision as_of",
     )
     registry.register(
         "factor_history", _history(service),
         description="Last 100 factor observations",
+        version="factor-runtime-1.1.0",
+        source="CANONICAL_FACTOR_STORE",
+        data_time_semantics="stored observations must be timestamped at or before decision as_of",
     )
     registry.register(
         "factor_performance", _performance(service),
         description="Recent sample sizes and out-of-sample factor performance",
+        version="factor-runtime-1.1.0",
+        source="CANONICAL_FACTOR_STORE",
+        data_time_semantics="stored observations must be timestamped at or before decision as_of",
     )
     registry.register(
         "factor_health", _health(service),
         description="Canonical FactorEvaluator health status for stored factors",
+        version="factor-runtime-1.1.0",
+        source="CANONICAL_FACTOR_STORE",
+        data_time_semantics="stored observations must be timestamped at or before decision as_of",
     )
 
 

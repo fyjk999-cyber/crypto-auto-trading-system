@@ -12,6 +12,11 @@ def register_market_history_tool(registry: LLMToolRegistry, feed) -> None:
     registry.register(
         "multi_timeframe_history", _tool(feed),
         description="Up to 60 factual closed OKX candles for 1m, 15m, and 1H",
+        version="okx-closed-candles-1.1.0",
+        source="OKX_PUBLIC_CANDLES",
+        data_time_semantics=(
+            "confirm=1 closed candles only; candle timestamp must be <= decision as_of"
+        ),
     )
 
 
