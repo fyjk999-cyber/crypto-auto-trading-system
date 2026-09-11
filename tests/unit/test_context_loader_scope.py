@@ -3,7 +3,11 @@ from decimal import Decimal
 
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
-from crypto_trader.persistence.models import ResearchReportORM, TradeEpisodeORM
+from crypto_trader.persistence.models import (
+    AITradeReviewORM,
+    ResearchReportORM,
+    TradeEpisodeORM,
+)
 
 
 def _context(as_of: datetime) -> ChiefTraderContext:
@@ -18,7 +22,12 @@ def _context(as_of: datetime) -> ChiefTraderContext:
     )
 
 
-def _episode(episode_id: str, symbol: str, closed_at: datetime) -> TradeEpisodeORM:
+def _episode(
+    episode_id: str,
+    symbol: str,
+    closed_at: datetime,
+    regime: str = "RANGE",
+) -> TradeEpisodeORM:
     return TradeEpisodeORM(
         episode_id=episode_id,
         trade_plan_id=f"plan-{episode_id}",
@@ -40,7 +49,7 @@ def _episode(episode_id: str, symbol: str, closed_at: datetime) -> TradeEpisodeO
         gross_pnl=Decimal("1"),
         net_pnl=Decimal("1"),
         holding_time_seconds=60,
-        entry_market_regime="RANGE",
+        entry_market_regime=regime,
         terminal_reason="EXIT",
         factual=True,
         review_status="REVIEWED",
@@ -118,8 +127,29 @@ async def test_context_tools_filter_time_symbol_and_research_scope(database):
                     created_at=after,
                 ),
                 _episode("btc-past", "BTCUSDT", before),
+                _episode("btc-wrong-regime", "BTCUSDT", before, "TREND"),
                 _episode("eth-past", "ETHUSDT", before),
                 _episode("btc-future", "BTCUSDT", after),
+                AITradeReviewORM(
+                    episode_id="btc-past",
+                    success_factors_json=[],
+                    failure_factors_json=["range-warning"],
+                    mistakes_json=[],
+                    lessons_json=[],
+                    future_rules_json=[],
+                    confidence=Decimal("0.8"),
+                    created_at=before,
+                ),
+                AITradeReviewORM(
+                    episode_id="btc-wrong-regime",
+                    success_factors_json=[],
+                    failure_factors_json=["trend-warning"],
+                    mistakes_json=[],
+                    lessons_json=[],
+                    future_rules_json=[],
+                    confidence=Decimal("0.8"),
+                    created_at=before,
+                ),
             ]
         )
         await session.commit()
@@ -138,3 +168,8 @@ async def test_context_tools_filter_time_symbol_and_research_scope(database):
         row["episode_id"] for row in episodes.features["episodes"]
     }
     assert episode_ids == {"btc-past"}
+
+    memory = await loader.load_tool("memory_search", context, as_of=as_of)
+    reviews = memory.features["reviews"]
+    assert [row["episode_id"] for row in reviews] == ["btc-past"]
+    assert reviews[0]["failure_factors"] == ["range-warning"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from sqlalchemy import and_, case, or_, select
+from sqlalchemy import and_, or_, select
 
 from crypto_trader.llm.tools.registry import ToolEvidence
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -36,15 +36,10 @@ class ChiefContextLoader:
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
                         TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.entry_market_regime == context.regime,
                         TradeEpisodeORM.closed_at <= as_of,
                     )
-                    .order_by(
-                        case(
-                            (TradeEpisodeORM.entry_market_regime == context.regime, 0),
-                            else_=1,
-                        ),
-                        TradeEpisodeORM.closed_at.desc(),
-                    )
+                    .order_by(TradeEpisodeORM.closed_at.desc())
                     .limit(self.limit)
                 )
             ).scalars().all()
@@ -201,15 +196,10 @@ class ChiefContextLoader:
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
                         TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.entry_market_regime == context.regime,
                         TradeEpisodeORM.closed_at <= as_of,
                     )
-                    .order_by(
-                        case(
-                            (TradeEpisodeORM.entry_market_regime == context.regime, 0),
-                            else_=1,
-                        ),
-                        TradeEpisodeORM.closed_at.desc(),
-                    )
+                    .order_by(TradeEpisodeORM.closed_at.desc())
                     .limit(self.limit)
                 )
             ).scalars().all()
@@ -238,7 +228,11 @@ class ChiefContextLoader:
                         TradeEpisodeORM.episode_id == AITradeReviewORM.episode_id,
                     )
                     .where(
+                        TradeEpisodeORM.factual.is_(True),
+                        TradeEpisodeORM.review_status == "REVIEWED",
                         TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.entry_market_regime == context.regime,
+                        TradeEpisodeORM.closed_at <= as_of,
                         AITradeReviewORM.created_at <= as_of,
                     )
                     .order_by(AITradeReviewORM.created_at.desc())
