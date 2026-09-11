@@ -24,3 +24,6 @@ node_modules/
 
 # G07 growth-system evidence (ignored)
 .ops-growth/
+
+# Growth System V2 evidence (ignored)
+.ops-growth-v2/
