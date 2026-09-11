@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
