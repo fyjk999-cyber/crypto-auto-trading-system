@@ -6,11 +6,12 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from crypto_trader.governance.daily_review import DailyReview
+from crypto_trader.governance.daily_review import DailyReview, DailyReviewStats
 from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory import FailureMemory, TradeMemory, TradeMemoryRecord
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
+from crypto_trader.learning.growth_experience import ClaimLostError
 
 
 class DailyReviewScheduler:
@@ -23,6 +24,10 @@ class DailyReviewScheduler:
         use_local_time: bool = False,
         owner: str = "daily-review",
         claim_lease_seconds: int = 1800,
+        account_id: str = "default",
+        mode: str = "PAPER",
+        profile_version: str | None = None,
+        card_learner=None,
     ) -> None:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
@@ -33,6 +38,10 @@ class DailyReviewScheduler:
         self.use_local_time = use_local_time
         self.owner = owner
         self.claim_lease_seconds = max(60, claim_lease_seconds)
+        self.account_id = account_id
+        self.mode = mode
+        self.profile_version = profile_version
+        self.card_learner = card_learner
 
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
@@ -77,7 +86,11 @@ class DailyReviewScheduler:
             for record in records:
                 if record.failure_class is not None:
                     failure_memory.record(record.decision_id, record.failure_class)
-            stats = DailyReview(trade_memory, failure_memory).run(date)
+            # STRICT: a record without explicit funding provenance is
+            # reported as incomplete rather than silently treated as 0.
+            stats = DailyReview(
+                trade_memory, failure_memory, funding_policy="STRICT"
+            ).run(date)
             # Only the live claim owner may run learning/mark/publish.
             if not await self.persistence.heartbeat_daily_review(
                 date,
@@ -87,15 +100,20 @@ class DailyReviewScheduler:
             ):
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST")
             await self.learning.review_many(pending)
+            # Growth V2: after factual learning/pattern update, propose/apply
+            # card changes on the same claim.  The learner re-validates the
+            # fence before every write; claim loss produces NO card mutation.
+            card_learning = await self._learn_cards(date, claim_token)
             # Publish SUCCEEDED only through the fenced claim update. Episode
             # mark_reviewed must happen after that fence so an old/stale token
             # can never mark factual episodes REVIEWED without a published
             # successful review.
+            storage_stats = _storage_stats(stats)
             saved = await self.persistence.save_daily_review(
                 date,
-                stats,
+                storage_stats,
                 episode_count=len(episodes),
-                output_ref=f"daily_review:{date}",
+                output_ref=_review_output_ref(date, stats),
                 claim_token=claim_token,
             )
             if not saved:
@@ -111,12 +129,51 @@ class DailyReviewScheduler:
             return {
                 "date": date,
                 "status": "SUCCEEDED",
+                # daily_pnl is the legacy partial mirror for storage.  net_pnl
+                # is the authoritative value and is null when funding is
+                # incomplete; net_status says why.
                 "daily_pnl": str(stats.daily_pnl),
+                "net_pnl": str(stats.net_pnl) if stats.net_pnl is not None else None,
+                "gross_pnl": str(stats.gross_pnl),
+                "fees": str(stats.fees),
+                "funding_pnl": str(stats.funding_pnl),
+                "net_status": stats.net_status,
+                "funding_status": stats.funding_status,
+                "unknown_funding_count": stats.unknown_funding_count,
                 "trade_count": stats.trade_count,
-                "win_rate": str(stats.win_rate),
-                "profit_factor": str(stats.profit_factor),
+                "win_count": stats.win_count,
+                "loss_count": stats.loss_count,
+                "breakeven_count": stats.breakeven_count,
+                "win_rate": (
+                    str(stats.win_rate) if stats.win_rate is not None else None
+                ),
+                "win_rate_status": stats.win_rate_status,
+                "profit_factor": (
+                    str(stats.profit_factor)
+                    if stats.profit_factor is not None
+                    else None
+                ),
+                "profit_factor_status": stats.profit_factor_status,
+                "expectancy": (
+                    str(stats.expectancy) if stats.expectancy is not None else None
+                ),
+                "long_pnl": str(stats.long_pnl),
+                "short_pnl": str(stats.short_pnl),
+                "long_net_pnl": (
+                    str(stats.long_net_pnl)
+                    if stats.long_net_pnl is not None
+                    else None
+                ),
+                "short_net_pnl": (
+                    str(stats.short_net_pnl)
+                    if stats.short_net_pnl is not None
+                    else None
+                ),
+                "long_gross_pnl": str(stats.long_gross_pnl),
+                "short_gross_pnl": str(stats.short_gross_pnl),
                 "episode_count": len(episodes),
                 "reviewed_this_attempt": len(pending),
+                "card_learning": card_learning,
             }
         except Exception as exc:
             await self.persistence.fail_daily_review(
@@ -124,6 +181,42 @@ class DailyReviewScheduler:
             )
             raise
 
+
+    async def _learn_cards(self, date: str, claim_token: str) -> dict:
+        if self.card_learner is None:
+            return {"status": "NOT_CONFIGURED", "mutations": 0}
+
+        async def fence() -> bool:
+            return await self.persistence.heartbeat_daily_review(
+                date,
+                claim_token,
+                owner=self.owner,
+                lease_seconds=self.claim_lease_seconds,
+            )
+
+        try:
+            report = await self.card_learner.learn_day(
+                account_id=self.account_id,
+                mode=self.mode,
+                review_date=date,
+                profile_version=self.profile_version,
+                fence=fence,
+                origin="DAILY_REVIEW",
+            )
+        except ClaimLostError:
+            return {"status": "CLAIM_LOST", "mutations": 0}
+        except Exception as exc:
+            # Card learning is one stage of the daily review.  It never writes
+            # without a live fence and its failure is reported explicitly
+            # instead of silently passing.
+            return {"status": "FAILED", "mutations": 0, "error": type(exc).__name__}
+        return {
+            "status": "CLAIM_LOST" if report.claim_lost else "SUCCEEDED",
+            "mutations": len(report.mutations),
+            "idempotent_mutations": sum(
+                1 for mutation in report.mutations if mutation.idempotent
+            ),
+        }
 
     async def run_missed_days(self, since_date: str, end_date: str | None = None) -> list[dict]:
         """Run one review per UTC day from since_date through yesterday."""
@@ -158,8 +251,20 @@ class DailyReviewScheduler:
                 continue
 
 
+def _storage_stats(stats: DailyReviewStats) -> DailyReviewStats:
+    """Legacy non-null storage copy; statuses travel in output_ref."""
+    return stats.for_storage()
+
+
+def _review_output_ref(date: str, stats: DailyReviewStats) -> str:
+    """Legacy output_ref carries the completeness status in a bounded suffix."""
+    ref = f"daily_review:{date};net_status={stats.net_status}"
+    ref += f";pf_status={stats.profit_factor_status}"
+    return ref[:128]
+
+
 def _episode_record(episode) -> TradeMemoryRecord:
-    return TradeMemoryRecord(
+    record = TradeMemoryRecord(
         decision_id=episode.episode_id,
         symbol=episode.symbol,
         side=episode.direction,
@@ -180,3 +285,7 @@ def _episode_record(episode) -> TradeMemoryRecord:
         r_multiple=Decimal("0"),
         ts=episode.closed_at,
     )
+    # Factual episodes are only materialized after funding coverage is
+    # proven upstream (TradeEpisodeStore fails closed otherwise).
+    record.funding_provenance = "PROVEN"
+    return record
