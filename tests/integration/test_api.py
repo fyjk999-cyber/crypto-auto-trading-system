@@ -194,6 +194,7 @@ async def test_api_read_only_trade_plan_episode_and_decision_detail_endpoints(da
 
 
 async def test_api_opportunity_stats_exposes_market_layer_sets(database):
+    """Market-set counters must be explicit and never conflated (§4/§6.8)."""
     state = make_state(database)
     board = OpportunityBoard()
     board.universe_size = 100
@@ -205,12 +206,21 @@ async def test_api_opportunity_stats_exposes_market_layer_sets(database):
     client = TestClient(create_app(state))
     response = client.get("/opportunity/stats")
     assert response.status_code == 200
-    assert response.json()["market_sets"] == {
-        "all_market_count": 100,
-        "observable_count": 80,
-        "analysis_count": 12,
-        "executable_count": 40,
-    }
+    market_sets = response.json()["market_sets"]
+    assert market_sets["discovered_count"] == 100
+    assert market_sets["observable_count"] == 80
+    assert market_sets["analysis_attempted_count"] == 12
+    assert market_sets["execution_supported_count"] == 40
+    # attempted analysis is NOT successful coverage
+    assert "analysis_success_count" in market_sets
+    assert "analysis_ready_count" in market_sets
+    assert market_sets["research_pool_count"] == 0
+    assert market_sets["risk_approved_count"] == 0
+    assert market_sets["executed_count"] == 0
+    # legacy aliases remain for pre-V1 clients
+    assert market_sets["all_market_count"] == 100
+    assert market_sets["analysis_count"] == 12
+    assert market_sets["executable_count"] == 40
     assert response.json()["executable_scope"] == "USDT_LINEAR_SWAP_ONLY"
     assert response.json()["unsupported_products"]["SPOT"] == "NOT_EXECUTABLE"
 
