@@ -153,6 +153,8 @@ class OpportunityScannerService:
         market_sets: MarketSetCounts | None = None,
         oi_series: OiTimeSeries | None = None,
         cache=None,
+        state_store=None,
+        state_save_every_cycles: int = 1,
     ) -> None:
         base = config or ScannerConfig()
         overrides = {
@@ -183,6 +185,10 @@ class OpportunityScannerService:
         # Canonical shared cache: identical market history is never downloaded
         # twice within the (short) freshness window, and failures never poison it.
         self.cache = cache if cache is not None else get_shared_market_data_cache()
+        # Restart durability for fairness clocks / rotation / OI samples.
+        self.state_store = state_store
+        self.state_save_every_cycles = max(1, int(state_save_every_cycles))
+        self.state_restored: dict | None = None
         self.max_cycles = max_cycles
         self._sleep = sleep or asyncio.sleep
         self._clock = clock or time.monotonic
@@ -201,7 +207,13 @@ class OpportunityScannerService:
         return self.config.scan_interval_seconds
 
     async def run_forever(self) -> None:
-        """Target-cadence loop: no overlapping cycles, SCAN_OVERRUN on overrun."""
+        """Target-cadence loop: no overlapping cycles, SCAN_OVERRUN on overrun.
+
+        Fairness clocks, rotation cursor and OI samples are restored from the
+        non-secret settings store so a restart cannot silently re-favour the
+        same symbols.
+        """
+        await self.restore_state()
         cycles = 0
         while self.max_cycles is None or cycles < self.max_cycles:
             if self._next_start_mono is None:
@@ -545,6 +557,7 @@ class OpportunityScannerService:
         )
         self.board.publish_snapshot(snapshot)
         self._last_observed_symbols = observed_symbols
+        await self._maybe_persist_state()
         return {
             "scan_id": scan_id,
             "status": status,
@@ -569,6 +582,45 @@ class OpportunityScannerService:
             "candle_coverage": candle_stats,
             "market_data_cache": self.cache.snapshot()["stats"],
         }
+
+    # -------------------------------------------------------- restart durability
+    def export_state(self) -> dict:
+        """Operational scheduling state (never market facts, never authority)."""
+        return {
+            "version": 1,
+            "rotation": self._rotation.export_state(),
+            "coverage": self.coverage.export_state(),
+            "oi_series": self.oi_series.export_state(),
+            "cycles_completed": self.cycles_completed,
+            "scan_overrun_count": self.scan_overrun_count,
+        }
+
+    async def restore_state(self) -> int:
+        """Restore fairness clocks / rotation cursor / OI samples after restart."""
+        if self.state_store is None:
+            return 0
+        payload = await self.state_store.load()
+        if not payload:
+            return 0
+        restored = 0
+        if self._rotation.import_state(payload.get("rotation")):
+            restored += 1
+        restored += self.coverage.import_state(payload.get("coverage"))
+        restored += self.oi_series.import_state(payload.get("oi_series"))
+        self.cycles_completed = int(payload.get("cycles_completed") or 0)
+        self.scan_overrun_count = int(payload.get("scan_overrun_count") or 0)
+        self.state_restored = payload
+        return restored
+
+    async def _maybe_persist_state(self) -> None:
+        if self.state_store is None:
+            return
+        if self.cycles_completed and self.cycles_completed % self.state_save_every_cycles != 0:
+            return
+        try:
+            await self.state_store.save(self.export_state())
+        except Exception:  # persistence is best-effort, never fatal
+            self.last_error = "SCANNER_STATE_PERSIST_FAILED"
 
     # -------------------------------------------------------------- internals
     async def _batch(self, method, inst_type: str, deadline: float) -> tuple[list[dict], str]:

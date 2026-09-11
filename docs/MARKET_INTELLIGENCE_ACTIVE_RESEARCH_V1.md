@@ -107,6 +107,15 @@ Empty pools are reported as errors (`EMPTY_RESEARCH_POOL`), never silently as
 `NO_RESEARCH`. Statuses: `SUCCESS`, `NO_RESEARCH`, `LLM_UNAVAILABLE`, `INVALID_OUTPUT`,
 `STALE_SCAN`, `SKIPPED_BUDGET`, `TIMEOUT`, `FAILED`, `DEFERRED`.
 
+## 5b. Restart durability of scheduling state
+
+Fairness clocks (`last_observed_at`, `last_analysis_at`, `last_llm_research_at`),
+the rotation cursor/order, timestamped OI samples and the cycle/overrun counters are
+exported to the non-secret `runtime_settings` key `market_intelligence.scanner_state`
+(`ScannerStateStore`) and restored at scanner startup. A missing or corrupt value is
+ignored (fresh start) and never fails the runtime. No market fact and no authority is
+stored there.
+
 ## 6. Lineage
 
 ```

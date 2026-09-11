@@ -28,6 +28,7 @@ from crypto_trader.llm_chief.budget import BudgetConfig, GlobalLLMBudget
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.model_control import LLMModelControl
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
@@ -44,6 +45,7 @@ from crypto_trader.market_data.opportunity.service import (
     OpportunityScannerService,
     ScannerConfig,
 )
+from crypto_trader.market_data.opportunity.state_store import ScannerStateStore
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -152,6 +154,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     opportunity_service = None
     if feed_client is not None and settings.opportunity_scan_enabled:
         opportunity_service = OpportunityScannerService(
+            state_store=ScannerStateStore(database.session_factory),
             universe=OkxUniverseManager(feed_client),
             okx_client=feed_client,
             board=opportunity_board,
@@ -205,6 +208,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief_context = ChiefContextLoader(database.session_factory)
     llm_provider = DeepSeekProvider()
+    # Operator model selection (frontend-switchable, persisted, audited).
+    # A stored override wins over LLM_MODEL so the UI choice survives restarts.
+    model_control = LLMModelControl(
+        database.session_factory, provider=llm_provider, audit=audit
+    )
+    await model_control.apply_persisted()
     chief = ChiefTraderEngine(provider=llm_provider)
     tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)
@@ -332,6 +341,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
         opportunity_board=opportunity_board,
+        model_control=model_control,
         market_selection_service=market_selection_service,
         llm_budget=llm_budget,
         market_directory=market_directory,
