@@ -41,7 +41,9 @@ independent_review_status = ROUND1_CHANGES_REQUIRED_ADDRESSED / ROUND2_DELIVERY_
 A docs/growth-system/ACCEPTANCE_MATRIX.md
 A docs/growth-system/CONCURRENCY_AND_INTEGRATION.md
 A docs/growth-system/CONTRACTS.md
+A docs/growth-system/MERGE_CONFLICTS.md
 A docs/growth-system/MIGRATION_AND_ROLLBACK.md
+A docs/growth-system/PRODUCTION_BACKFILL_DRY_RUN_PLAN.md
 A docs/growth-system/REVIEW_RECEIPT.md
 A docs/growth-system/ROOT_CAUSE.md
 A docs/growth-system/SOURCE_MANIFEST.json
