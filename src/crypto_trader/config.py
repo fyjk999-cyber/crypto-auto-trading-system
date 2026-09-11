@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from crypto_trader.domain.enums import TradingMode
@@ -36,9 +36,7 @@ class Settings(BaseSettings):
     # Local paper runtime
     auto_start_runtime: bool = True
     scanner_enabled: bool = True
-    paper_mode: str = (
-        "PAPER_REAL_MARKET"  # PAPER_REAL_MARKET default; PAPER_SYNTHETIC explicit dev/test only
-    )
+    paper_mode: Literal["PAPER_REAL_MARKET", "PAPER_SYNTHETIC"] = "PAPER_REAL_MARKET"
     # Display-only public candle feed.  This is deliberately independent from
     # the Binance strategy market-data provider and from OKX credentials.
     kline_provider: str = "OKX"
@@ -79,6 +77,13 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.upper() == "TESTNET":
             return TradingMode.PAPER
         return value
+
+    @model_validator(mode="after")
+    def validate_paper_runtime_mode(self):
+        """Synthetic PAPER is explicit and never valid for production."""
+        if self.app_env == "production" and self.paper_mode == "PAPER_SYNTHETIC":
+            raise ValueError("PAPER_SYNTHETIC is not allowed in production")
+        return self
 
     @property
     def live_enabled(self) -> bool:
