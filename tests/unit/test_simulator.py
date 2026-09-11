@@ -356,3 +356,70 @@ async def test_sim_exchange_order_id_unique_across_adapter_restart():
 
 async def _noop():
     pass
+
+
+
+async def test_paper_real_submit_refreshes_provider_mapped_full_depth_before_fill():
+    class FakeClient:
+        def __init__(self):
+            self.requested = []
+
+        async def get_orderbook(self, symbol):
+            self.requested.append(symbol)
+            return {
+                "data": [
+                    {
+                        "ts": "1760000000000",
+                        "bids": [["99.9", "5"], ["99.8", "7"]],
+                        "asks": [["100.2", "0.4"], ["100.3", "2"]],
+                    }
+                ]
+            }
+
+    class FakeFeed:
+        def __init__(self):
+            self.client = FakeClient()
+
+        def provider_symbol(self, symbol):
+            assert symbol == "BTCUSDT"
+            return "BTC-USDT-SWAP"
+
+        async def close(self):
+            return None
+
+    feed = FakeFeed()
+    adapter = PaperRealMarketAdapter(feed=feed)  # type: ignore[arg-type]
+    await adapter.connect()
+    # Poison the local cache deliberately: submit must replace it with factual depth.
+    adapter.seed_book("BTCUSDT", mid="999", spread="1")
+    result = await adapter.submit_order(make_order(qty="0.5", price="101"))
+
+    assert feed.client.requested == ["BTC-USDT-SWAP"]
+    assert result.status == OrderStatus.FILLED
+    assert result.avg_fill_price == Decimal("100.22")
+    book = adapter.books["BTCUSDT"]
+    assert book.best_ask().price == Decimal("100.3")
+    await adapter.disconnect()
+
+
+async def test_paper_real_submit_fails_closed_when_factual_depth_unavailable():
+    class BrokenClient:
+        async def get_orderbook(self, symbol):
+            raise RuntimeError("provider down")
+
+    class FakeFeed:
+        client = BrokenClient()
+
+        def provider_symbol(self, symbol):
+            return "BTC-USDT-SWAP"
+
+        async def close(self):
+            return None
+
+    adapter = PaperRealMarketAdapter(feed=FakeFeed())  # type: ignore[arg-type]
+    await adapter.connect()
+    adapter.seed_book("BTCUSDT", mid="999", spread="1")
+    with pytest.raises(OrderRejected, match="real market data unavailable"):
+        await adapter.submit_order(make_order(qty="0.1", price="2000"))
+    assert adapter.orders == {}
+    await adapter.disconnect()
