@@ -219,7 +219,50 @@ class LegacyImporter:
         self.target_path = target_path
         self.test_only = test_only
         if target_path is not None:
+            # Path-shape guard only; the real connection identity is verified
+            # at authorization/mutation time so nothing is written before then.
             self._assert_test_target(target_path)
+
+    def _actual_sqlite_path(self) -> str:
+        """Resolve the database actually bound to this session factory."""
+        engine = None
+        kw = getattr(self.session_factory, "kw", None) or {}
+        engine = kw.get("bind") or getattr(self.session_factory, "bind", None)
+        if engine is None:
+            raise ImportSafetyError("cannot determine actual session-factory bind")
+        url = getattr(engine, "url", None)
+        if url is None or url.get_backend_name() != "sqlite":
+            raise ImportSafetyError("legacy importer only supports a real SQLite file target")
+        database = url.database
+        if not database or database in {":memory:", ""}:
+            raise ImportSafetyError("legacy importer target must be a real SQLite file")
+        absolute = os.path.realpath(os.path.abspath(database))
+        if not os.path.exists(absolute):
+            raise ImportSafetyError(f"bound SQLite target does not exist: {absolute}")
+        return absolute
+
+    def _assert_actual_target(self) -> None:
+        """Fail closed unless the real connection matches the approved target."""
+        if self.target_path is None:
+            raise ImportSafetyError("legacy importer requires an explicit target path")
+        actual = self._actual_sqlite_path()
+        expected = os.path.realpath(os.path.abspath(self.target_path))
+        if actual != expected:
+            raise ImportSafetyError(
+                "legacy importer target_path does not match the actual DB connection"
+            )
+        self._assert_test_target(actual)
+        # Strong identity where the filesystem exposes it.
+        try:
+            actual_stat = os.stat(actual)
+            expected_stat = os.stat(expected)
+        except OSError as exc:
+            raise ImportSafetyError(f"cannot stat import target: {exc}") from exc
+        if (actual_stat.st_dev, actual_stat.st_ino) != (
+            expected_stat.st_dev,
+            expected_stat.st_ino,
+        ):
+            raise ImportSafetyError("legacy importer target inode/device mismatch")
 
     @staticmethod
     def _assert_test_target(path: str) -> None:
@@ -246,6 +289,7 @@ class LegacyImporter:
             )
         if self.target_path is None:
             raise ImportSafetyError("import_plan requires an explicit test target path")
+        self._assert_actual_target()
 
     # ------------------------------------------------------------------
     def inventory(self, source_path: str) -> list[dict[str, Any]]:
@@ -555,6 +599,36 @@ class LegacyImporter:
         batch_id = batch_id or f"batch_{plan.plan_hash[:32]}"
         resolved_batch_id = resume_batch_id or batch_id
 
+        async with self.session_factory() as session:
+            bound_batch = await session.get(GrowthImportBatchORM, resolved_batch_id)
+            if resume_batch_id is not None:
+                if bound_batch is None:
+                    raise ImportSafetyError(
+                        f"resume batch not found: {resume_batch_id}"
+                    )
+                if (
+                    bound_batch.source_db_sha256 != plan.source_sha256
+                    or bound_batch.plan_hash != plan.plan_hash
+                ):
+                    raise ImportSafetyError(
+                        "resume batch source/plan identity mismatch; refusing mutation"
+                    )
+                if bound_batch.status not in {BATCH_PLANNED, BATCH_IMPORTING, BATCH_FAILED}:
+                    raise ImportSafetyError(
+                        f"resume batch has non-resumable status {bound_batch.status}"
+                    )
+            elif bound_batch is None:
+                session.add(
+                    GrowthImportBatchORM(
+                        batch_id=resolved_batch_id,
+                        source_db_path=plan.source_path,
+                        source_db_sha256=plan.source_sha256,
+                        plan_hash=plan.plan_hash,
+                        status=BATCH_PLANNED,
+                    )
+                )
+                await session.commit()
+
         if resume_batch_id is None:
             async with self.session_factory() as session:
                 existing = (
@@ -719,23 +793,40 @@ class LegacyImporter:
         async with self.session_factory() as session:
             batch = await session.get(GrowthImportBatchORM, batch_id)
             if batch is None:
-                batch = GrowthImportBatchORM(
-                    batch_id=batch_id,
-                    source_db_path="UNKNOWN",
-                    source_db_sha256="UNKNOWN",
-                    plan_hash="UNKNOWN",
-                    status=status,
+                raise ImportSafetyError(
+                    f"cannot set status for unknown batch identity: {batch_id}"
                 )
-                session.add(batch)
-            else:
-                batch.status = status
-                if status == BATCH_COMPLETED:
-                    batch.completed_at = utcnow()
+            batch.status = status
+            if status == BATCH_COMPLETED:
+                batch.completed_at = utcnow()
             await session.commit()
 
-    async def rollback(self, batch_id: str) -> dict[str, int]:
-        """Delete only the rows created by this batch; source data is untouched."""
+    async def rollback(
+        self,
+        batch_id: str,
+        *,
+        expected_source_sha256: str | None = None,
+        expected_plan_hash: str | None = None,
+    ) -> dict[str, int]:
+        """Delete only this exact batch; authorization/target identity required."""
+        self.require_import_authorization()
         async with self.session_factory() as session:
+            batch = await session.get(GrowthImportBatchORM, batch_id)
+            if batch is None:
+                raise ImportSafetyError(f"rollback batch not found: {batch_id}")
+            if batch.source_db_sha256 in (None, "", "UNKNOWN") or batch.plan_hash in (
+                None,
+                "",
+                "UNKNOWN",
+            ):
+                raise ImportSafetyError("rollback batch has no provable identity")
+            if (
+                expected_source_sha256 is not None
+                and batch.source_db_sha256 != expected_source_sha256
+            ):
+                raise ImportSafetyError("rollback source identity mismatch")
+            if expected_plan_hash is not None and batch.plan_hash != expected_plan_hash:
+                raise ImportSafetyError("rollback plan identity mismatch")
             observations = await session.execute(
                 delete(GrowthLegacyObservationORM).where(
                     GrowthLegacyObservationORM.batch_id == batch_id

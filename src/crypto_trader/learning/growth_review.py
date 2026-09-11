@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.learning.growth_contracts import (
@@ -118,13 +118,32 @@ class ReviewAttemptStore:
                 input_hash=row.input_hash,
             )
 
+    async def bind_job(
+        self, *, attempt_id: str, job_key: str, job_revision: int
+    ) -> bool:
+        """Bind one durable attempt to the exact growth job revision."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                update(GrowthReviewAttemptORM)
+                .where(GrowthReviewAttemptORM.attempt_id == attempt_id)
+                .values(job_key=job_key, job_revision=job_revision)
+            )
+            await session.commit()
+            return result.rowcount == 1
+
     async def load_succeeded_for_date(
         self,
         *,
         review_date: str,
         profile_version: str | None = None,
+        account_id: str | None = None,
+        mode: str | None = None,
+        input_hash: str | None = None,
+        job_key: str | None = None,
+        job_revision: int | None = None,
+        episode_ids: list[str] | None = None,
     ) -> list[ReviewAttempt]:
-        """Reload successful attempts so a publish retry never uses empty input."""
+        """Reload successful attempts for the exact input/job identity only."""
         async with self.session_factory() as session:
             query = select(GrowthReviewAttemptORM).where(
                 GrowthReviewAttemptORM.review_date == review_date,
@@ -133,6 +152,22 @@ class ReviewAttemptStore:
             if profile_version is not None:
                 query = query.where(
                     GrowthReviewAttemptORM.profile_version == profile_version
+                )
+            if account_id is not None:
+                query = query.where(GrowthReviewAttemptORM.account_id == account_id)
+            if mode is not None:
+                query = query.where(GrowthReviewAttemptORM.mode == mode)
+            if input_hash is not None:
+                query = query.where(GrowthReviewAttemptORM.input_hash == input_hash)
+            if job_key is not None:
+                query = query.where(GrowthReviewAttemptORM.job_key == job_key)
+            if job_revision is not None:
+                query = query.where(
+                    GrowthReviewAttemptORM.job_revision == job_revision
+                )
+            if episode_ids:
+                query = query.where(
+                    GrowthReviewAttemptORM.episode_id.in_(tuple(episode_ids))
                 )
             rows = (
                 await session.execute(
@@ -167,16 +202,23 @@ class ReviewAttemptStore:
         episode_id: str,
         profile_version: str,
         input_hash: str,
+        account_id: str | None = None,
+        mode: str | None = None,
     ) -> int:
         async with self.session_factory() as session:
+            conditions = [
+                GrowthReviewAttemptORM.review_date == review_date,
+                GrowthReviewAttemptORM.episode_id == episode_id,
+                GrowthReviewAttemptORM.profile_version == profile_version,
+                GrowthReviewAttemptORM.input_hash == input_hash,
+            ]
+            if account_id is not None:
+                conditions.append(GrowthReviewAttemptORM.account_id == account_id)
+            if mode is not None:
+                conditions.append(GrowthReviewAttemptORM.mode == mode)
             rows = (
                 await session.execute(
-                    select(GrowthReviewAttemptORM.attempt_no).where(
-                        GrowthReviewAttemptORM.review_date == review_date,
-                        GrowthReviewAttemptORM.episode_id == episode_id,
-                        GrowthReviewAttemptORM.profile_version == profile_version,
-                        GrowthReviewAttemptORM.input_hash == input_hash,
-                    )
+                    select(GrowthReviewAttemptORM.attempt_no).where(*conditions)
                 )
             ).scalars().all()
             return (max(rows) if rows else 0) + 1
@@ -338,6 +380,8 @@ class StructuredReviewService:
             episode_id=review_input.episode_id,
             profile_version=self.profile_version,
             input_hash=input_hash,
+            account_id=review_input.account_id,
+            mode=review_input.mode,
         )
         base = {
             "attempt_id": _attempt_id(
@@ -385,15 +429,44 @@ class StructuredReviewService:
                 **_attempt_meta(review_input, review_date, input_hash),
             )
 
-        # Provider call: deliberately outside any DB transaction.
-        response: LLMResponse = await self.provider.complete_json(
-            prompt=prompt,
-            temperature=0.1,
-            timeout_seconds=self.timeout_seconds,
-            retries=self.retries,
-            max_tokens=self.max_tokens,
-            operation="growth_structured_review",
-        )
+        # Provider call: deliberately outside any DB transaction.  A thrown
+        # transport/timeout exception must still leave exactly one factual
+        # durable FAILED attempt with UNKNOWN usage; never persist exception
+        # text or provider payloads.
+        try:
+            response: LLMResponse = await self.provider.complete_json(
+                prompt=prompt,
+                temperature=0.1,
+                timeout_seconds=self.timeout_seconds,
+                retries=self.retries,
+                max_tokens=self.max_tokens,
+                operation="growth_structured_review",
+            )
+        except Exception as exc:
+            error_type = f"PROVIDER_EXCEPTION_{type(exc).__name__}"
+            await self.store.persist(
+                {
+                    **base,
+                    "status": STATUS_FAILED,
+                    "error_type": bounded_text(error_type, 64),
+                    "error_detail_sanitized": (
+                        "provider call raised before a response; no result persisted"
+                    ),
+                    "result_json": None,
+                    "usage_status": "UNKNOWN",
+                    "latency_ms": None,
+                    "completed_at": utcnow(),
+                }
+            )
+            return ReviewAttempt(
+                status=STATUS_FAILED,
+                attempt_id=base["attempt_id"],
+                review=None,
+                error_type=error_type,
+                error_detail="provider call raised; no result persisted",
+                usage_status="UNKNOWN",
+                **_attempt_meta(review_input, review_date, input_hash),
+            )
         usage_status = "KNOWN" if getattr(response, "token_usage", None) else "UNKNOWN"
         latency = getattr(response, "latency_ms", None)
 

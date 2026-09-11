@@ -188,7 +188,7 @@ class GrowthJobStore:
             if row is not None and row.input_hash == input_hash and _job_complete(row):
                 return row, True
 
-            if row is not None and row.input_hash != input_hash and _job_complete(row):
+            if row is not None and row.input_hash != input_hash:
                 next_revision = row.revision + 1
                 row.superseded_by_revision = next_revision
                 new_row = GrowthLearningJobORM(
@@ -240,9 +240,11 @@ class GrowthJobStore:
                 await session.commit()
                 return row, False
 
-            # Resume/retry of an incomplete revision.  SUCCEEDED stages stay
-            # SUCCEEDED; FAILED/PENDING stages become PENDING again.
-            row.input_hash = input_hash
+            # Resume/retry of the SAME input identity only.  A changed
+            # input_hash never reaches this branch: it opens revision + 1 so
+            # SUCCEEDED stages from the old identity can never leak forward.
+            if row.input_hash != input_hash:
+                raise RuntimeError("GROWTH_JOB_INPUT_IDENTITY_MISMATCH")
             row.claim_token = claim_token
             row.claim_owner = owner
             row.claim_fence = (row.claim_fence or 0) + 1
@@ -445,6 +447,10 @@ class GrowthLearningPipeline:
                 lease_seconds=self.lease_seconds,
             )
 
+        # Publishing performs the final claim CAS in the same transaction as
+        # staged knowledge activation; the publisher reads this exact identity.
+        fence.claim_context = (review_date, token, self.owner)  # type: ignore[attr-defined]
+
         async def stage_update(stage: str, status: str, detail: str | None = None) -> bool:
             if status not in {STAGE_CLAIM_LOST} and not await fence():
                 return False
@@ -497,6 +503,16 @@ class GrowthLearningPipeline:
                 except Exception as exc:
                     attempt = None
                     review_error = f"REVIEW_RUNNER_EXCEPTION:{type(exc).__name__}"
+                if getattr(attempt, "attempt_id", None):
+                    # Best-effort binding for durable service attempts.  Test
+                    # doubles / injected runners may not have a persisted row;
+                    # exact recovery still filters by account/mode/date and
+                    # treats unbound legacy rows conservatively.
+                    await self.review_store.bind_job(
+                        attempt_id=attempt.attempt_id,
+                        job_key=job_key,
+                        job_revision=job.revision,
+                    )
                 status = getattr(attempt, "status", None)
                 if status == STAGE_SUCCEEDED:
                     reviewed_count += 1
@@ -550,6 +566,10 @@ class GrowthLearningPipeline:
             reloaded = await self.review_store.load_succeeded_for_date(
                 review_date=review_date,
                 profile_version=profile_version,
+                account_id=account_id,
+                mode=mode,
+                job_key=job_key,
+                job_revision=job.revision,
             )
             publish_inputs = list(reloaded)
             reviewed_count = len(reloaded)
@@ -558,22 +578,23 @@ class GrowthLearningPipeline:
         net_status = str(stats.payload.get("net_status", "UNKNOWN"))
         published_count = 0
         if not publish_inputs and net_status == "COMPLETE":
-            # Defensive: publication with no review input is never a success.
-            if not await stage_update(
-                "publish", STAGE_SKIPPED_INCOMPLETE, "NO_PUBLISH_INPUT"
-            ):
-                await self._record_claim_lost(job.id, token, job)
-                await self._fail_day(review_date, "CLAIM_LOST", "publish no-input", token)
-                return _result_from_row(
-                    job, idempotent=False, stats=stats, error_type="CLAIM_LOST"
-                )
-            await self._save_day(review_date, stats, job, token)
-            final_job = await self.jobs.latest(job_key)
+            # COMPLETE factual input but zero valid review input is a blocked
+            # failure.  It must never satisfy _job_complete/succeeded and must
+            # remain retryable.
+            blocked = "BLOCKED_NO_PUBLISH_INPUT"
+            await stage_update("publish", STAGE_FAILED, blocked)
+            await self._fail_day(
+                review_date,
+                blocked,
+                "COMPLETE input produced zero publish inputs",
+                token,
+            )
             return _result_from_row(
-                final_job or job,
+                job,
                 idempotent=False,
                 stats=stats,
                 reviewed=reviewed_count,
+                error_type=blocked,
             )
         if net_status != "COMPLETE":
             publish_status = STAGE_SKIPPED_INCOMPLETE

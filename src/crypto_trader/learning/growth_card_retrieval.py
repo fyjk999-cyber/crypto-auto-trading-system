@@ -9,6 +9,7 @@ cards.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -581,6 +582,8 @@ class CardDecisionTraceStore:
     ) -> GrowthCardDecisionTraceORM:
         trace_payload = {
             "decision_id": decision_id,
+            "account_id": account_id,
+            "mode": mode,
             "as_of": result.as_of.isoformat(),
             "symbol": result.context.symbol,
             "selected": [item.rule_id for item in result.selected],
@@ -721,44 +724,86 @@ def register_experience_card_tool(
                 data_quality="TRACE_UNAVAILABLE",
                 source_refs=[],
             )
+        cards = [
+            {
+                "rule_id": item.rule_id,
+                "version": item.version,
+                "status": item.status,
+                "score": item.score,
+                "why": item.why,
+                "guidance": item.card.guidance if item.card else {},
+                "evidence_refs": item.evidence_refs,
+                **(
+                    item.card.semantics()
+                    if item.card is not None
+                    else {"evidence_only": True, "can_emit_direction": False}
+                ),
+            }
+            for item in result.selected
+        ]
+        refs = [f"card:{item.rule_id}:v{item.version}" for item in result.selected]
         features = {
-            "cards": [
-                {
-                    "rule_id": item.rule_id,
-                    "version": item.version,
-                    "status": item.status,
-                    "score": item.score,
-                    "why": item.why,
-                    "guidance": item.card.guidance if item.card else {},
-                    "evidence_refs": item.evidence_refs,
-                    **(
-                        item.card.semantics()
-                        if item.card is not None
-                        else {"evidence_only": True, "can_emit_direction": False}
-                    ),
-                }
-                for item in result.selected
-            ],
-            "card_evidence_available": bool(result.selected),
+            "cards": cards,
+            "card_evidence_available": bool(cards),
             "card_trace_id": trace.trace_id,
             "retrieval": result.metrics,
             "trigger_signature": result.trigger.to_json(),
             "context_signature": result.context.to_json(),
             "prompt_semantics": prompt_semantics,
         }
-        return ToolEvidence(
-            tool_name="experience_cards",
-            symbol=symbol,
-            timestamp=as_of,
-            features=features,
-            supporting_evidence=[],
-            contrary_evidence=[],
-            confidence_of_measurement=1.0 if result.selected else 0.0,
-            data_quality="FACTUAL_PUBLISHED" if result.selected else "NO_MATCHES",
-            source_refs=[
-                f"card:{item.rule_id}:v{item.version}" for item in result.selected
-            ],
-        )
+
+        def _make_evidence() -> ToolEvidence:
+            features["card_evidence_available"] = bool(cards)
+            return ToolEvidence(
+                tool_name="experience_cards",
+                symbol=symbol,
+                timestamp=as_of,
+                features=features,
+                supporting_evidence=[],
+                contrary_evidence=[],
+                confidence_of_measurement=1.0 if cards else 0.0,
+                data_quality="FACTUAL_PUBLISHED" if cards else "NO_MATCHES",
+                source_refs=list(refs),
+            )
+
+        def _cost(evidence: ToolEvidence) -> int:
+            payload = {
+                "tool_name": evidence.tool_name,
+                "symbol": evidence.symbol,
+                "timestamp": evidence.timestamp,
+                "features": evidence.features,
+                "supporting_evidence": evidence.supporting_evidence,
+                "contrary_evidence": evidence.contrary_evidence,
+                "confidence_of_measurement": evidence.confidence_of_measurement,
+                "data_quality": evidence.data_quality,
+                "source_refs": evidence.source_refs,
+            }
+            return max(1, len(json.dumps(payload, sort_keys=True, default=str)) // 4)
+
+        # R13 hard budget on the final serialized evidence object.  Whole cards
+        # are dropped first (with their refs), then non-card observability
+        # fields; ids/versions are never partially truncated.
+        budget = int(getattr(retriever.policy, "token_budget", 1200))
+        evidence = _make_evidence()
+        while _cost(evidence) > budget:
+            if cards:
+                cards.pop()
+                if refs:
+                    refs.pop()
+            elif features.get("retrieval") is not None:
+                features.pop("retrieval", None)
+            elif features.get("trigger_signature") is not None:
+                features.pop("trigger_signature", None)
+            elif features.get("context_signature") is not None:
+                features.pop("context_signature", None)
+            elif features.get("prompt_semantics"):
+                features["prompt_semantics"] = "HISTORICAL_EXPERIENCE_EVIDENCE_NOT_COMMANDS"
+            elif "card_trace_id" in features:
+                features.pop("card_trace_id", None)
+            else:
+                break
+            evidence = _make_evidence()
+        return evidence
 
     registry.register(
         "experience_cards",

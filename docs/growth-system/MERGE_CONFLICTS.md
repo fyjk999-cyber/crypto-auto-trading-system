@@ -55,7 +55,7 @@ Nothing from that set was copied, staged, committed, reverted or rebased.
 | Legacy review rows | result descriptors marked `DESCRIPTIVE_*`, `confidence=0` | `factual_learning` may still be used by dev API | keep compatibility wrapper until the pipeline is enabled |
 | Daily-review metrics | net fields + nullable ratios + status suffix | `DailyReviewRunORM` legacy non-null scalar columns | keep the `for_storage()` compatibility mapping until a shared migration adds status columns |
 | Growth schema | independent `GrowthBase` draft | untracked `0040` migration | integrate only after numbering/`down_revision` is assigned by the integration owner |
-| Memory retrieval | `GrowthContextLoader` injected through the official registry | `llm_chief/context_loader.py` is public | production change must be a reviewed patch that selects one loader or a composite, never two divergent memory stores |
+| Memory retrieval | Canonical runtime = Growth V2 `experience_cards` → `ExperienceCardRetriever` → `CardDecisionTraceStore` (trace before use). v1 `GrowthContextLoader` remains support/legacy/research only. | `llm_chief/context_loader.py` is public | never treat the v1 `record_selection` helper as canonical decision-trace persistence; do not run two divergent memory stores as authority |
 | Frontend | untouched | other task owns `frontend/src/App*` | no frontend changes in this package |
 
 ## 5. Rebase/candidate protocol

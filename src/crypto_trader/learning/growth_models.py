@@ -115,9 +115,13 @@ class GrowthReviewAttemptORM(GrowthBase):
             "review_date",
             "episode_id",
             "profile_version",
+            "account_id",
+            "mode",
             "input_hash",
+            "job_key",
+            "job_revision",
             "attempt_no",
-            name="uq_growth_review_attempt",
+            name="uq_growth_review_attempt_scope",
         ),
     )
 
@@ -147,6 +151,10 @@ class GrowthReviewAttemptORM(GrowthBase):
     retries: Mapped[int | None] = mapped_column(Integer)
     claim_token: Mapped[str | None] = mapped_column(String(64))
     owner: Mapped[str | None] = mapped_column(String(64))
+    # Exact growth-job identity binding: a publish retry may only reload
+    # attempts that belong to this job key/revision.
+    job_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    job_revision: Mapped[int | None] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

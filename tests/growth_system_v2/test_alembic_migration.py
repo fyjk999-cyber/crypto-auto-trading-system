@@ -15,6 +15,7 @@ from crypto_trader.persistence.database import create_sync_engine
 
 PREVIOUS_HEAD = "0041_market_selection"
 NEW_HEAD = "0042_growth_v2_cards"
+JOB_HEAD = "0043_growth_review_job_binding"
 
 
 def _config(url: str) -> Config:
@@ -148,3 +149,94 @@ def test_postgresql_real_database_if_available():
         assert "share_scope" in columns
     command.downgrade(config, PREVIOUS_HEAD)
     engine.dispose()
+
+
+_OLD_ATTEMPTS_TABLE = """
+create table growth_review_attempts (
+    attempt_id varchar(64) primary key,
+    review_date varchar(16) not null,
+    episode_id varchar(64) not null,
+    account_id varchar(64) not null,
+    mode varchar(16) not null,
+    symbol varchar(32) not null,
+    direction varchar(8) not null,
+    profile_version varchar(64) not null,
+    prompt_version varchar(64) not null,
+    schema_version varchar(64) not null,
+    provider varchar(32),
+    model varchar(64),
+    prompt_hash varchar(64) not null,
+    schema_hash varchar(64) not null,
+    input_hash varchar(64) not null,
+    status varchar(16) not null,
+    attempt_no integer not null,
+    result_json json,
+    error_type varchar(64),
+    error_detail_sanitized varchar(255),
+    usage_json json,
+    usage_status varchar(16) default 'UNKNOWN',
+    latency_ms float,
+    retries integer,
+    claim_token varchar(64),
+    owner varchar(64),
+    created_at datetime,
+    completed_at datetime,
+    constraint uq_growth_review_attempt unique (
+        review_date, episode_id, profile_version, input_hash, attempt_no
+    )
+)
+"""
+
+
+def test_job_binding_revision_adds_columns_and_scope_constraint(tmp_path):
+    database_path = tmp_path / "job_binding.db"
+    url = f"sqlite:///{database_path}"
+    config = _config(url)
+    command.upgrade(config, NEW_HEAD)
+    engine = create_sync_engine(url)
+    with engine.begin() as connection:
+        connection.execute(sa.text(_OLD_ATTEMPTS_TABLE))
+    engine.dispose()
+
+    command.upgrade(config, JOB_HEAD)
+    engine = create_sync_engine(url)
+    with engine.connect() as connection:
+        inspector = sa.inspect(connection)
+        columns = {
+            column["name"]
+            for column in inspector.get_columns("growth_review_attempts")
+        }
+        constraints = {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(
+                "growth_review_attempts"
+            )
+        }
+    assert {"job_key", "job_revision"} <= columns
+    assert "uq_growth_review_attempt_scope" in constraints
+    engine.dispose()
+
+    command.downgrade(config, NEW_HEAD)
+    engine = create_sync_engine(url)
+    with engine.connect() as connection:
+        columns = {
+            column["name"]
+            for column in sa.inspect(connection).get_columns(
+                "growth_review_attempts"
+            )
+        }
+    assert "job_key" not in columns
+    engine.dispose()
+
+    command.upgrade(config, JOB_HEAD)
+
+
+def test_postgresql_sql_compilation_for_job_binding_revision():
+    config = _config("postgresql://growth:growth@localhost:5432/growth")
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        command.upgrade(config, f"{NEW_HEAD}:{JOB_HEAD}", sql=True)
+    sql = buffer.getvalue().upper()
+    assert "ALTER TABLE GROWTH_REVIEW_ATTEMPTS ADD COLUMN JOB_KEY" in sql
+    assert "ALTER TABLE GROWTH_REVIEW_ATTEMPTS ADD COLUMN JOB_REVISION" in sql
+    assert "UQ_GROWTH_REVIEW_ATTEMPT_SCOPE" in sql

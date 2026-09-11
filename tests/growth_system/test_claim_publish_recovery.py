@@ -236,12 +236,13 @@ async def test_publish_failure_isolated_and_retry_is_idempotent(growth_db):
     await _expire_claim(growth_db)
     second = await _runner(recorder, pipeline)
     # The stub review runner does not persist durable attempts, so the safe
-    # retry path refuses to publish from empty input (SKIPPED_INCOMPLETE)
-    # instead of marking publish SUCCEEDED with nothing.
+    # retry path refuses to publish and reports BLOCKED_NO_PUBLISH_INPUT.
+    # COMPLETE + zero publish input is never a success (R04).
     assert second.stats_status == STAGE_SUCCEEDED
     assert second.review_status == STAGE_SUCCEEDED
-    assert second.publish_status == STAGE_SKIPPED_INCOMPLETE
-    assert second.succeeded
+    assert second.publish_status == STAGE_FAILED
+    assert second.succeeded is False
+    assert second.error_type == "BLOCKED_NO_PUBLISH_INPUT"
     assert second.published_count == 0
     assert recorder.publish_calls == 1
     # The first publish attempt observed a live fence before visible work.
@@ -377,8 +378,16 @@ async def test_publish_retry_reloads_durable_review_attempts(growth_db):
 
     from crypto_trader.learning.growth_contracts import ObservationFact, StructuredReview
     from crypto_trader.learning.growth_models import GrowthReviewAttemptORM
+    from crypto_trader.learning.growth_pipeline import identity_key
     from crypto_trader.learning.growth_review import STATUS_SUCCEEDED as REVIEW_SUCCEEDED
 
+    job_key = identity_key(
+        account_id=ACCOUNT,
+        mode=MODE,
+        review_date=REVIEW_DATE,
+        source_revision=SOURCE_REVISION,
+        profile_version=PROFILE,
+    )
     recorder = Recorder()
     recorder.fail_publish_once = 1
     pipeline = GrowthLearningPipeline(growth_db.session_factory, owner="worker-a")
@@ -417,6 +426,8 @@ async def test_publish_retry_reloads_durable_review_attempts(growth_db):
                         attempt_no=1,
                         result_json=review.model_dump(mode="json"),
                         usage_status="UNKNOWN",
+                        job_key=job_key,
+                        job_revision=1,
                     )
                 )
                 await session.commit()

@@ -22,6 +22,7 @@ Guarantees:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,6 +39,7 @@ from crypto_trader.learning.growth_knowledge import (
 )
 from crypto_trader.learning.growth_models import (
     GrowthCompressionORM,
+    GrowthEpisodeBindingORM,
     GrowthLessonORM,
     GrowthPatternORM,
     GrowthToolSelectionORM,
@@ -45,7 +47,7 @@ from crypto_trader.learning.growth_models import (
 )
 from crypto_trader.llm.tools.registry import ToolEvidence
 from crypto_trader.llm_chief.context import ChiefTraderContext
-from crypto_trader.persistence.models import AICoinProfileORM, TradeEpisodeORM
+from crypto_trader.persistence.models import TradeEpisodeORM
 
 MAX_ITEMS_PER_CATEGORY = 5
 DEFAULT_TOKEN_BUDGET = 4000
@@ -83,6 +85,10 @@ def estimate_tokens(text: str) -> int:
 class ToolBudget:
     limit: int = MAX_ITEMS_PER_CATEGORY
     token_budget: int = DEFAULT_TOKEN_BUDGET
+
+    def __post_init__(self) -> None:
+        # Hard cap: no category may request more than five items.
+        object.__setattr__(self, "limit", max(1, min(int(self.limit), MAX_ITEMS_PER_CATEGORY)))
 
 
 class GrowthContextLoader:
@@ -124,7 +130,7 @@ class GrowthContextLoader:
         if loader is None:
             raise ValueError(f"unknown growth-context tool: {name}")
         finding, refs, timestamp = await loader(context, as_of)
-        return ToolEvidence(
+        evidence = ToolEvidence(
             tool_name=name,
             symbol=context.symbol,
             timestamp=timestamp or utcnow(),
@@ -135,6 +141,83 @@ class GrowthContextLoader:
             data_quality="FACTUAL_PUBLISHED" if refs else "NO_MATCHES",
             source_refs=refs,
         )
+        return self._enforce_hard_budget(evidence)
+
+    def _serialized_cost(self, evidence: ToolEvidence) -> int:
+        payload = {
+            "tool_name": evidence.tool_name,
+            "symbol": evidence.symbol,
+            "timestamp": evidence.timestamp,
+            "features": evidence.features,
+            "supporting_evidence": evidence.supporting_evidence,
+            "contrary_evidence": evidence.contrary_evidence,
+            "confidence_of_measurement": evidence.confidence_of_measurement,
+            "data_quality": evidence.data_quality,
+            "source_refs": evidence.source_refs,
+        }
+        return estimate_tokens(json.dumps(payload, sort_keys=True, default=str))
+
+    def _enforce_hard_budget(self, evidence: ToolEvidence) -> ToolEvidence:
+        """Enforce the configured token budget on the serialized evidence.
+
+        Drop lowest-priority whole items (never partial ids/version lineage)
+        until the final serialized payload fits.  Per-category limits are
+        already enforced by the individual loaders.
+        """
+        features = dict(evidence.features or {})
+        refs = list(evidence.source_refs or [])
+        if self._serialized_cost(evidence) <= self.budget.token_budget:
+            return evidence
+        # Lowest priority first; remove whole records only.
+        drop_order = (
+            ("research", "research:"),
+            ("episodes", "episode:"),
+            ("episodes", "episode:"),
+            ("profile", "profile:"),
+            ("compressions", "compression:"),
+            ("patterns", "pattern:"),
+            ("lessons", "lesson:"),
+        )
+        while True:
+            evidence = ToolEvidence(
+                tool_name=evidence.tool_name,
+                symbol=evidence.symbol,
+                timestamp=evidence.timestamp,
+                features=features,
+                supporting_evidence=[],
+                contrary_evidence=[],
+                confidence_of_measurement=evidence.confidence_of_measurement,
+                data_quality=evidence.data_quality,
+                source_refs=refs,
+            )
+            if self._serialized_cost(evidence) <= self.budget.token_budget:
+                return evidence
+            dropped = False
+            for key, prefix in drop_order:
+                bucket = features.get(key)
+                if isinstance(bucket, list) and bucket:
+                    bucket.pop()
+                    if not bucket:
+                        features.pop(key, None)
+                    for index in range(len(refs) - 1, -1, -1):
+                        if refs[index].startswith(prefix):
+                            refs.pop(index)
+                            break
+                    dropped = True
+                    break
+            if not dropped:
+                # Nothing left to drop; return the minimal factual shell.
+                return ToolEvidence(
+                    tool_name=evidence.tool_name,
+                    symbol=evidence.symbol,
+                    timestamp=evidence.timestamp,
+                    features={},
+                    supporting_evidence=[],
+                    contrary_evidence=[],
+                    confidence_of_measurement=0.0,
+                    data_quality="NO_MATCHES",
+                    source_refs=[],
+                )
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
         from dataclasses import replace
@@ -383,34 +466,25 @@ class GrowthContextLoader:
         )
 
     async def _coin_profile_evidence(self, context, as_of):
-        async with self.session_factory() as session:
-            row = (
-                await session.execute(
-                    select(AICoinProfileORM).where(
-                        AICoinProfileORM.symbol == context.symbol,
-                        AICoinProfileORM.updated_at <= as_of,
-                    )
-                )
-            ).scalar_one_or_none()
-        if row is None:
-            return {}, [], None
-        return (
-            {
-                "profile": {
-                    "symbol": row.symbol,
-                    "version": row.version,
-                    "sample_count": row.sample_count,
-                    "summary": wrap_untrusted(row.profile_summary),
-                    "tags": list(row.behavior_tags_json or []),
-                    "supported_setups": list(row.best_setups_json or []),
-                    "contested_setups": list(row.worst_setups_json or []),
-                }
-            },
-            [f"profile:{row.symbol}:v{row.version}"],
-            _aware(row.updated_at),
-        )
+        """Fail closed: AICoinProfile has no account/mode provenance.
+
+        Returning a symbol-only profile would leak knowledge across
+        account/mode boundaries (reviewer R12).  The canonical runtime reads
+        Growth V2 Adaptive Experience Cards instead; this v1 loader is
+        support/legacy only and reports SCOPE_UNAVAILABLE rather than guessing.
+        """
+        return {"scope_unavailable": True, "reason": "NO_ACCOUNT_MODE_PROVENANCE"}, [], None
 
     async def _episode_evidence(self, context, as_of):
+        # R12: an episode is visible only through an explicit account/mode
+        # binding; symbol-only lookup is forbidden.
+        bound_ids = (
+            select(GrowthEpisodeBindingORM.episode_id)
+            .where(
+                GrowthEpisodeBindingORM.account_id == self.account_id,
+                GrowthEpisodeBindingORM.mode == self.mode,
+            )
+        )
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -420,6 +494,7 @@ class GrowthContextLoader:
                         TradeEpisodeORM.review_status == "REVIEWED",
                         TradeEpisodeORM.symbol == context.symbol,
                         TradeEpisodeORM.closed_at <= as_of,
+                        TradeEpisodeORM.episode_id.in_(bound_ids),
                     )
                     .order_by(TradeEpisodeORM.closed_at.desc())
                     .limit(self.budget.limit)

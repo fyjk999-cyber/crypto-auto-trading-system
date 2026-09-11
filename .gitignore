@@ -27,3 +27,6 @@ node_modules/
 
 # Growth System V2 evidence (ignored)
 .ops-growth-v2/
+
+# Round-2 repair evidence
+.ops-growth-r2/

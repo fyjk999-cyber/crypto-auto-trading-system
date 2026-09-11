@@ -170,3 +170,24 @@ and no concurrent resume of an active writer thread was performed.
   was produced; status remains `FACTUAL_LEARNING_AND_RETRIEVAL_EVIDENCE = NOT_PROVEN`.
 * Engineering gate results above are bound to the candidate SHA, not to any
   running process or production database.
+
+
+## 7. Round-2 remediation (after verdict)
+
+```text
+OLD_REVIEW_TARGET = 99c744cbb169ebaf01238d23f26d1ff9a35df2a5
+OLD_REVIEW_VERDICT = CHANGES_REQUIRED
+THREAD = 01a08fcf-d919-7983-b7aa-00d58cab0c30
+INTEGRATION_BASE = b3873d015b40916066dc19243e7d005be5ae3f5b
+REPAIR_BRANCH = codex/core-growth-v2-review2-fixes
+```
+
+All 13 findings have been addressed with code + regression evidence in
+`docs/growth-system/ROUND2_FIX_RECEIPT.md` (R15, including the two
+Standards findings S1/S2 and the P1/P2 findings).  Migration head is now the
+single `0043_growth_review_job_binding`; no production migration/deploy was
+performed.
+
+This section is a remediation record only.  It does not convert the old
+verdict into approval: `INDEPENDENT_REVIEW_NEW_SHA` remains pending until a
+fresh reviewer evaluates the final repair SHA.
