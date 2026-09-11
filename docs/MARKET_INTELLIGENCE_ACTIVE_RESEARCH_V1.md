@@ -111,6 +111,35 @@ analysis_attempted_count / analysis_success_count / analysis_ready_count
 `status = COMPLETE` with `oi_coverage_ratio < 1` is a valid, truthful state;
 `PARTIAL` is never used to describe intentional bounded coverage.
 
+## 4c. Research-attention authority (no programmatic fallback)
+
+```
+RESEARCH_ATTENTION_AUTHORITY = CHIEF_TRADER_MARKET_SELECTION   (when enabled)
+```
+
+When MarketSelection is wired, `LiveLLMDecisionStrategy.desired_symbol()` — the
+production path that decides which symbol receives autonomous NEW research —
+consults ONLY the current valid ChiefTrader selection:
+
+| Selection state | `desired_symbol()` |
+|---|---|
+| `SUCCESS` with selected symbols | the next unconsumed selected symbol |
+| all selected symbols consumed | `None` — never a board candidate |
+| `NO_RESEARCH` | `None` — never a board candidate |
+| `LLM_UNAVAILABLE` / `TIMEOUT` / `FAILED` | `None` |
+| `SKIPPED_BUDGET` / `DEFERRED` | `None` |
+| stale / expired selection, or `scan_id` mismatch | `None` |
+
+Each selected symbol is consumed at most once per selection round
+(`(selection_id, symbol)` bookkeeping), so the retry cooldown cannot resurrect it
+inside the same round.
+
+The OpportunityBoard agenda (factor candidates, then fairness rotation) is used
+**only** when `selection_service is None`, i.e. MarketSelection is explicitly
+disabled (legacy/test wiring). That distinction is explicit and covered by
+`tests/opportunity/test_research_attention_authority.py`, which always publishes a
+board candidate so a hidden fallback would fail.
+
 ## 5. Selection lifecycle
 
 ```
@@ -180,7 +209,8 @@ ever invented when none exists.
 | research tool timeout | evidence `UNAVAILABLE`; no synthetic substitution |
 | scanner partial failure | snapshot `PARTIAL` with factual counts |
 | whole scanner failure | snapshot `FAILED` with an error code |
-| LLM budget exhausted | `SKIPPED_BUDGET` / `DEFERRED`; never an engine failure |
+| LLM budget exhausted | `SKIPPED_BUDGET` / `DEFERRED`; never an engine failure, and never a programmatic substitute selection |
+| ChiefTrader returns `NO_RESEARCH` | no new autonomous symbol research this round; observation and position management continue |
 
 ### Global LLM budget (single authority)
 

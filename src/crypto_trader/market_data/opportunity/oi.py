@@ -52,7 +52,7 @@ class OiSample:
     symbol: str
     open_interest: float
     observed_at: datetime
-    source: str = "OKX /api/v5/public/open-interests"
+    source: str = "OKX /api/v5/public/open-interest"
     quality: str = VALID
 
     def as_dict(self) -> dict:
@@ -222,7 +222,7 @@ class OiTimeSeries:
                         symbol=str(row["symbol"]),
                         open_interest=float(row["open_interest"]),
                         observed_at=datetime.fromisoformat(str(row["observed_at"])),
-                        source=str(row.get("source", "OKX /api/v5/public/open-interests")),
+                        source=str(row.get("source", "OKX /api/v5/public/open-interest")),
                         quality=str(row.get("quality", VALID)),
                     )
                 except (KeyError, TypeError, ValueError):

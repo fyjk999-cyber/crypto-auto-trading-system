@@ -126,7 +126,8 @@ class MarketDirectory:
         """Execute a bounded, structural ChiefTrader directory query.
 
         Hard limits are enforced here, not by the model: at most
-        ``max_pages`` (<=2) pages of at most ``page_size`` (<=25) rows. The
+        ``max_pages`` (<=2) pages of at most ``page_size`` (<=25) rows, starting
+        at the page the ChiefTrader requested and never browsing further. The
         return value includes a symbol -> page map so directory-sourced
         selections can carry exact provenance.
         """
@@ -136,15 +137,38 @@ class MarketDirectory:
             sort = "estimated_turnover"
         allowed_filters = {"min_abs_move_pct", "min_estimated_turnover", "funding_side"}
         filters = {k: v for k, v in query.items() if k in allowed_filters and v is not None}
-        pages, refs = self.bounded_pages(
-            scan_id=scan_id, exclude=exclude, now=now, sort=sort, filters=filters
-        )
+        # The requested page is FACTUAL: the lookup starts at that page and
+        # returns at most ``max_pages`` consecutive pages (hard cap stays 2).
+        try:
+            start_page = max(1, min(int(query.get("page") or 1), MAX_DIRECTORY_PAGES_PER_ROUND))
+        except (TypeError, ValueError):
+            start_page = 1
+        pages: list[dict] = []
+        refs: list[str] = []
         symbol_pages: dict[str, int] = {}
-        for page in pages:
+        for offset in range(self.max_pages):
+            page_number = start_page + offset
+            page = self.page(
+                page=page_number,
+                scan_id=scan_id,
+                exclude=exclude,
+                sort=sort,
+                filters=filters,
+                now=now,
+            )
+            if page_number > int(page.get("page_count") or 0):
+                break
+            if not page.get("rows") and offset > 0:
+                break
+            pages.append(page)
+            refs.append(
+                f"market_directory:scan_id={scan_id};page={page_number};"
+                f"page_size={page['page_size']};rows={len(page['rows'])}"
+            )
             for row in page.get("rows") or ():
                 symbol = row.get("symbol")
                 if symbol and symbol not in symbol_pages:
-                    symbol_pages[symbol] = int(page["page"])
+                    symbol_pages[symbol] = page_number
         return pages, refs, symbol_pages
 
     @staticmethod

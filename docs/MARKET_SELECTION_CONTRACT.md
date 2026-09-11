@@ -179,6 +179,20 @@ Hidden chain-of-thought is never stored. Migration: `0041_market_selection`
 (down_revision `0040_runtime_settings`); it also adds `scan_id` / `selection_id` lineage
 columns to `llm_decisions`.
 
+## 6b. Downstream authority
+
+`LiveLLMDecisionStrategy.desired_symbol()` → `_selected_research_queue()` only.
+When MarketSelection is enabled there is **no** fallback to
+`OpportunityBoard.next_agenda_symbol()`: `NO_RESEARCH`, selection failure
+(`LLM_UNAVAILABLE` / `TIMEOUT` / `FAILED`), budget deferral
+(`SKIPPED_BUDGET` / `DEFERRED`), stale/expired selections, `scan_id` mismatch and
+an exhausted selection queue all yield `None` (no new autonomous research).
+The board agenda is legacy mode only (`selection_service is None`).
+
+Directory page semantics: `DirectoryQuery.page` is factual — a lookup starts at
+the requested page and returns at most the hard cap of 2 consecutive pages
+(page size <= 25), never silently re-serving page 1.
+
 ## 7. Downstream consumption
 
 `LiveLLMDecisionStrategy`:

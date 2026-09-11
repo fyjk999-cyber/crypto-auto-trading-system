@@ -32,6 +32,7 @@ from crypto_trader.market_data.opportunity.snapshot import (
 )
 from crypto_trader.market_data.opportunity.universe import Instrument
 from crypto_trader.market_data.quality import (
+    MISSING,
     NOT_SAMPLED,
     REQUEST_FAILED,
     VALID,
@@ -483,3 +484,121 @@ def test_pool_native_selection_has_no_directory_provenance():
     assert entry["discovered_via_directory"] is False
     assert "directory_page_ref" not in entry
     assert record.exploration_rounds == 0
+
+# ------------------------------------------------- OI missing vs zero (client)
+def _adapter_with_payload(payload):
+    """OKXAdapter whose public request returns one fixed OI row."""
+    from crypto_trader.exchange.okx import OKXAdapter
+
+    client = OKXAdapter(base_url="https://www.okx.com", demo=False)
+
+    async def fake_public_request(method, path, params=None):
+        return {"code": "0", "data": [payload]}
+
+    client._public_request = fake_public_request  # type: ignore[assignment]
+    return client
+
+
+def test_provider_oi_zero_stays_a_valid_zero():
+    client = _adapter_with_payload({"instId": "BTC-USDT-SWAP", "oi": "0", "oiCcy": "0",
+                                    "oiUsd": "0", "ts": client_ts()})
+    payload = asyncio.run(client.get_open_interest("BTC-USDT-SWAP"))
+    assert payload["open_interest"] == "0"
+
+    board, _ = _scan(OiClient(oi_value="0"))
+    row = board.current_snapshot().observable_rows[0]
+    assert row["open_interest"] == 0.0
+    assert row["oi_quality"] == VALID
+
+
+def test_provider_missing_oi_is_not_a_fake_zero():
+    """A row without ``oi`` must NOT become the string "0" / a VALID zero."""
+    client = _adapter_with_payload({"instId": "BTC-USDT-SWAP", "ts": client_ts()})
+    payload = asyncio.run(client.get_open_interest("BTC-USDT-SWAP"))
+    assert payload["open_interest"] is None
+    assert payload["open_interest_ccy"] is None
+    assert payload["open_interest"] != "0"
+
+
+def test_fallback_missing_oi_maps_to_missing_not_valid_zero():
+    client = OiClient(fallback_enabled=False, oi_rows=[])
+    # broad response succeeds with no rows; the bounded fallback yields no value
+    client.oi_rows = []
+    board, _ = _scan(client)
+    rows = {row["symbol"]: row for row in board.current_snapshot().observable_rows}
+    for row in rows.values():
+        assert row["open_interest"] is None
+        assert row["oi_quality"] != VALID
+        assert row["oi_quality"] in (NOT_SAMPLED, MISSING, REQUEST_FAILED)
+
+
+def test_malformed_and_negative_oi_never_become_valid_zero():
+    client = OiClient(
+        fallback_enabled=False,
+        oi_rows=[
+            {"instId": _inst("AAAUSDT"), "oi": "abc", "ts": client_ts()},
+            {"instId": _inst("BBBUSDT"), "oi": "-5", "ts": client_ts()},
+            {"instId": _inst("CCCUSDT"), "oi": "NaN", "ts": client_ts()},
+            {"instId": _inst("DDDUSDT"), "oi": "Infinity", "ts": client_ts()},
+        ],
+    )
+    board, _ = _scan(client)
+    rows = {row["symbol"]: row for row in board.current_snapshot().observable_rows}
+    for symbol in ("AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT"):
+        assert rows[symbol]["open_interest"] is None
+        assert rows[symbol]["oi_quality"] != VALID
+
+
+# ------------------------------------------------------- OI source provenance
+def test_oi_time_series_source_is_the_real_endpoint():
+    from crypto_trader.market_data.opportunity import oi as oi_module
+    from crypto_trader.market_data.opportunity.oi import OiSample, OiTimeSeries
+
+    assert oi_module.OiSample.__dataclass_fields__["source"].default == (
+        "OKX /api/v5/public/open-interest"
+    )
+
+    series = OiTimeSeries()
+    sample = OiSample(symbol="BTCUSDT", open_interest=1.0, observed_at=datetime.now(UTC))
+    series.record(sample)
+    exported = series.export_state()["BTCUSDT"][0]
+    assert exported["source"] == "OKX /api/v5/public/open-interest"
+    assert "open-interests" not in exported["source"]
+
+    # import path must default to the real endpoint too
+    restored = OiTimeSeries()
+    restored.import_state({"BTCUSDT": [{"symbol": "BTCUSDT", "open_interest": 1.0,
+                                        "observed_at": datetime.now(UTC).isoformat()}]})
+    assert "open-interests" not in restored.export_state()["BTCUSDT"][0]["source"]
+
+
+def test_service_oi_source_constant_and_snapshot_provenance_are_consistent():
+    from crypto_trader.market_data.opportunity.service import OI_SOURCE
+
+    assert OI_SOURCE == "OKX /api/v5/public/open-interest"
+    board, _ = _scan(OiClient())
+    snapshot = board.current_snapshot()
+    for row in snapshot.observable_rows:
+        assert row["oi_quality"] == VALID
+    assert snapshot.data_quality_summary["open_interest_collection"]["collected"] == len(SYMBOLS)
+
+
+# --------------------------------------------------- directory page semantics
+def test_directory_requested_page_is_factual():
+    board = _board_with_rows(100)
+    directory = MarketDirectory(board=board, page_size=20, max_pages=2)
+    first = directory.query_pages({"page": 1}, scan_id="scan-explore")
+    second = directory.query_pages({"page": 2}, scan_id="scan-explore")
+    pages_1, refs_1, map_1 = first
+    pages_2, refs_2, map_2 = second
+    assert [page["page"] for page in pages_1] == [1, 2]
+    # asking for page 2 starts there and does not silently re-serve page 1
+    assert [page["page"] for page in pages_2] == [2]
+    assert all("page=2" in ref for ref in refs_2)
+    rows_page_1 = {row["symbol"] for row in pages_1[0]["rows"]}
+    rows_page_2 = {row["symbol"] for row in pages_2[0]["rows"]}
+    assert rows_page_1.isdisjoint(rows_page_2)  # genuinely different page windows
+    assert all(page_number == 1 for page_number in map_1.values() if page_number == 1)
+    # hard caps are enforced regardless of the requested page
+    assert len(pages_1) <= 2 and len(pages_2) <= 2
+    assert all(page["page_size"] <= 25 for page in pages_1 + pages_2)

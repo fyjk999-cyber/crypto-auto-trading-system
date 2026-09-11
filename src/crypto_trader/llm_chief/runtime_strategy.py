@@ -83,6 +83,10 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # owns the final directional decision.
         self.selection_service = selection_service
         self._researched_selection_ids: set[str] = set()
+        # (selection_id, symbol) pairs already handed to the review loop, so a
+        # selected symbol is consumed at most once per selection round and the
+        # retry cooldown cannot resurrect it inside the same round.
+        self._consumed_selection_symbols: set[tuple[str, str]] = set()
         self._last_attempt_by_symbol: dict[str, datetime] = {}
         self._skip_until: dict[str, datetime] = {}
         # This is an attempt cooldown, not an entry cooldown.  Every provider
@@ -90,12 +94,21 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self._last_decision_attempt: datetime | None = None
 
     def desired_symbol(self) -> str | None:
-        """Next symbol for DeepSeek review (MASTER DIRECTIVE §10/§24/§39).
+        """Next symbol for autonomous NEW research (canonical production path).
 
-        Priority: due factor candidates (priority-ranked), then rotation
-        symbols outside the candidate pool (no factor-induced blind spots).
-        Pure scheduling — never admissibility. Returns None when no board is
-        wired (legacy single-symbol behavior preserved).
+        Authority:
+            When ChiefTrader MarketSelection is active (``selection_service`` is
+            wired) it is the ONLY authority over which new symbols receive
+            autonomous research attention. ``NO_RESEARCH``, a selection failure
+            (LLM unavailable / timeout / failed), a stale or expired selection,
+            an exhausted selection queue and budget deferral ALL mean
+            "no new autonomous symbol research" for this round. There is no
+            programmatic substitute selection in that mode.
+
+            The legacy OpportunityBoard agenda (factor candidates then fairness
+            rotation) is used ONLY when ``selection_service is None`` — i.e.
+            MarketSelection is explicitly disabled — which preserves legacy and
+            test wiring.
         """
         if self.opportunity_board is None:
             return None
@@ -106,9 +119,12 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             for s, last in self._last_attempt_by_symbol.items()
             if now - last < self.retry_cooldown
         }
-        queued = self._selected_research_queue(exclude=exclude, now=now)
-        if queued is not None:
-            return queued
+
+        # New architecture: ChiefTrader MarketSelection owns research attention.
+        if self.selection_service is not None:
+            return self._selected_research_queue(exclude=exclude, now=now)
+
+        # Legacy compatibility only (MarketSelection disabled).
         return self.opportunity_board.next_agenda_symbol(exclude=exclude)
 
     # ------------------------------------------------------- research queue
@@ -128,6 +144,12 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         return record
 
     def _selected_research_queue(self, *, exclude: set[str], now) -> str | None:
+        """Consume ONLY the symbols of the current valid ChiefTrader selection.
+
+        Returns ``None`` — never a programmatic substitute — whenever no usable
+        selection exists, the selection explicitly requested no research, the
+        selection failed/expired, or every selected symbol has been consumed.
+        """
         record = self.current_selection()
         if record is None or record.selection_id in self._researched_selection_ids:
             return None
@@ -137,12 +159,30 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             self._researched_selection_ids.add(record.selection_id)
             return None
         for symbol in record.selected_symbol_names:
-            if symbol in exclude:
+            key = (record.selection_id, symbol)
+            if key in self._consumed_selection_symbols:
                 continue
+            if symbol in exclude:
+                # cooldown / position backoff still applies; the symbol is not
+                # consumed but is also not returned this call
+                continue
+            self._consumed_selection_symbols.add(key)
+            self._trim_consumption_state()
             return symbol
-        # every selected symbol has been reviewed for this selection round
+        # every selected symbol has been consumed for this selection round
         self._researched_selection_ids.add(record.selection_id)
         return None
+
+    def _trim_consumption_state(self) -> None:
+        """Bound the consumption bookkeeping (last 50 selection rounds)."""
+        if len(self._researched_selection_ids) > 50:
+            self._researched_selection_ids = set(
+                list(self._researched_selection_ids)[-50:]
+            )
+        if len(self._consumed_selection_symbols) > 500:
+            self._consumed_selection_symbols = set(
+                list(self._consumed_selection_symbols)[-500:]
+            )
 
     def selection_lineage(self, symbol: str) -> dict:
         """Scan/selection lineage for one research target (§13)."""

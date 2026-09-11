@@ -195,6 +195,9 @@ async def run_qualification(cycles: int, report: dict) -> dict:
             bundle, selection_service
         )
 
+        # ---- deterministic research-attention authority evidence -----------
+        report["authority_semantics"] = _authority_semantics(bundle, selection_service)
+
         research_symbol = None
         if record.selected_symbols:
             research_symbol = str(record.selected_symbols[0]["symbol"])
@@ -364,6 +367,78 @@ async def _induced_exploration(bundle, selection_service) -> dict:
     }
 
 
+def _authority_semantics(bundle, selection_service) -> dict:
+    """Prove on the PRODUCTION path that selection states never fall back.
+
+    Calls the real ``LiveLLMDecisionStrategy.desired_symbol()`` with the real
+    OpportunityBoard (which always has a candidate and rotation symbol) and the
+    real MarketSelectionService whose ``last_record`` is temporarily replaced by
+    each terminal/failed state. If any programmatic fallback existed, the board
+    candidate would be returned.
+    """
+    from crypto_trader.market_data.opportunity.selection import MarketSelectionRecord
+
+    strategy = None
+    for candidate in bundle.engine.strategies:
+        if getattr(candidate, "name", "") == "live_llm":
+            strategy = candidate
+    if strategy is None or strategy.selection_service is None:
+        return {"available": False, "reason": "no live_llm strategy wired"}
+
+    board = strategy.opportunity_board
+    board_next = board.next_agenda_symbol() if board is not None else None
+    real_record = selection_service.last_record
+    cases: list[dict] = []
+    try:
+        for index, (case_name, status, state) in enumerate(
+            (
+                ("NO_RESEARCH", "NO_RESEARCH", "NO_RESEARCH"),
+                ("SELECTION_LLM_UNAVAILABLE", "LLM_UNAVAILABLE", ""),
+                ("SELECTION_TIMEOUT", "TIMEOUT", ""),
+                ("SELECTION_FAILED", "FAILED", ""),
+                ("SELECTION_SKIPPED_BUDGET", "SKIPPED_BUDGET", ""),
+                ("SELECTION_DEFERRED", "DEFERRED", ""),
+                ("SELECTION_QUEUE_EXHAUSTED", "SUCCESS", "SELECT"),
+            )
+        ):
+            selection_service.last_record = MarketSelectionRecord(
+                selection_id=f"mkt_sel_authority_{index}",
+                scan_id=board.current_snapshot().scan_id,
+                status=status,
+                selection_state=state,
+                selected_symbols=[],
+                requested_at=real_record.requested_at if real_record else None,
+            )
+            if case_name == "SELECTION_QUEUE_EXHAUSTED":
+                # consume the (empty) queue once so it is marked exhausted
+                strategy.desired_symbol()
+            observed = strategy.desired_symbol()
+            cases.append(
+                {
+                    "case": case_name,
+                    "record_status": status,
+                    "desired_symbol": observed,
+                    "board_candidate_available": board_next,
+                    "board_candidate_consumed": observed == board_next and board_next is not None,
+                }
+            )
+    finally:
+        selection_service.last_record = real_record
+
+    fallback_used = any(case["board_candidate_consumed"] for case in cases)
+    return {
+        "available": True,
+        "programmatic_fallback_when_selection_enabled": "YES" if fallback_used else "NO",
+        "board_candidate_available": board_next,
+        "cases": cases,
+        "note": (
+            "desired_symbol() is the canonical production path; the board always "
+            "had a candidate/rotation symbol available, so a value returned here "
+            "would prove a programmatic fallback"
+        ),
+    }
+
+
 def _state_histogram(states) -> dict:
     histogram: dict[str, int] = {}
     for state in states:
@@ -475,6 +550,25 @@ def _readiness(report: dict) -> dict:
         ),
         "tool_lineage_matches_selected_symbol": (
             "YES" if research.get("tool_symbols_match_research_target") else "NO"
+        ),
+        "research_attention_authority_ready": (
+            "YES"
+            if (report.get("authority_semantics") or {}).get(
+                "programmatic_fallback_when_selection_enabled"
+            )
+            == "NO"
+            else "NO"
+        ),
+        "no_research_fails_closed_on_production_path": (
+            "YES"
+            if all(
+                case.get("desired_symbol") is None
+                for case in (
+                    (report.get("authority_semantics") or {}).get("cases") or []
+                )
+            )
+            and (report.get("authority_semantics") or {}).get("cases")
+            else "NO"
         ),
         "chief_controlled_directory_exploration": (
             "YES"

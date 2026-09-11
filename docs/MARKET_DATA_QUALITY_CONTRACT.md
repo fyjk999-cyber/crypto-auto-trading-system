@@ -114,6 +114,35 @@ depth_semantics = "best bid/ask size only; full depth is an explicit tool reques
 Full-depth imbalance is **not** claimed. If the factors ever require depth, it must come
 from an explicit read-only tool call.
 
+## 6a. Missing vs zero at the provider boundary
+
+The OKX client passes provider fields through unchanged — a missing field is
+`None`, never a defaulted string:
+
+```python
+raw = data["data"][0]
+return {
+    "open_interest": raw.get("oi"),        # None when absent
+    "open_interest_ccy": raw.get("oiCcy"),
+    "open_interest_usd": raw.get("oiUsd"),
+    "source_timestamp": raw.get("ts"),
+}
+```
+
+Downstream classification then decides:
+
+| Provider value | Result |
+|---|---|
+| `"0"` | `VALID` zero (a real factual zero) |
+| field absent | `MISSING` (or `NOT_SAMPLED` when simply not collected) |
+| `"abc"` / negative | `MALFORMED` |
+| `"NaN"` / `"Infinity"` | `NON_FINITE` |
+
+A missing provider value can never become a `VALID` zero.
+
+OI provenance strings name the real endpoint: `OKX /api/v5/public/open-interest`
+(plural `open-interests` appears only in documentation of the invalid-path test).
+
 ## 6b. Open interest contract (live-verified)
 
 `GET /api/v5/public/open-interest?instType=SWAP` (no `instId`) is the broad form

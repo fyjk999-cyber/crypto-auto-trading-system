@@ -74,6 +74,7 @@ from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.quality import (
     ESTIMATED,
     FUTURE_TIMESTAMP,
+    MALFORMED,
     MISSING,
     NON_FINITE,
     NOT_SAMPLED,
@@ -85,7 +86,7 @@ from crypto_trader.market_data.quality import (
 )
 
 TICKER_SOURCE = "OKX /api/v5/market/tickers"
-OI_SOURCE = "OKX /api/v5/public/open-interests"
+OI_SOURCE = "OKX /api/v5/public/open-interest"
 FUNDING_SOURCE = "OKX /api/v5/public/funding-rate"
 CANDLES_SOURCE = "OKX /api/v5/market/candles"
 
@@ -716,12 +717,22 @@ class OpportunityScannerService:
             if not isinstance(oi_row, dict):
                 missing_inst_ids.append(row["inst_id"])
                 continue
-            value = _finite(oi_row.get("oi"))
+            raw_oi = oi_row.get("oi")
+            value = _finite(raw_oi)
             if value is None:
-                quality_by_symbol[symbol] = NON_FINITE if oi_row.get("oi") else MISSING
+                # a present-but-unparseable value is malformed/non-finite; an
+                # absent value is MISSING. Neither may become a valid zero.
+                quality_by_symbol[symbol] = (
+                    NON_FINITE
+                    if isinstance(raw_oi, str) and raw_oi.strip().lower() in {"nan", "inf", "-inf"}
+                    else MALFORMED
+                    if raw_oi not in (None, "")
+                    else MISSING
+                )
                 continue
             if value < 0:
-                quality_by_symbol[symbol] = MISSING
+                # negative open interest is impossible: never a valid fact
+                quality_by_symbol[symbol] = MALFORMED
                 continue
             observed_at, ts_quality, _reason = self._ticker_timestamp(
                 {"ts": oi_row.get("ts")}, now=fetched_at
@@ -749,9 +760,15 @@ class OpportunityScannerService:
                 if row["inst_id"] not in fallback_rows:
                     continue
                 payload = fallback_rows[row["inst_id"]]
-                value = _finite(payload.get("open_interest"))
-                if value is None or value < 0:
-                    quality_by_symbol[symbol] = MISSING
+                raw_oi = payload.get("open_interest")
+                value = _finite(raw_oi)
+                if value is None:
+                    quality_by_symbol[symbol] = (
+                        MISSING if raw_oi in (None, "") else MALFORMED
+                    )
+                    continue
+                if value < 0:
+                    quality_by_symbol[symbol] = MALFORMED
                     continue
                 row["open_interest"] = float(value)
                 row["open_interest_usd"] = _finite(payload.get("open_interest_usd"))

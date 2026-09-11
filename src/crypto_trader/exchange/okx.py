@@ -502,9 +502,13 @@ class OKXAdapter(ExchangeAdapter):
         if not data.get("data"):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX open-interest response is empty")
         raw = data["data"][0]
+        # Data truth: a missing provider field stays missing (None) and MUST NOT
+        # be defaulted to "0" (which downstream would classify as a VALID zero).
+        # Downstream decides: missing -> MISSING, malformed -> MALFORMED/
+        # NON_FINITE, an actual provider "0" -> VALID zero.
         return {
-            "open_interest": raw.get("oi", "0"),
-            "open_interest_ccy": raw.get("oiCcy", "0"),
+            "open_interest": raw.get("oi"),
+            "open_interest_ccy": raw.get("oiCcy"),
             "open_interest_usd": raw.get("oiUsd"),
             "source_timestamp": raw.get("ts"),
         }
