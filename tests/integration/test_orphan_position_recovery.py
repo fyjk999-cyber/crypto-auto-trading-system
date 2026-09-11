@@ -195,5 +195,10 @@ async def test_orphan_recovery_signal_enters_normal_risk_execution_pipeline(data
         submitted = list(engine.adapter.orders.values())[-1]
         assert submitted.metadata["reduce_only"] is True
         assert submitted.metadata["trade_plan_id"] == plan.trade_plan_id
+        closed = await engine.trade_plans.get(plan.trade_plan_id)
+        assert closed is not None and closed.state == TradePlanState.CLOSED
+        episode_health = engine.health.snapshot()["components"]["trade_episode"]
+        assert episode_health["ok"] is True
+        assert episode_health["detail"] == "NOT_APPLICABLE_RECOVERY"
     finally:
         await engine.stop()
