@@ -33,7 +33,7 @@ def upgrade() -> None:
                 "scope_type",
                 sa.String(length=24),
                 nullable=False,
-                server_default="GLOBAL",
+                server_default="UNSCOPED",
             ),
         )
     if "symbol" not in existing:

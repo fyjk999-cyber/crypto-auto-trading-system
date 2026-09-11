@@ -103,6 +103,13 @@ async def test_context_tools_filter_time_symbol_and_research_scope(database):
                     created_at=before,
                 ),
                 ResearchReportORM(
+                    research_id="unscoped",
+                    summary="legacy-style",
+                    conclusion="must not be used",
+                    confidence=0.8,
+                    created_at=before,
+                ),
+                ResearchReportORM(
                     research_id="future",
                     scope_type="GLOBAL",
                     summary="future",

@@ -48,7 +48,7 @@ def test_research_scope_migration_preserves_legacy_rows_and_is_repeatable(tmp_pa
             )
         ).one()
     assert {"scope_type", "symbol", "regime"} <= columns
-    assert row[0] == "GLOBAL"
+    assert row[0] == "UNSCOPED"
     assert row[1] is None
     assert row[2] is None
 
