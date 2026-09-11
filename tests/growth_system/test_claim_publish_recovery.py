@@ -236,12 +236,13 @@ async def test_publish_failure_isolated_and_retry_is_idempotent(growth_db):
     await _expire_claim(growth_db)
     second = await _runner(recorder, pipeline)
     # The stub review runner does not persist durable attempts, so the safe
-    # retry path refuses to publish from empty input (SKIPPED_INCOMPLETE)
-    # instead of marking publish SUCCEEDED with nothing.
+    # retry path refuses to publish and reports BLOCKED_NO_PUBLISH_INPUT.
+    # COMPLETE + zero publish input is never a success (R04).
     assert second.stats_status == STAGE_SUCCEEDED
     assert second.review_status == STAGE_SUCCEEDED
-    assert second.publish_status == STAGE_SKIPPED_INCOMPLETE
-    assert second.succeeded
+    assert second.publish_status == STAGE_FAILED
+    assert second.succeeded is False
+    assert second.error_type == "BLOCKED_NO_PUBLISH_INPUT"
     assert second.published_count == 0
     assert recorder.publish_calls == 1
     # The first publish attempt observed a live fence before visible work.
