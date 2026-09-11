@@ -21,6 +21,7 @@ from crypto_trader.persistence.models import (
 )
 from crypto_trader.valuation.domain import (
     VALUATION_QUALITY_HEALTHY,
+    VALUATION_QUALITY_UNAVAILABLE,
     ValuationBatch,
 )
 
@@ -88,7 +89,7 @@ class PortfolioService:
         batch can never seed a baseline.
         """
         as_of = valuation_as_of or datetime.now(UTC)
-        healthy = quality == VALUATION_QUALITY_HEALTHY
+        claimed_healthy = quality == VALUATION_QUALITY_HEALTHY
         snapshot_equity = (
             raw_mtm_equity
             if raw_mtm_equity is not None
@@ -118,23 +119,41 @@ class PortfolioService:
                 )
             ).scalars().all()
             cumulative_flow = Decimal("0")
+            unproven_flow_currency = False
+            unproven_flow_amount = False
             for txn in flow_rows:
                 metadata = txn.metadata_json or {}
-                raw_amount = (
-                    metadata.get("amount")
-                    or metadata.get("quantity")
-                    or metadata.get("total")
-                    or "0"
-                )
+                # CORE CONSTRAINT: the transaction's own PROVEN currency decides
+                # whether its cash flow belongs to this valuation scope. It is
+                # never assumed to be the valuation currency (no USDT, no
+                # quote-currency guess, no synthetic default): an unprovable
+                # currency makes cash-flow completeness INCOMPLETE instead.
                 row_currency = (
                     metadata.get("currency")
                     or metadata.get("settleCcy")
                     or metadata.get("quote_currency")
-                    or currency
                 )
-                if row_currency != currency:
+                if row_currency is None or not str(row_currency).strip():
+                    unproven_flow_currency = True
                     continue
-                amount = abs(D(raw_amount))
+                if str(row_currency).strip() != currency:
+                    # A proven foreign-currency flow belongs to another scope.
+                    continue
+                raw_amount = (
+                    metadata.get("amount")
+                    or metadata.get("quantity")
+                    or metadata.get("total")
+                )
+                if raw_amount is None or not str(raw_amount).strip():
+                    # UNKNOWN != ZERO: a missing flow amount must not be
+                    # silently treated as a zero cash flow.
+                    unproven_flow_amount = True
+                    continue
+                try:
+                    amount = abs(D(raw_amount))
+                except Exception:
+                    unproven_flow_amount = True
+                    continue
                 cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
             account_row = (
                 await session.execute(
@@ -144,6 +163,27 @@ class PortfolioService:
                     )
                 )
             ).scalar_one_or_none()
+            # Cash-flow completeness is a factual precondition of this scope:
+            # a flow whose own currency/amount cannot be proven leaves the
+            # adjusted equity unprovable, so the whole batch is UNAVAILABLE
+            # (existing quality architecture) — no peak, no drawdown, no new
+            # exposure. Proven foreign-currency flows were excluded above.
+            cash_flow_complete = not (
+                unproven_flow_currency or unproven_flow_amount
+            )
+            healthy = claimed_healthy and cash_flow_complete
+            effective_quality = (
+                VALUATION_QUALITY_HEALTHY if healthy else VALUATION_QUALITY_UNAVAILABLE
+            )
+            effective_reason_codes = list(reason_codes or [])
+            if unproven_flow_currency and (
+                "CASH_FLOW_CURRENCY_UNPROVEN" not in effective_reason_codes
+            ):
+                effective_reason_codes.append("CASH_FLOW_CURRENCY_UNPROVEN")
+            if unproven_flow_amount and (
+                "CASH_FLOW_AMOUNT_UNPROVEN" not in effective_reason_codes
+            ):
+                effective_reason_codes.append("CASH_FLOW_AMOUNT_UNPROVEN")
             adjusted_equity = (
                 snapshot_equity - cumulative_flow if healthy else None
             )
@@ -198,8 +238,8 @@ class PortfolioService:
                     peak_adjusted_equity=peak_adjusted,
                     drawdown_amount=drawdown,
                     drawdown_ratio=drawdown_ratio,
-                    quality=quality,
-                    reason_codes_json=reason_codes or [],
+                    quality=effective_quality,
+                    reason_codes_json=effective_reason_codes,
                     solvency=solvency,
                     missing_marks_json=missing_marks or [],
                     stale_marks_json=stale_marks or [],
@@ -222,7 +262,7 @@ class PortfolioService:
                     peak_adjusted_equity=peak_adjusted,
                     drawdown=drawdown,
                     # Valuation quality and solvency are independent facts.
-                    valuation_status=quality,
+                    valuation_status=effective_quality,
                     valuation_source=source,
                     valuation_id=valuation_id,
                     valuation_as_of=as_of,
@@ -233,7 +273,7 @@ class PortfolioService:
             valuation_id=valuation_id,
             account_id=account_id,
             currency=currency,
-            quality=quality,
+            quality=effective_quality,
             raw_mtm_equity=raw_mtm_equity if healthy else None,
             available_margin=(
                 account_row.available if healthy and account_row is not None else None
@@ -249,7 +289,7 @@ class PortfolioService:
             stale_marks=tuple(stale_marks or ()),
             components=tuple(components or ()),
             solvency=solvency,
-            reason_codes=tuple(reason_codes or ()),
+            reason_codes=tuple(effective_reason_codes),
             valuation_as_of=as_of,
         )
 
