@@ -186,7 +186,7 @@ class TradingEngine:
         await self._load_instruments()
         await self._restore_paper_adapter_state()
         self.order_manager.settlement_callback = self._settle_fill
-        await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        await self._run_recovery(self.run_id)
         await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
         # Daily review recovery is not an execution mutation and must not
@@ -302,6 +302,24 @@ class TradingEngine:
                 if state == RuntimeState.STOPPED:
                     row.ended_at = now
             await session.commit()
+
+    async def _run_recovery(self, run_id: str | None) -> list[str]:
+        """Recover orders and PAPER position/ledger invariants before acquiring the lease."""
+
+        return await RecoveryService(
+            self.order_manager,
+            self.adapter,
+            self.audit,
+            positions_provider=self.portfolio.get_positions,
+            plans=self.trade_plans,
+            ledger_state_provider=self._ledger_state,
+            recovery_mode=self.settings.effective_mode(),
+        ).recover(run_id)
+
+    async def _ledger_state(self) -> tuple[dict, dict]:
+        account = await self.portfolio.get_account(self.settings.effective_mode())
+        positions = await self.portfolio.get_positions()
+        return account.balances, positions
 
     async def _reconcile_stale_runs(self) -> list[str]:
         """Close abandoned rows only after this process owns the fenced lease."""
