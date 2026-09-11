@@ -10,8 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --dev
+      - name: Verify source provenance
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: uv run python -m crypto_trader.build_info --expect-sha "$EXPECTED_SHA"
       - run: uv run ruff check src tests
 
   unit-test:
@@ -19,8 +25,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --dev
+      - name: Verify source provenance
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: uv run python -m crypto_trader.build_info --expect-sha "$EXPECTED_SHA"
       - run: uv run pytest tests/unit -q
 
   integration-test:
@@ -28,14 +40,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --dev
+      - name: Verify source provenance
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: uv run python -m crypto_trader.build_info --expect-sha "$EXPECTED_SHA"
       - run: uv run pytest tests/integration tests/runtime_unit tests/e2e tests/chaos tests/cloud_unit tests/perpetual_unit tests/perpetual_integration tests/governance_unit tests/alpha_unit tests/alpha_integration -q
 
   cloudflare-worker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -50,4 +70,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t crypto-trading-core:ci -f deployment/cloudflare/container/Dockerfile .
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Build exact-SHA container
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: docker build --build-arg CRYPTO_TRADER_SOURCE_SHA="$EXPECTED_SHA" -t crypto-trading-core:ci -f deployment/cloudflare/container/Dockerfile .
+      - name: Verify container source provenance
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: docker run --rm --entrypoint python crypto-trading-core:ci -m crypto_trader.build_info --expect-sha "$EXPECTED_SHA"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
