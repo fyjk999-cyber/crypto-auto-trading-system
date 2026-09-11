@@ -53,6 +53,15 @@ class LiveLLMPositionManager:
         self.attempt_clock = attempt_clock or (lambda: datetime.now(UTC))
         self._last_review_attempt: dict[str, datetime] = {}
 
+    def review_priority(self, position: Position) -> tuple[int, datetime, str]:
+        """Never-reviewed first, then the position waiting longest for review."""
+        last = self._last_review_attempt.get(position.symbol)
+        return (
+            0 if last is None else 1,
+            last or datetime.min.replace(tzinfo=UTC),
+            position.symbol,
+        )
+
     async def review(
         self, ctx: StrategyContext, position: Position
     ) -> SignalIntent | None:

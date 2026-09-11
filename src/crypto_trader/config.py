@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3
     engine_tick_seconds: float = 0.5
+    position_review_concurrency: int = 4
+    position_review_deadline_seconds: float = 90.0
     reconciliation_interval_seconds: int = 30
     funding_refresh_interval_seconds: int = 900
     funding_lookback_hours: int = 24
