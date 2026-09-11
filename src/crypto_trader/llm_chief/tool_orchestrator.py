@@ -42,7 +42,7 @@ class ToolDrivenChiefTrader:
             # provider timeout and is intentionally outside this evidence round.
             async with asyncio.timeout(self.tool_round_timeout_seconds):
                 selected, error = await self.chief.select_tools(
-                    ctx, self.tools.catalog()
+                    ctx, self.tools.contract_catalog()
                 )
                 if selected is None:
                     return self.chief.fail_closed(

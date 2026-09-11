@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -33,7 +34,7 @@ class ChiefTraderEngine:
         self.model_version = model_version
 
     async def select_tools(
-        self, ctx: ChiefTraderContext, available_tools: list[str] | dict[str, str]
+        self, ctx: ChiefTraderContext, available_tools: list[str] | dict[str, Any]
     ) -> tuple[list[str] | None, str | None]:
         if self.provider is None:
             return None, "LLM_UNAVAILABLE"
