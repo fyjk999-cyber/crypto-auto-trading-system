@@ -39,7 +39,7 @@ All commands ran inside the task worktree with `.venv`; raw logs are in
 | Growth-system suite | `.venv/bin/python -m pytest tests/growth_system -q` on final candidate | **66 passed** |
 | Directly affected governance/integration tests | `pytest tests/integration/test_p8_daily_review_concurrency.py tests/integration/test_memory_persistence.py tests/integration/test_p8_migrations.py tests/governance_unit/test_governance.py -q` | **28 passed** |
 | Ruff (whole repo) | `.venv/bin/python -m ruff check .` | **All checks passed** |
-| Migration matrix (draft) | `test_growth_schema_is_additive_and_compiles_for_both_dialects`; `alembic heads` | SQLite + PostgreSQL dialect compile passed; Alembic head remains `0039_applicability`; no new revision claimed |
+| Migration matrix (round 2) | `test_alembic_migration.py`; `alembic heads` | SQLite upgrade/repeat/downgrade/re-upgrade passed; single head `0043_growth_review_job_binding`; PostgreSQL offline compile passed; real PG NOT_VERIFIED |
 | Read-only dry-run | `scripts/growth_system_dry_run.py manifest/episodes/review-status/import-inventory` against the five candidate DBs | completed; source opened `mode=ro` + `query_only`; no source write |
 | Frontend gates | `scripts/frontend-verify.sh` | **NOT_AVAILABLE**: this environment has no `node`/`npm` and `frontend/node_modules` is absent |
 | `agent-project-test` harness | path/command not present | **NOT_AVAILABLE** (not invented) |
@@ -60,9 +60,10 @@ All commands ran inside the task worktree with `.venv`; raw logs are in
   reported separately and are not interchangeable.
 
 ```
-IMPLEMENTATION:                                 DONE for G00–G07 on candidate SHA
-INDEPENDENT_REVIEW:                             ROUND-1 CHANGES ADDRESSED; ROUND-2 DELIVERY_FAILED; RETRY SCHEDULED (cron-16, 2026-09-11T13:35Z)
-MIGRATION_AUTHORIZATION:                        NOT_GRANTED (draft only)
+IMPLEMENTATION:                                 ROUND-2 FINDINGS IMPLEMENTED on repair branch (see ROUND2_FIX_RECEIPT.md)
+INDEPENDENT_REVIEW:                             ROUND-2 VERDICT CHANGES_REQUIRED (99c744c); NEW REVIEW PENDING for the repair SHA
+ROUND2_FINDINGS_ADDRESSED:                      YES (R01–R15; each has code + regression evidence)
+MIGRATION_AUTHORIZATION:                        NOT_GRANTED; 0043 single head is an engineering revision only
 DEPLOYMENT:                                     NOT_PERFORMED
 FACTUAL_LEARNING_AND_RETRIEVAL_EVIDENCE:        NOT_PROVEN (no real provider run, no deployed loop)
 ```

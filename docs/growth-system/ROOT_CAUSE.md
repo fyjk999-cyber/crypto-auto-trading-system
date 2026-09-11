@@ -118,8 +118,12 @@ The following candidates were checked explicitly rather than summarized as
 
 | Candidate | Verdict | Evidence |
 | --- | --- | --- |
-| Review scheduler not constructed by the live process | **CONFIRMED for PID 8845** | `runtime/bootstrap.py` builds `DailyReviewScheduler(...)` only inside `if settings.auto_start_runtime`; the process env has `AUTO_START_RUNTIME=false`, and `TradingEngine.start` creates the `daily-review` task only when `daily_review_scheduler is not None`. The same gate makes the executable strategy `DummyStrategy`, matching `engine_runs.strategy_id = dummy`. |
-| Backfill/recovery not run | **CONFIRMED for PID 8845** | `_recover_missed_daily_reviews()` returns immediately when the scheduler is `None`; it is called during engine start. |
+| Review scheduler not constructed by the live process | **STATIC INFERENCE for PID 8845 (not runtime-observed in this task)** | `runtime/bootstrap.py` builds `DailyReviewScheduler(...)` only inside `if settings.auto_start_runtime`; the process env has `AUTO_START_RUNTIME=false`, and `TradingEngine.start` creates the `daily-review` task only when `daily_review_scheduler is not None`. The same gate makes the executable strategy `DummyStrategy`, matching `engine_runs.strategy_id = dummy`.
+
+> R15 evidence class: the scheduler/boot log line is a **static code +
+> environment inference**, not a live runtime observation.  It is retained as
+> inference, not upgraded to `CONFIRMED` runtime fact. |
+| Backfill/recovery not run | **STATIC INFERENCE for PID 8845 (not runtime-observed in this task)** | `_recover_missed_daily_reviews()` returns immediately when the scheduler is `None`; it is called during engine start. |
 | Wrong database / split-brain DB ownership | **CONFIRMED** | The live process holds the empty `fullmarket` DB (0 episodes, 0 decisions). The 33 factual episodes and 13,271 decisions are in `canonical-clean`, which no process holds. |
 | Review date not yet due | **PARTLY RULED OUT** | Episodes closed on 2026-09-09 and 2026-09-10 UTC. At process start (2026-09-11 08:08 UTC) the complete previous UTC day was 2026-09-10, so at least that day's episodes were already eligible. UTC 00:00 of 2026-09-11 had passed. |
 | Factual/ownership filter dropped episodes | **NOT THE BLOCKER in canonical-clean** | 33 `factual=1` rows exist with `review_status=PENDING`; the live DB simply has no rows. Whether a `build_for_closed_plan` fail-closed reason (`overlapping lifecycle`, `FUNDING_COVERAGE_UNKNOWN`, etc.) suppressed additional closed plans remains **UNKNOWN** and needs per-plan reason logging. |
