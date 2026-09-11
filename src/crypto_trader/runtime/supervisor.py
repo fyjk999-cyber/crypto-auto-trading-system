@@ -104,22 +104,26 @@ class TradingRuntimeSupervisor:
         }
         if self.ai_position_callback is not None:
             loops["ai_position"] = self._ai_position_loop
-        for name, coro in loops.items():
+        for name, factory in loops.items():
             self._tasks[name] = asyncio.create_task(
-                self._supervised(name, coro()), name=f"runtime-{name}"
+                self._supervised(name, factory), name=f"runtime-{name}"
             )
 
-    async def _supervised(self, name: str, coro: Awaitable[None]) -> None:
-        try:
-            await coro
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # keep runtime alive: independent loop restart
-            if not self._stopping:
-                self._tasks[name] = asyncio.create_task(
-                    self._supervised(name, coro), name=f"runtime-{name}-restart"
-                )
+    async def _supervised(
+        self, name: str, factory: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Restart a failed loop with a fresh coroutine object."""
+        while not self._stopping:
+            try:
+                await factory()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._stopping:
+                    return
+                self.status.restart_count += 1
+                await asyncio.sleep(0)
 
     async def _ai_position_loop(self) -> None:
         while not self._stopping:
