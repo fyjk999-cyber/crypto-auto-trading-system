@@ -39,7 +39,14 @@ class ExactDecimal(TypeDecorator):
         return format_decimal(D(value))
 
     def process_result_value(self, value: str | None, dialect: Any) -> Decimal | None:
-        return D(value) if value is not None else None
+        if value is None:
+            return None
+        # Legacy SQLite NUMERIC columns may surface floats; the adapter
+        # boundary converts them exactly via Decimal(str(...)) as prescribed
+        # by the core error.  Core arithmetic itself still rejects floats.
+        if isinstance(value, float):
+            return Decimal(str(value))
+        return D(value)
 
 
 class Base(DeclarativeBase):
@@ -739,6 +746,14 @@ class AICoinProfileORM(Base):
 
 
 class AICompressedExperienceORM(Base):
+    """Compressed experience / Adaptive Experience Card canonical memory.
+
+    V2 extends this existing table in place.  Runtime retrieval reads only this
+    table; ``growth_card_versions`` is an append-only history journal and
+    ``growth_card_decision_traces`` is a decision trace, not a second memory
+    store.
+    """
+
     __tablename__ = "ai_compressed_experience"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -750,6 +765,41 @@ class AICompressedExperienceORM(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     applicability_scope_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    # --- Growth V2 (nullable/server-defaulted for in-place upgrade) --------
+    experience_type: Mapped[str] = mapped_column(
+        String(32), default="ADAPTIVE_CARD", server_default="ADAPTIVE_CARD", index=True
+    )
+    account_id: Mapped[str] = mapped_column(
+        String(64), default="default", server_default="default", index=True
+    )
+    mode: Mapped[str] = mapped_column(
+        String(16), default="PAPER", server_default="PAPER", index=True
+    )
+    share_scope: Mapped[str] = mapped_column(
+        String(32), default="ACCOUNT_MODE", server_default="ACCOUNT_MODE", index=True
+    )
+    trigger_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    context_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    factor_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    guidance_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    source_episode_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    supporting_episode_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    contradicting_episode_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    support_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    contradiction_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    confidence: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    quality_score: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    decay_score: Mapped[Decimal | None] = mapped_column(ExactDecimal(), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), default="CANDIDATE", server_default="CANDIDATE", index=True
+    )
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supersedes_rule_id: Mapped[str | None] = mapped_column(String(64))
+    supersedes_version: Mapped[int | None] = mapped_column(Integer)
+    update_reason: Mapped[str | None] = mapped_column(String(255))
+    known_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ShadowCampaignORM(Base):

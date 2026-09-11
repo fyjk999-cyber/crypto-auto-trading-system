@@ -158,6 +158,49 @@ class MemoryPersistence:
                 await session.rollback()
                 return None
 
+    def build_claim_guard(
+        self,
+        date: str,
+        claim_token: str,
+        *,
+        owner: str | None = None,
+        lease_seconds: int = 1800,
+    ):
+        """Return an in-transaction claim guard for publish writes.
+
+        The returned coroutine takes the *publisher's* session and performs an
+        atomic conditional UPDATE on the authoritative day claim. Because it runs
+        inside the same transaction as the knowledge write, a lost/expired claim
+        cannot commit retrieval-visible knowledge: rowcount 0 rolls the whole
+        transaction back.
+
+        The guard also extends the claim deadline on success so ownership cannot
+        expire mid-publish.
+        """
+
+        async def _guard(session) -> bool:
+            now = datetime.now(UTC)
+            deadline = now + timedelta(seconds=max(60, lease_seconds))
+            conditions = [
+                DailyReviewRunORM.review_date == date,
+                DailyReviewRunORM.claim_token == claim_token,
+                DailyReviewRunORM.status == "RUNNING",
+                or_(
+                    DailyReviewRunORM.claim_deadline_at.is_(None),
+                    DailyReviewRunORM.claim_deadline_at >= now,
+                ),
+            ]
+            if owner is not None:
+                conditions.append(DailyReviewRunORM.owner == owner)
+            result = await session.execute(
+                update(DailyReviewRunORM)
+                .where(*conditions)
+                .values(last_attempt_at=now, claim_deadline_at=deadline)
+            )
+            return result.rowcount == 1
+
+        return _guard
+
     async def heartbeat_daily_review(
         self,
         date: str,

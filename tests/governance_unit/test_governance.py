@@ -286,7 +286,15 @@ def test_daily_review_stats():
     review = DailyReview(memory, failure)
     stats = review.run()
     assert stats.trade_count == 1
-    assert stats.long_pnl == Decimal("4.8")
+    # G01: long PnL is net (realized - fees + funding) and gross is separate.
+    assert stats.long_gross_pnl == Decimal("4.8")
+    assert stats.long_net_pnl == Decimal("4.65")
+    assert stats.long_pnl == Decimal("4.65")
+    assert stats.net_pnl == Decimal("4.65")
+    assert stats.net_status == "COMPLETE"
+    assert stats.win_count == 1 and stats.loss_count == 0 and stats.breakeven_count == 0
+    assert stats.profit_factor is None
+    assert stats.profit_factor_status == "NO_LOSSES"
     assert stats.fees == Decimal("0.1")
     assert stats.failure_distribution["TIMING_ERROR"] == 1
 
