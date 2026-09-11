@@ -16,7 +16,7 @@ changed, no gate is bypassed, and no trade is manufactured.
 
 | Fact | Cycle 1 | Cycle 2 |
 |---|---|---|
-| `scan_id` | `scan_51dc7244...` | `scan_94667296...` |
+| `scan_id` | `scan_2ce5d6ab...` | `scan_6417b3fa...` |
 | snapshot status | `PARTIAL` | `PARTIAL` |
 | `discovered_count` (OKX live USDT perpetuals) | 463 | 463 |
 | `observable_count` | 463 | 463 |
@@ -45,16 +45,16 @@ remaining instruments are truthfully reported as `UNSUPPORTED` (not zero, not VA
 
 | Fact | Value |
 |---|---|
-| `selection_id` | `mkt_sel_202c9181...` |
-| `scan_id` | `scan_94667296...` (matches the snapshot) |
+| `selection_id` | `mkt_sel_77c5d0fd...` |
+| `scan_id` | `scan_6417b3fa...` (matches the snapshot) |
 | status | `SUCCESS` |
 | selection_state | `SELECTED` |
 | provider / model | `deepseek` / `deepseek-flash` |
-| latency_ms | 1740 |
-| input / output tokens | 14988 / 190 |
+| latency_ms | 2161 |
+| input / output tokens | 15115 / 216 |
 | pool size | 30 (bounded) |
 | directory pages offered | 2 (bounded) |
-| selected symbols | `ZECUSDT` (factor candidate), `ANIMEUSDT` (+ others) |
+| selected symbols | `ANIMEUSDT`, `CNPYUSDT`, `ZECUSDT` (3 of 30 pool entries) |
 | persisted to `market_selections` | YES |
 | duplicate guard (`scan_id` re-request) | YES — same `selection_id`, no second model call |
 
@@ -69,13 +69,13 @@ For the first selected symbol the SAME ChiefTrader selected tools and made the f
 decision:
 
 ```
-symbol              = ZECUSDT (matches the selected research target)
+symbol              = ANIMEUSDT (matches the selected research target)
 tools selected      = multi_timeframe_history, orderbook, momentum, volatility,
                       liquidity, funding, open_interest, market_regime
-evidence items      = 8 (all symbol == ZECUSDT)
+evidence items      = 8 (all symbol == ANIMEUSDT)
 decision action     = NO_TRADE
-stored.scan_id      = scan_94667296...      (== selection.scan_id)
-stored.selection_id = mkt_sel_202c9181...   (== selection.selection_id)
+stored.scan_id      = scan_6417b3fa...      (== selection.scan_id)
+stored.selection_id = mkt_sel_77c5d0fd...   (== selection.selection_id)
 ```
 
 So the factual chain
