@@ -52,8 +52,21 @@ Tests: `tests/growth_system/test_review_schema_and_refs.py`.
 
 ## C3 — Idempotent stages (G03)
 
-Status: implemented in `src/crypto_trader/learning/growth_pipeline.py`.
-See `CONCURRENCY_AND_INTEGRATION.md`.
+Implementation: `src/crypto_trader/learning/growth_pipeline.py`.
+Tests: `tests/growth_system/test_claim_publish_recovery.py`.
+Detailed design and integration package: `CONCURRENCY_AND_INTEGRATION.md`.
+
+| Rule | Contract |
+| --- | --- |
+| Job identity | `(account_id, mode, review_date, source_revision, profile_version, revision)` |
+| Stage separation | `stats_status`, `review_status`, `publish_status`; per-stage completion timestamps; a single `SUCCEEDED` never covers a failed middle stage |
+| Claim reuse | Existing `MemoryPersistence.begin_daily_review/heartbeat/fail/save`; no second claim implementation |
+| Fence | Every stage commit and day publication requires the live token/owner/fence/deadline; stale token → `CLAIM_LOST`, no visible publish |
+| External call | Provider calls outside DB transactions; at-least-once, duplicate-billing risk recorded |
+| Late revision | Changed `input_hash` opens `revision+1`, sets `superseded_by_revision` on the old row, retains old revision for audit |
+| Incomplete funding | `net_status != COMPLETE` → `publish_status=SKIPPED_INCOMPLETE`; publisher never called |
+| Recovery | Retry resumes only non-`SUCCEEDED` stages; >1,000-episode day is fully processed |
+| Integration | Public bootstrap/engine wiring and migration application remain a separate integration package; this branch is IMPLEMENTATION only |
 
 ## C4 — Knowledge promotion and compression (G04)
 

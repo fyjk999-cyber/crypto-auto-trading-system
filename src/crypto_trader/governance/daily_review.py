@@ -91,6 +91,49 @@ class DailyReviewStats:
     def win_rate_compat(self) -> Decimal:
         return self.win_rate if self.win_rate is not None else Decimal("0")
 
+    def for_storage(self) -> DailyReviewStats:
+        """Copy with legacy non-null columns populated; status fields preserved.
+
+        ``DailyReviewRunORM`` predates nullable ratios and status columns, so
+        the copy stores 0 while ``output_ref``/the authoritative report keeps
+        the explicit status.  Unknown funding still yields a non-COMPLETE
+        ``net_status``, so the copy can never be mistaken for a complete day.
+        """
+        return DailyReviewStats(
+            date=self.date,
+            daily_pnl=self.daily_pnl,
+            long_pnl=self.long_pnl,
+            short_pnl=self.short_pnl,
+            gross_pnl=self.gross_pnl,
+            net_pnl=self.net_pnl,
+            fees=self.fees,
+            funding_pnl=self.funding_pnl,
+            trade_count=self.trade_count,
+            win_count=self.win_count,
+            loss_count=self.loss_count,
+            breakeven_count=self.breakeven_count,
+            win_rate=self.win_rate if self.win_rate is not None else Decimal("0"),
+            win_rate_status=self.win_rate_status,
+            profit_factor=(
+                self.profit_factor if self.profit_factor is not None else Decimal("0")
+            ),
+            profit_factor_status=self.profit_factor_status,
+            expectancy=self.expectancy if self.expectancy is not None else Decimal("0"),
+            avg_r=self.avg_r,
+            long_gross_pnl=self.long_gross_pnl,
+            short_gross_pnl=self.short_gross_pnl,
+            long_net_pnl=self.long_net_pnl,
+            short_net_pnl=self.short_net_pnl,
+            long_net_status=self.long_net_status,
+            short_net_status=self.short_net_status,
+            net_status=self.net_status,
+            funding_status=self.funding_status,
+            unknown_funding_count=self.unknown_funding_count,
+            unknown_gross_count=self.unknown_gross_count,
+            excluded_from_net_count=self.excluded_from_net_count,
+            failure_distribution=dict(self.failure_distribution),
+        )
+
     def legacy_metrics(self) -> dict:
         """Return the pre-G01 field names with honest zero-for-unknown values.
 

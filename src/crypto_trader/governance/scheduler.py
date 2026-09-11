@@ -202,50 +202,8 @@ class DailyReviewScheduler:
 
 
 def _storage_stats(stats: DailyReviewStats) -> DailyReviewStats:
-    """Copy nullable ratios into legacy non-null columns with status carried.
-
-    ``DailyReviewRunORM`` is a pre-G01 table (non-null Decimal columns, no
-    status columns).  The returned copy is only used for that legacy write;
-    the authoritative report returned to callers keeps null + status.
-    """
-    return DailyReviewStats(
-        date=stats.date,
-        daily_pnl=stats.daily_pnl,
-        long_pnl=stats.long_pnl,
-        short_pnl=stats.short_pnl,
-        gross_pnl=stats.gross_pnl,
-        net_pnl=stats.net_pnl,
-        fees=stats.fees,
-        funding_pnl=stats.funding_pnl,
-        trade_count=stats.trade_count,
-        win_count=stats.win_count,
-        loss_count=stats.loss_count,
-        breakeven_count=stats.breakeven_count,
-        # Legacy non-null columns: unknown ratios are stored as 0 while the
-        # authoritative status travels in output_ref and the returned report.
-        win_rate=stats.win_rate if stats.win_rate is not None else Decimal("0"),
-        win_rate_status=stats.win_rate_status,
-        profit_factor=(
-            stats.profit_factor if stats.profit_factor is not None else Decimal("0")
-        ),
-        profit_factor_status=stats.profit_factor_status,
-        expectancy=(
-            stats.expectancy if stats.expectancy is not None else Decimal("0")
-        ),
-        avg_r=stats.avg_r,
-        long_gross_pnl=stats.long_gross_pnl,
-        short_gross_pnl=stats.short_gross_pnl,
-        long_net_pnl=stats.long_net_pnl,
-        short_net_pnl=stats.short_net_pnl,
-        long_net_status=stats.long_net_status,
-        short_net_status=stats.short_net_status,
-        net_status=stats.net_status,
-        funding_status=stats.funding_status,
-        unknown_funding_count=stats.unknown_funding_count,
-        unknown_gross_count=stats.unknown_gross_count,
-        excluded_from_net_count=stats.excluded_from_net_count,
-        failure_distribution=dict(stats.failure_distribution),
-    )
+    """Legacy non-null storage copy; statuses travel in output_ref."""
+    return stats.for_storage()
 
 
 def _review_output_ref(date: str, stats: DailyReviewStats) -> str:
