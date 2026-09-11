@@ -59,6 +59,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         attempt_clock: Callable[[], datetime] | None = None,
         opportunity_board: OpportunityBoard | None = None,
         evidence_router: PerSymbolEvidenceRouter | None = None,
+        selection_service=None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -77,6 +78,11 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # cooldown replaces the single-symbol clock (same semantics).
         self.opportunity_board = opportunity_board
         self.evidence_router = evidence_router
+        # ChiefTrader ACTIVE market selection (research-attention only). The
+        # selected symbols form the research queue; the SAME ChiefTrader still
+        # owns the final directional decision.
+        self.selection_service = selection_service
+        self._researched_selection_ids: set[str] = set()
         self._last_attempt_by_symbol: dict[str, datetime] = {}
         self._skip_until: dict[str, datetime] = {}
         # This is an attempt cooldown, not an entry cooldown.  Every provider
@@ -100,7 +106,61 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             for s, last in self._last_attempt_by_symbol.items()
             if now - last < self.retry_cooldown
         }
+        queued = self._selected_research_queue(exclude=exclude, now=now)
+        if queued is not None:
+            return queued
         return self.opportunity_board.next_agenda_symbol(exclude=exclude)
+
+    # ------------------------------------------------------- research queue
+    def current_selection(self):
+        """Latest usable ChiefTrader selection (expired scans are refused)."""
+        service = self.selection_service
+        if service is None:
+            return None
+        record = getattr(service, "last_record", None)
+        if record is None:
+            return None
+        snapshot = self.opportunity_board.current_snapshot()
+        if snapshot is None or snapshot.scan_id != record.scan_id:
+            return None
+        if snapshot.is_expired(now=self.attempt_clock()):
+            return None
+        return record
+
+    def _selected_research_queue(self, *, exclude: set[str], now) -> str | None:
+        record = self.current_selection()
+        if record is None or record.selection_id in self._researched_selection_ids:
+            return None
+        if record.status not in ("SUCCESS", "NO_RESEARCH"):
+            return None
+        if record.status == "NO_RESEARCH":
+            self._researched_selection_ids.add(record.selection_id)
+            return None
+        for symbol in record.selected_symbol_names:
+            if symbol in exclude:
+                continue
+            return symbol
+        # every selected symbol has been reviewed for this selection round
+        self._researched_selection_ids.add(record.selection_id)
+        return None
+
+    def selection_lineage(self, symbol: str) -> dict:
+        """Scan/selection lineage for one research target (§13)."""
+        record = self.current_selection()
+        snapshot = self.opportunity_board.current_snapshot() if self.opportunity_board else None
+        if snapshot is not None and snapshot.scan_id == (
+            getattr(record, "scan_id", None) if record else None
+        ):
+            scan_id = snapshot.scan_id
+        else:
+            scan_id = snapshot.scan_id if snapshot is not None else None
+        if record is not None and symbol in record.selected_symbol_names:
+            return {
+                "scan_id": record.scan_id,
+                "selection_id": record.selection_id,
+                "selection_source": "DEEPSEEK_SELECTION",
+            }
+        return {"scan_id": scan_id, "selection_id": None, "selection_source": None}
 
     async def on_market_data(self, ctx: StrategyContext):
         # OPEN-position management is a separate canonical LLM lifecycle.  New
@@ -130,13 +190,18 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             else None
         )
         opportunity_context = None
+        selected_lineage = self.selection_lineage(ctx.symbol)
+        deepseek_selected = selected_lineage.get("selection_id") is not None
         if self.opportunity_board is not None:
             opportunity_context = build_opportunity_context(
                 symbol=ctx.symbol,
                 candidate=candidate,
                 board=self.opportunity_board,
-                deepseek_selected=False,
+                deepseek_selected=deepseek_selected,
             )
+            if deepseek_selected:
+                opportunity_context["selection_id"] = selected_lineage["selection_id"]
+                opportunity_context["scan_id"] = selected_lineage["scan_id"]
 
         evidence = (
             evidence_engine.analyze_evidence(ctx)
@@ -193,6 +258,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # MASTER DIRECTIVE §30: durable opportunity lineage (observability
         # only — it never gates Risk or Execution).
         lineage = self._lineage(candidate)
+        lineage.update(selected_lineage)
         await self.decisions.save(
             decision,
             run_id=ctx.run_id,
@@ -212,8 +278,12 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 factor_evidence_present=lineage["factor_evidence_present"],
                 factor_trigger_count=len(lineage["triggered_factors"]),
                 decision_id=decision.decision_id,
+                deepseek_selected=deepseek_selected,
+                scan_id=lineage.get("scan_id"),
+                selection_id=lineage.get("selection_id"),
             )
             self.opportunity_board.mark_reviewed(ctx.symbol)
+            self.opportunity_board.mark_llm_research(ctx.symbol, now)
 
         # This commit is deliberately before TradePlan creation.  It is the
         # durable factual proof that the LLM owned the proposed direction.
@@ -389,7 +459,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 "candidate_source": CANDIDATE_SOURCE_MARKET_OBSERVER,
                 "triggered_factors": [],
                 "factor_evidence_present": False,
-                "nominated_reason": "routine broad-market review; no factor trigger",
+                "nominated_reason": "routine program-rotation review; no factor trigger",
             }
         return {
             "candidate_source": candidate.source,

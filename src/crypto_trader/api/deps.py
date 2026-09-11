@@ -156,6 +156,10 @@ class AppState:
     supervisor: TradingRuntimeSupervisor | None = None
     # MASTER DIRECTIVE §29: evidence-only opportunity snapshot (no authority).
     opportunity_board: Any | None = None
+    # Market-Intelligence V1 (research-attention only; no trading authority).
+    market_selection_service: Any | None = None
+    market_directory: Any | None = None
+    llm_budget: Any | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
     llm_runtime: LLMRuntimeStatus = field(default_factory=LLMRuntimeStatus)
 

@@ -34,6 +34,8 @@ class LLMDecisionRecord:
     factor_evidence_present: bool | None = None
     triggered_factors: list[Any] = dataclass_field(default_factory=list)
     evidence_package: dict[str, Any] | None = None
+    scan_id: str | None = None
+    selection_id: str | None = None
 
 
 class LLMDecisionStore:
@@ -97,6 +99,8 @@ class LLMDecisionStore:
                     triggered_factors_json=lineage.get("triggered_factors"),
                     factor_evidence_present=lineage.get("factor_evidence_present"),
                     nominated_reason=lineage.get("nominated_reason"),
+                    scan_id=lineage.get("scan_id"),
+                    selection_id=lineage.get("selection_id"),
                     created_at=_created_at(decision.created_at),
                 )
                 session.add(row)
@@ -190,6 +194,8 @@ class LLMDecisionStore:
             factor_evidence_present=row.factor_evidence_present,
             triggered_factors=list(row.triggered_factors_json or []),
             evidence_package=row.evidence_package_json,
+            scan_id=getattr(row, "scan_id", None),
+            selection_id=getattr(row, "selection_id", None),
         )
 
 

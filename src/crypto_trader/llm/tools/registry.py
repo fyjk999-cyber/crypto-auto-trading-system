@@ -11,6 +11,10 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 MAX_SELECTED_TOOLS = 8
+# Locally generated fail-closed evidence (timeout / provider error) is stamped
+# when the tool returns, which can be marginally after the request ``now``.
+# Only genuinely future evidence is refused; the original reason is preserved.
+MAX_EVIDENCE_FUTURE_SKEW_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -180,15 +184,34 @@ class LLMToolRegistry:
                 else evidence.timestamp.replace(tzinfo=UTC)
             )
             age = (now.astimezone(UTC) - timestamp).total_seconds()
-            if age < 0:
+            # A tool payload claiming a FUTURE data time is refused. The only
+            # exception is fail-closed evidence this registry itself generated
+            # (timeout / provider error): its timestamp is stamped when the
+            # call returns and may be marginally after the request ``now``.
+            locally_generated_failure = (
+                evidence.data_quality == "UNAVAILABLE"
+                and evidence.confidence_of_measurement == 0.0
+            )
+            future_evidence = age < 0 and not (
+                locally_generated_failure and age >= -MAX_EVIDENCE_FUTURE_SKEW_SECONDS
+            )
+            if future_evidence:
                 evidence = ToolEvidence(
-                    tool_name=name, symbol=symbol, timestamp=timestamp,
-                    features={}, supporting_evidence=[],
-                    contrary_evidence=["future evidence rejected"],
-                    confidence_of_measurement=0.0, data_quality="UNAVAILABLE", source_refs=[],
+                    tool_name=name,
+                    symbol=symbol,
+                    timestamp=timestamp,
+                    features={},
+                    supporting_evidence=[],
+                    contrary_evidence=[
+                        *evidence.contrary_evidence,
+                        f"future evidence rejected: {age:.1f}s ahead",
+                    ],
+                    confidence_of_measurement=0.0,
+                    data_quality="UNAVAILABLE",
+                    source_refs=[],
                 )
             freshness = "FRESH" if age <= max_age_seconds else "STALE"
-            if age < 0:
+            if future_evidence:
                 freshness = "FUTURE_REJECTED"
             items.append(
                 EvidenceItem(

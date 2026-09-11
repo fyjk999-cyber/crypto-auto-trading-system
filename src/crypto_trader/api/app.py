@@ -169,6 +169,112 @@ def create_app(state: AppState) -> FastAPI:
             "updated_at": snap["updated_at"],
         }
 
+    @app.get("/market-intelligence/snapshot")
+    async def market_intelligence_snapshot():
+        """Current immutable MarketObservationSnapshot + market-set counts (§17).
+
+        Read-only observability. Exposes no secrets and no chain-of-thought.
+        """
+        board = state.opportunity_board
+        if board is None:
+            return {"enabled": False}
+        snap = board.snapshot()
+        return {
+            "enabled": True,
+            "scan_id": snap["scan_id"],
+            "snapshot_status": snap["snapshot_status"],
+            "snapshot_age_seconds": snap["snapshot_age_seconds"],
+            "snapshot": snap["snapshot_summary"],
+            "market_sets": snap["market_sets"],
+            "data_quality_summary": snap["data_quality_summary"],
+            "factor_candidates": snap["candidates"],
+            "rotation_symbols": snap["rotation_symbols"],
+            "coverage": snap["coverage"],
+            "authority": snap["authority"],
+        }
+
+    @app.get("/market-intelligence/selection")
+    async def market_intelligence_selection():
+        """Latest ChiefTrader MarketSelection (research attention only, §17)."""
+        service = getattr(state, "market_selection_service", None)
+        if service is None:
+            return {"enabled": False}
+        record = getattr(service, "last_record", None)
+        return {
+            "enabled": True,
+            "latest_selection": record.as_dict() if record is not None else None,
+            "cooldown_seconds": getattr(service, "cooldown_seconds", None),
+            "cooldown_remaining_seconds": (
+                service.cooldown_remaining_seconds(now=datetime.now(UTC))
+                if record is not None
+                else 0.0
+            ),
+            "pool_size": getattr(record, "pool_size", None) if record else None,
+            "authority": {
+                "selection_authority": "RESEARCH_ATTENTION_ONLY",
+                "directional_authority": "NONE",
+            },
+        }
+
+    @app.get("/market-intelligence/lineage")
+    async def market_intelligence_lineage(limit: int = 25):
+        """Scan -> selection -> decision lineage (§13/§17)."""
+        board = state.opportunity_board
+        if board is None:
+            return {"enabled": False}
+        snap = board.snapshot()
+        return {
+            "enabled": True,
+            "scan_id": snap["scan_id"],
+            "selections": (
+                [
+                    record.as_dict()
+                    for record in state.market_selection_service.store.recent(
+                        limit=max(1, min(int(limit), 50))
+                    )
+                ]
+                if getattr(state, "market_selection_service", None) is not None
+                and getattr(state.market_selection_service, "store", None) is not None
+                else []
+            ),
+            "recent_decisions": snap["recent_decisions"][: max(1, min(int(limit), 50))],
+        }
+
+    @app.get("/market-intelligence/directory")
+    async def market_intelligence_directory(page: int = 1, exclude: str = ""):
+        """Read-only bounded Market Directory (max 2 pages per round)."""
+        directory = getattr(state, "market_directory", None)
+        if directory is None:
+            return {"enabled": False}
+        excluded = {s for s in exclude.split(",") if s}
+        return {
+            "enabled": True,
+            **directory.page(page=page, exclude=excluded),
+        }
+
+    @app.get("/market-intelligence/cache")
+    async def market_intelligence_cache():
+        """Canonical shared market-data cache state (read-only)."""
+        from crypto_trader.market_data.cache import get_shared_market_data_cache
+
+        return {"enabled": True, **get_shared_market_data_cache().snapshot()}
+
+    @app.get("/market-intelligence/budget")
+    async def market_intelligence_budget():
+        """Global LLM budget state (operation/token/latency facts, no secrets)."""
+        budget = getattr(state, "llm_budget", None)
+        if budget is None:
+            return {"enabled": False}
+        return {"enabled": True, **budget.snapshot()}
+
+    @app.get("/market-intelligence/symbol/{symbol}")
+    async def market_intelligence_symbol(symbol: str):
+        """Per-symbol fairness clocks + current candidate view (§17)."""
+        board = state.opportunity_board
+        if board is None:
+            return {"enabled": False}
+        return {"enabled": True, **board.symbol_observability(symbol)}
+
     @app.get("/opportunity/stats")
     async def opportunity_stats():
         """Counters proving factor-optional behavior (§29)."""

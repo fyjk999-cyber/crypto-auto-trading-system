@@ -115,8 +115,18 @@ class TradingEngine:
         valuation_service: ValuationService | None = None,
         funding_supervisor=None,
         evidence_router=None,
+        market_intelligence=None,
+        market_selection_service=None,
+        market_selection_interval_seconds: float = 30.0,
     ) -> None:
         self.settings = settings
+        # Market-Intelligence observability sink (counters only, no authority).
+        self.market_intelligence = market_intelligence
+        # ChiefTrader active market selection runs as its OWN independent loop
+        # so slow scans / slow selection / slow research can never block
+        # position review (§3.4 priority order).
+        self.market_selection_service = market_selection_service
+        self.market_selection_interval_seconds = float(market_selection_interval_seconds)
         self.database = database
         self.adapter = adapter
         self.order_manager = order_manager
@@ -257,6 +267,14 @@ class TradingEngine:
             self._tasks.append(
                 asyncio.create_task(
                     self.opportunity_service.run_forever(), name="opportunity-scanner"
+                )
+            )
+        if self.market_selection_service is not None:
+            # ChiefTrader research-attention selection: its own task, its own
+            # cooldown/duplicate guards, zero directional authority.
+            self._tasks.append(
+                asyncio.create_task(
+                    self._market_selection_loop(), name="market-selection"
                 )
             )
         await self.audit.log("ENGINE_STARTED", target=self.run_id, run_id=self.run_id)
@@ -461,6 +479,30 @@ class TradingEngine:
                         run_id=self.run_id,
                     )
             await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
+
+    async def _market_selection_loop(self) -> None:
+        """Independent selection loop (§14).
+
+        Observes the latest immutable snapshot, honours cooldown / duplicate /
+        freshness guards, and never raises into the runtime: any failure
+        degrades to a recorded selection status while positions keep running.
+        """
+        while True:
+            try:
+                positions = await self.portfolio.get_positions()
+                symbols = [
+                    symbol
+                    for symbol, position in positions.items()
+                    if Decimal(str(position.quantity)) != 0
+                ]
+                await self.market_selection_service.maybe_select(
+                    existing_positions=symbols
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("market selection loop iteration failed", exc_info=True)
+            await asyncio.sleep(max(1.0, self.market_selection_interval_seconds))
 
     async def _funding_loop(self) -> None:
         while True:
@@ -1293,6 +1335,15 @@ class TradingEngine:
             run_id=run_id,
         )
         await self._persist_risk(risk_decision)
+        if (
+            self.market_intelligence is not None
+            and risk_decision.decision
+            in {ExecutionDecision.APPROVE, ExecutionDecision.SCALE_DOWN}
+        ):
+            try:
+                self.market_intelligence.record_risk_approval()
+            except Exception:  # observability must never affect risk authority
+                logger.warning("market_intelligence.record_risk_approval failed", exc_info=True)
         if trade_plan_id and is_entry:
             await self.trade_plans.link(
                 trade_plan_id, risk_decision_id=risk_decision.risk_decision_id
@@ -1651,6 +1702,11 @@ class TradingEngine:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return
+        if self.market_intelligence is not None:
+            try:
+                self.market_intelligence.record_execution()
+            except Exception:  # observability must never affect execution
+                logger.warning("market_intelligence.record_execution failed", exc_info=True)
         position = await self.portfolio.get_position(fill.symbol)
         account = await self.portfolio.get_account(self.settings.effective_mode())
         if order.metadata.get("instrument_type") == "LINEAR_PERP":

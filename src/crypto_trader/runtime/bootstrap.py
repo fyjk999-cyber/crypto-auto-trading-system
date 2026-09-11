@@ -24,6 +24,7 @@ from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
 from crypto_trader.llm.tools.factor_runtime import register_factor_runtime_tools
 from crypto_trader.llm.tools.market_history import register_market_history_tool
+from crypto_trader.llm_chief.budget import BudgetConfig, GlobalLLMBudget
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
@@ -33,10 +34,16 @@ from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.market_data.opportunity.board import OpportunityBoard
+from crypto_trader.market_data.opportunity.directory import MarketDirectory
 from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
 from crypto_trader.market_data.opportunity.factors import DEFAULT_FACTORS
 from crypto_trader.market_data.opportunity.scanner import FactorScanner
-from crypto_trader.market_data.opportunity.service import OpportunityScannerService
+from crypto_trader.market_data.opportunity.selection import MarketSelectionService
+from crypto_trader.market_data.opportunity.selection_store import MarketSelectionStore
+from crypto_trader.market_data.opportunity.service import (
+    OpportunityScannerService,
+    ScannerConfig,
+)
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -153,6 +160,17 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             scan_interval_seconds=settings.opportunity_scan_interval_seconds,
             active_set_size=settings.opportunity_active_set_size,
             rotation_size=settings.opportunity_rotation_size,
+            max_concurrency=settings.opportunity_max_concurrency,
+            config=ScannerConfig(
+                scan_interval_seconds=settings.opportunity_scan_interval_seconds,
+                active_set_size=settings.opportunity_active_set_size,
+                rotation_size=settings.opportunity_rotation_size,
+                max_concurrency=settings.opportunity_max_concurrency,
+                per_request_timeout_seconds=settings.opportunity_request_timeout_seconds,
+                whole_scan_deadline_seconds=settings.opportunity_scan_deadline_seconds,
+                candidate_ttl_seconds=settings.opportunity_candidate_ttl_seconds,
+                oi_sample_max_symbols=settings.opportunity_oi_sample_max_symbols,
+            ),
         )
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
@@ -194,6 +212,37 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     if feed_client is not None:
         register_market_history_tool(tools, adapter.feed)
     tool_chief = ToolDrivenChiefTrader(chief, tools)
+    # Market-Intelligence V1: single global LLM budget + bounded read-only
+    # market directory + durable selection store. Selection is research
+    # attention only; the SAME chief owns the final decision.
+    llm_budget = GlobalLLMBudget(
+        BudgetConfig(
+            window_seconds=settings.llm_budget_window_seconds,
+            max_calls_per_window=settings.llm_budget_max_calls_per_window,
+        )
+    )
+    market_directory = MarketDirectory(
+        board=opportunity_board,
+        page_size=settings.market_directory_page_size,
+        max_pages=settings.market_directory_max_pages,
+    )
+    selection_store = MarketSelectionStore(database.session_factory)
+    await selection_store.restore_duplicate_guard()
+    market_selection_service = (
+        MarketSelectionService(
+            board=opportunity_board,
+            chief=chief,
+            budget=llm_budget,
+            store=selection_store,
+            directory=market_directory,
+            cooldown_seconds=settings.market_selection_min_interval_seconds,
+            pool_size=settings.market_selection_pool_size,
+            timeout_seconds=settings.market_selection_timeout_seconds,
+        )
+        if settings.market_selection_enabled
+        else None
+    )
+    opportunity_board.selection_service = market_selection_service
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
         max_order_notional=risk.config.max_order_notional,
@@ -213,6 +262,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         sizer=sizer,
         opportunity_board=opportunity_board,
         evidence_router=evidence_router,
+        selection_service=market_selection_service,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (
@@ -263,6 +313,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         funding_coverage=funding_coverage,
         valuation_service=valuation_service,
         funding_supervisor=funding_supervisor,
+        market_intelligence=opportunity_board,
+        market_selection_service=market_selection_service,
+        market_selection_interval_seconds=settings.market_selection_loop_interval_seconds,
     )
 
     app_state = AppState(
@@ -279,6 +332,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
         opportunity_board=opportunity_board,
+        market_selection_service=market_selection_service,
+        llm_budget=llm_budget,
+        market_directory=market_directory,
     )
     return RuntimeBundle(
         settings=settings,

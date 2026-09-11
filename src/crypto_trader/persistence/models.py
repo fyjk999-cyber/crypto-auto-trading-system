@@ -519,6 +519,10 @@ class LLMDecisionORM(Base):
     unrealized_pnl: Mapped[Decimal | None] = mapped_column(ExactDecimal())
     time_in_trade_seconds: Mapped[float | None] = mapped_column(Float)
     original_trade_plan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Market-Intelligence-V1 lineage (§13): which immutable snapshot and which
+    # ChiefTrader market selection produced this research target/decision.
+    scan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    selection_id: Mapped[str | None] = mapped_column(String(64), index=True)
     original_entry_decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1153,4 +1157,34 @@ class ResearchOptimizationORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     strategy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketSelectionORM(Base):
+    """Durable record of one ChiefTrader market-selection round (§12).
+
+    Selection is research-attention authority ONLY. The schema deliberately has
+    no direction / order / quantity fields; those belong to the final decision.
+    """
+
+    __tablename__ = "market_selections"
+
+    selection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    provider: Mapped[str | None] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(128))
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    candidate_set_ref: Mapped[str | None] = mapped_column(String(255))
+    directory_query_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    selected_symbols_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    selection_source: Mapped[str | None] = mapped_column(String(40))
+    selection_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    snapshot_age_seconds: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -19,12 +20,37 @@ from crypto_trader.llm_chief.provider import LLMProvider
 from crypto_trader.market_data.opportunity.context import (
     render_opportunity_context_block,
 )
+from crypto_trader.market_data.opportunity.selection import (
+    ST_FAILED,
+    ST_INVALID_OUTPUT,
+    ST_LLM_UNAVAILABLE,
+    ST_SUCCESS,
+    ST_TIMEOUT,
+    MarketSelectionOutput,
+    parse_selection_payload,
+    render_selection_prompt,
+)
 
 
 class ToolSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tools: list[str] = Field(default_factory=list, max_length=MAX_SELECTED_TOOLS)
+
+
+@dataclass(slots=True)
+class MarketSelectionResult:
+    """Outcome of one ChiefTrader market-selection phase (research attention)."""
+
+    ok: bool
+    status: str
+    output: MarketSelectionOutput | None = None
+    error_code: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    latency_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class ChiefTraderEngine:
@@ -73,6 +99,75 @@ class ChiefTraderEngine:
         if any(tool not in names for tool in selection.tools):
             return None, "UNKNOWN_TOOL_SELECTED"
         return selection.tools, None
+
+    async def select_markets(
+        self,
+        selection_context: dict,
+        *,
+        timeout_seconds: float = 40.0,
+        selection_id: str,
+        scan_id: str,
+        known_symbols: set[str] | None = None,
+    ) -> MarketSelectionResult:
+        """Phase 1 of the SAME ChiefTrader authority: research attention only.
+
+        It cannot emit direction, quantity, leverage, stops or orders — the
+        strict schema plus the explicit authority-leak scan rejects them.
+        """
+        if self.provider is None:
+            return MarketSelectionResult(
+                ok=False, status=ST_LLM_UNAVAILABLE, error_code="LLM_UNAVAILABLE"
+            )
+        prompt = render_selection_prompt(selection_context)
+        try:
+            response = await self.provider.complete_json(
+                prompt=prompt,
+                temperature=0.0,
+                timeout_seconds=max(1.0, float(timeout_seconds)),
+                retries=1,
+                max_tokens=900,
+                thinking=False,
+                operation="market_selection",
+            )
+        except TimeoutError:
+            return MarketSelectionResult(
+                ok=False, status=ST_TIMEOUT, error_code="SELECTION_TIMEOUT"
+            )
+        except Exception as exc:  # provider explosion -> fail closed, never fake
+            return MarketSelectionResult(
+                ok=False,
+                status=ST_FAILED,
+                error_code=f"{type(exc).__name__}"[:64],
+            )
+        usage = response.token_usage or {}
+        result_kwargs = {
+            "provider": response.provider,
+            "model": response.model,
+            "latency_ms": int(response.latency_ms),
+            "input_tokens": _token(usage, "prompt_tokens", "input_tokens"),
+            "output_tokens": _token(usage, "completion_tokens", "output_tokens"),
+        }
+        if not response.ok or response.parsed_json is None:
+            return MarketSelectionResult(
+                ok=False,
+                status=ST_LLM_UNAVAILABLE,
+                error_code=(response.error or "LLM_UNAVAILABLE")[:64],
+                **result_kwargs,
+            )
+        parsed = parse_selection_payload(
+            response.parsed_json,
+            selection_id=selection_id,
+            scan_id=scan_id,
+            known_symbols=None,  # pool/directory membership checked by the service
+        )
+        if isinstance(parsed, str):
+            return MarketSelectionResult(
+                ok=False,
+                status=ST_INVALID_OUTPUT,
+                error_code=parsed,
+                **result_kwargs,
+            )
+        return MarketSelectionResult(ok=True, status=ST_SUCCESS, output=parsed, **result_kwargs)
 
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
@@ -188,3 +283,15 @@ class ChiefTraderEngine:
         raw["model"] = model or getattr(self.provider, "model", "unknown")
         raw["model_version"] = self.model_version
         return ChiefTraderDecision(**raw)
+
+
+def _token(usage: dict, *keys: str) -> int | None:
+    for key in keys:
+        value = usage.get(key) if isinstance(usage, dict) else None
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None

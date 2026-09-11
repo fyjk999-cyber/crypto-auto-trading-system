@@ -22,13 +22,38 @@ def register_market_history_tool(registry: LLMToolRegistry, feed) -> None:
 
 
 def _tool(feed):
+    from crypto_trader.market_data.cache import (
+        as_of_bucket,
+        candle_cache_key,
+        closed_candle_ttl_seconds,
+        get_shared_market_data_cache,
+    )
+
+    cache = get_shared_market_data_cache()
+
     async def execute(symbol: str, context: dict) -> ToolEvidence:
         instrument_id = feed.provider_symbol(symbol)
 
         async def fetch(interval: str):
             duration = _INTERVAL_DURATION[interval]
             as_of = context["as_of"]
-            rows = await feed.client.get_candles(instrument_id, interval, 60)
+            rows, quality, _hit = await cache.get_or_fetch(
+                candle_cache_key(
+                    instrument=instrument_id,
+                    timeframe=interval,
+                    limit=60,
+                    # "closed candles usable at T" is keyed by the interval
+                    # bucket of the decision time, so cached evidence can never
+                    # leak across different as-of instants.
+                    as_of_bucket=as_of_bucket(as_of, duration.total_seconds()),
+                ),
+                lambda: feed.client.get_candles(instrument_id, interval, 60),
+                ttl_seconds=closed_candle_ttl_seconds(_INTERVAL_DURATION[interval].total_seconds()),
+                source="OKX /api/v5/market/candles",
+                is_usable=lambda payload: isinstance(payload, list) and bool(payload),
+            )
+            if quality != "VALID" or rows is None:
+                return interval, []
             selected = []
             for row in reversed(rows):
                 if not isinstance(row, list) or len(row) < 9:
