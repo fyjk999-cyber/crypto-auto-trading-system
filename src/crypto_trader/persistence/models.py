@@ -1187,4 +1187,7 @@ class MarketSelectionORM(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     snapshot_age_seconds: Mapped[float | None] = mapped_column(Float)
+    # ChiefTrader directory exploration lineage (research attention only).
+    exploration_rounds: Mapped[int | None] = mapped_column(Integer)
+    directory_query_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -89,6 +89,28 @@ Attempted analysis is never reported as successful coverage.
 6. A FAILED scan publishes its own `scan_id`, zero candidates and an error code. It can
    never make a stale board look current.
 
+## 4b. Execution status vs feature coverage
+
+`status` describes whether the scan executed its designed plan:
+
+| Status | Meaning |
+|---|---|
+| `COMPLETE` | the designed bounded plan executed successfully (even when a bounded/rotating feature covers < 100% of the universe) |
+| `PARTIAL` | an UNEXPECTED provider failure, timeout, missing required component or incomplete execution occurred |
+| `FAILED` | the core snapshot could not be truthfully produced |
+
+Feature coverage is tracked separately and never conflated with health:
+
+```
+ticker_coverage_count / ticker_coverage_ratio
+funding_coverage_count / funding_coverage_ratio
+oi_coverage_count / oi_coverage_ratio
+analysis_attempted_count / analysis_success_count / analysis_ready_count
+```
+
+`status = COMPLETE` with `oi_coverage_ratio < 1` is a valid, truthful state;
+`PARTIAL` is never used to describe intentional bounded coverage.
+
 ## 5. Selection lifecycle
 
 ```
@@ -98,9 +120,12 @@ valid fresh snapshot (COMPLETE | PARTIAL, not expired)
   -> cooldown check (default 300 s)
   -> duplicate guard (one autonomous selection per scan_id, restart-durable)
   -> global LLM budget (P4 — higher priorities are reserved first)
-  -> SAME ChiefTrader select_markets()
+  -> SAME ChiefTrader select_markets()  [phase 1: SELECT | NO_RESEARCH | REQUEST_DIRECTORY]
+       if REQUEST_DIRECTORY:
+            bounded read-only directory lookup (<=2 pages, <=25 rows/page, P4 budget)
+            -> SAME ChiefTrader select_markets()  [phase 2, terminal: SELECT | NO_RESEARCH]
   -> strict schema validation (authority-leak rejection)
-  -> MarketSelection persisted; research queue exposed to the entry review loop
+  -> MarketSelection persisted (incl. exploration provenance); research queue exposed
 ```
 
 Empty pools are reported as errors (`EMPTY_RESEARCH_POOL`), never silently as

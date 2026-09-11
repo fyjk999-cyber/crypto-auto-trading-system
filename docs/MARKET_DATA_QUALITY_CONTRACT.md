@@ -18,7 +18,18 @@ Fact(
 ```
 
 Quality states: `VALID`, `MISSING`, `STALE`, `FUTURE_TIMESTAMP`, `NON_FINITE`,
-`REQUEST_FAILED`, `UNSUPPORTED`, `ESTIMATED`, `PARTIAL`, `MALFORMED`.
+`REQUEST_FAILED`, `UNSUPPORTED`, `NOT_SAMPLED`, `ESTIMATED`, `PARTIAL`, `MALFORMED`.
+
+`UNSUPPORTED` and `NOT_SAMPLED` are deliberately different:
+
+| State | Meaning |
+|---|---|
+| `UNSUPPORTED` | the provider/instrument/field combination fundamentally cannot supply the fact (capability limitation) |
+| `NOT_SAMPLED` | the fact IS supported but was not collected in this bounded cycle (coverage decision) |
+
+A rotating coverage gap must never be reported as provider incapability or as a
+runtime failure, and DeepSeek must never read "not collected this cycle" as
+"this market has no such fact".
 
 Only `VALID`, `ESTIMATED` and `PARTIAL` are usable for computation. No other state may
 enter ranking, factor strength, liquidity comparison, OI change, turnover calculation or
@@ -102,6 +113,29 @@ depth_semantics = "best bid/ask size only; full depth is an explicit tool reques
 
 Full-depth imbalance is **not** claimed. If the factors ever require depth, it must come
 from an explicit read-only tool call.
+
+## 6b. Open interest contract (live-verified)
+
+`GET /api/v5/public/open-interest?instType=SWAP` (no `instId`) is the broad form
+and returns one row per instrument. Live verification at correction time:
+
+```
+HTTP 200 · code 0 · 478 rows · 463 of them -USDT-SWAP (the whole discovery universe)
+fields: instId, instType, oi (contracts), oiCcy (base ccy), oiUsd (notional), ts
+```
+
+Notable contract details, all observed directly:
+
+| Request | Result |
+|---|---|
+| `/api/v5/public/open-interest?instType=SWAP` | works (broad) |
+| `/api/v5/public/open-interest?instType=SWAP&instId=<real>` | works (single) |
+| `/api/v5/public/open-interest?instType=SWAP&instId=ANY` | code 51001 — `ANY` is NOT valid for OI (it IS valid for funding) |
+| `/api/v5/public/open-interests?instType=SWAP` (plural path) | HTTP 404 |
+
+So the primary source is ONE broad request; per-instrument calls remain only as a
+bounded fallback for instruments absent from a successful broad response, and
+`oi_sample_max_symbols` now bounds that fallback (not a 120-symbol rotation).
 
 ## 7. OI factual time series
 

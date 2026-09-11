@@ -87,6 +87,44 @@ def test_real_okx_batch_funding_contract_returns_rows_not_empty():
     assert zeros, "expected some factual zero funding rates in a real snapshot"
 
 
+def test_real_okx_broad_open_interest_contract():
+    """LIVE_OI_BATCH_SUPPORTED must be established by the real provider response.
+
+    The correction directive requires this to be verified directly, not inferred
+    from a failed ``instId=ANY`` call: open interest and funding have DIFFERENT
+    contracts. ``instType=SWAP`` without ``instId`` is the broad form.
+    """
+
+    async def run():
+        client = _client()
+        try:
+            rows = await client.get_open_interests("SWAP")
+            single = await client.get_open_interest("BTC-USDT-SWAP")
+        finally:
+            await client.disconnect()
+        return rows, single
+
+    rows, single = _run(run())
+    assert isinstance(rows, list)
+    usdt = [row for row in rows if str(row.get("instId", "")).endswith("-USDT-SWAP")]
+    live_batch_supported = len(usdt) > 100
+    print(f"LIVE_OI_BATCH_SUPPORTED = {'YES' if live_batch_supported else 'NO'} "
+          f"(rows={len(rows)}, usdt_rows={len(usdt)})")
+    assert live_batch_supported, (
+        f"OKX broad open interest returned only {len(usdt)} USDT perpetual rows"
+    )
+    sample = usdt[0]
+    for field in ("instId", "oi", "oiCcy", "oiUsd", "ts"):
+        assert field in sample, f"missing provider field: {field}"
+    float(sample["oi"])
+    float(sample["oiUsd"])
+    assert int(sample["ts"]) > 0
+    # single-instrument retrieval stays consistent with the broad row
+    broad_btc = next(row for row in usdt if row["instId"] == "BTC-USDT-SWAP")
+    assert float(single["open_interest"]) == float(broad_btc["oi"])
+    assert single["open_interest_usd"] is not None
+
+
 def test_real_okx_insttype_only_funding_request_is_rejected():
     """Proves the OLD request shape could never return data (fail-closed)."""
 

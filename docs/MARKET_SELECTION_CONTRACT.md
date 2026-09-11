@@ -27,6 +27,49 @@ Fairness: rotation uses the independent deep-analysis clock (`last_analysis_at`)
 fill uses the LLM-research clock (`last_llm_research_at`). Persistent hot factor
 candidates cannot starve non-factor markets because the factor category is capped.
 
+## 1b. Two-phase exploration (ChiefTrader-controlled)
+
+Phase 1 sees ONLY the bounded initial pool. The contract allows exactly three
+outcomes:
+
+```
+SELECT            0-3 symbols from the pool
+NO_RESEARCH       explicit, no research this round
+REQUEST_DIRECTORY ask the system to run ONE bounded read-only directory lookup
+```
+
+If and only if the ChiefTrader returns `REQUEST_DIRECTORY`:
+
+1. the system executes the requested structural query through the read-only
+   directory layer (bounded to <=2 pages of <=25 rows, no URLs, no shell, no
+   private data);
+2. the SAME ChiefTrader receives the directory result in a second, TERMINAL
+   phase and must return `SELECT` (0-3 symbols) or `NO_RESEARCH`.
+
+A second `REQUEST_DIRECTORY` is `INVALID_OUTPUT` with
+`error_code = NO_THIRD_EXPLORATION_PHASE`; there is no third phase in V1 and no
+recursive browsing. A second model call is a second P4 budget acquisition — if
+no P4 capacity remains, exploration fails closed (`DEFERRED` /
+`SKIPPED_BUDGET`) and position review is unaffected.
+
+Directory provenance is persisted per selected symbol, so the system can always
+answer "was this supplied in the initial pool, or did the ChiefTrader discover
+it?":
+
+```json
+{
+  "symbol": "ZECUSDT",
+  "from_initial_pool": false,
+  "discovered_via_directory": true,
+  "directory_query_ref": "market_directory_query:<scan_id>:sort=abs_move|page=1",
+  "directory_page_ref": "market_directory:<scan_id>:page=2",
+  "selection_source": "DEEPSEEK_SELECTION"
+}
+```
+
+Pool-native selections carry `from_initial_pool=true` /
+`discovered_via_directory=false` and NO directory refs.
+
 ## 2. Selection context (bounded)
 
 ```
@@ -43,16 +86,26 @@ No uncontrolled full histories. No secrets. No chain-of-thought.
 
 ```json
 {
-  "selection_state": "SELECTED | NO_RESEARCH",
+  "selection_state": "SELECT | NO_RESEARCH | REQUEST_DIRECTORY",
   "selected_symbols": [
     {
       "symbol": "ETHUSDT",
       "brief_reason": "short factual reason",
       "requested_additional_data": ["..."]
     }
-  ]
+  ],
+  "directory_query": {
+    "sort": "estimated_turnover | abs_move | symbol",
+    "page": 1,
+    "min_abs_move_pct": null,
+    "min_estimated_turnover": null,
+    "funding_side": "positive | negative | any"
+  }
 }
 ```
+
+`directory_query` is only valid with `REQUEST_DIRECTORY`; its fields are a closed
+structural set (unknown keys such as `url` are rejected).
 
 Validation (`pydantic` `extra="forbid"` **plus** an explicit authority-leak scan):
 
@@ -89,6 +142,14 @@ persisted as a selection.
 
 The duplicate guard survives restart: `MarketSelectionStore.restore_duplicate_guard()`
 rehydrates it from `market_selections` at bootstrap.
+
+## 4b. Token optimisation
+
+Phase 1 no longer preloads directory pages, and the snapshot summaries are
+trimmed to the attention-allocation facts (pool entries + quality/coverage
+counts). Directory data is fetched only when the ChiefTrader asks for it. Live
+phase-1 usage is reported by `tools/qualify_market_intelligence_v1.py`; no
+mandatory threshold is asserted because provider token accounting is not exact.
 
 ## 5. Market Directory (read-only)
 

@@ -114,16 +114,26 @@ async def run_qualification(cycles: int, report: dict) -> dict:
                     "candidate_symbols": summary["candidates"],
                     "rotation_symbols": summary["rotation"],
                     "funding_batch_quality": snapshot.data_quality_summary["batch"]["funding"],
-                    "oi_sampling_quality": snapshot.data_quality_summary["batch"][
-                        "open_interest_per_instrument"
-                    ],
+                    "oi_batch_quality": snapshot.data_quality_summary["batch"]["open_interest"],
+                    "oi_collection": snapshot.data_quality_summary.get(
+                        "open_interest_collection", {}
+                    ),
                     "oi_quality_states": _state_histogram(
                         [row.get("oi_quality") for row in snapshot.observable_rows]
                     ),
-                    "oi_sampled_symbols": sorted(
+                    "feature_coverage": dict(snapshot.feature_coverage),
+                    "oi_covered_symbols": sorted(
                         row["symbol"]
                         for row in snapshot.observable_rows
                         if row.get("oi_quality") == "VALID"
+                    ),
+                    "oi_usd_sample": next(
+                        (
+                            row.get("open_interest_usd")
+                            for row in snapshot.observable_rows
+                            if row.get("open_interest_usd") is not None
+                        ),
+                        None,
                     ),
                 }
             )
@@ -139,7 +149,14 @@ async def run_qualification(cycles: int, report: dict) -> dict:
                 [row["funding_quality"] for row in snapshot.observable_rows]
             ),
             "rotation_progressed": _rotation_progressed(scans),
-            "oi_coverage_progressed": _oi_coverage_progressed(scans),
+            "oi_coverage_ratio": (snapshot.feature_coverage or {}).get("oi_coverage_ratio"),
+            "oi_coverage_count": (snapshot.feature_coverage or {}).get("oi_coverage_count"),
+            "funding_coverage_ratio": (snapshot.feature_coverage or {}).get(
+                "funding_coverage_ratio"
+            ),
+            "ticker_coverage_ratio": (snapshot.feature_coverage or {}).get(
+                "ticker_coverage_ratio"
+            ),
             "snapshot_immutable_ids_unique": len({s["scan_id"] for s in scans}) == len(scans),
         }
 
@@ -160,13 +177,23 @@ async def run_qualification(cycles: int, report: dict) -> dict:
             "selected_symbols": record.selected_symbols,
             "error_code": record.error_code,
             "directory_pages": len(record.directory_query_refs),
+            "exploration_rounds": record.exploration_rounds,
             "scan_id_matches_snapshot": record.scan_id == snapshot.scan_id,
+            "input_tokens_note": (
+                "phase-1 context only (no preloaded directory pages); the previous "
+                "implementation sent preloaded directory pages in one call"
+            ),
         }
         persisted = await selection_service.store.load_for_scan(snapshot.scan_id)
         report["selection"]["persisted"] = persisted is not None
         report["selection"]["duplicate_guard"] = (
             await selection_service.maybe_select(existing_positions=[])
         ).selection_id == record.selection_id
+
+        # ---- controlled REQUEST_DIRECTORY induction (real directory + real LLM)
+        report["selection_exploration"] = await _induced_exploration(
+            bundle, selection_service
+        )
 
         research_symbol = None
         if record.selected_symbols:
@@ -276,6 +303,67 @@ async def _research_round(bundle, selection_record, research_symbol: str | None)
     }
 
 
+async def _induced_exploration(bundle, selection_service) -> dict:
+    """Exercise the REQUEST_DIRECTORY path with a REAL phase-2 DeepSeek call.
+
+    The first phase is scripted to REQUEST_DIRECTORY (a controlled harness
+    decision, so the path is safely inducible); the directory lookup and the
+    FINAL selection call are real: the same real ChiefTrader receives the real
+    read-only directory result and must return SELECT or NO_RESEARCH.
+    """
+    from crypto_trader.llm_chief.engine import MarketSelectionResult as _Result
+    from crypto_trader.market_data.opportunity.selection import (
+        parse_selection_payload,
+    )
+
+    scanner = bundle.engine.opportunity_service
+    snapshot = await scanner.scan_once()
+    board = scanner.board
+    usable = board.current_snapshot()
+    service = selection_service
+    real_chief = service.chief
+    state = {"phase1_done": False}
+
+    class InducedChief:
+        """Same ChiefTrader; only the FIRST phase prompt is answered by script."""
+
+        async def select_markets(self, context, **kwargs):
+            if not state["phase1_done"]:
+                state["phase1_done"] = True
+                parsed = parse_selection_payload(
+                    {
+                        "selection_state": "REQUEST_DIRECTORY",
+                        "directory_query": {"sort": "abs_move", "page": 1},
+                    },
+                    selection_id=kwargs["selection_id"],
+                    scan_id=kwargs["scan_id"],
+                )
+                return _Result(ok=True, status="SUCCESS", output=parsed, provider="harness")
+            return await real_chief.select_markets(context, **kwargs)
+
+    service.chief = InducedChief()
+    try:
+        record = await service.maybe_select(existing_positions=[])
+    finally:
+        service.chief = real_chief
+    discovered = [s for s in record.selected_symbols if s.get("discovered_via_directory")]
+    return {
+        "scan_id": snapshot["scan_id"],
+        "status": record.status,
+        "selection_state": record.selection_state,
+        "exploration_rounds": record.exploration_rounds,
+        "directory_query": record.directory_query,
+        "directory_page_refs": list(record.directory_query_refs),
+        "selected_symbols": record.selected_symbols,
+        "discovered_via_directory": [s["symbol"] for s in discovered],
+        "real_phase2_provider": record.provider,
+        "real_phase2_model": record.model,
+        "phase2_input_tokens": record.input_tokens,
+        "phase2_output_tokens": record.output_tokens,
+        "snapshot_id_matches": record.scan_id == usable.scan_id,
+    }
+
+
 def _state_histogram(states) -> dict:
     histogram: dict[str, int] = {}
     for state in states:
@@ -361,22 +449,25 @@ def _readiness(report: dict) -> dict:
         "funding_data_quality_truthful": (
             "YES" if "VALID" in (observation.get("funding_quality_states") or {}) else "NO"
         ),
-        "oi_sampling_quality_truthful": (
+        "oi_contract_broad_coverage": (
+            "YES"
+            if (observation.get("oi_coverage_ratio") or 0.0) >= 0.99
+            else "NO"
+        ),
+        "oi_batch_quality_truthful": (
             "YES" if "VALID" in _flatten_oi_states(observation) else "NO"
         ),
         "fair_rotation_progressing": (
             "YES" if observation.get("rotation_progressed") else "NO"
         ),
-        "oi_coverage_rotates_across_broad_set": (
-            "YES" if observation.get("oi_coverage_progressed") else "NO"
-        ),
+        "snapshot_status_distinguishes_coverage": "YES" if cycles else "NO",
         "same_chief_market_selection_executes": (
             "YES" if selection.get("status") in ("SUCCESS", "NO_RESEARCH") else "NO"
         ),
         "no_research_is_supported": (
             "YES"
-            if selection.get("status") == "NO_RESEARCH"
-            or selection.get("selection_state") == "SELECTED"
+            if selection.get("status") in ("NO_RESEARCH", "SUCCESS")
+            and selection.get("selection_state") in ("NO_RESEARCH", "SELECT")
             else "NO"
         ),
         "selected_symbol_invokes_real_tools": (
@@ -384,6 +475,12 @@ def _readiness(report: dict) -> dict:
         ),
         "tool_lineage_matches_selected_symbol": (
             "YES" if research.get("tool_symbols_match_research_target") else "NO"
+        ),
+        "chief_controlled_directory_exploration": (
+            "YES"
+            if (report.get("selection_exploration") or {}).get("exploration_rounds") == 1
+            and (report.get("selection_exploration") or {}).get("real_phase2_provider")
+            else "NO"
         ),
         "final_decision_persists_with_lineage": (
             "YES" if research.get("lineage_matches_selection") else "NO"

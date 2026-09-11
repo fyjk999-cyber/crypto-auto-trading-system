@@ -33,6 +33,9 @@ from crypto_trader.llm_chief.budget import (
     STATUS_OK,
     GlobalLLMBudget,
 )
+from crypto_trader.market_data.opportunity.directory import (
+    MAX_DIRECTORY_PAGES_PER_ROUND,
+)
 from crypto_trader.market_data.opportunity.pool import PoolEntry, build_research_pool
 from crypto_trader.market_data.opportunity.scanner import (
     CANDIDATE_SOURCE_DEEPSEEK_SELECTION as SELECTION_SOURCE_DEEPSEEK,
@@ -48,8 +51,15 @@ MAX_SELECTED_SYMBOLS = 3
 MAX_REQUESTED_DATA = 5
 MAX_BRIEF_REASON = 240
 
-STATE_SELECTED = "SELECTED"
+STATE_SELECT = "SELECT"
 STATE_NO_RESEARCH = "NO_RESEARCH"
+# Phase-1 only: the ChiefTrader explicitly asks to explore outside the initial
+# pool. It is a request, not a selection — no symbol is selected yet.
+STATE_REQUEST_DIRECTORY = "REQUEST_DIRECTORY"
+#: legacy spelling accepted when parsing (never emitted)
+STATE_SELECTED_LEGACY = "SELECTED"
+SELECTION_STATES = (STATE_SELECT, STATE_NO_RESEARCH, STATE_REQUEST_DIRECTORY)
+MAX_EXPLORATION_ROUNDS = 1  # hard cap: phase 1 -> (optional directory) -> phase 2
 
 # statuses
 ST_SUCCESS = "SUCCESS"
@@ -113,26 +123,61 @@ class SelectedSymbol(BaseModel):
     selection_source: str = SELECTION_SOURCE_DEEPSEEK
 
 
+class DirectoryQuery(BaseModel):
+    """Bounded structural directory query (no URLs, no shell, no private data)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sort: Literal["estimated_turnover", "abs_move", "symbol"] = "estimated_turnover"
+    page: int = Field(default=1, ge=1, le=MAX_DIRECTORY_PAGES_PER_ROUND)
+    min_abs_move_pct: float | None = Field(default=None, ge=0.0, le=100.0)
+    min_estimated_turnover: float | None = Field(default=None, ge=0.0)
+    funding_side: Literal["positive", "negative", "any"] | None = None
+    note: str = Field(default="", max_length=160)
+
+
 class MarketSelectionOutput(BaseModel):
-    """Strict selection output contract — no trading-authority fields."""
+    """Strict two-phase selection contract — no trading-authority fields.
+
+    Phase 1 may return SELECT / NO_RESEARCH / REQUEST_DIRECTORY.
+    Phase 2 (after the system executed the bounded directory lookup) may return
+    only SELECT / NO_RESEARCH — there is no third exploration phase in V1.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     selection_id: str
     scan_id: str
-    selection_state: Literal["SELECTED", "NO_RESEARCH"]
+    selection_state: Literal["SELECT", "NO_RESEARCH", "REQUEST_DIRECTORY"]
     selected_symbols: list[SelectedSymbol] = Field(
         default_factory=list, max_length=MAX_SELECTED_SYMBOLS
     )
+    directory_query: DirectoryQuery | None = None
 
     def model_post_init(self, __context) -> None:  # noqa: D105
+        if self.selection_state == STATE_REQUEST_DIRECTORY:
+            if self.selected_symbols:
+                raise ValueError("REQUEST_DIRECTORY must not select symbols")
+            if self.directory_query is None:
+                raise ValueError("REQUEST_DIRECTORY requires a bounded directory_query")
+            return
         if self.selection_state == STATE_NO_RESEARCH and self.selected_symbols:
             raise ValueError("NO_RESEARCH must not contain selected symbols")
-        if self.selection_state == STATE_SELECTED and not self.selected_symbols:
-            raise ValueError("SELECTED requires at least one symbol")
+        if self.selection_state == STATE_SELECT and not self.selected_symbols:
+            raise ValueError("SELECT requires at least one symbol")
+        if self.directory_query is not None:
+            raise ValueError("directory_query is only valid with REQUEST_DIRECTORY")
         symbols = [s.symbol for s in self.selected_symbols]
         if len(symbols) != len(set(symbols)):
             raise ValueError("duplicate selected symbols")
+
+    @property
+    def is_exploration_request(self) -> bool:
+        return self.selection_state == STATE_REQUEST_DIRECTORY
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.selection_state in (STATE_SELECT, STATE_NO_RESEARCH)
 
 
 def find_authority_leak(payload: Any, *, path: str = "") -> str | None:
@@ -176,6 +221,8 @@ class MarketSelectionRecord:
     latency_ms: int | None = None
     snapshot_age_seconds: float | None = None
     pool_size: int = 0
+    exploration_rounds: int = 0
+    directory_query: dict = field(default_factory=dict)
 
     @property
     def selected_symbol_names(self) -> list[str]:
@@ -202,12 +249,18 @@ class MarketSelectionRecord:
             "latency_ms": self.latency_ms,
             "snapshot_age_seconds": self.snapshot_age_seconds,
             "pool_size": self.pool_size,
+            "exploration_rounds": self.exploration_rounds,
+            "directory_query": dict(self.directory_query),
             "authority": {
                 "selection_authority": "RESEARCH_ATTENTION_ONLY",
                 "directional_authority": "NONE",
                 "new_direction_decision_authority": "CHIEF_TRADER_FINAL_PHASE_ONLY",
             },
         }
+
+
+PHASE_INITIAL = "INITIAL_POOL"
+PHASE_EXPLORATION = "DIRECTORY_EXPLORATION"
 
 
 def build_selection_context(
@@ -220,9 +273,16 @@ def build_selection_context(
     cooldown_remaining_seconds: float,
     last_selection: dict | None,
     now: datetime,
+    phase: str = PHASE_INITIAL,
+    directory_symbol_pages: dict[str, int] | None = None,
 ) -> dict:
-    """Compact, bounded selection context (§7.2). Never full histories."""
-    return {
+    """Compact, bounded selection context.
+
+    Phase 1 carries ONLY the initial pool (no directory pages) so the
+    ChiefTrader must actively REQUEST_DIRECTORY to explore. Phase 2 carries the
+    bounded directory result of that request and is terminal.
+    """
+    context = {
         "scan_id": snapshot.scan_id,
         "snapshot_age_seconds": round(snapshot.age_seconds(now=now), 3),
         "snapshot_status": snapshot.status,
@@ -236,25 +296,31 @@ def build_selection_context(
             "analysis_ready_count": snapshot.analysis_ready_count,
             "execution_supported_count": snapshot.execution_supported_count,
         },
+        "phase": phase,
         "candidate_pool": [entry.as_dict() for entry in pool],
         "candidate_pool_size": len(pool),
-        "broad_market_summary": dict(snapshot.broad_market_summary),
-        "data_quality_summary": dict(snapshot.data_quality_summary),
-        "existing_positions": list(existing_positions),
-        "execution_supported_label": "USDT linear perpetual swaps only (PAPER)",
-        "global_llm_budget": budget_state,
-        "selection_cooldown_remaining_seconds": round(cooldown_remaining_seconds, 1),
-        "last_selection": last_selection,
-        "market_directory": {
-            "pages": directory_pages,
-            "note": (
-                "read-only factual directory pages; symbols here are outside the "
-                "initial candidate pool and may be selected if research-worthy"
+        "broad_market_summary": {
+            "rows_observed": (snapshot.broad_market_summary or {}).get("rows_observed"),
+            "top_abs_movers_24h": (snapshot.broad_market_summary or {}).get(
+                "top_abs_movers_24h", []
             ),
         },
+        "data_quality_summary": {
+            "funding": (snapshot.data_quality_summary or {}).get("funding", {}),
+            "open_interest": (snapshot.data_quality_summary or {}).get("open_interest", {}),
+            "notes": (snapshot.data_quality_summary or {}).get("notes", []),
+        },
+        "feature_coverage": dict(getattr(snapshot, "feature_coverage", {}) or {}),
+        "existing_positions": list(existing_positions),
+        "execution_supported_label": "USDT linear perpetual swaps only (PAPER)",
+        "global_llm_budget": {
+            "calls_in_window": budget_state.get("calls_in_window"),
+            "remaining": budget_state.get("remaining"),
+        },
+        "last_selection": last_selection,
         "authority_note": SELECTION_AUTHORITY_NOTE,
         "output_contract": {
-            "selection_state": "SELECTED | NO_RESEARCH",
+            "selection_state": "SELECT | NO_RESEARCH | REQUEST_DIRECTORY",
             "selected_symbols": [
                 {
                     "symbol": "string",
@@ -262,9 +328,27 @@ def build_selection_context(
                     "requested_additional_data": ["optional bounded requests"],
                 }
             ],
+            "directory_query": {
+                "sort": "estimated_turnover | abs_move | symbol",
+                "page": "1..2",
+                "min_abs_move_pct": "optional number",
+                "min_estimated_turnover": "optional number",
+                "funding_side": "positive | negative | any (optional)",
+            },
             "maximum_selected_symbols": MAX_SELECTED_SYMBOLS,
+            "maximum_directory_pages": MAX_DIRECTORY_PAGES_PER_ROUND,
         },
     }
+    if phase == PHASE_EXPLORATION and directory_pages:
+        context["market_directory"] = {
+            "pages": directory_pages,
+            "symbol_pages": dict(directory_symbol_pages or {}),
+            "note": (
+                "read-only factual directory result for YOUR exploration request. "
+                "This is the FINAL phase: return SELECT (0-3 symbols) or NO_RESEARCH."
+            ),
+        }
+    return context
 
 
 class MarketSelectionService:
@@ -297,6 +381,7 @@ class MarketSelectionService:
         self._records_by_scan: dict[str, MarketSelectionRecord] = {}
         self.selection_count = 0
         self.last_record: MarketSelectionRecord | None = None
+        self.last_query_ref: str | None = None
 
     # ------------------------------------------------------------------ read
     def last_selection_for_scan(self, scan_id: str) -> MarketSelectionRecord | None:
@@ -390,24 +475,19 @@ class MarketSelectionService:
                 record.error_code = "LLM_BUDGET_RESERVED_FOR_HIGHER_PRIORITY"
                 return await self._persist(record, now=now)
 
-        directory_pages: list[dict] = []
-        directory_refs: list[str] = []
-        if self.directory is not None:
-            directory_pages, directory_refs = self.directory.bounded_pages(
-                scan_id=snapshot.scan_id, exclude={e.symbol for e in pool}, now=now
-            )
-        record.directory_query_refs = directory_refs
+        # ---- phase 1: initial pool only (NO preloaded directory) -----------
+        record.candidate_set_ref = f"pool:{snapshot.scan_id}:{len(pool)}"
         context = build_selection_context(
             snapshot=snapshot,
             pool=pool,
-            directory_pages=directory_pages,
+            directory_pages=[],
             existing_positions=list(existing_positions or ()),
             budget_state=budget_state,
             cooldown_remaining_seconds=cooldown_remaining,
             last_selection=self.last_record.as_dict() if self.last_record else None,
             now=now,
+            phase=PHASE_INITIAL,
         )
-        record.candidate_set_ref = f"pool:{snapshot.scan_id}:{len(pool)}"
         started = self._clock()
         try:
             result = await self.chief.select_markets(
@@ -438,24 +518,49 @@ class MarketSelectionService:
         record.output_tokens = result.output_tokens
         record.latency_ms = result.latency_ms
         record.completed_at = self._clock()
-
-        if ticket:
-            ticket.complete(
-                status=STATUS_OK if result.ok else "ERROR",
-                provider=result.provider,
-                model=result.model,
-                input_tokens=result.input_tokens,
-                output_tokens=result.output_tokens,
-                latency_ms=result.latency_ms,
-                detail=result.error_code,
-            )
+        _complete_ticket(ticket, result)
 
         if not result.ok:
             record.status = result.status
             record.error_code = result.error_code
             return await self._persist(record, now=now)
 
-        selected = self._materialize(result.output, pool=pool, directory_pages=directory_pages)
+        directory_pages: list[dict] = []
+        directory_symbol_pages: dict[str, int] = {}
+
+        # ---- optional bounded directory exploration by the SAME chief ------
+        if result.output.is_exploration_request:
+            exploration = await self._explore_directory(
+                record=record,
+                snapshot=snapshot,
+                result=result,
+                pool=pool,
+                existing_positions=list(existing_positions or ()),
+                now=now,
+            )
+            if isinstance(exploration, str):
+                record.status = (
+                    ST_DEFERRED if exploration == "SKIPPED_BUDGET" else ST_INVALID_OUTPUT
+                )
+                record.error_code = exploration
+                record.completed_at = self._clock()
+                return await self._persist(record, now=now)
+            directory_pages, directory_symbol_pages, phase2 = exploration
+            if not phase2.ok:
+                record.status = phase2.status
+                record.error_code = phase2.error_code
+                return await self._persist(record, now=now)
+            result = phase2
+            record.input_tokens = (record.input_tokens or 0) + (result.input_tokens or 0)
+            record.output_tokens = (record.output_tokens or 0) + (result.output_tokens or 0)
+            record.latency_ms = (record.latency_ms or 0) + (result.latency_ms or 0)
+            record.exploration_rounds = 1
+            record.completed_at = self._clock()
+
+        selected = self._materialize(
+            result.output, pool=pool, directory_pages=directory_pages,
+            directory_symbol_pages=directory_symbol_pages,
+        )
         if isinstance(selected, str):
             record.status = ST_INVALID_OUTPUT
             record.error_code = selected
@@ -474,8 +579,87 @@ class MarketSelectionService:
         return await self._persist(record, now=now)
 
     # -------------------------------------------------------------- internals
+    async def _explore_directory(
+        self, *, record, snapshot, result, pool, existing_positions, now
+    ):
+        """Execute ONE bounded read-only directory lookup for the same chief.
+
+        Hard limits: at most 2 pages of <=25 rows. The second model call is the
+        SAME ChiefTrader and is terminal (no third exploration phase). The
+        exploration call consumes P4 budget like any other market-selection call
+        and fails closed when no P4 capacity remains.
+        """
+        if self.directory is None:
+            return "DIRECTORY_UNAVAILABLE"
+        if record.exploration_rounds >= MAX_EXPLORATION_ROUNDS:
+            return "EXPLORATION_ROUND_LIMIT"
+
+        # budget: the follow-up call is a second model call at the same priority
+        ticket = None
+        if self.budget is not None:
+            ticket = self.budget.try_acquire(
+                P4_MARKET_SELECTION, operation="market_directory_exploration"
+            )
+            if not ticket.granted:
+                return "SKIPPED_BUDGET"
+
+        query = result.output.directory_query
+        query_payload = query.model_dump(mode="json") if query is not None else {}
+        pages, refs, symbol_pages = self.directory.query_pages(
+            query_payload,
+            scan_id=snapshot.scan_id,
+            exclude={e.symbol for e in pool},
+            now=now,
+        )
+        record.directory_query_refs = list(refs)
+        record.directory_query = _compact_query(query_payload)
+        self.last_query_ref = "|".join(
+            f"{key}={value}" for key, value in record.directory_query.items()
+        ) or "default"
+
+        context = build_selection_context(
+            snapshot=snapshot,
+            pool=pool,
+            directory_pages=pages,
+            existing_positions=list(existing_positions or ()),
+            budget_state=self.budget.snapshot() if self.budget else {"enabled": False},
+            cooldown_remaining_seconds=0.0,
+            last_selection=self.last_record.as_dict() if self.last_record else None,
+            now=now,
+            phase=PHASE_EXPLORATION,
+            directory_symbol_pages=symbol_pages,
+        )
+        try:
+            phase2 = await self.chief.select_markets(
+                context,
+                timeout_seconds=self.timeout_seconds,
+                selection_id=record.selection_id,
+                scan_id=snapshot.scan_id,
+            )
+        except TimeoutError:
+            if ticket:
+                ticket.fail(status="TIMEOUT")
+            return "EXPLORATION_TIMEOUT"
+        except Exception as exc:
+            if ticket:
+                ticket.fail(status="ERROR", detail=type(exc).__name__)
+            return f"EXPLORATION_FAILED:{type(exc).__name__}"[:64]
+        _complete_ticket(ticket, phase2)
+        if not phase2.ok:
+            return phase2
+        if not phase2.output.is_terminal:
+            # V1 allows exactly one exploration round: a second
+            # REQUEST_DIRECTORY is an invalid output, not a new loop.
+            return "NO_THIRD_EXPLORATION_PHASE"
+        return pages, symbol_pages, phase2
+
     def _materialize(
-        self, output: MarketSelectionOutput, *, pool: list[PoolEntry], directory_pages: list[dict]
+        self,
+        output: MarketSelectionOutput,
+        *,
+        pool: list[PoolEntry],
+        directory_pages: list[dict],
+        directory_symbol_pages: dict[str, int] | None = None,
     ) -> list[dict] | str:
         pool_by_symbol = {entry.symbol: entry for entry in pool}
         directory_symbols = {
@@ -483,29 +667,55 @@ class MarketSelectionService:
             for page in directory_pages
             for row in (page.get("rows") or ())
         }
+        directory_symbol_pages = directory_symbol_pages or {}
         materialized: list[dict] = []
         for item in output.selected_symbols:
             symbol = item.symbol.strip()
             if symbol in pool_by_symbol:
-                source = SELECTION_SOURCE_DEEPSEEK
-                reasons = list(pool_by_symbol[symbol].reasons)
-            elif symbol in directory_symbols:
-                # §7.5: discovered through the read-only Market Directory path
-                source = SELECTION_SOURCE_DEEPSEEK
-                reasons = ["market directory"]
-            else:
-                return f"SELECTED_SYMBOL_NOT_IN_CONTEXT:{symbol}"[:64]
-            materialized.append(
-                {
-                    "symbol": symbol,
-                    "brief_reason": item.brief_reason[:MAX_BRIEF_REASON],
-                    "requested_additional_data": list(item.requested_additional_data)[
-                        :MAX_REQUESTED_DATA
-                    ],
-                    "selection_source": source,
-                    "pool_reasons": reasons,
-                }
-            )
+                # supplied by the program in the initial pool: NOT a discovery
+                pool_reasons = list(pool_by_symbol[symbol].reasons)
+                materialized.append(
+                    {
+                        "symbol": symbol,
+                        "brief_reason": item.brief_reason[:MAX_BRIEF_REASON],
+                        "requested_additional_data": list(item.requested_additional_data)[
+                            :MAX_REQUESTED_DATA
+                        ],
+                        "selection_source": SELECTION_SOURCE_DEEPSEEK,
+                        "pool_reasons": pool_reasons,
+                        "from_initial_pool": True,
+                        "discovered_via_directory": False,
+                    }
+                )
+                continue
+            if symbol in directory_symbols:
+                # §10: actively discovered by ChiefTrader directory exploration
+                page_number = directory_symbol_pages.get(symbol)
+                query_ref = (
+                    f"market_directory_query:{output.scan_id}:"
+                    f"{self.last_query_ref or 'page'}"
+                )
+                materialized.append(
+                    {
+                        "symbol": symbol,
+                        "brief_reason": item.brief_reason[:MAX_BRIEF_REASON],
+                        "requested_additional_data": list(item.requested_additional_data)[
+                            :MAX_REQUESTED_DATA
+                        ],
+                        "selection_source": SELECTION_SOURCE_DEEPSEEK,
+                        "pool_reasons": ["market directory"],
+                        "from_initial_pool": False,
+                        "discovered_via_directory": True,
+                        "directory_query_ref": query_ref,
+                        "directory_page_ref": (
+                            f"market_directory:{output.scan_id}:page={page_number}"
+                            if page_number is not None
+                            else None
+                        ),
+                    }
+                )
+                continue
+            return f"SELECTED_SYMBOL_NOT_IN_CONTEXT:{symbol}"[:64]
         return materialized
 
     def _latency_ms(self, started: datetime) -> int:
@@ -530,6 +740,36 @@ class MarketSelectionService:
         if self.store is not None:
             await self.store.save(record)
         return record
+
+
+def _complete_ticket(ticket, result) -> None:
+    """Record the outcome of one budgeted market-selection model call."""
+    if ticket is None:
+        return
+    ticket.complete(
+        status=STATUS_OK if result.ok else "ERROR",
+        provider=result.provider,
+        model=result.model,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        latency_ms=result.latency_ms,
+        detail=result.error_code,
+    )
+
+
+def _compact_query(query: dict) -> dict:
+    """Bounded, non-secret summary of the structural directory query."""
+    return {
+        key: query.get(key)
+        for key in (
+            "sort",
+            "page",
+            "min_abs_move_pct",
+            "min_estimated_turnover",
+            "funding_side",
+        )
+        if query.get(key) is not None
+    }
 
 
 def parse_selection_payload(
@@ -557,13 +797,34 @@ def parse_selection_payload(
     if state in {"NO_RESEARCH", "NO RESEARCH", "NONE", "NO_SELECTION"}:
         candidate["selection_state"] = STATE_NO_RESEARCH
         candidate["selected_symbols"] = []
+        candidate.pop("directory_query", None)
     elif state in {"SELECTED", "SELECT"}:
-        candidate["selection_state"] = STATE_SELECTED
+        candidate["selection_state"] = STATE_SELECT
         symbols = candidate.get("selected_symbols")
         if isinstance(symbols, list):
             candidate["selected_symbols"] = [
                 {"symbol": s} if isinstance(s, str) else s for s in symbols
             ]
+        candidate.pop("directory_query", None)
+    elif state in {"REQUEST_DIRECTORY", "REQUEST DIRECTORY", "EXPLORE", "DIRECTORY"}:
+        candidate["selection_state"] = STATE_REQUEST_DIRECTORY
+        candidate["selected_symbols"] = []
+        query = candidate.get("directory_query") or {}
+        if not isinstance(query, dict):
+            return "INVALID_DIRECTORY_QUERY"
+        # bounded structural fields only — never a raw URL / provider call
+        allowed = {
+            "sort",
+            "page",
+            "min_abs_move_pct",
+            "min_estimated_turnover",
+            "funding_side",
+            "note",
+        }
+        unexpected = set(query) - allowed
+        if unexpected:
+            return f"INVALID_DIRECTORY_QUERY:{sorted(unexpected)[0]}"[:64]
+        candidate["directory_query"] = query
     try:
         output = MarketSelectionOutput(**candidate)
     except (ValidationError, ValueError) as exc:
@@ -576,13 +837,39 @@ def parse_selection_payload(
 
 
 def render_selection_prompt(context: dict) -> str:
+    """Phase-aware prompt for the SAME ChiefTrader market-selection authority."""
+    phase = str(context.get("phase") or PHASE_INITIAL)
+    if phase == PHASE_EXPLORATION:
+        instructions = (
+            "This is the FINAL phase. You requested bounded directory exploration "
+            "and the factual result is in market_directory. You may NOT request "
+            "exploration again. Return JSON only as:\n"
+            '{"selection_state":"SELECT|NO_RESEARCH","selected_symbols":'
+            '[{"symbol":"...","brief_reason":"...","requested_additional_data":["..."]}]}\n'
+            f"Select at most {MAX_SELECTED_SYMBOLS} symbols, or NO_RESEARCH with an "
+            "empty selected_symbols list.\n"
+        )
+    else:
+        instructions = (
+            "You have a bounded initial candidate pool. Choose ONE of:\n"
+            '  {"selection_state":"SELECT","selected_symbols":[{"symbol":"...",'
+            '"brief_reason":"...","requested_additional_data":["..."]}]}\n'
+            '  {"selection_state":"NO_RESEARCH","selected_symbols":[]}\n'
+            '  {"selection_state":"REQUEST_DIRECTORY","directory_query":'
+            '{"sort":"estimated_turnover|abs_move|symbol","page":1,'
+            '"min_abs_move_pct":null,"min_estimated_turnover":null,'
+            '"funding_side":"positive|negative|any"}}\n'
+            "REQUEST_DIRECTORY asks the system to run ONE bounded read-only "
+            f"directory lookup (max {MAX_DIRECTORY_PAGES_PER_ROUND} pages, "
+            f"max {MAX_DIRECTORY_PAGES_PER_ROUND} pages, page size <= 25) so you "
+            "can see markets outside the initial pool before the final selection.\n"
+            f"Select at most {MAX_SELECTED_SYMBOLS} symbols when you SELECT. "
+            "Keep brief_reason short.\n"
+        )
     return (
         "You are the Chief Trader selecting WHERE TO SPEND RESEARCH ATTENTION.\n"
         "This is NOT a trade decision. Return JSON only.\n"
         f"{SELECTION_AUTHORITY_NOTE}\n"
-        "Decide which 0-3 symbols deserve deeper factual research. Return:\n"
-        '{"selection_state":"SELECTED|NO_RESEARCH","selected_symbols":'
-        '[{"symbol":"...","brief_reason":"...","requested_additional_data":["..."]}]}\n'
-        f"Select at most {MAX_SELECTED_SYMBOLS} symbols. Keep brief_reason short.\n"
+        f"{instructions}"
         f"MarketSelectionContext: {json.dumps(context, default=str)}"
     )

@@ -495,13 +495,19 @@ class OKXAdapter(ExchangeAdapter):
         }
 
     async def get_open_interest(self, symbol: str) -> dict:
+        """Single-instrument factual open interest (bounded fallback path)."""
         data = await self._public_request(
             "GET", "/api/v5/public/open-interest", params={"instType": "SWAP", "instId": symbol}
         )
         if not data.get("data"):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX open-interest response is empty")
         raw = data["data"][0]
-        return {"open_interest": raw.get("oi", "0"), "open_interest_ccy": raw.get("oiCcy", "0")}
+        return {
+            "open_interest": raw.get("oi", "0"),
+            "open_interest_ccy": raw.get("oiCcy", "0"),
+            "open_interest_usd": raw.get("oiUsd"),
+            "source_timestamp": raw.get("ts"),
+        }
 
     async def get_tickers(self, inst_type: str = "SWAP") -> list[dict]:
         """Batch factual tickers for a whole instrument type (one cheap call).
@@ -518,23 +524,32 @@ class OKXAdapter(ExchangeAdapter):
         return rows
 
     async def get_open_interests(self, inst_type: str = "SWAP") -> list[dict]:
-        """OKX has NO batch open-interest endpoint — fail closed.
+        """Broad factual open interest for a whole instrument type (one call).
 
-        Verified against the live public API:
+        OKX contract, verified against the LIVE public endpoint:
 
-        * ``/api/v5/public/open-interests`` (plural)  -> HTTP 404
-        * ``/api/v5/public/open-interest?instType=SWAP&instId=ANY`` -> code 51001
-          ("Instrument ID ... doesn't exist")
-        * ``/api/v5/public/open-interest?instId=<instId>`` -> works (single).
+        * ``GET /api/v5/public/open-interest?instType=SWAP`` -> HTTP 200 /
+          code 0, hundreds of rows (478 observed), each row carrying
+          ``instId``, ``instType``, ``oi`` (contracts), ``oiCcy`` (base
+          currency), ``oiUsd`` (USD notional) and ``ts`` (source timestamp).
+        * ``GET /api/v5/public/open-interests`` (plural path) -> HTTP 404.
+        * ``instId=ANY`` is NOT valid for this endpoint -> code 51001. The
+          funding endpoint accepts ``ANY``; open interest does not. Batch mode
+          for OI is expressed by OMITTING ``instId`` while supplying
+          ``instType``.
 
-        The scanner therefore samples OI per instrument through a bounded,
-        rate-limited path. This method stays explicit so a caller can never
-        mistake "unsupported" for "zero open interest".
+        Returning raw rows keeps provenance with the caller (identity, value,
+        unit and source timestamp are all per-row facts).
         """
-        raise OKXDiagnosticError(
-            "UNSUPPORTED",
-            "OKX exposes open interest per instrument only; batch is unsupported",
+        data = await self._public_request(
+            "GET", "/api/v5/public/open-interest", params={"instType": inst_type}
         )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX open-interest response is invalid"
+            )
+        return rows
 
     async def get_funding_rates(self, inst_type: str = "SWAP") -> list[dict]:
         """Batch factual current funding rates for a whole instrument type.

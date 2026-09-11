@@ -66,6 +66,7 @@ from crypto_trader.market_data.opportunity.snapshot import (
     UNIVERSE_TYPE_OKX_USDT_PERP,
     MarketObservationSnapshot,
     build_data_quality_summary,
+    build_feature_coverage,
     new_scan_id,
     snapshot_expiry,
 )
@@ -75,7 +76,7 @@ from crypto_trader.market_data.quality import (
     FUTURE_TIMESTAMP,
     MISSING,
     NON_FINITE,
-    PARTIAL,
+    NOT_SAMPLED,
     REQUEST_FAILED,
     UNSUPPORTED,
     VALID,
@@ -374,7 +375,7 @@ class OpportunityScannerService:
             oi_quality_by_symbol[symbol] = oi_symbol_quality
 
         # ---- bounded factual OI sampling (OKX has no batch endpoint) -------
-        oi_quality, oi_quality_by_symbol = await self._sample_open_interest(
+        oi_quality, oi_quality_by_symbol, oi_collection = await self._collect_open_interest(
             facts_rows, deadline=deadline
         )
 
@@ -467,26 +468,26 @@ class OpportunityScannerService:
         analysis_ready = candle_stats["ready"]
         broad_summary = self._broad_summary(facts_rows)
         completed_at = datetime.now(UTC)
+        # Execution status describes whether the scan executed its designed
+        # plan. Intentional bounded/rotating coverage (e.g. OI that is supported
+        # but not collected for every symbol this cycle) is NOT a failure; the
+        # coverage ratios are reported separately in feature_coverage.
         status = STATUS_COMPLETE
         notes: list[str] = []
-        oi_degraded = any(
-            state not in (VALID,) for state in oi_quality_by_symbol.values()
-        ) if oi_quality_by_symbol else True
-        if (
-            candle_stats["errors"]
-            or candle_stats.get("empty_responses")
-            or oi_degraded
-            or funding_quality != VALID
-        ):
+        unexpected_failures: list[str] = []
+        if candle_stats["errors"]:
+            unexpected_failures.append(f"candle_fetch_errors={candle_stats['errors']}")
+        if candle_stats.get("empty_responses"):
+            unexpected_failures.append(
+                f"candle_empty_responses={candle_stats['empty_responses']}"
+            )
+        if oi_quality != VALID:
+            unexpected_failures.append(f"open_interest_batch={oi_quality}")
+        if funding_quality != VALID:
+            unexpected_failures.append(f"funding_batch={funding_quality}")
+        if unexpected_failures:
             status = STATUS_PARTIAL
-            if candle_stats["errors"]:
-                notes.append(f"candle_fetch_errors={candle_stats['errors']}")
-            if candle_stats.get("empty_responses"):
-                notes.append(f"candle_empty_responses={candle_stats['empty_responses']}")
-            if oi_degraded:
-                notes.append(f"oi_sampling={oi_quality}")
-            if funding_quality != VALID:
-                notes.append(f"funding_batch={funding_quality}")
+            notes.extend(unexpected_failures)
         observable_rows = tuple(
             {
                 "symbol": row["symbol"],
@@ -496,7 +497,13 @@ class OpportunityScannerService:
                 "funding_rate": row["funding_rate"],
                 "funding_quality": row["funding_quality"],
                 "open_interest": row["open_interest"],
-                "oi_quality": oi_quality_by_symbol.get(row["symbol"], MISSING),
+                "open_interest_usd": row.get("open_interest_usd"),
+                "oi_quality": oi_quality_by_symbol.get(row["symbol"], NOT_SAMPLED),
+                "oi_observed_at": (
+                    row["oi_observed_at"].isoformat()
+                    if row.get("oi_observed_at")
+                    else None
+                ),
                 "ticker_quality": row["ticker_quality"],
                 "ticker_observed_at": (
                     row["ticker_observed_at"].isoformat()
@@ -519,11 +526,25 @@ class OpportunityScannerService:
         )
         data_quality_summary.update(
             {
-                "batch": {"funding": funding_quality, "open_interest_per_instrument": oi_quality},
+                "batch": {"funding": funding_quality, "open_interest": oi_quality},
+                "open_interest_collection": dict(oi_collection),
                 "ticker_states": _state_counts(ticker_quality_by_symbol),
                 "notes": notes,
                 "turnover_semantics": "estimated_quote_turnover_24h (ESTIMATED, derived)",
+                "quality_vs_coverage": (
+                    "quality states describe fact reliability; coverage ratios "
+                    "describe how much of the universe was collected this cycle"
+                ),
             }
+        )
+        feature_coverage = build_feature_coverage(
+            discovered_count=discovered_count,
+            ticker_quality=ticker_quality_by_symbol,
+            funding_quality=funding_quality_by_symbol,
+            oi_quality=oi_quality_by_symbol,
+            analysis_attempted=analysis_attempted,
+            analysis_success=analysis_success,
+            analysis_ready=analysis_ready,
         )
         snapshot = MarketObservationSnapshot(
             scan_id=scan_id,
@@ -546,6 +567,7 @@ class OpportunityScannerService:
             data_quality_summary=data_quality_summary,
             scanner_version=SCANNER_VERSION,
             observable_rows=observable_rows,
+            feature_coverage=feature_coverage,
         )
         self.market_sets.record_scan(
             discovered=discovered_count,
@@ -581,6 +603,7 @@ class OpportunityScannerService:
             },
             "candle_coverage": candle_stats,
             "market_data_cache": self.cache.snapshot()["stats"],
+            "feature_coverage": feature_coverage,
         }
 
     # -------------------------------------------------------- restart durability
@@ -644,87 +667,137 @@ class OpportunityScannerService:
             return [], MISSING
         return rows, VALID
 
-    async def _sample_open_interest(
+    async def _collect_open_interest(
         self, facts_rows: list[dict], *, deadline: float
-    ) -> tuple[str, dict[str, str]]:
-        """Bounded per-instrument OI sampling for the broad observable set.
+    ) -> tuple[str, dict[str, str], dict[str, int]]:
+        """Broad factual OI collection with a bounded per-instrument fallback.
 
-        OKX exposes open interest per instrument only. Symbols are ordered by
-        (never-sampled first, then estimated turnover) so low-turnover markets
-        still receive factual OI coverage across cycles, and the whole call
-        count is capped by ``oi_sample_max_symbols``.
+        OKX DOES support broad open interest: ``GET /api/v5/public/open-interest
+        ?instType=SWAP`` (no ``instId``) returns one row per instrument with
+        ``oi`` (contracts), ``oiCcy``, ``oiUsd`` and ``ts`` — live-verified at
+        478 rows / 463 USDT perpetuals, which is the whole discovery universe.
+
+        Therefore the broad response is the PRIMARY source (one request), not a
+        120-symbol rotation. Per-instrument requests are used only as a bounded
+        fallback for instruments absent from a successful broad response, and
+        symbols still missing are reported ``NOT_SAMPLED`` (supported but not
+        collected) — never ``UNSUPPORTED``, which would misstate provider
+        capability.
         """
         quality_by_symbol: dict[str, str] = {}
         rows_by_symbol = {row["symbol"]: row for row in facts_rows}
+        fetched_at = datetime.now(UTC)
+        batch = getattr(self.client, "get_open_interests", None)
+        if not callable(batch):
+            for symbol in rows_by_symbol:
+                quality_by_symbol[symbol] = UNSUPPORTED
+            return (
+                UNSUPPORTED,
+                quality_by_symbol,
+                {"requested": len(rows_by_symbol), "collected": 0},
+            )
+        rows, batch_quality = await self._batch(batch, "SWAP", deadline)
+        if batch_quality != VALID:
+            # an unexpected provider failure: every symbol is REQUEST_FAILED,
+            # which the snapshot status reports as PARTIAL
+            for symbol in rows_by_symbol:
+                rows_by_symbol[symbol]["oi_quality"] = batch_quality
+            quality_by_symbol = {symbol: batch_quality for symbol in rows_by_symbol}
+            return batch_quality, quality_by_symbol, {
+                "requested": len(rows_by_symbol),
+                "collected": 0,
+            }
+
+        by_inst = {str(r.get("instId")): r for r in rows if isinstance(r, dict)}
+        collected = 0
+        missing_inst_ids: list[str] = []
+        for symbol, row in rows_by_symbol.items():
+            oi_row = by_inst.get(row["inst_id"])
+            if not isinstance(oi_row, dict):
+                missing_inst_ids.append(row["inst_id"])
+                continue
+            value = _finite(oi_row.get("oi"))
+            if value is None:
+                quality_by_symbol[symbol] = NON_FINITE if oi_row.get("oi") else MISSING
+                continue
+            if value < 0:
+                quality_by_symbol[symbol] = MISSING
+                continue
+            observed_at, ts_quality, _reason = self._ticker_timestamp(
+                {"ts": oi_row.get("ts")}, now=fetched_at
+            )
+            if ts_quality not in (VALID, MISSING):
+                # the value exists but its observation time is unusable: never
+                # present it as a fresh fact
+                quality_by_symbol[symbol] = ts_quality
+                continue
+            row["open_interest"] = float(value)
+            row["open_interest_usd"] = _finite(oi_row.get("oiUsd"))
+            row["oi_observed_at"] = observed_at or fetched_at
+            row["oi_quality"] = VALID
+            quality_by_symbol[symbol] = VALID
+            collected += 1
+
+        # bounded factual fallback for instruments absent from a SUCCESSFUL
+        # broad response (provider coverage gaps, newly listed instruments)
+        fallback_cap = max(0, int(self.config.oi_sample_max_symbols))
+        if missing_inst_ids and fallback_cap:
+            fallback_rows = await self._open_interest_fallback(
+                missing_inst_ids[:fallback_cap], deadline=deadline, now=fetched_at
+            )
+            for symbol, row in rows_by_symbol.items():
+                if row["inst_id"] not in fallback_rows:
+                    continue
+                payload = fallback_rows[row["inst_id"]]
+                value = _finite(payload.get("open_interest"))
+                if value is None or value < 0:
+                    quality_by_symbol[symbol] = MISSING
+                    continue
+                row["open_interest"] = float(value)
+                row["open_interest_usd"] = _finite(payload.get("open_interest_usd"))
+                row["oi_observed_at"] = fetched_at
+                row["oi_quality"] = VALID
+                quality_by_symbol[symbol] = VALID
+                collected += 1
+
+        for symbol in rows_by_symbol:
+            quality_by_symbol.setdefault(symbol, NOT_SAMPLED)
+        return VALID, quality_by_symbol, {
+            "requested": len(rows_by_symbol),
+            "collected": collected,
+        }
+
+    async def _open_interest_fallback(
+        self, inst_ids: list[str], *, deadline: float, now: datetime
+    ) -> dict[str, dict]:
+        """Bounded per-instrument OI lookups (fallback only, small cap)."""
         fetcher = getattr(self.client, "get_open_interest", None)
         if not callable(fetcher):
-            # legacy batch double (tests) — keep working without claiming more
-            batch = getattr(self.client, "get_open_interests", None)
-            if not callable(batch):
-                for symbol in rows_by_symbol:
-                    quality_by_symbol[symbol] = UNSUPPORTED
-                return UNSUPPORTED, quality_by_symbol
-            rows, quality = await self._batch(batch, "SWAP", deadline)
-            by_inst = {str(r.get("instId")): r for r in rows if isinstance(r, dict)}
-            for symbol, row in rows_by_symbol.items():
-                oi_row = by_inst.get(row["inst_id"])
-                value = _finite((oi_row or {}).get("oi")) if isinstance(oi_row, dict) else None
-                if value is not None and value > 0:
-                    row["open_interest"] = value
-                    quality_by_symbol[symbol] = quality
-                else:
-                    quality_by_symbol[symbol] = quality if quality != VALID else MISSING
-            return quality, quality_by_symbol
-
-        ordered = sorted(
-            rows_by_symbol.values(),
-            key=lambda row: (
-                self.oi_series.sample_count(row["symbol"]),
-                -(row.get("vol_usd_24h") or 0.0),
-                row["symbol"],
-            ),
-        )[: max(0, self.config.oi_sample_max_symbols)]
-        if not ordered:
-            return MISSING, quality_by_symbol
-        semaphore = asyncio.Semaphore(max(1, self.config.max_concurrency))
+            return {}
         loop = asyncio.get_running_loop()
-        sampled = 0
-        failed = 0
+        semaphore = asyncio.Semaphore(max(1, self.config.max_concurrency))
+        results: dict[str, dict] = {}
 
-        async def fetch(row: dict) -> tuple[str, float | None, str]:
+        async def fetch(inst_id: str) -> tuple[str, dict | None]:
             remaining = deadline - loop.time()
             if remaining <= 0:
-                return row["symbol"], None, REQUEST_FAILED
+                return inst_id, None
             async with semaphore:
                 try:
                     payload = await asyncio.wait_for(
-                        fetcher(row["inst_id"]),
+                        fetcher(inst_id),
                         timeout=max(
                             0.1, min(self.config.per_request_timeout_seconds, remaining)
                         ),
                     )
                 except Exception:
-                    return row["symbol"], None, REQUEST_FAILED
-            raw = payload.get("open_interest") if isinstance(payload, dict) else None
-            value = _finite(raw)
-            if value is None or value <= 0:
-                return row["symbol"], None, MISSING
-            return row["symbol"], float(value), VALID
+                    return inst_id, None
+            return inst_id, payload if isinstance(payload, dict) else None
 
-        for symbol, value, quality in await asyncio.gather(*(fetch(r) for r in ordered)):
-            quality_by_symbol[symbol] = quality
-            if value is not None:
-                rows_by_symbol[symbol]["open_interest"] = value
-                rows_by_symbol[symbol]["oi_quality"] = VALID
-                sampled += 1
-            elif quality == REQUEST_FAILED:
-                failed += 1
-        for symbol in rows_by_symbol:
-            quality_by_symbol.setdefault(symbol, UNSUPPORTED)
-        overall = VALID if failed == 0 and sampled == len(ordered) else (
-            REQUEST_FAILED if failed == len(ordered) and ordered else PARTIAL
-        )
-        return overall, quality_by_symbol
+        for inst_id, payload in await asyncio.gather(*(fetch(i) for i in inst_ids)):
+            if payload is not None:
+                results[inst_id] = payload
+        return results
 
     async def _funding_fallback(
         self, inst_ids: list[str], *, deadline: float
