@@ -42,6 +42,7 @@ from crypto_trader.learning.growth_models import (
     GrowthReviewAttemptORM,
     utcnow,
 )
+from crypto_trader.learning.growth_review import ReviewAttemptStore
 
 STAGE_PENDING = "PENDING"
 STAGE_RUNNING = "RUNNING"
@@ -339,6 +340,7 @@ class GrowthLearningPipeline:
         self.lease_seconds = max(60, lease_seconds)
         self.persistence = MemoryPersistence(session_factory)
         self.jobs = GrowthJobStore(session_factory)
+        self.review_store = ReviewAttemptStore(session_factory)
 
     async def run_day(
         self,
@@ -542,11 +544,37 @@ class GrowthLearningPipeline:
                 )
             reviewed_count = len(inputs)
         else:
-            reviewed_count = await self.jobs.successful_attempt_count(review_date)
+            # Publish may be retried after a partial publish failure.  Reload
+            # the durable SUCCEEDED attempts so the publisher never receives an
+            # empty review list and marks the retry as successful.
+            reloaded = await self.review_store.load_succeeded_for_date(
+                review_date=review_date,
+                profile_version=profile_version,
+            )
+            publish_inputs = list(reloaded)
+            reviewed_count = len(reloaded)
 
         # ---------------- publish stage ----------------
         net_status = str(stats.payload.get("net_status", "UNKNOWN"))
         published_count = 0
+        if not publish_inputs and net_status == "COMPLETE":
+            # Defensive: publication with no review input is never a success.
+            if not await stage_update(
+                "publish", STAGE_SKIPPED_INCOMPLETE, "NO_PUBLISH_INPUT"
+            ):
+                await self._record_claim_lost(job.id, token, job)
+                await self._fail_day(review_date, "CLAIM_LOST", "publish no-input", token)
+                return _result_from_row(
+                    job, idempotent=False, stats=stats, error_type="CLAIM_LOST"
+                )
+            await self._save_day(review_date, stats, job, token)
+            final_job = await self.jobs.latest(job_key)
+            return _result_from_row(
+                final_job or job,
+                idempotent=False,
+                stats=stats,
+                reviewed=reviewed_count,
+            )
         if net_status != "COMPLETE":
             publish_status = STAGE_SKIPPED_INCOMPLETE
             detail = "net_status is not COMPLETE; reusable knowledge promotion blocked"

@@ -118,6 +118,48 @@ class ReviewAttemptStore:
                 input_hash=row.input_hash,
             )
 
+    async def load_succeeded_for_date(
+        self,
+        *,
+        review_date: str,
+        profile_version: str | None = None,
+    ) -> list[ReviewAttempt]:
+        """Reload successful attempts so a publish retry never uses empty input."""
+        async with self.session_factory() as session:
+            query = select(GrowthReviewAttemptORM).where(
+                GrowthReviewAttemptORM.review_date == review_date,
+                GrowthReviewAttemptORM.status == STATUS_SUCCEEDED,
+            )
+            if profile_version is not None:
+                query = query.where(
+                    GrowthReviewAttemptORM.profile_version == profile_version
+                )
+            rows = (
+                await session.execute(
+                    query.order_by(GrowthReviewAttemptORM.created_at.asc())
+                )
+            ).scalars().all()
+        out: list[ReviewAttempt] = []
+        for row in rows:
+            if row.result_json is None:
+                continue
+            out.append(
+                ReviewAttempt(
+                    status=STATUS_SUCCEEDED,
+                    attempt_id=row.attempt_id,
+                    review=StructuredReview.model_validate(row.result_json),
+                    usage_status=row.usage_status,
+                    idempotent=True,
+                    account_id=row.account_id,
+                    mode=row.mode,
+                    symbol=row.symbol,
+                    direction=row.direction,
+                    review_date=row.review_date,
+                    input_hash=row.input_hash,
+                )
+            )
+        return out
+
     async def next_attempt_no(
         self,
         *,
@@ -277,6 +319,17 @@ class StructuredReviewService:
             profile_version=self.profile_version,
             input_hash=input_hash,
         )
+        if existing is not None and existing.review is not None:
+            # A cache hit must still satisfy THIS call's allowed-ref set; a
+            # caller passing a narrower set must not be handed refs outside it.
+            try:
+                validate_review(
+                    existing.review,
+                    allowed_refs=set(allowed_refs),
+                    expected_episode_id=review_input.episode_id,
+                )
+            except (ReferenceValidationError, ValueError):
+                existing = None
         if existing is not None:
             return existing
 

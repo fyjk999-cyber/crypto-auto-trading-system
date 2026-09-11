@@ -337,3 +337,58 @@ async def test_usage_is_unknown_when_provider_omits_token_usage(growth_db):
     assert attempt.usage_status == "UNKNOWN"
     rows = await _rows(growth_db)
     assert rows[0].usage_status == "UNKNOWN"
+
+
+async def test_cache_hit_must_satisfy_current_allowed_refs(growth_db):
+    """Regression from independent review: a cache hit still needs validation."""
+    first_payload = _valid_payload()
+    second_payload = _valid_payload(
+        observation_facts=[
+            {"statement": "Episode-only evidence.", "evidence_refs": ["episode:episode_1"]}
+        ],
+        candidate_explanations=[
+            {
+                "explanation": "Episode-level candidate.",
+                "confidence": "LOW",
+                "supporting_refs": ["episode:episode_1"],
+                "contrary_refs": [],
+                "uncertainty": "single case",
+            }
+        ],
+        testable_lessons=[
+            {
+                "statement": "Episode-level testable statement.",
+                "testable_prediction": "A future episode can test it.",
+                "scope": {
+                    "scope": "SYMBOL_REGIME",
+                    "symbols": ["BTCUSDT"],
+                    "regimes": ["TREND"],
+                },
+                "evidence_refs": ["episode:episode_1"],
+                "contrary_refs": [],
+                "uncertainty": "candidate",
+                "confidence": "LOW",
+            }
+        ],
+    )
+    provider = FakeProvider([first_payload, second_payload])
+    service = StructuredReviewService(provider, growth_db.session_factory)
+    review_input = _input()
+    all_refs = review_input.derived_refs()
+    first = await service.review(
+        review_input, review_date=REVIEW_DATE, allowed_refs=all_refs
+    )
+    assert first.status == STATUS_SUCCEEDED
+    assert len(provider.calls) == 1
+
+    narrow_refs = {ref for ref in all_refs if not ref.startswith("fill:")}
+    second = await service.review(
+        review_input, review_date=REVIEW_DATE, allowed_refs=narrow_refs
+    )
+    assert second.status == STATUS_SUCCEEDED
+    assert second.attempt_id != first.attempt_id
+    assert len(provider.calls) == 2  # no idempotent reuse of out-of-set refs
+    assert all(
+        not ref.startswith("fill:") for ref in (second.review.all_refs() if second.review else [])
+    )
+    assert len(await _rows(growth_db)) == 2

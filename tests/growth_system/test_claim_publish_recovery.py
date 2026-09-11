@@ -65,6 +65,7 @@ class Recorder:
         self.review_calls: list[str] = []
         self.publish_calls = 0
         self.publish_fences: list[bool] = []
+        self.review_batch_sizes: list[int] = []
         self.fail_review_once: set[str] = set()
         self.fail_publish_once = 0
 
@@ -99,6 +100,7 @@ class Recorder:
     def publisher(self):
         async def runner(stats, reviews, *, fence) -> StageOutcome:
             self.publish_calls += 1
+            self.review_batch_sizes.append(len(reviews))
             self.publish_fences.append(await fence())
             if self.fail_publish_once:
                 self.fail_publish_once -= 1
@@ -233,9 +235,16 @@ async def test_publish_failure_isolated_and_retry_is_idempotent(growth_db):
 
     await _expire_claim(growth_db)
     second = await _runner(recorder, pipeline)
+    # The stub review runner does not persist durable attempts, so the safe
+    # retry path refuses to publish from empty input (SKIPPED_INCOMPLETE)
+    # instead of marking publish SUCCEEDED with nothing.
+    assert second.stats_status == STAGE_SUCCEEDED
+    assert second.review_status == STAGE_SUCCEEDED
+    assert second.publish_status == STAGE_SKIPPED_INCOMPLETE
     assert second.succeeded
-    assert recorder.publish_calls == 2
-    # Both publish attempts observed a live fence before doing visible work.
+    assert second.published_count == 0
+    assert recorder.publish_calls == 1
+    # The first publish attempt observed a live fence before visible work.
     assert all(recorder.publish_fences)
 
 
@@ -361,3 +370,80 @@ async def test_late_revision_supersedes_and_same_hash_is_idempotent(growth_db):
     replay = await _runner(recorder, pipeline, input_hash="hash_v2_late")
     assert replay.idempotent is True
     assert recorder.publish_calls == 2
+
+
+async def test_publish_retry_reloads_durable_review_attempts(growth_db):
+    """Regression from independent review: publish retry must not use empty input."""
+
+    from crypto_trader.learning.growth_contracts import ObservationFact, StructuredReview
+    from crypto_trader.learning.growth_models import GrowthReviewAttemptORM
+    from crypto_trader.learning.growth_review import STATUS_SUCCEEDED as REVIEW_SUCCEEDED
+
+    recorder = Recorder()
+    recorder.fail_publish_once = 1
+    pipeline = GrowthLearningPipeline(growth_db.session_factory, owner="worker-a")
+    inputs = [StubReview("reload_a"), StubReview("reload_b")]
+    persisted: set[str] = set()
+
+    async def persisting_runner(item) -> StubReview:
+        if item.episode_id not in persisted:
+            review = StructuredReview(
+                episode_id=item.episode_id,
+                observation_facts=[
+                    ObservationFact(
+                        statement="Complete factual fills.",
+                        evidence_refs=[f"episode:{item.episode_id}"],
+                    )
+                ],
+            )
+            async with growth_db.session_factory() as session:
+                session.add(
+                    GrowthReviewAttemptORM(
+                        attempt_id=f"attempt_{item.episode_id}",
+                        review_date=REVIEW_DATE,
+                        episode_id=item.episode_id,
+                        account_id=ACCOUNT,
+                        mode=MODE,
+                        symbol="BTCUSDT",
+                        direction="LONG",
+                        profile_version=PROFILE,
+                        prompt_version="v1",
+                        schema_version="v1",
+                        provider="fake",
+                        input_hash=f"input_{item.episode_id}",
+                        prompt_hash="ph",
+                        schema_hash="sh",
+                        status=REVIEW_SUCCEEDED,
+                        attempt_no=1,
+                        result_json=review.model_dump(mode="json"),
+                        usage_status="UNKNOWN",
+                    )
+                )
+                await session.commit()
+            persisted.add(item.episode_id)
+        return StubReview(item.episode_id)
+
+    first = await _runner(
+        recorder,
+        pipeline,
+        inputs=inputs,
+        input_hash="reload_hash",
+        review_runner=persisting_runner,
+    )
+    assert first.review_status == STAGE_SUCCEEDED
+    assert first.publish_status == STAGE_FAILED
+    assert recorder.publish_calls == 1
+
+    await _expire_claim(growth_db)
+    second = await _runner(
+        recorder,
+        pipeline,
+        inputs=inputs,
+        input_hash="reload_hash",
+        review_runner=persisting_runner,
+    )
+    assert second.succeeded
+    assert second.publish_status == STAGE_SUCCEEDED
+    assert recorder.publish_calls == 2
+    # The retry publisher received the two durable attempts, not an empty list.
+    assert recorder.review_batch_sizes == [2, 2]
