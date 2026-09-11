@@ -386,14 +386,19 @@ async def create_growth_schema(engine) -> None:
         await connection.run_sync(GrowthBase.metadata.create_all)
 
 
-def growth_schema_sql() -> list[str]:
-    """Return CREATE TABLE statements for the draft migration package."""
+def growth_schema_sql(dialect: str = "sqlite") -> list[str]:
+    """Return CREATE TABLE statements for the draft migration package.
 
-    from sqlalchemy.dialects import sqlite
+    Used by the migration matrix test to compile the draft against both the
+    SQLite and PostgreSQL dialect paths without touching a database.
+    """
+
+    from sqlalchemy.dialects import postgresql, sqlite
     from sqlalchemy.schema import CreateTable
 
+    dialect_impl = postgresql.dialect() if dialect == "postgresql" else sqlite.dialect()
     return [
-        str(CreateTable(table).compile(dialect=sqlite.dialect())).strip() + ";"
+        str(CreateTable(table.__table__).compile(dialect=dialect_impl)).strip() + ";"
         for table in GROWTH_TABLES
     ]
 

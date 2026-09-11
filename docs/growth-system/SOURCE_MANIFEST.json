@@ -1,6 +1,6 @@
 {
   "manifest_version": "growth-source-manifest-v1",
-  "generated_at": "2026-09-11T08:51:20.762556+00:00",
+  "generated_at": "2026-09-11T09:17:31.459909+00:00",
   "harness": {
     "task_id": "growth-learning-pipeline",
     "base_sha": "df55b11bcde5d50670ef92d05ba2166feb4735d9",
@@ -13,14 +13,14 @@
       "label": "fullmarket",
       "path": "/Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-fullmarket/data/crypto_trader.db",
       "exists": true,
-      "size_bytes": 745472,
-      "mtime_utc": "2026-09-11T08:27:27.030495+00:00",
-      "sha256_main": "acda6ab3a30e6981b3107af4f9a8db4ebc544bc38666fa9bdd56ecbc752f942a",
+      "size_bytes": 761856,
+      "mtime_utc": "2026-09-11T09:08:51.950259+00:00",
+      "sha256_main": "7b74c929ba7e20006c2c1118f3c653211b53d7968d881cf36a56f1980ebbf756",
       "snapshot_method": "sqlite_backup_api_from_readonly_connection",
       "wal": {
         "present": true,
         "size_bytes": 4120032,
-        "sha256_at_read_time": "9a035c06349c2b163fae2ec36c358795f365db6a3a73758eda7fde8b42669e86"
+        "sha256_at_read_time": "cd388cafb1bf516b3fc6fc28ded6ffb5b67b6a1132b82222c0ad135926022a04"
       },
       "shm_present": true,
       "table_count": 66,
@@ -109,7 +109,7 @@
           "crypto_engine_execution",
           "engine_run_da0fc3d9f41e45ab81093ea74f63ae05",
           1789114120.512618,
-          1789116684.486882,
+          1789118255.681996,
           3
         ]
       ]

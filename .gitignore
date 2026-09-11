@@ -21,3 +21,6 @@ node_modules/
 
 # Harness review queue/checkpoints/logs; no credentials or DB snapshots in Git.
 .ops/ai-native-remediation/
+
+# G07 growth-system evidence (ignored)
+.ops-growth/
