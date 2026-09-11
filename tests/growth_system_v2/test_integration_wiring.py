@@ -325,7 +325,7 @@ async def test_build_system_canonical_composition_root(tmp_path, monkeypatch):
     from crypto_trader.runtime import bootstrap as bootstrap_module
 
     provider = ScriptedProvider(["experience_cards"])
-    monkeypatch.setattr(bootstrap_module, "DeepSeekProvider", lambda: provider)
+    monkeypatch.setattr(bootstrap_module, "DeepSeekProvider", lambda **kwargs: provider)
     settings = Settings(
         app_env="test",
         trading_mode="PAPER",
@@ -394,3 +394,107 @@ async def test_strategy_attaches_trace_to_decision_after_evidence(v2_db):
         ).scalar_one()
     assert row.decision_id == "decision_attach_1"
     assert strategy.audit.events == []
+
+
+class _FakeStructuredRunner:
+    def __init__(self, status: str = "SUCCEEDED"):
+        self.status = status
+        self.calls = []
+
+    async def run_day(self, episodes, **kwargs):
+        self.calls.append([episode.episode_id for episode in episodes])
+        reviewed = (
+            [episode.episode_id for episode in episodes]
+            if self.status == "SUCCEEDED"
+            else []
+        )
+        return {
+            "status": self.status,
+            "reviewed_episode_ids": reviewed,
+            "attempts_total": len(episodes),
+            "attempts_succeeded": len(reviewed),
+            "attempts_failed": 0 if reviewed else len(episodes),
+        }
+
+
+async def test_scheduler_marks_only_llm_reviewed_episodes(v2_db):
+    await _seed_daily_card_scenario(v2_db)
+    runner = _FakeStructuredRunner("SUCCEEDED")
+    scheduler = DailyReviewScheduler(
+        v2_db.session_factory,
+        canonical_only=True,
+        structured_review_runner=runner,
+        account_id="default",
+        mode="PAPER",
+    )
+    result = await scheduler.run_once("2026-09-10")
+    assert result["status"] == "SUCCEEDED"
+    assert result["structured_review"]["status"] == "SUCCEEDED"
+    async with v2_db.session_factory() as session:
+        row = (
+            await session.execute(
+                select(TradeEpisodeORM).where(TradeEpisodeORM.episode_id == "ep_wire")
+            )
+        ).scalar_one()
+    assert row.review_status == "REVIEWED"
+    assert runner.calls == [["ep_wire"]]
+
+
+async def test_scheduler_keeps_episode_pending_when_llm_review_fails(v2_db):
+    await _seed_daily_card_scenario(v2_db)
+    runner = _FakeStructuredRunner("FAILED")
+    scheduler = DailyReviewScheduler(
+        v2_db.session_factory,
+        canonical_only=True,
+        structured_review_runner=runner,
+        account_id="default",
+        mode="PAPER",
+    )
+    result = await scheduler.run_once("2026-09-10")
+    assert result["status"] == "SUCCEEDED"
+    assert result["structured_review"]["status"] == "FAILED"
+    async with v2_db.session_factory() as session:
+        row = (
+            await session.execute(
+                select(TradeEpisodeORM).where(TradeEpisodeORM.episode_id == "ep_wire")
+            )
+        ).scalar_one()
+    assert row.review_status == "PENDING"
+
+
+def test_reference_aliases_accept_prefix_stripped_ids():
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from crypto_trader.learning.growth_contracts import EpisodeReviewInput
+
+    moment = datetime(2026, 9, 10, tzinfo=UTC)
+    review_input = EpisodeReviewInput(
+        episode_id="episode_plan_abc",
+        account_id="default",
+        mode="PAPER",
+        symbol="BTCUSDT",
+        direction="LONG",
+        order_refs=["ord_deadbeef"],
+        fill_refs=["fill_feedface"],
+        entry_price=Decimal("1"),
+        exit_price=Decimal("2"),
+        quantity=Decimal("1"),
+        leverage=Decimal("1"),
+        fees=Decimal("0"),
+        funding_pnl=Decimal("0"),
+        gross_pnl=Decimal("1"),
+        net_pnl=Decimal("1"),
+        opened_at=moment,
+        closed_at=moment,
+        entry_market_regime="BULL",
+        terminal_reason="EXIT",
+        risk_adjustments=[{"risk_decision_id": "risk_cafebabe"}],
+        trade_plan={"trade_plan_id": "plan_deadbeef"},
+    )
+    refs = review_input.derived_refs()
+    assert "order:ord_deadbeef" in refs and "order:deadbeef" in refs
+    assert "fill:fill_feedface" in refs and "fill:feedface" in refs
+    assert "risk:risk_cafebabe" in refs and "risk:cafebabe" in refs
+    assert "trade_plan:plan_deadbeef" in refs and "trade_plan:deadbeef" in refs
+    assert "episode:plan_abc" in refs

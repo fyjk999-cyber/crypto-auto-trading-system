@@ -6,6 +6,7 @@ Test/API/CLI must not each assemble a different core. They should call
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -25,6 +26,7 @@ from crypto_trader.learning.growth_card_retrieval import (
     ExperienceCardRetriever,
     register_experience_card_tool,
 )
+from crypto_trader.learning.growth_structured_review import StructuredReviewRunner
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
@@ -203,6 +205,23 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     card_trace_store = CardDecisionTraceStore(database.session_factory)
     card_retriever = ExperienceCardRetriever(database.session_factory)
     register_experience_card_tool(tools, card_retriever, trace_store=card_trace_store)
+    # Built-in LLM review worker: only attached when a provider credential is
+    # configured.  Without a key the scheduler keeps its deterministic stages
+    # and no provider call is attempted.
+    review_provider = DeepSeekProvider(
+        model=os.environ.get("LLM_REVIEW_MODEL") or "deepseek-flash"
+    )
+    structured_review_runner = (
+        StructuredReviewRunner(
+            database.session_factory,
+            review_provider,
+            owner="daily-review",
+            max_tokens=int(os.environ.get("LLM_REVIEW_MAX_TOKENS") or "8192"),
+            thinking=True,
+        )
+        if review_provider.healthy()
+        else None
+    )
     tool_chief = ToolDrivenChiefTrader(chief, tools)
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
@@ -270,6 +289,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 account_id="default",
                 mode=settings.trading_mode.value,
                 card_learner=DailyCardLearner(database.session_factory),
+                structured_review_runner=structured_review_runner,
             )
             if settings.auto_start_runtime
             else None

@@ -28,6 +28,7 @@ class DailyReviewScheduler:
         mode: str = "PAPER",
         profile_version: str | None = None,
         card_learner=None,
+        structured_review_runner=None,
     ) -> None:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
@@ -42,6 +43,7 @@ class DailyReviewScheduler:
         self.mode = mode
         self.profile_version = profile_version
         self.card_learner = card_learner
+        self.structured_review_runner = structured_review_runner
 
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
@@ -100,6 +102,38 @@ class DailyReviewScheduler:
             ):
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST")
             await self.learning.review_many(pending)
+            # Built-in LLM structured review (G02).  The runner persists each
+            # provider attempt before publication; only SUCCEEDED episodes are
+            # marked REVIEWED.  It never authors knowledge itself.
+            structured_review: dict = {
+                "status": "NOT_CONFIGURED",
+                "reviewed_episode_ids": [],
+            }
+            if self.structured_review_runner is not None:
+                async def review_fence() -> bool:
+                    return await self.persistence.heartbeat_daily_review(
+                        date,
+                        claim_token,
+                        owner=self.owner,
+                        lease_seconds=self.claim_lease_seconds,
+                    )
+
+                try:
+                    structured_review = await self.structured_review_runner.run_day(
+                        pending,
+                        review_date=date,
+                        fence=review_fence,
+                        owner=self.owner,
+                        lease_seconds=self.claim_lease_seconds,
+                        account_id=self.account_id,
+                        mode=self.mode,
+                    )
+                except Exception as exc:
+                    structured_review = {
+                        "status": "FAILED",
+                        "error_type": type(exc).__name__,
+                        "reviewed_episode_ids": [],
+                    }
             # Growth V2: after factual learning/pattern update, propose/apply
             # card changes on the same claim.  The learner re-validates the
             # fence before every write; claim loss produces NO card mutation.
@@ -118,8 +152,16 @@ class DailyReviewScheduler:
             )
             if not saved:
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_MARK")
+            mark_episode_ids = [episode.episode_id for episode in pending]
+            if self.structured_review_runner is not None:
+                reviewed = set(structured_review.get("reviewed_episode_ids") or [])
+                mark_episode_ids = [
+                    episode_id
+                    for episode_id in mark_episode_ids
+                    if episode_id in reviewed
+                ]
             if not await self.episodes.mark_reviewed_fenced(
-                [episode.episode_id for episode in pending],
+                mark_episode_ids,
                 review_date=date,
                 claim_token=claim_token,
                 owner=self.owner,
@@ -174,6 +216,7 @@ class DailyReviewScheduler:
                 "episode_count": len(episodes),
                 "reviewed_this_attempt": len(pending),
                 "card_learning": card_learning,
+                "structured_review": structured_review,
             }
         except Exception as exc:
             await self.persistence.fail_daily_review(

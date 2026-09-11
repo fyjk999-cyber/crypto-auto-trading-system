@@ -87,14 +87,50 @@ class EpisodeReviewInput(BaseModel):
             raise ValueError("direction must be LONG or SHORT")
         return upper
 
+    @staticmethod
+    def _add_ref(refs: set[str], kind: str, value: str | None) -> None:
+        """Accept canonical ids and their known prefix-stripped equivalents.
+
+        Providers sometimes cite the raw exchange/DB id (for example
+        ``order:e3d74...``) while the canonical episode stores
+        ``ord_e3d74...``.  Both identify the same factual row, so both are
+        valid references; the prefix remains the canonical stored form.
+        """
+        if not value:
+            return
+        text = str(value)
+        refs.add(f"{kind}:{text}")
+        for prefix in (
+            "ord_",
+            "fill_",
+            "risk_",
+            "llm_",
+            "episode_",
+            "decision_",
+            "plan_",
+        ):
+            if text.startswith(prefix):
+                refs.add(f"{kind}:{text[len(prefix):]}")
+
     def derived_refs(self) -> set[str]:
-        refs = {f"episode:{self.episode_id}"}
-        if self.entry_decision_id:
-            refs.add(f"decision:{self.entry_decision_id}")
-        if self.exit_decision_id:
-            refs.add(f"decision:{self.exit_decision_id}")
-        refs.update(f"order:{ref}" for ref in self.order_refs)
-        refs.update(f"fill:{ref}" for ref in self.fill_refs)
+        refs: set[str] = set()
+        self._add_ref(refs, "episode", self.episode_id)
+        self._add_ref(refs, "decision", self.entry_decision_id)
+        self._add_ref(refs, "decision", self.exit_decision_id)
+        for ref in self.order_refs:
+            self._add_ref(refs, "order", ref)
+        for ref in self.fill_refs:
+            self._add_ref(refs, "fill", ref)
+        for adjustment in self.risk_adjustments:
+            if isinstance(adjustment, dict):
+                self._add_ref(
+                    refs, "risk", adjustment.get("risk_decision_id")
+                )
+                self._add_ref(
+                    refs, "position", adjustment.get("position_decision_id")
+                )
+        if isinstance(self.trade_plan, dict):
+            self._add_ref(refs, "trade_plan", self.trade_plan.get("trade_plan_id"))
         for tool in self.selected_tools:
             refs.update(tool.source_refs)
             refs.add(f"tool:{tool.tool_name}")

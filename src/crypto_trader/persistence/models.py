@@ -39,7 +39,14 @@ class ExactDecimal(TypeDecorator):
         return format_decimal(D(value))
 
     def process_result_value(self, value: str | None, dialect: Any) -> Decimal | None:
-        return D(value) if value is not None else None
+        if value is None:
+            return None
+        # Legacy SQLite NUMERIC columns may surface floats; the adapter
+        # boundary converts them exactly via Decimal(str(...)) as prescribed
+        # by the core error.  Core arithmetic itself still rejects floats.
+        if isinstance(value, float):
+            return Decimal(str(value))
+        return D(value)
 
 
 class Base(DeclarativeBase):

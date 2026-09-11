@@ -350,7 +350,7 @@ async def test_official_build_system_path_with_injected_provider(tmp_path, monke
         ["memory_search", "factor_intelligence", "coin_profile"]
     )
 
-    monkeypatch.setattr(bootstrap_module, "DeepSeekProvider", lambda: fake_provider)
+    monkeypatch.setattr(bootstrap_module, "DeepSeekProvider", lambda **kwargs: fake_provider)
 
     def loader_factory(session_factory):
         loader = GrowthContextLoader(session_factory)

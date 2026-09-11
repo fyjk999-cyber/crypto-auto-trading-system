@@ -249,6 +249,7 @@ class StructuredReviewService:
         timeout_seconds: float = 60.0,
         max_tokens: int = 2000,
         retries: int = 0,
+        thinking: bool = True,
     ) -> None:
         self.provider = provider
         self.session_factory = session_factory
@@ -258,6 +259,7 @@ class StructuredReviewService:
         self.timeout_seconds = timeout_seconds
         self.max_tokens = max_tokens
         self.retries = retries
+        self.thinking = thinking
         self.store = ReviewAttemptStore(session_factory)
 
     # ------------------------------------------------------------------
@@ -392,6 +394,7 @@ class StructuredReviewService:
             timeout_seconds=self.timeout_seconds,
             retries=self.retries,
             max_tokens=self.max_tokens,
+            thinking=self.thinking,
             operation="growth_structured_review",
         )
         usage_status = "KNOWN" if getattr(response, "token_usage", None) else "UNKNOWN"
