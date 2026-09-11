@@ -19,6 +19,12 @@ from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
+from crypto_trader.learning.growth_attribution import DailyCardLearner
+from crypto_trader.learning.growth_card_retrieval import (
+    CardDecisionTraceStore,
+    ExperienceCardRetriever,
+    register_experience_card_tool,
+)
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
@@ -193,6 +199,10 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     register_factor_runtime_tools(tools, FactorService(database.session_factory))
     if feed_client is not None:
         register_market_history_tool(tools, adapter.feed)
+    # Growth V2 Adaptive Experience Card read path: evidence-only, trace-first.
+    card_trace_store = CardDecisionTraceStore(database.session_factory)
+    card_retriever = ExperienceCardRetriever(database.session_factory)
+    register_experience_card_tool(tools, card_retriever, trace_store=card_trace_store)
     tool_chief = ToolDrivenChiefTrader(chief, tools)
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
@@ -210,6 +220,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         audit=audit,
         risk_summary=risk.config.model_dump(mode="json"),
         tool_chief=tool_chief,
+        card_trace_store=card_trace_store,
+        card_account_id="default",
+        card_mode=settings.trading_mode.value,
         sizer=sizer,
         opportunity_board=opportunity_board,
         evidence_router=evidence_router,
@@ -254,6 +267,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 review_time_utc="00:00",
                 canonical_only=True,
                 use_local_time=False,
+                account_id="default",
+                mode=settings.trading_mode.value,
+                card_learner=DailyCardLearner(database.session_factory),
             )
             if settings.auto_start_runtime
             else None

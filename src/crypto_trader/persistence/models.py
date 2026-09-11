@@ -765,6 +765,9 @@ class AICompressedExperienceORM(Base):
     mode: Mapped[str] = mapped_column(
         String(16), default="PAPER", server_default="PAPER", index=True
     )
+    share_scope: Mapped[str] = mapped_column(
+        String(32), default="ACCOUNT_MODE", server_default="ACCOUNT_MODE", index=True
+    )
     trigger_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     context_signature_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     factor_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)

@@ -17,6 +17,8 @@ from typing import Any
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.domain.money import round_tick
+from crypto_trader.learning.growth_card_retrieval import CardDecisionTraceStore
+from crypto_trader.learning.growth_v2_runtime import build_card_tool_context
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
@@ -59,6 +61,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         attempt_clock: Callable[[], datetime] | None = None,
         opportunity_board: OpportunityBoard | None = None,
         evidence_router: PerSymbolEvidenceRouter | None = None,
+        card_trace_store: CardDecisionTraceStore | None = None,
+        card_account_id: str = "default",
+        card_mode: str = "PAPER",
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -77,6 +82,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # cooldown replaces the single-symbol clock (same semantics).
         self.opportunity_board = opportunity_board
         self.evidence_router = evidence_router
+        self.card_trace_store = card_trace_store
+        self.card_account_id = card_account_id
+        self.card_mode = card_mode
         self._last_attempt_by_symbol: dict[str, datetime] = {}
         self._skip_until: dict[str, datetime] = {}
         # This is an attempt cooldown, not an entry cooldown.  Every provider
@@ -165,7 +173,14 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             else:
                 decision, package = await self.tool_chief.decide(
                     chief_ctx,
-                    tool_context={"strategy_context": ctx},
+                    tool_context=build_card_tool_context(
+                        ctx,
+                        chief_context=chief_ctx,
+                        candidate=candidate,
+                        account_id=self.card_account_id,
+                        mode=self.card_mode,
+                        as_of=now,
+                    ),
                     now=now,
                 )
                 if package is not None:
@@ -176,6 +191,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                     memory_refs = package.refs_with_prefix("memory:")
                     research_refs = package.refs_with_prefix("research:")
                     episode_refs = package.refs_with_prefix("episode:")
+                    await self._attach_card_decision_trace(decision, package, ctx)
         finally:
             completed_at = self.attempt_clock()
             if completed_at.tzinfo is None:
@@ -380,6 +396,37 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             )
             return []
         return [signal] if signal is not None else []
+
+    async def _attach_card_decision_trace(self, decision, package, ctx) -> None:
+        """Attach the durable retrieval trace to the final decision id.
+
+        The trace row already exists before card evidence was exposed; this
+        call only links it to the decision.  Failure is audited but cannot
+        change the ChiefTrader decision (no block, no fabricated lineage).
+        """
+        if self.card_trace_store is None:
+            return
+        trace_id = None
+        for item in getattr(package, "items", []) or []:
+            finding = getattr(item, "finding", None)
+            if isinstance(finding, dict) and finding.get("card_trace_id"):
+                trace_id = str(finding["card_trace_id"])
+                break
+        if trace_id is None:
+            return
+        try:
+            await self.card_trace_store.attach_decision(
+                trace_id=trace_id,
+                decision_id=decision.decision_id,
+                evidence_package_id=None,
+            )
+        except Exception as exc:  # evidence was already durably traced
+            await self.audit.log(
+                "CARD_TRACE_ATTACH_FAILED",
+                target=decision.decision_id,
+                run_id=getattr(ctx, "run_id", None),
+                after={"error": type(exc).__name__, "trace_id": trace_id},
+            )
 
     @staticmethod
     def _lineage(candidate) -> dict[str, Any]:

@@ -217,6 +217,7 @@ class AdaptiveCardStore:
                 experience_type="ADAPTIVE_CARD",
                 account_id=proposal.account_id or "default",
                 mode=proposal.mode or "PAPER",
+                share_scope=proposal.share_scope or "ACCOUNT_MODE",
                 trigger_signature_json=trigger.to_json() if trigger else None,
                 context_signature_json=context.to_json() if context else None,
                 factor_refs_json=[
@@ -319,6 +320,8 @@ class AdaptiveCardStore:
                 ]
             if proposal.proposed_status:
                 row.status = proposal.proposed_status
+            if proposal.share_scope:
+                row.share_scope = proposal.share_scope
             if proposal.supersedes_rule_id:
                 row.supersedes_rule_id = proposal.supersedes_rule_id
                 row.supersedes_version = proposal.supersedes_version
@@ -570,6 +573,8 @@ class AdaptiveCardStore:
             "experience_type": row.experience_type,
             "account_id": row.account_id,
             "mode": row.mode,
+            "share_scope": row.share_scope,
+            "applicability_scope_json": row.applicability_scope_json,
             "trigger_signature_json": row.trigger_signature_json,
             "context_signature_json": row.context_signature_json,
             "guidance_json": row.guidance_json,

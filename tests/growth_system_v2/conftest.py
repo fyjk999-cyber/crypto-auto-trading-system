@@ -89,6 +89,7 @@ async def seed_card(
     version: int = 1,
     account_id: str = "default",
     mode: str = "PAPER",
+    share_scope: str = "ACCOUNT_MODE",
     symbol: str | None = None,
     updated_at: datetime | None = AS_OF,
 ):
@@ -103,6 +104,7 @@ async def seed_card(
         card_rule_id=rule_id,
         account_id=account_id,
         mode=mode,
+        share_scope=share_scope,
         source_episode_ids=source_ids or ["ep_1", "ep_2", "ep_3"],
         supporting_episode_ids=support_ids or source_ids or ["ep_1", "ep_2", "ep_3"],
         contradicting_episode_ids=contrary_ids or [],

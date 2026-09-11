@@ -11,6 +11,7 @@ from crypto_trader.governance.factual_learning import FactualEpisodeLearning
 from crypto_trader.governance.memory import FailureMemory, TradeMemory, TradeMemoryRecord
 from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
+from crypto_trader.learning.growth_experience import ClaimLostError
 
 
 class DailyReviewScheduler:
@@ -23,6 +24,10 @@ class DailyReviewScheduler:
         use_local_time: bool = False,
         owner: str = "daily-review",
         claim_lease_seconds: int = 1800,
+        account_id: str = "default",
+        mode: str = "PAPER",
+        profile_version: str | None = None,
+        card_learner=None,
     ) -> None:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
@@ -33,6 +38,10 @@ class DailyReviewScheduler:
         self.use_local_time = use_local_time
         self.owner = owner
         self.claim_lease_seconds = max(60, claim_lease_seconds)
+        self.account_id = account_id
+        self.mode = mode
+        self.profile_version = profile_version
+        self.card_learner = card_learner
 
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
@@ -91,6 +100,10 @@ class DailyReviewScheduler:
             ):
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST")
             await self.learning.review_many(pending)
+            # Growth V2: after factual learning/pattern update, propose/apply
+            # card changes on the same claim.  The learner re-validates the
+            # fence before every write; claim loss produces NO card mutation.
+            card_learning = await self._learn_cards(date, claim_token)
             # Publish SUCCEEDED only through the fenced claim update. Episode
             # mark_reviewed must happen after that fence so an old/stale token
             # can never mark factual episodes REVIEWED without a published
@@ -160,6 +173,7 @@ class DailyReviewScheduler:
                 "short_gross_pnl": str(stats.short_gross_pnl),
                 "episode_count": len(episodes),
                 "reviewed_this_attempt": len(pending),
+                "card_learning": card_learning,
             }
         except Exception as exc:
             await self.persistence.fail_daily_review(
@@ -167,6 +181,42 @@ class DailyReviewScheduler:
             )
             raise
 
+
+    async def _learn_cards(self, date: str, claim_token: str) -> dict:
+        if self.card_learner is None:
+            return {"status": "NOT_CONFIGURED", "mutations": 0}
+
+        async def fence() -> bool:
+            return await self.persistence.heartbeat_daily_review(
+                date,
+                claim_token,
+                owner=self.owner,
+                lease_seconds=self.claim_lease_seconds,
+            )
+
+        try:
+            report = await self.card_learner.learn_day(
+                account_id=self.account_id,
+                mode=self.mode,
+                review_date=date,
+                profile_version=self.profile_version,
+                fence=fence,
+                origin="DAILY_REVIEW",
+            )
+        except ClaimLostError:
+            return {"status": "CLAIM_LOST", "mutations": 0}
+        except Exception as exc:
+            # Card learning is one stage of the daily review.  It never writes
+            # without a live fence and its failure is reported explicitly
+            # instead of silently passing.
+            return {"status": "FAILED", "mutations": 0, "error": type(exc).__name__}
+        return {
+            "status": "CLAIM_LOST" if report.claim_lost else "SUCCEEDED",
+            "mutations": len(report.mutations),
+            "idempotent_mutations": sum(
+                1 for mutation in report.mutations if mutation.idempotent
+            ),
+        }
 
     async def run_missed_days(self, since_date: str, end_date: str | None = None) -> list[dict]:
         """Run one review per UTC day from since_date through yesterday."""

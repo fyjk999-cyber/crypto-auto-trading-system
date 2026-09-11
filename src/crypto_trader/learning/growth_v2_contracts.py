@@ -13,6 +13,9 @@ from typing import Any
 from crypto_trader.learning.growth_contracts import canonical_json, sha256_text
 
 TRIGGER_SCHEMA_VERSION = "trigger-v1"
+SHARE_SCOPE_ACCOUNT_MODE = "ACCOUNT_MODE"
+SHARE_SCOPE_GLOBAL_EXPLICIT = "GLOBAL_EXPLICIT"
+SHARE_SCOPES = (SHARE_SCOPE_ACCOUNT_MODE, SHARE_SCOPE_GLOBAL_EXPLICIT)
 CONTEXT_SCHEMA_VERSION = "context-v1"
 CARD_SCHEMA_VERSION = "adaptive-experience-card-v1"
 
@@ -262,6 +265,7 @@ class AdaptiveExperienceCard:
     mode: str = "PAPER"
     trigger: TriggerSignature | None = None
     context: ContextSignature | None = None
+    share_scope: str = SHARE_SCOPE_ACCOUNT_MODE
     scope: dict[str, Any] = field(default_factory=dict)
     guidance: dict[str, Any] = field(default_factory=dict)
     factor_refs: list[str] = field(default_factory=list)
@@ -366,6 +370,7 @@ class CardUpdateProposal:
     rationale: str
     account_id: str = "default"
     mode: str = "PAPER"
+    share_scope: str = SHARE_SCOPE_ACCOUNT_MODE
     source_episode_ids: list[str] = field(default_factory=list)
     supporting_episode_ids: list[str] = field(default_factory=list)
     contradicting_episode_ids: list[str] = field(default_factory=list)
@@ -385,6 +390,9 @@ class CardUpdateProposal:
         payload = {
             "operation": self.operation,
             "card_rule_id": self.card_rule_id,
+            "account_id": self.account_id,
+            "mode": self.mode,
+            "share_scope": self.share_scope,
             "source_episode_ids": sorted(self.source_episode_ids),
             "supporting": sorted(self.supporting_episode_ids),
             "contradicting": sorted(self.contradicting_episode_ids),
