@@ -1743,7 +1743,20 @@ class TradingEngine:
                 episode = await self.trade_episodes.build_for_closed_plan(
                     closed_plan.trade_plan_id
                 )
-                if episode is None:
+                if episode is None and plan.state == TradePlanState.RECOVERY:
+                    # A recovered orphan position has no provable factual entry
+                    # fill by definition. Failing closed on Episode creation is
+                    # correct, but it is not a runtime-health failure.
+                    self.health.set(
+                        "trade_episode", True, "NOT_APPLICABLE_RECOVERY"
+                    )
+                    await self.audit.log(
+                        "TRADE_EPISODE_NOT_APPLICABLE_RECOVERY",
+                        target=closed_plan.trade_plan_id,
+                        run_id=self.run_id,
+                        order_id=order.internal_order_id,
+                    )
+                elif episode is None:
                     self.health.set(
                         "trade_episode", False, "closed lifecycle lacks factual lineage"
                     )
