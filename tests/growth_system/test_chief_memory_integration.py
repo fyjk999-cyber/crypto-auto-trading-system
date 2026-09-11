@@ -160,9 +160,15 @@ async def test_future_and_revoked_knowledge_are_not_retrieved(growth_db):
     pattern_ref = pattern_evidence.source_refs[0]
     pattern_id = pattern_ref.split(":")[1]
     await publisher.revoke(kind="pattern", logical_id=pattern_id, reason="TEST_REVOKE")
-    revoked = await loader.load_tool("factor_intelligence", _context(), as_of=AS_OF)
-    assert revoked.source_refs == []
-    assert revoked.data_quality == "NO_MATCHES"
+    # R07: historical as_of BEFORE the revocation still sees the old version;
+    # after the transition the revoked latest version controls visibility.
+    before = await loader.load_tool("factor_intelligence", _context(), as_of=AS_OF)
+    assert before.source_refs
+    after = await loader.load_tool(
+        "factor_intelligence", _context(), as_of=datetime.now(UTC)
+    )
+    assert after.source_refs == []
+    assert after.data_quality == "NO_MATCHES"
 
 
 async def test_account_and_mode_isolation(growth_db):
@@ -185,11 +191,13 @@ async def test_account_and_mode_isolation(growth_db):
 
 async def test_per_category_limit_and_token_budget(growth_db):
     publisher = GrowthKnowledgePublisher(growth_db.session_factory, min_pattern_samples=3)
+    # One testable proposition repeated across eight factual episodes; R08
+    # proposition identity must aggregate these (not eight unrelated claims).
     for index in range(8):
         await publisher.publish_review(
             attempt=_attempt(
                 f"many_{index}",
-                statement=f"Case {index}: volume expansion accompanied the move.",
+                statement="Volume expansion accompanied the directional move.",
             ),
             binding=_binding(),
             known_at=AS_OF,
@@ -221,7 +229,7 @@ async def test_prompt_injection_text_is_wrapped_as_untrusted_data(growth_db):
     )
     for index in range(3):
         await publisher.publish_review(
-            attempt=_attempt(f"inject_{index}", statement=f"{index}: {injection}"),
+            attempt=_attempt(f"inject_{index}", statement=injection),
             binding=_binding(),
             known_at=AS_OF,
         )

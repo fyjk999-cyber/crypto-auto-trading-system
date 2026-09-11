@@ -229,10 +229,12 @@ async def test_contrary_episode_downgrades_and_keeps_old_version(publisher, grow
     pattern_id = pattern.pattern_id
     v1_id = pattern.id
 
+    # R08: a contrary observation of the SAME proposition downgrades it.
+    # A different proposition would not co-validate or downgrade this one.
     downgraded = await publisher.publish_review(
         attempt=_attempt(
             "contrary_1",
-            statement="Rising volume at entry preceded a reversal in this case.",
+            statement="Rising volume at entry is associated with trend continuation.",
             contrary_refs=["tool:market_regime:candle:9"],
         ),
         binding=_binding(),
@@ -273,12 +275,22 @@ async def test_revoked_and_expired_and_future_knowledge_is_not_default_retrieved
     validated_versions = await _pattern_versions(growth_db, pattern.pattern_id)
     validated_id = validated_versions[-1].id
     await publisher.revoke(kind="pattern", logical_id=pattern.pattern_id, reason="MANUAL_REVIEW")
+    # R07: the revocation version is visible at the transition time, while
+    # historical as_of before it still sees the old validated version.
     assert (
         await publisher.list_published_patterns(
-            account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME, as_of=KNOWN_AT
+            account_id="default",
+            mode="PAPER",
+            symbol=SYMBOL,
+            regime=REGIME,
+            as_of=datetime.now(UTC),
         )
         == []
     )
+    historical = await publisher.list_published_patterns(
+        account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME, as_of=KNOWN_AT
+    )
+    assert historical
     # Old versions are retained for audit; the current version is REVOKED.
     versions = await _pattern_versions(growth_db, pattern.pattern_id)
     assert versions[-1].status == "REVOKED"
@@ -294,12 +306,17 @@ async def test_revoked_and_expired_and_future_knowledge_is_not_default_retrieved
         await fresh.publish_review(
             attempt=_attempt(f"future_{index}"), binding=_binding(), known_at=future
         )
-    assert (
-        await fresh.list_published_patterns(
-            account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME, as_of=KNOWN_AT
-        )
-        == []
+    # R06/R07: at KNOWN_AT the latest *visible* version is the historical
+    # validated version; the future rows must never leak backward.
+    historical_again = await fresh.list_published_patterns(
+        account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME, as_of=KNOWN_AT
     )
+    assert historical_again
+    for row in historical_again:
+        known = row.known_at
+        if known is not None and known.tzinfo is None:
+            known = known.replace(tzinfo=UTC)
+        assert known is None or known <= KNOWN_AT
 
 
 async def test_compression_requires_published_knowledge_and_is_conditional(
