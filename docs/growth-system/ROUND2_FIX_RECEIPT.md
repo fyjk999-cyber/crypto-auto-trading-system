@@ -132,5 +132,15 @@ counterexamples.  All were fixed and re-tested:
    known.  Fix: strict `job_key`/`job_revision` matching, no unbound fallback
    (`test_recovery_ignores_unbound_rows_when_job_identity_is_known`).
 
+Interrupted-review evidence:
+
+```text
+thread_id = 01a090ea-89c0-7633-b781-82a8afc48930
+record_path = /Users/huhongjie/.dsh/codex-dispatch/records/2026-09-11T14-41-19-198Z-01a090ea.json
+b4b6243cc27832527a39c9f71214bfcc47004666c9c2911bf56642a085b2ecba  .ops-growth-r2/review_dispatch_round3.json
+1ce5643eb9b5ea79f9fb2887e585b921843d059e4eb427cef65465107e05a07e  .ops-growth-r2/retrieval-review/probe.log
+6e7dca9e2eec60969a0bce43260ba32ea8142f8f31e5b350734f4ffc023f990b  .ops-growth-r2/spec-publication/adversarial-results.txt
+```
+
 Formal independent verdict for the final repair SHA remains pending a retry
 after the usage limit resets.  This receipt does not claim approval.
