@@ -38,4 +38,11 @@ async def test_multi_timeframe_history_is_closed_bounded_and_as_of_safe():
     assert set(result.features) == {"1m", "15m", "1H"}
     assert all(len(rows) == 1 for rows in result.features.values())
     assert all(rows[0]["volume"] == "7" for rows in result.features.values())
+    assert all(rows[0]["volume_contracts"] == "7" for rows in result.features.values())
+    assert all(rows[0]["volume_base"] == "0" for rows in result.features.values())
+    assert all(rows[0]["volume_quote"] == "0" for rows in result.features.values())
+    assert all(
+        rows[0]["volume_unit"] == "OKX_SWAP_CONTRACTS"
+        for rows in result.features.values()
+    )
     assert result.timestamp < as_of

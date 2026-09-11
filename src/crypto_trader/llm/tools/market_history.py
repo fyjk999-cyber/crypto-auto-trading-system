@@ -25,7 +25,14 @@ def _tool(feed):
                 {
                     "timestamp": datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC).isoformat(),
                     "open": str(row[1]), "high": str(row[2]), "low": str(row[3]),
-                    "close": str(row[4]), "volume": str(row[5]),
+                    "close": str(row[4]),
+                    # OKX SWAP candle schema:
+                    # vol=contracts, volCcy=base currency, volCcyQuote=quote currency.
+                    "volume": str(row[5]),
+                    "volume_contracts": str(row[5]),
+                    "volume_base": str(row[6]),
+                    "volume_quote": str(row[7]),
+                    "volume_unit": "OKX_SWAP_CONTRACTS",
                 }
                 for row in reversed(rows)
                 if isinstance(row, list) and len(row) >= 9 and str(row[8]) == "1"

@@ -16,9 +16,18 @@ from crypto_trader.llm_chief.engine import ChiefTraderEngine
 class ToolDrivenChiefTrader:
     """The same Chief selects evidence tools and makes the final decision."""
 
-    def __init__(self, chief: ChiefTraderEngine, tools: LLMToolRegistry) -> None:
+    def __init__(
+        self,
+        chief: ChiefTraderEngine,
+        tools: LLMToolRegistry,
+        *,
+        tool_round_timeout_seconds: float = 30.0,
+    ) -> None:
+        if tool_round_timeout_seconds <= 0:
+            raise ValueError("tool_round_timeout_seconds must be positive")
         self.chief = chief
         self.tools = tools
+        self.tool_round_timeout_seconds = float(tool_round_timeout_seconds)
 
     async def decide(
         self,
@@ -27,15 +36,24 @@ class ToolDrivenChiefTrader:
         tool_context: dict[str, Any],
         now: datetime,
     ) -> tuple[ChiefTraderDecision, DynamicEvidencePackage | None]:
-        selected, error = await self.chief.select_tools(ctx, self.tools.catalog())
-        if selected is None:
-            return self.chief.fail_closed(ctx, error or "TOOL_SELECTION_FAILED"), None
         try:
-            async with asyncio.timeout(30):
+            # One wall-clock budget covers model tool selection and all selected
+            # tool execution. The final trading decision has its own bounded
+            # provider timeout and is intentionally outside this evidence round.
+            async with asyncio.timeout(self.tool_round_timeout_seconds):
+                selected, error = await self.chief.select_tools(
+                    ctx, self.tools.catalog()
+                )
+                if selected is None:
+                    return self.chief.fail_closed(
+                        ctx, error or "TOOL_SELECTION_FAILED"
+                    ), None
                 package, ctx = await self._build_evidence(
                     selected, ctx, tool_context=tool_context, now=now
                 )
-        except (KeyError, TimeoutError, TypeError, ValueError):
+        except TimeoutError:
+            return self.chief.fail_closed(ctx, "TOOL_ROUND_TIMEOUT"), None
+        except (KeyError, TypeError, ValueError):
             return self.chief.fail_closed(ctx, "TOOL_ROUTER_FAILED"), None
         enriched = replace(
             ctx,
