@@ -164,6 +164,11 @@ class TradingEngine:
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
+        self.position_review_timeout_seconds = 30.0
+        self.position_review_interval_seconds = max(
+            0.5, min(30.0, float(settings.engine_tick_seconds))
+        )
+        self._position_review_state: dict[str, dict] = {}
 
     # ------------------------------------------------------------------ state
     async def start(self, run_id: str | None = None) -> str:
@@ -211,6 +216,7 @@ class TradingEngine:
                     after={"stale_run_ids": stale_runs},
                 )
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
+        await self._ensure_orphan_recovery_plans()
 
         self.state_machine.transition(RuntimeState.RUNNING)
         await self._persist_run(RuntimeState.RUNNING)
@@ -303,6 +309,50 @@ class TradingEngine:
                     row.ended_at = now
             await session.commit()
 
+    async def _ensure_orphan_recovery_plans(self) -> list[str]:
+        """Create explicit RECOVERY plans for factual positions without one.
+
+        This does not create fills or orders and never bypasses the normal
+        reduce-only signal -> Risk -> ExecutionAuthority -> OrderManager path.
+        """
+        if not hasattr(self.adapter, "get_positions"):
+            return []
+        try:
+            positions = await self.adapter.get_positions()
+        except Exception as exc:
+            await self.audit.log(
+                "ORPHAN_RECOVERY_SCAN_FAILED",
+                target=self.run_id or "unknown",
+                run_id=self.run_id,
+                after={"error_type": type(exc).__name__},
+            )
+            return []
+        created: list[str] = []
+        for position in positions:
+            if position.quantity == 0:
+                continue
+            active = await self.trade_plans.get_active_for_symbol(position.symbol)
+            if active is not None:
+                continue
+            plan = await self.trade_plans.ensure_recovery_plan(
+                symbol=position.symbol,
+                direction="LONG" if position.quantity > 0 else "SHORT",
+                quantity=abs(position.quantity),
+                entry_price=getattr(position, "avg_entry_price", None),
+            )
+            created.append(plan.trade_plan_id)
+            await self.audit.log(
+                "ORPHAN_POSITION_RECOVERY_PLANNED",
+                target=position.symbol,
+                run_id=self.run_id,
+                after={
+                    "trade_plan_id": plan.trade_plan_id,
+                    "state": plan.state.value,
+                    "quantity": str(abs(position.quantity)),
+                },
+            )
+        return created
+
     async def _reconcile_stale_runs(self) -> list[str]:
         """Close abandoned rows only after this process owns the fenced lease."""
 
@@ -362,7 +412,7 @@ class TradingEngine:
                 )
 
     async def _position_loop(self) -> None:
-        """Review open positions independently from potentially slow entry calls."""
+        """Review positions on deadline; never sleep a drifted fixed period."""
         while True:
             try:
                 await self._review_positions_once()
@@ -370,7 +420,21 @@ class TradingEngine:
                 raise
             except Exception as exc:
                 self.health.set("position_manager", False, type(exc).__name__)
-            await asyncio.sleep(self.settings.engine_tick_seconds)
+            now_epoch = self.clock.now().timestamp()
+            due_times = [
+                state.get("next_due_at", now_epoch + self.position_review_interval_seconds)
+                for state in self._position_review_state.values()
+            ]
+            next_due = (
+                min(due_times)
+                if due_times
+                else now_epoch + self.position_review_interval_seconds
+            )
+            sleep_for = max(
+                0.05,
+                min(next_due - now_epoch, self.position_review_interval_seconds),
+            )
+            await asyncio.sleep(sleep_for)
 
     async def _lease_loop(self) -> None:
         # Renew immediately (t=0) and then on the configured cadence so the
@@ -452,29 +516,128 @@ class TradingEngine:
     async def _review_positions_once(self) -> list[RiskDecision]:
         if self.position_manager is None:
             return []
+        now_wall = self.clock.now()
+        now_epoch = now_wall.timestamp()
         positions = await self.portfolio.get_positions()
+        due = []
+        for symbol, position in positions.items():
+            if position.quantity == 0:
+                continue
+            state = self._position_review_state.setdefault(
+                symbol,
+                {"next_due_at": 0.0, "failures": 0, "last_started_at": None},
+            )
+            if state["next_due_at"] <= now_epoch:
+                score = await self._position_review_priority(
+                    position, state, now_wall, now_epoch
+                )
+                due.append((score, symbol, position))
+        if not due:
+            return []
+        due.sort(key=lambda row: row[0], reverse=True)
+
         semaphore = asyncio.Semaphore(4)
 
-        async def review_one(position):
+        async def review_one(_, symbol, position):
             async with semaphore:
-                if position.quantity == 0:
-                    return None
-                ctx = await self._strategy_context(position.symbol)
-                if ctx is None:
-                    return None
+                state = self._position_review_state[symbol]
+                state["last_started_at"] = now_epoch
                 try:
-                    signal = await self.position_manager.review(ctx, position)
-                except Exception as exc:
-                    self.consecutive_failures += 1
-                    self.health.set("position_manager", False, type(exc).__name__)
+                    signal = await asyncio.wait_for(
+                        self._review_one_position(symbol, position, now_wall),
+                        timeout=max(0.05, self.position_review_timeout_seconds),
+                    )
+                except TimeoutError:
+                    state["failures"] = state.get("failures", 0) + 1
+                    state["next_due_at"] = (
+                        self.clock.now().timestamp() + self._review_backoff(state)
+                    )
+                    self.health.set("position_manager", False, "POSITION_REVIEW_TIMEOUT")
+                    await self.audit.log(
+                        "POSITION_REVIEW_TIMEOUT",
+                        target=symbol,
+                        run_id=self.run_id,
+                        after={"timeout_seconds": self.position_review_timeout_seconds},
+                    )
                     return None
+                except Exception as exc:
+                    state["failures"] = state.get("failures", 0) + 1
+                    state["next_due_at"] = (
+                        self.clock.now().timestamp() + self._review_backoff(state)
+                    )
+                    self.consecutive_failures += 1
+                    self.health.set(
+                        "position_manager", False, type(exc).__name__
+                    )
+                    return None
+                state["failures"] = 0
+                state["next_due_at"] = self.clock.now().timestamp() + self._next_review_delay(
+                    position, now_wall
+                )
                 self.health.set("position_manager", True)
-                if signal is not None:
-                    return await self.process_signal(signal)
-                return None
+                return signal
 
-        reviewed = await asyncio.gather(*(review_one(position) for position in positions.values()))
+        reviewed = await asyncio.gather(
+            *(review_one(score, symbol, position) for score, symbol, position in due)
+        )
         return [decision for decision in reviewed if decision is not None]
+
+    async def _review_one_position(
+        self, symbol: str, position, now_wall: datetime
+    ) -> RiskDecision | None:
+        ctx = await self._strategy_context(symbol)
+        if ctx is None:
+            return None
+        signal = await self.position_manager.review(ctx, position)
+        if signal is None:
+            return None
+        return await self.process_signal(signal)
+
+    async def _position_review_priority(
+        self, position, state: dict, now_wall: datetime, now_epoch: float
+    ) -> tuple[int, float]:
+        overdue = max(0.0, now_epoch - state.get("next_due_at", 0.0))
+        hold_bonus = 0.0
+        risk_bonus = 0.0
+        try:
+            plan = await self.trade_plans.get_active_for_symbol(position.symbol)
+        except Exception:
+            plan = None
+        if plan is not None and plan.opened_at is not None:
+            opened_at = plan.opened_at
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=UTC)
+            elapsed = max(0.0, (now_wall - opened_at).total_seconds())
+            remaining = float(plan.max_holding_time_seconds) - elapsed
+            if remaining <= 600:
+                hold_bonus = 10000.0 - max(0.0, remaining)
+        entry = getattr(position, "avg_entry_price", None)
+        unrealized = getattr(position, "unrealized_pnl", Decimal("0")) or Decimal("0")
+        if entry and entry > 0:
+            spec = (
+                getattr(position, "contract_size", Decimal("1"))
+                * getattr(position, "contract_multiplier", Decimal("1"))
+            )
+            notional = abs(position.quantity) * entry * spec
+            if notional > 0 and unrealized < 0:
+                risk_bonus = float(abs(unrealized) / notional) * 1000.0
+        return (1 if overdue > 0 else 0, overdue + hold_bonus + risk_bonus)
+
+    def _review_backoff(self, state: dict) -> float:
+        failures = max(1, int(state.get("failures", 0)))
+        return min(
+            self.position_review_interval_seconds,
+            0.5 * (2 ** (failures - 1)),
+        )
+
+    def _next_review_delay(self, position, now_wall: datetime) -> float:
+        base = self.position_review_interval_seconds
+        # Deteriorating PnL and near-time-stop positions get a shorter cadence.
+        entry = getattr(position, "avg_entry_price", None)
+        unrealized = getattr(position, "unrealized_pnl", Decimal("0")) or Decimal("0")
+        if entry and entry > 0 and unrealized < 0:
+            base = min(base, 5.0)
+        return base
 
     def _remember_pending_valuation(self, batch: ValuationBatch) -> None:
         self._pending_valuations[batch.valuation_id] = batch
@@ -1549,7 +1712,7 @@ class TradingEngine:
                 await self.trade_plans.transition(plan.trade_plan_id, TradePlanState.ACTIVE)
         elif (
             plan is not None
-            and plan.state == TradePlanState.ACTIVE
+            and plan.state in {TradePlanState.ACTIVE, TradePlanState.RECOVERY}
             and order.metadata.get("reduce_only") is True
             and (position is None or position.quantity == 0)
         ):

@@ -33,6 +33,11 @@ class LLMMemoryStore:
                     pnl=episode.net_pnl,
                     result=episode.result,
                     review_status="PENDING",
+                    applicability_scope_json={
+                        "scope": "SYMBOL_REGIME",
+                        "symbols": [episode.symbol],
+                        "regimes": [episode.market_regime],
+                    },
                 )
             )
             await session.commit()
@@ -90,12 +95,22 @@ class LLMMemoryStore:
                 session.add(
                     AIMarketPatternORM(
                         pattern_id=pattern.pattern_id,
+                        symbol=pattern.symbol,
                         regime=pattern.regime,
                         strategy=pattern.strategy_family,
                         sample_count=pattern.sample_count,
                         win_rate=pattern.win_rate,
                         profit_factor=pattern.profit_factor,
                         version=pattern.version,
+                        applicability_scope_json=(
+                            {
+                                "scope": "SYMBOL_REGIME",
+                                "symbols": [pattern.symbol],
+                                "regimes": [pattern.regime],
+                            }
+                            if pattern.symbol
+                            else {"scope": "REGIME", "regimes": [pattern.regime]}
+                        ),
                     )
                 )
             else:
@@ -142,6 +157,7 @@ class LLMMemoryStore:
                     title=title,
                     content=content,
                     source_episode_count=source_count,
+                    applicability_scope_json={"scope": "GLOBAL"},
                 )
             )
             await session.commit()

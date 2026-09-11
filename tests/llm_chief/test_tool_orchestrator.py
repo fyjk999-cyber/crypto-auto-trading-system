@@ -16,8 +16,10 @@ class Provider:
     def __init__(self, payloads: list[dict]) -> None:
         self.payloads = payloads
         self.calls = 0
+        self.prompts: list[str] = []
 
-    async def complete_json(self, **_kwargs):
+    async def complete_json(self, **kwargs):
+        self.prompts.append(str(kwargs.get("prompt", "")))
         payload = self.payloads[self.calls]
         self.calls += 1
         return LLMResponse(
@@ -82,6 +84,30 @@ async def test_same_chief_selects_only_requested_tools_then_makes_final_decision
     assert package is not None and package.selected_tools == ["trend", "orderbook"]
     assert decision.action == "NO_TRADE"
     assert decision.model_provider == "deepseek"
+
+
+async def test_tool_selection_prompt_carries_entry_opportunity_context():
+    registry = LLMToolRegistry()
+    provider = Provider(
+        [
+            {"tools": []},
+            {"action": "NO_TRADE", "market_regime": "UNKNOWN"},
+        ]
+    )
+    ctx = context()
+    ctx = __import__("dataclasses").replace(
+        ctx,
+        opportunity_context={
+            "candidate_source": "FACTOR_SCANNER",
+            "nominated_reason": "momentum_breakout",
+            "triggered_factors": [{"factor": "momentum", "strength": "0.9"}],
+        },
+    )
+    await ToolDrivenChiefTrader(ChiefTraderEngine(provider=provider), registry).decide(
+        ctx, tool_context={}, now=datetime.now(UTC)
+    )
+    assert "FACTOR_SCANNER" in provider.prompts[0]
+    assert "momentum_breakout" in provider.prompts[0]
 
 
 async def test_tool_failure_is_factual_unavailable_evidence_not_fabricated():

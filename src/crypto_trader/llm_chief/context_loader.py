@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from sqlalchemy import case, select
+from sqlalchemy import case, or_, select
 
 from crypto_trader.llm.tools.registry import ToolEvidence
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -35,6 +35,7 @@ class ChiefContextLoader:
                     .where(
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.symbol == context.symbol,
                         TradeEpisodeORM.closed_at <= as_of,
                     )
                     .order_by(
@@ -45,9 +46,16 @@ class ChiefContextLoader:
                         ),
                         TradeEpisodeORM.closed_at.desc(),
                     )
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            episodes = [
+                row
+                for row in episodes
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
             episode_ids = [row.episode_id for row in episodes]
             reviews = []
             if episode_ids:
@@ -62,19 +70,45 @@ class ChiefContextLoader:
             research = (
                 await session.execute(
                     select(ResearchReportORM)
-                    .where(ResearchReportORM.created_at <= as_of)
+                    .where(
+                        ResearchReportORM.created_at <= as_of,
+                        or_(
+                            ResearchReportORM.symbol.is_(None),
+                            ResearchReportORM.symbol == context.symbol,
+                        ),
+                    )
                     .order_by(ResearchReportORM.created_at.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            research = [
+                row
+                for row in research
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
             compressed = (
                 await session.execute(
                     select(AICompressedExperienceORM)
-                    .where(AICompressedExperienceORM.created_at <= as_of)
+                    .where(
+                        AICompressedExperienceORM.created_at <= as_of,
+                        or_(
+                            AICompressedExperienceORM.symbol.is_(None),
+                            AICompressedExperienceORM.symbol == context.symbol,
+                        ),
+                    )
                     .order_by(AICompressedExperienceORM.created_at.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            compressed = [
+                row
+                for row in compressed
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
             profile = (
                 await session.execute(
                     select(AICoinProfileORM).where(
@@ -86,12 +120,25 @@ class ChiefContextLoader:
             patterns = (
                 await session.execute(
                     select(AIMarketPatternORM)
-                    .where(AIMarketPatternORM.regime == context.regime)
-                    .where(AIMarketPatternORM.created_at <= as_of)
+                    .where(
+                        AIMarketPatternORM.regime == context.regime,
+                        AIMarketPatternORM.created_at <= as_of,
+                        or_(
+                            AIMarketPatternORM.symbol.is_(None),
+                            AIMarketPatternORM.symbol == context.symbol,
+                        ),
+                    )
                     .order_by(AIMarketPatternORM.sample_count.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            patterns = [
+                row
+                for row in patterns
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
 
         return replace(
             context,
@@ -189,6 +236,7 @@ class ChiefContextLoader:
                     .where(
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.symbol == context.symbol,
                         TradeEpisodeORM.closed_at <= as_of,
                     )
                     .order_by(
@@ -199,9 +247,16 @@ class ChiefContextLoader:
                         ),
                         TradeEpisodeORM.closed_at.desc(),
                     )
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            rows = [
+                row
+                for row in rows
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
         finding = {
             "episodes": [
                 {
@@ -237,11 +292,24 @@ class ChiefContextLoader:
             compressed = (
                 await session.execute(
                     select(AICompressedExperienceORM)
-                    .where(AICompressedExperienceORM.created_at <= as_of)
+                    .where(
+                        AICompressedExperienceORM.created_at <= as_of,
+                        or_(
+                            AICompressedExperienceORM.symbol.is_(None),
+                            AICompressedExperienceORM.symbol == context.symbol,
+                        ),
+                    )
                     .order_by(AICompressedExperienceORM.created_at.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            compressed = [
+                row
+                for row in compressed
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
         finding = {}
         if reviews:
             finding["reviews"] = [
@@ -267,16 +335,29 @@ class ChiefContextLoader:
         )
         return finding, refs, timestamp
 
-    async def _research_evidence(self, _context: ChiefTraderContext, as_of: datetime):
+    async def _research_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(ResearchReportORM)
-                    .where(ResearchReportORM.created_at <= as_of)
+                    .where(
+                        ResearchReportORM.created_at <= as_of,
+                        or_(
+                            ResearchReportORM.symbol.is_(None),
+                            ResearchReportORM.symbol == context.symbol,
+                        ),
+                    )
                     .order_by(ResearchReportORM.created_at.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            rows = [
+                row
+                for row in rows
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
         finding = {
             "research": [
                 {
@@ -328,11 +409,22 @@ class ChiefContextLoader:
                     .where(
                         AIMarketPatternORM.regime == context.regime,
                         AIMarketPatternORM.created_at <= as_of,
+                        or_(
+                            AIMarketPatternORM.symbol.is_(None),
+                            AIMarketPatternORM.symbol == context.symbol,
+                        ),
                     )
                     .order_by(AIMarketPatternORM.sample_count.desc())
-                    .limit(self.limit)
+                    .limit(self.limit * 5)
                 )
             ).scalars().all()
+            rows = [
+                row
+                for row in rows
+                if _scope_applies(
+                    row.applicability_scope_json, context.symbol, context.regime
+                )
+            ][: self.limit]
         finding = {
             "patterns": [
                 {
@@ -349,6 +441,28 @@ class ChiefContextLoader:
             ]
         } if rows else {}
         return finding, [f"pattern:{row.pattern_id}" for row in rows], _latest(rows, "created_at")
+
+
+def _scope_applies(scope, symbol: str, regime: str) -> bool:
+    """FAIL CLOSED: missing/unknown scope is not silently applicable.
+
+    Migration 0039 backfills legacy rows with an explicit GLOBAL scope; new
+    records must carry an explicit SYMBOL / REGIME / SYMBOL_REGIME scope.
+    """
+    if not isinstance(scope, dict):
+        return False
+    kind = scope.get("scope")
+    if kind == "GLOBAL":
+        return True
+    if kind not in {"SYMBOL", "REGIME", "SYMBOL_REGIME"}:
+        return False
+    symbols = scope.get("symbols")
+    regimes = scope.get("regimes")
+    if symbols is not None and symbol not in symbols:
+        return False
+    if regimes is not None and regime not in regimes:
+        return False
+    return bool(symbols or regimes)
 
 
 def _latest(rows, field: str):

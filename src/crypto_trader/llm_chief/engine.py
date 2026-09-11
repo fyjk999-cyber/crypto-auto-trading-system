@@ -33,7 +33,11 @@ class ChiefTraderEngine:
         self.model_version = model_version
 
     async def select_tools(
-        self, ctx: ChiefTraderContext, available_tools: list[str] | dict[str, str]
+        self,
+        ctx: ChiefTraderContext,
+        available_tools: list[str] | dict[str, str],
+        *,
+        timeout_seconds: float | None = None,
     ) -> tuple[list[str] | None, str | None]:
         if self.provider is None:
             return None, "LLM_UNAVAILABLE"
@@ -46,12 +50,13 @@ class ChiefTraderEngine:
             f"Symbol: {ctx.symbol}\nPositionState: {ctx.position_state.value}\n"
             f"OpenPosition: {ctx.position_context}\n"
             f"Portfolio: {ctx.portfolio_state}\nRisk: {ctx.risk_summary}\n"
+            f"Opportunity: {ctx.opportunity_context}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
         response = await self.provider.complete_json(
             prompt=prompt,
             temperature=0.0,
-            timeout_seconds=20.0,
+            timeout_seconds=min(20.0, timeout_seconds or 20.0),
             retries=1,
             max_tokens=768,
             thinking=False,

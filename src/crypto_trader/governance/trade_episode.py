@@ -310,6 +310,11 @@ class TradeEpisodeStore:
                 terminal_reason=plan.terminal_reason or "POSITION_CLOSED",
                 factual=True,
                 review_status="PENDING",
+                applicability_scope_json={
+                    "scope": "SYMBOL_REGIME",
+                    "symbols": [plan.symbol],
+                    "regimes": [entry_decision.market_regime],
+                },
                 opened_at=opened_at,
                 closed_at=closed_at,
                 created_at=datetime.now(UTC),

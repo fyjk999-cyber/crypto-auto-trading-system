@@ -46,3 +46,66 @@ async def test_expired_overall_deadline_starts_no_tool():
             ["tool"], "SOLUSDT", {}, now=datetime.now(UTC), overall_timeout_seconds=0,
         )
     assert called == []
+
+
+async def test_tool_round_deadline_is_absolute_across_selection_and_execution():
+    import asyncio
+
+    from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
+
+    called = []
+    completed = []
+
+    async def slow_tool(symbol, context):
+        called.append(symbol)
+        await asyncio.sleep(0.5)
+        completed.append(symbol)
+
+    class FakeChief:
+        async def select_tools(self, ctx, catalog, *, timeout_seconds=None):
+            return ["slow"], None
+
+        def fail_closed(self, ctx, reason):
+            return type("D", (), {"action": type("A", (), {"value": "FAIL_CLOSED"})()})()
+
+        async def decide(self, ctx):
+            raise AssertionError("decision must not run after deadline")
+
+    registry = LLMToolRegistry()
+    registry.register("slow", slow_tool)
+    orchestrator = ToolDrivenChiefTrader.__new__(ToolDrivenChiefTrader)
+    orchestrator.chief = FakeChief()
+    orchestrator.tools = registry
+    orchestrator.tool_round_budget_seconds = 0.05
+    orchestrator.tool_selection_timeout_seconds = 0.01
+
+    decision, package = await ToolDrivenChiefTrader.decide(
+        orchestrator,
+        type("Ctx", (), {"symbol": "BTCUSDT", "opportunity_context": None})(),
+        tool_context={},
+        now=datetime.now(UTC),
+    )
+    assert decision.action.value == "FAIL_CLOSED"
+    assert package is None
+    assert called == ["BTCUSDT"]
+    assert completed == []  # cancelled by the shared absolute deadline
+
+
+async def test_evidence_package_records_tool_contract_and_versions():
+    now = datetime.now(UTC)
+
+    async def tool(symbol, context):
+        return ToolEvidence(
+            "versioned", symbol, now, {"v": 1}, [], [], 1.0,
+            "FACTUAL", ["source:versioned:v2"],
+        )
+
+    registry = LLMToolRegistry()
+    registry.register("versioned", tool, version="2.3.0")
+    package = await registry.build_package(
+        ["versioned"], "BTCUSDT", {}, now=now
+    )
+    assert package.tool_versions == {"versioned": "2.3.0"}
+    assert package.contract_version == "tool-round-v1"
+    assert package.schema_version == "evidence-package-v1"
+    assert "source:versioned:v2" in package.source_refs

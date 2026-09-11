@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from crypto_trader.llm.tools.registry import LLMToolRegistry, ToolEvidence
+
+_INTERVAL_DURATION = {
+    "1m": timedelta(minutes=1),
+    "15m": timedelta(minutes=15),
+    "1H": timedelta(hours=1),
+}
 
 
 def register_market_history_tool(registry: LLMToolRegistry, feed) -> None:
@@ -20,17 +26,32 @@ def _tool(feed):
         instrument_id = feed.provider_symbol(symbol)
 
         async def fetch(interval: str):
+            duration = _INTERVAL_DURATION[interval]
+            as_of = context["as_of"]
             rows = await feed.client.get_candles(instrument_id, interval, 60)
-            return interval, [
-                {
-                    "timestamp": datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC).isoformat(),
-                    "open": str(row[1]), "high": str(row[2]), "low": str(row[3]),
-                    "close": str(row[4]), "volume": str(row[5]),
-                }
-                for row in reversed(rows)
-                if isinstance(row, list) and len(row) >= 9 and str(row[8]) == "1"
-                and datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC) <= context["as_of"]
-            ]
+            selected = []
+            for row in reversed(rows):
+                if not isinstance(row, list) or len(row) < 9:
+                    continue
+                if str(row[8]) != "1":
+                    continue
+                open_at = datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC)
+                # A candle is factual closed history only once its full
+                # interval has ended; confirm=1 today cannot backfill a
+                # historical decision as-of.
+                if open_at + duration > as_of:
+                    continue
+                selected.append(
+                    {
+                        "timestamp": open_at.isoformat(),
+                        "open": str(row[1]),
+                        "high": str(row[2]),
+                        "low": str(row[3]),
+                        "close": str(row[4]),
+                        "volume": str(row[5]),
+                    }
+                )
+            return interval, selected
 
         results = await asyncio.gather(*(fetch(item) for item in ("1m", "15m", "1H")))
         payload = {interval: rows for interval, rows in results}

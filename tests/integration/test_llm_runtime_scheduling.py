@@ -68,3 +68,54 @@ async def test_slow_entry_llm_does_not_block_position_review(database):
     await asyncio.wait_for(review_task, timeout=0.2)
     assert not entry_task.done()
     await asyncio.wait_for(entry_task, timeout=1)
+
+
+async def test_slow_position_review_cannot_delay_other_due_positions(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    engine.position_review_timeout_seconds = 0.1
+    engine.position_review_interval_seconds = 0.05
+    reviewed = []
+
+    class SlowStrategy:
+        name = "slow-entry"
+
+        async def on_market_data(self, context):
+            await asyncio.sleep(0.5)
+            return []
+
+    class PositionManager:
+        async def review(self, context, position):
+            if position.symbol == "SLOWUSDT":
+                await asyncio.sleep(5)
+            reviewed.append(position.symbol)
+            return None
+
+    async def positions():
+        return {
+            symbol: type(
+                "P",
+                (),
+                {
+                    "symbol": symbol,
+                    "quantity": 1,
+                    "avg_entry_price": None,
+                    "contract_size": 1,
+                    "contract_multiplier": 1,
+                },
+            )()
+            for symbol in ("SLOWUSDT", "FAST1USDT", "FAST2USDT")
+        }
+
+    async def strategy_context(symbol=None):
+        return object()
+
+    engine.strategies = [SlowStrategy()]
+    engine.position_manager = PositionManager()
+    engine.portfolio.get_positions = positions
+    engine._strategy_context = strategy_context
+
+    entry_task = asyncio.create_task(engine.tick(include_position_reviews=False))
+    await asyncio.wait_for(engine._review_positions_once(), timeout=0.3)
+    assert set(reviewed) == {"FAST1USDT", "FAST2USDT"}
+    assert not entry_task.done()
+    await asyncio.wait_for(entry_task, timeout=1)

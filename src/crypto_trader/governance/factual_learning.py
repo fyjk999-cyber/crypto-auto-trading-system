@@ -112,6 +112,7 @@ class FactualEpisodeLearning:
                     )
                 ).scalar_one_or_none()
                 values = {
+                    "symbol": symbol,
                     "regime": regime,
                     "strategy": direction,
                     "sample_count": len(rows),
@@ -122,6 +123,11 @@ class FactualEpisodeLearning:
                     if len(wins) != len(rows)
                     else [],
                     "confidence": min(Decimal(len(rows)) / Decimal("20"), Decimal("1")),
+                    "applicability_scope_json": {
+                        "scope": "SYMBOL_REGIME",
+                        "symbols": [symbol],
+                        "regimes": [regime],
+                    },
                 }
                 if pattern is None:
                     session.add(AIMarketPatternORM(pattern_id=pattern_id, **values))

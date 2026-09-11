@@ -40,6 +40,7 @@ class MarketPattern:
     profit_factor: Decimal
     average_return: Decimal
     version: int = 1
+    symbol: str | None = None
 
 
 class ExperienceMemory:

@@ -461,6 +461,23 @@ class TradePlanORM(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RuntimeSettingORM(Base):
+    """Operator-controlled runtime overrides (e.g. LLM model selection).
+
+    Persisted so a switch made from the UI survives a runtime restart
+    without editing .env or the launcher. Values are non-secret.
+    """
+
+    __tablename__ = "runtime_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_by: Mapped[str | None] = mapped_column(String(64))
+
+
 class LLMDecisionORM(Base):
     """Canonical truth store for every real ChiefTrader decision attempt."""
 
@@ -537,6 +554,7 @@ class TradeEpisodeORM(Base):
     terminal_reason: Mapped[str] = mapped_column(String(255), nullable=False)
     factual: Mapped[bool] = mapped_column(nullable=False, default=True)
     review_status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    applicability_scope_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -663,6 +681,7 @@ class AITradeEpisodeORM(Base):
     mae: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     result: Mapped[str] = mapped_column(String(16), default="")
     review_status: Mapped[str] = mapped_column(String(16), default="PENDING")
+    applicability_scope_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -685,6 +704,7 @@ class AIMarketPatternORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     pattern_id: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
     regime: Mapped[str] = mapped_column(String(16))
     features_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     strategy: Mapped[str] = mapped_column(String(64))
@@ -696,6 +716,7 @@ class AIMarketPatternORM(Base):
     confidence: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     embedding_json: Mapped[list[Any] | None] = mapped_column(JSON)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    applicability_scope_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -718,10 +739,12 @@ class AICompressedExperienceORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     rule_id: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
     title: Mapped[str] = mapped_column(String(200))
     content: Mapped[str] = mapped_column(String(2000))
     source_episode_count: Mapped[int] = mapped_column(Integer, default=0)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    applicability_scope_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -948,9 +971,11 @@ class ResearchReportORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     research_id: Mapped[str] = mapped_column(String(64), unique=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
     summary: Mapped[str] = mapped_column(String(500), default="")
     conclusion: Mapped[str] = mapped_column(String(500), default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    applicability_scope_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

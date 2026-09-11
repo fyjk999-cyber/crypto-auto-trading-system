@@ -22,6 +22,7 @@ class TradePlanState(StrEnum):
     PLANNED = "PLANNED"
     APPROVED = "APPROVED"
     ACTIVE = "ACTIVE"
+    RECOVERY = "RECOVERY"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
@@ -52,6 +53,7 @@ ALLOWED_TRANSITIONS = {
         TradePlanState.INVALIDATED,
     },
     TradePlanState.ACTIVE: {TradePlanState.CLOSED},
+    TradePlanState.RECOVERY: {TradePlanState.CLOSED, TradePlanState.INVALIDATED},
 }
 
 
@@ -195,12 +197,88 @@ class TradePlanService:
                     select(TradePlanORM)
                     .where(
                         TradePlanORM.symbol == symbol,
-                        TradePlanORM.state == TradePlanState.ACTIVE.value,
+                        TradePlanORM.state.in_(
+                            (
+                                TradePlanState.ACTIVE.value,
+                                TradePlanState.RECOVERY.value,
+                            )
+                        ),
                     )
                     .order_by(TradePlanORM.opened_at.desc(), TradePlanORM.created_at.desc())
                 )
             ).scalars().first()
             return self._to_domain(row) if row is not None else None
+
+    async def ensure_recovery_plan(
+        self,
+        *,
+        symbol: str,
+        direction: str,
+        quantity: Decimal,
+        entry_price: Decimal | None = None,
+    ) -> TradePlan:
+        """Create an explicit ORPHAN recovery plan without fabricating a fill.
+
+        A factual exchange position without an active TradePlan must be
+        reconciled only through the normal reduce-only signal -> Risk ->
+        ExecutionAuthority -> OrderManager path. This method creates the
+        durable RECOVERY lifecycle that path reviews; it never submits orders.
+        """
+        if direction not in {"LONG", "SHORT"} or quantity <= 0:
+            raise ValueError("recovery plan requires direction and positive quantity")
+        decision_id = f"orphan_recovery_{symbol}"
+        async with self.session_factory() as session:
+            existing = (
+                await session.execute(
+                    select(TradePlanORM)
+                    .where(
+                        TradePlanORM.decision_id == decision_id,
+                        TradePlanORM.state == TradePlanState.RECOVERY.value,
+                    )
+                    .order_by(TradePlanORM.created_at.desc())
+                )
+            ).scalars().first()
+            if existing is not None:
+                return self._to_domain(existing)
+            any_plan = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.decision_id == decision_id)
+                )
+            ).scalars().first()
+            if any_plan is not None:
+                return self._to_domain(any_plan)
+            row = TradePlanORM(
+                trade_plan_id=new_id("plan"),
+                decision_id=decision_id,
+                symbol=symbol,
+                direction=direction,
+                state=TradePlanState.RECOVERY.value,
+                thesis="ORPHAN_POSITION_RECOVERY: factual exchange position without active plan",
+                requested_quantity=quantity,
+                requested_leverage=Decimal("1"),
+                requested_exposure=None,
+                entry_conditions_json=[],
+                invalidation_conditions_json=[],
+                reduce_conditions_json=["RECOVER_TO_ZERO"],
+                exit_conditions_json=["FACTUAL_ZERO_POSITION"],
+                expected_holding_period="ORPHAN_RECOVERY",
+                max_holding_time_seconds=1.0,
+                opened_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+            session.add(row)
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                row = (
+                    await session.execute(
+                        select(TradePlanORM).where(
+                            TradePlanORM.decision_id == decision_id
+                        )
+                    )
+                ).scalar_one()
+            return self._to_domain(row)
 
     async def plan_covering(
         self, symbol: str, instant: datetime
@@ -351,8 +429,8 @@ class TradePlanService:
                 if row.exit_decision_id != exit_decision_id:
                     raise ValueError("closed TradePlan exit lineage is immutable")
                 return self._to_domain(row)
-            if current != TradePlanState.ACTIVE:
-                raise ValueError("factual close requires an ACTIVE TradePlan")
+            if current not in {TradePlanState.ACTIVE, TradePlanState.RECOVERY}:
+                raise ValueError("factual close requires an ACTIVE/RECOVERY TradePlan")
             position = (
                 await session.execute(
                     select(PositionProjectionORM).where(
