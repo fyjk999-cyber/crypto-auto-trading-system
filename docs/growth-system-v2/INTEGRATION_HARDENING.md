@@ -119,45 +119,62 @@ LEGACY_RUNTIME_CARD_WRITES=0
 canonical truth = ai_compressed_experience
 ```
 
-## I07 — real provider shadow smoke
+## I07 — real provider run (built-in LLM enabled)
 
-Credential check (values never printed):
-
-```text
-DEEPSEEK_API_KEY present = false
-LLM_API_KEY present = false
-growth .env present = false
-api.deepseek.com:443 reachable = true
-openapi.okx.com:443 reachable = true
-```
-
-No approved provider credential is available in this environment (the only
-local `.env` belongs to another worktree/credential scope and was not read).
-The smoke was **not simulated**:
+Credential check (values never printed; no environment dump):
 
 ```text
-REAL_PROVIDER_SMOKE=NOT_VERIFIED
-BLOCKER=no approved DeepSeek/provider credential in this environment
+macOS Keychain (project helper) = credential exists
+DEEPSEEK_API_KEY env before run  = false
+model for review                 = deepseek-flash
+thinking                         = enabled
+max_tokens                       = 8192
+in-process only                  = true (never printed/persisted)
 ```
+
+The built-in DeepSeek provider was connected in memory and the real
+`StructuredReviewRunner` processed the 33 factual PAPER episodes in
+canonical-clean.  No simulation was substituted:
+
+```text
+REAL_PROVIDER_SMOKE=VERIFIED
+provider_attempts=53 (KNOWN usage), successful structured reviews=33/33 episodes
+episode review_status: PENDING=0, REVIEWED=33
+generated knowledge: growth_lessons=59 CANDIDATE, growth_patterns=20 CANDIDATE
+cards=0 (all pattern scopes have independent_sample_count=1 < required 3)
+data integrity: orders=205, fills=434, risk_decisions=3388,
+                llm_decisions=13271, trade_plans=167 — identical to backup
+```
+
+Model lineage during the run: 24 episodes were first reviewed by
+`deepseek-chat` before the operator switched back to flash thinking; the
+remaining 9 were reviewed by `deepseek-flash` with thinking enabled and the
+8192-token cap.  The runtime review provider is now configured as
+`deepseek-flash`, thinking=true, max_tokens=8192 (`LLM_REVIEW_MODEL` /
+`LLM_REVIEW_MAX_TOKENS` override).
+
+Runner: `scripts/growth_review_worker.py`; scheduler stage:
+`StructuredReviewRunner`; report evidence in
+`.ops-growth-v2/paper_review/SYSTEM_REVIEW_SUMMARY.json`.
 
 ## I08 — natural PAPER closed loop
 
-Read-only snapshot check:
+Read-only snapshot before the review run:
 
 ```text
 canonical-clean: trade_episodes=33, max closed_at=2026-09-10 08:29:35, reviews=0
 fullmarket:      trade_episodes=0, reviews=0
-no growth_card_versions table in either runtime DB
 ```
 
-No natural PAPER lifecycle was observed/approved in this task's window and no
-runtime was started, so:
+The 33 episodes were reviewed post-hoc by the built-in LLM; no new runtime was
+started and no natural decision→fill→episode→review cycle was observed in this
+window:
 
 ```text
-NATURAL_PAPER_GROWTH_LOOP=PENDING
+NATURAL_PAPER_GROWTH_LOOP=PENDING (historical backfill ≠ natural live loop)
 ```
 
-This is not an engineering failure and no fake fill/episode was created.
+No fake fill/episode was created.
 
 ## I09 — status semantics
 
@@ -166,7 +183,8 @@ CORE_ENGINE_COMPLETE=YES
 MIGRATION_INTEGRATED=YES (Alembic revision real; not deployed)
 CANONICAL_RUNTIME_WIRED=YES (build_system composition root; not started)
 CANONICAL_SCHEDULER_WIRED=YES (DailyReviewScheduler + DailyCardLearner)
-REAL_PROVIDER_VERIFIED=NO (NOT_VERIFIED blocker above)
+BUILTIN_LLM_REVIEW_WIRED=YES (StructuredReviewRunner, flash/thinking/8192)
+REAL_PROVIDER_VERIFIED=YES (33 factual PAPER episodes)
 NATURAL_PAPER_LOOP_VERIFIED=PENDING
 REMOTE_REPRODUCIBLE=see final receipt (push status)
 DEPLOYABLE=ENGINEERING_READY (production migration/deploy authorization required)
