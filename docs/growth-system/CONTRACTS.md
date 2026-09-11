@@ -88,8 +88,22 @@ Schema draft and field-gap table: `MIGRATION_AND_ROLLBACK.md`.
 
 ## C5 — Legacy import (G05)
 
-Status: implemented in `src/crypto_trader/learning/growth_import.py` as
-dry-run/isolated-copy only.
+Implementation: `src/crypto_trader/learning/growth_import.py`.
+Tests: `tests/growth_system/test_legacy_import.py`.
+Rollback contract: `MIGRATION_AND_ROLLBACK.md`.
+
+| Rule | Contract |
+| --- | --- |
+| Read-only first | `inventory`/`build_plan` use a read-only SQLite URI + backup API; source hash is unchanged by tests |
+| No automatic upgrade | Legacy rows become `LEGACY_OBSERVATION` (with `proof_kind` like `LEGACY_AI_EPISODE`) or `QUARANTINED`; they are never written to canonical `trade_episodes` |
+| Namespace | `sha256(source_db_sha256|table|source_id|account_id|mode)` preserves source identity and isolates accounts |
+| Near duplicates | Same symbol/time/PnL similarity only marks `DUPLICATE_SUSPECT` and quarantines; it is never used to merge rows |
+| Same namespace, different content | `CONTENT_CONFLICT` item + quarantine; the original observation is not overwritten |
+| Time semantics | `economic_closed_at` comes from the source; `imported_at`/`known_at` are import-time and never time-travel into past as-of queries |
+| Batch identity | Batch id + plan hash + source hash; a completed identical plan is idempotent |
+| Resume | Failure after a durable item boundary marks the batch `FAILED`; `resume_batch_id` continues without duplicating items |
+| Rollback | Deletes only that batch's observations/items and marks the batch `ROLLED_BACK`; source and other batches untouched |
+| Authorization | `import_plan` requires `test_only=True` and a target under an ephemeral temp directory; known production paths are refused |
 
 ## C6 — Chief retrieval (G06)
 

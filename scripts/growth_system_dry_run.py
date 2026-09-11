@@ -468,7 +468,8 @@ def cmd_import_inventory(args: argparse.Namespace) -> int:
             "target_db_written": False,
             "inventory": inventory,
             "namespace_rule": (
-                "namespace = sha256(source_db_sha256 + '|' + table + '|' + source_id)"
+                "namespace = sha256(source_db_sha256 + '|' + table + '|' + "
+                "source_id + '|' + account_id + '|' + mode)"
             ),
             "strong_dedup_rule": (
                 "same namespace only; near-duplicate symbol/time/pnl stays "

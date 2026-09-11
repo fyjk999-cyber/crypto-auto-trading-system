@@ -334,6 +334,9 @@ class GrowthLegacyObservationORM(GrowthBase):
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     known_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     status: Mapped[str] = mapped_column(String(24), default="LEGACY_OBSERVATION", index=True)
+    proof_kind: Mapped[str] = mapped_column(String(32), default="LEGACY_UNPROVEN")
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+    near_duplicate_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
     source_json_sanitized: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
