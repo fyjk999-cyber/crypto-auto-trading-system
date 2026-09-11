@@ -21,6 +21,7 @@ async def test_bootstrap_builds_and_starts_single_core(database):
         auto_start_runtime=True,
         paper_mode="PAPER_SYNTHETIC",
         paper_initial_equity="100000",
+        daily_review_time_utc="00:17",
         engine_tick_seconds=3600,
         reconciliation_interval_seconds=3600,
         run_lease_renew_interval_seconds=3600,
@@ -47,6 +48,8 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     assert bundle.position_manager.__class__.__name__ == "LiveLLMPositionManager"
     assert not hasattr(bundle, "ai_position_bridge")
     assert bundle.engine.enforce_llm_entry_authority is True
+    assert bundle.engine.daily_review_scheduler is not None
+    assert bundle.engine.daily_review_scheduler.review_time_utc == "00:17"
     run_id = await bundle.engine.start()
     assert run_id
     assert bundle.engine.state_machine.state.value == "RUNNING"
@@ -167,3 +170,15 @@ async def test_failed_lease_acquisition_never_closes_other_runtime_row(database)
         fence_generation=held.fence_generation,
     )
     await bundle.database.close()
+
+
+async def test_runtime_migration_verifier_rejects_unmigrated_database(tmp_path):
+    from crypto_trader.persistence.database import Database
+    from crypto_trader.runtime.bootstrap import _verify_migrations
+
+    db = Database(f"sqlite+aiosqlite:///{tmp_path}/unmigrated.db")
+    try:
+        with pytest.raises(RuntimeError, match="DATABASE_MIGRATION_NOT_AT_HEAD"):
+            await _verify_migrations(db)
+    finally:
+        await db.close()
