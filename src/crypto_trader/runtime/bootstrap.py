@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
@@ -82,8 +84,10 @@ class RuntimeBundle:
 
 async def build_system(settings: Settings) -> RuntimeBundle:
     database = Database(settings.database_url)
+    strict_migrations = settings.auto_start_runtime and settings.app_env != "test"
+    if strict_migrations:
+        await _verify_migrations(database)
     await database.init_schema()
-    await _verify_migrations(database)
 
     ledger = LedgerService(database.session_factory)
     portfolio = PortfolioService(database.session_factory)
@@ -102,12 +106,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
             }
         )
-    else:
+    elif settings.paper_mode == "PAPER_SYNTHETIC":
         adapter = SimulatedExchangeAdapter(
             initial_balances={
                 settings.paper_settlement_asset: Decimal(settings.paper_initial_equity)
             }
         )
+    else:  # defensive: Settings currently rejects this before bootstrap.
+        raise RuntimeError("UNSUPPORTED_PAPER_MODE")
 
     # Quant is evidence-only.  The official auto-start runtime installs a
     # single Live-LLM adapter as its executable strategy slot so no quant
@@ -251,7 +257,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         daily_review_scheduler=(
             DailyReviewScheduler(
                 database.session_factory,
-                review_time_utc="00:00",
+                review_time_utc=settings.daily_review_time_utc,
                 canonical_only=True,
                 use_local_time=False,
             )
@@ -300,5 +306,25 @@ async def build_system(settings: Settings) -> RuntimeBundle:
 
 
 async def _verify_migrations(database: Database) -> None:
-    async with database.session_factory() as session:
-        await session.execute(text("SELECT 1"))
+    """Require the runtime database to be exactly at the repository Alembic head.
+
+    Runtime startup must never use ORM create_all() to mask a stale or missing
+    migration. Tests may still build ephemeral schemas directly.
+    """
+
+    config = AlembicConfig("alembic.ini")
+    expected_head = ScriptDirectory.from_config(config).get_current_head()
+    if not expected_head:
+        raise RuntimeError("DATABASE_MIGRATION_HEAD_UNAVAILABLE")
+    try:
+        async with database.session_factory() as session:
+            rows = (
+                await session.execute(text("SELECT version_num FROM alembic_version"))
+            ).scalars().all()
+    except Exception as exc:
+        raise RuntimeError("DATABASE_MIGRATION_NOT_AT_HEAD") from exc
+    if rows != [expected_head]:
+        current = ",".join(str(row) for row in rows) if rows else "MISSING"
+        raise RuntimeError(
+            f"DATABASE_MIGRATION_NOT_AT_HEAD: current={current} expected={expected_head}"
+        )
