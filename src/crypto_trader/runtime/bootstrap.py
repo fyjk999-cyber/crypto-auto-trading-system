@@ -214,22 +214,24 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         database.session_factory, provider=llm_provider, audit=audit
     )
     await model_control.apply_persisted()
-    chief = ChiefTraderEngine(provider=llm_provider)
-    tools = build_canonical_tool_registry(evidence_router)
-    register_context_tools(tools, chief_context)
-    register_factor_runtime_tools(tools, FactorService(database.session_factory))
-    if feed_client is not None:
-        register_market_history_tool(tools, adapter.feed)
-    tool_chief = ToolDrivenChiefTrader(chief, tools)
-    # Market-Intelligence V1: single global LLM budget + bounded read-only
-    # market directory + durable selection store. Selection is research
-    # attention only; the SAME chief owns the final decision.
+    # Single logical global model-budget authority (8): created
+    # before the engine so every model call site shares it.
     llm_budget = GlobalLLMBudget(
         BudgetConfig(
             window_seconds=settings.llm_budget_window_seconds,
             max_calls_per_window=settings.llm_budget_max_calls_per_window,
         )
     )
+    chief = ChiefTraderEngine(provider=llm_provider, budget=llm_budget)
+    tools = build_canonical_tool_registry(evidence_router)
+    register_context_tools(tools, chief_context)
+    register_factor_runtime_tools(tools, FactorService(database.session_factory))
+    if feed_client is not None:
+        register_market_history_tool(tools, adapter.feed)
+    tool_chief = ToolDrivenChiefTrader(chief, tools)
+    # Market-Intelligence V1: bounded read-only market directory + durable
+    # selection store. Selection is research attention only; the SAME chief
+    # (already budget-bound above) owns the final decision.
     market_directory = MarketDirectory(
         board=opportunity_board,
         page_size=settings.market_directory_page_size,

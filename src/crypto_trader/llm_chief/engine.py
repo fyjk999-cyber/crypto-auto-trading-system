@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.llm.tools.registry import MAX_SELECTED_TOOLS
+from crypto_trader.llm_chief.budget import (
+    P1_POSITION_LIFECYCLE,
+    P2_FINAL_ENTRY_DECISION,
+    P3_SELECTED_SYMBOL_RESEARCH,
+)
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import (
     ChiefTraderDecision,
@@ -54,9 +59,18 @@ class MarketSelectionResult:
 
 
 class ChiefTraderEngine:
-    def __init__(self, provider: LLMProvider | None = None, model_version: str = "0.1.0") -> None:
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        model_version: str = "0.1.0",
+        budget=None,
+    ) -> None:
         self.provider = provider
         self.model_version = model_version
+        # Single logical global model-budget authority (directive §8). Every
+        # model call in this engine asks it first so market selection can never
+        # starve position safety / lifecycle / final entry decisions.
+        self.budget = budget
 
     async def select_tools(
         self,
@@ -79,15 +93,40 @@ class ChiefTraderEngine:
             f"Opportunity: {ctx.opportunity_context}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
-        response = await self.provider.complete_json(
-            prompt=prompt,
-            temperature=0.0,
-            timeout_seconds=min(20.0, timeout_seconds or 20.0),
-            retries=1,
-            max_tokens=768,
-            thinking=False,
-            operation="tool_selection",
+        ticket = (
+            self.budget.try_acquire(
+                P3_SELECTED_SYMBOL_RESEARCH, operation="tool_selection"
+            )
+            if self.budget is not None
+            else None
         )
+        if ticket is not None and not ticket.granted:
+            return None, "SKIPPED_BUDGET"
+        try:
+            response = await self.provider.complete_json(
+                prompt=prompt,
+                temperature=0.0,
+                timeout_seconds=min(20.0, timeout_seconds or 20.0),
+                retries=1,
+                max_tokens=768,
+                thinking=False,
+                operation="tool_selection",
+            )
+        except Exception:
+            if ticket is not None:
+                ticket.fail(status="ERROR")
+            raise
+        if ticket is not None:
+            usage = response.token_usage or {}
+            ticket.complete(
+                status="OK" if response.ok else "ERROR",
+                provider=response.provider,
+                model=response.model,
+                latency_ms=int(response.latency_ms),
+                input_tokens=_token(usage, "prompt_tokens", "input_tokens"),
+                output_tokens=_token(usage, "completion_tokens", "output_tokens"),
+                detail=response.error,
+            )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
         try:
@@ -171,6 +210,20 @@ class ChiefTraderEngine:
 
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
+        priority = (
+            P1_POSITION_LIFECYCLE
+            if ctx.position_state != PositionState.FLAT
+            else P2_FINAL_ENTRY_DECISION
+        )
+        ticket = (
+            self.budget.try_acquire(priority, operation="trading_decision")
+            if self.budget is not None
+            else None
+        )
+        if ticket is not None and not ticket.granted:
+            # Budget exhaustion is an explicit skip: never a crash, and never a
+            # silent WAIT that could be mistaken for analysis.
+            return self.fail_closed(ctx, "SKIPPED_BUDGET")
         response = (
             await self.provider.complete_json(
                 prompt=prompt,
@@ -188,6 +241,17 @@ class ChiefTraderEngine:
             if self.provider
             else None
         )
+        if ticket is not None:
+            usage = (response.token_usage or {}) if response is not None else {}
+            ticket.complete(
+                status="OK" if response is not None and response.ok else "ERROR",
+                provider=getattr(response, "provider", None),
+                model=getattr(response, "model", None),
+                latency_ms=int(response.latency_ms) if response is not None else None,
+                input_tokens=_token(usage, "prompt_tokens", "input_tokens"),
+                output_tokens=_token(usage, "completion_tokens", "output_tokens"),
+                detail=getattr(response, "error", None),
+            )
         if response is not None and response.ok and response.parsed_json:
             try:
                 return self.parse_decision(

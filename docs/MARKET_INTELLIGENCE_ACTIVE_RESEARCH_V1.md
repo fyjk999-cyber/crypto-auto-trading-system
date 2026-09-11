@@ -156,3 +156,24 @@ ever invented when none exists.
 | scanner partial failure | snapshot `PARTIAL` with factual counts |
 | whole scanner failure | snapshot `FAILED` with an error code |
 | LLM budget exhausted | `SKIPPED_BUDGET` / `DEFERRED`; never an engine failure |
+
+### Global LLM budget (single authority)
+
+Every model call in the canonical ChiefTrader asks the same `GlobalLLMBudget`:
+
+| Phase | Priority |
+|---|---|
+| position safety / exit | P0 |
+| position lifecycle review | P1 |
+| final entry decision (flat) | P2 |
+| selected-symbol research / tool selection | P3 |
+| market selection | P4 |
+| background research | P5 |
+
+Each lower priority keeps a reserved *share* of the rolling window for the levels
+above it (P3 15%, P4 30%, P5 45%), so market selection can never starve position
+management. Refusal is an explicit `SKIPPED_BUDGET` state (a fail-closed decision
+with `SKIPPED_BUDGET` reason code for `decide()`, a skip for `select_markets()` /
+`select_tools()`), never an exception. Each granted call records operation,
+provider, model, started_at, latency and input/output tokens when  no
+secrets are recorded.

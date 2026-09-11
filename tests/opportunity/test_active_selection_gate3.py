@@ -393,15 +393,15 @@ def test_empty_research_pool_is_an_error_not_no_research():
 def test_budget_exhaustion_skips_market_selection_without_engine_failure():
     board = OpportunityBoard()
     board.publish_snapshot(_snapshot(rows=(_row("BTCUSDT"),)))
-    # ceiling for P4 = 2 - 1 reserved = 1
+    # a full reservation for higher priorities means market selection may never
+    # spend in this window: it must skip explicitly, not fail the engine
     budget = GlobalLLMBudget(
         BudgetConfig(
             window_seconds=3600,
             max_calls_per_window=2,
-            reserved_for_higher={P0_POSITION_SAFETY: 0, P4_MARKET_SELECTION: 1},
+            reserved_fraction_for_higher={P0_POSITION_SAFETY: 0.0, P4_MARKET_SELECTION: 1.0},
         )
     )
-    assert budget.try_acquire(P4_MARKET_SELECTION, operation="pre").granted is True
     chief = FakeSelectingChief({"selection_state": "NO_RESEARCH", "selected_symbols": []})
     service = _service(board, chief, budget=budget)
     record = asyncio.run(service.maybe_select(now=datetime.now(UTC)))

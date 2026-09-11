@@ -11,7 +11,7 @@ is fixed and non-negotiable:
     P5 BACKGROUND RESEARCH
 
 Market selection must never starve position management. Each priority level
-keeps a reserved number of calls per rolling window for the levels above it, so
+keeps a reserved SHARE of the rolling window for the levels above it, so
 low-priority work is refused with an explicit ``SKIPPED_BUDGET`` state instead
 of consuming capacity that safer work may need. Refusing is never an engine
 failure.
@@ -51,14 +51,16 @@ STATUS_OK = "OK"
 STATUS_ERROR = "ERROR"
 STATUS_TIMEOUT = "TIMEOUT"
 
-# calls per window reserved for the priorities ABOVE a given level
-DEFAULT_RESERVED_FOR_HIGHER: dict[str, int] = {
-    P0_POSITION_SAFETY: 0,
-    P1_POSITION_LIFECYCLE: 0,
-    P2_FINAL_ENTRY_DECISION: 0,
-    P3_SELECTED_SYMBOL_RESEARCH: 15,
-    P4_MARKET_SELECTION: 30,
-    P5_BACKGROUND_RESEARCH: 40,
+# Share of the rolling window reserved for the priorities ABOVE a given level.
+# Fractions (not absolute counts) so the reservation stays meaningful for any
+# configured window size.
+DEFAULT_RESERVED_FRACTION_FOR_HIGHER: dict[str, float] = {
+    P0_POSITION_SAFETY: 0.0,
+    P1_POSITION_LIFECYCLE: 0.0,
+    P2_FINAL_ENTRY_DECISION: 0.0,
+    P3_SELECTED_SYMBOL_RESEARCH: 0.15,
+    P4_MARKET_SELECTION: 0.30,
+    P5_BACKGROUND_RESEARCH: 0.45,
 }
 
 
@@ -66,13 +68,21 @@ DEFAULT_RESERVED_FOR_HIGHER: dict[str, int] = {
 class BudgetConfig:
     window_seconds: float = 3600.0
     max_calls_per_window: int = 120
-    reserved_for_higher: dict[str, int] = field(
-        default_factory=lambda: dict(DEFAULT_RESERVED_FOR_HIGHER)
+    reserved_fraction_for_higher: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_RESERVED_FRACTION_FOR_HIGHER)
     )
 
     def ceiling_for(self, priority: str) -> int:
-        reserved = int(self.reserved_for_higher.get(priority, 0))
-        return max(0, self.max_calls_per_window - reserved)
+        """Calls this priority may start in a window.
+
+        The ceiling leaves the reserved share for the higher priorities, so
+        low-priority work can never consume the capacity that position safety /
+        lifecycle / entry decisions may need. ``1.0`` reservation means "never
+        spend here" (used to prove exhaustion behaviour in tests).
+        """
+        fraction = float(self.reserved_fraction_for_higher.get(priority, 0.0))
+        fraction = min(max(fraction, 0.0), 1.0)
+        return max(0, int(self.max_calls_per_window * (1.0 - fraction)))
 
 
 @dataclass(slots=True)
@@ -242,6 +252,9 @@ class GlobalLLMBudget:
                 "ceilings": {
                     priority: self.config.ceiling_for(priority) for priority in PRIORITY_ORDER
                 },
+                "reserved_fraction_for_higher": dict(
+                    self.config.reserved_fraction_for_higher
+                ),
                 "granted_by_priority": dict(self.granted_by_priority),
                 "skipped_by_priority": dict(self.skipped_by_priority),
                 "recent_operations": recent,
