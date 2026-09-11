@@ -104,17 +104,19 @@ async def run_qualification(cycles: int, report: dict) -> dict:
         for index in range(cycles):
             summary = await scanner.scan_once()
             snapshot = board.current_snapshot()
+            batch_quality = (snapshot.data_quality_summary or {}).get("batch", {})
             scans.append(
                 {
                     "cycle": index + 1,
-                    "scan_id": summary["scan_id"],
-                    "status": summary["status"],
-                    "counts": summary["market_sets"],
-                    "candle_coverage": summary["candle_coverage"],
-                    "candidate_symbols": summary["candidates"],
-                    "rotation_symbols": summary["rotation"],
-                    "funding_batch_quality": snapshot.data_quality_summary["batch"]["funding"],
-                    "oi_batch_quality": snapshot.data_quality_summary["batch"]["open_interest"],
+                    "scan_id": summary.get("scan_id"),
+                    "status": summary.get("status"),
+                    "counts": summary.get("market_sets", {}),
+                    "candle_coverage": summary.get("candle_coverage", {}),
+                    "candidate_symbols": summary.get("candidates", []),
+                    "rotation_symbols": summary.get("rotation", []),
+                    "error": summary.get("error"),
+                    "funding_batch_quality": batch_quality.get("funding"),
+                    "oi_batch_quality": batch_quality.get("open_interest"),
                     "oi_collection": snapshot.data_quality_summary.get(
                         "open_interest_collection", {}
                     ),
@@ -139,8 +141,21 @@ async def run_qualification(cycles: int, report: dict) -> dict:
             )
             if index + 1 < cycles:
                 await asyncio.sleep(2.0)
-        snapshot = require_usable_snapshot(board.current_snapshot())
+        try:
+            snapshot = require_usable_snapshot(board.current_snapshot())
+        except Exception as exc:
+            report["observation"] = {
+                "cycles": scans,
+                "snapshot_usable": False,
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+            }
+            report["fatal_error"] = (
+                "NO_USABLE_SNAPSHOT: the real provider did not deliver a usable "
+                "observation cycle (environment/provider failure, not a code claim)"
+            )
+            return report
         report["observation"] = {
+            "snapshot_usable": True,
             "cycles": scans,
             "discovery_universe_label": snapshot.universe_type,
             "discovered_count": snapshot.discovered_count,
@@ -161,7 +176,9 @@ async def run_qualification(cycles: int, report: dict) -> dict:
         }
 
         selection_service = bundle.app_state.market_selection_service
-        assert selection_service is not None, "market selection was not wired"
+        if selection_service is None:
+            report["fatal_error"] = "MARKET_SELECTION_NOT_WIRED"
+            return report
         record = await selection_service.maybe_select(existing_positions=[])
         report["selection"] = {
             "selection_id": record.selection_id,
@@ -184,6 +201,12 @@ async def run_qualification(cycles: int, report: dict) -> dict:
                 "implementation sent preloaded directory pages in one call"
             ),
         }
+        if record.status not in ("SUCCESS", "NO_RESEARCH"):
+            report["fatal_error"] = (
+                f"MARKET_SELECTION_NOT_USABLE: status={record.status} "
+                f"error_code={record.error_code}"
+            )
+            return report
         persisted = await selection_service.store.load_for_scan(snapshot.scan_id)
         report["selection"]["persisted"] = persisted is not None
         report["selection"]["duplicate_guard"] = (
