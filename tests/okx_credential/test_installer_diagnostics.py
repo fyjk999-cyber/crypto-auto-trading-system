@@ -57,6 +57,31 @@ def host(monkeypatch, tmp_path):
     monkeypatch.setattr(mod.pwd, "getpwall", lambda: [client])
     monkeypatch.setattr(mod.grp, "getgrnam", group)
     monkeypatch.setattr(mod.grp, "getgrall", lambda: [])
+
+    # The installer is intentionally macOS-only, while CI runs on Linux.
+    # Model the required macOS tool paths as present/executable without
+    # invoking them. Tests that deliberately change DSCL to an unmodelled path
+    # still exercise the real missing-tool failure.
+    simulated_tools = {
+        Path("/usr/bin/dscl"),
+        Path("/usr/sbin/dseditgroup"),
+        Path("/usr/bin/sudo"),
+        Path("/usr/bin/git"),
+        Path("/bin/chmod"),
+        Path("/bin/launchctl"),
+        Path("/usr/bin/env"),
+    }
+    real_is_file = Path.is_file
+    real_access = mod.os.access
+
+    def simulated_is_file(path):
+        return True if Path(path) in simulated_tools else real_is_file(path)
+
+    def simulated_access(path, mode):
+        return True if Path(path) in simulated_tools else real_access(path, mode)
+
+    monkeypatch.setattr(Path, "is_file", simulated_is_file)
+    monkeypatch.setattr(mod.os, "access", simulated_access)
     calls = []
 
     def readonly_command(argv, **kwargs):
