@@ -5,6 +5,17 @@ from crypto_trader.domain.models import Account, Position, SignalIntent
 from crypto_trader.risk.engine import RiskConfig, RiskEngine
 from crypto_trader.risk.kill_switch import KillSwitch
 
+# CORE CONSTRAINT: new exposure is only authorized from a PROVEN, scoped
+# valuation fact (HEALTHY quality + referenceable valuation_id). Tests that
+# exercise anything downstream of that gate must supply one explicitly.
+PROVEN_VALUATION = {
+    "drawdown": Decimal("0"),
+    "current_equity": Decimal("10000"),
+    "peak_equity": Decimal("10000"),
+    "valuation_id": "val-test-proven",
+    "valuation_quality": "HEALTHY",
+}
+
 
 def make_signal(qty="1"):
     return SignalIntent(
@@ -29,6 +40,7 @@ def test_risk_approves_normal_order():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert decision.decision == ExecutionDecision.APPROVE
 
@@ -57,6 +69,7 @@ def test_max_order_notional_rejects():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert decision.decision == ExecutionDecision.SCALE_DOWN
     assert decision.reason == "MAX_ORDER_NOTIONAL"
@@ -109,6 +122,7 @@ def test_max_symbol_exposure_rejects():
         positions={"BTCUSDT": pos},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert decision.reason == "MAX_SYMBOL_EXPOSURE"
 
@@ -220,6 +234,7 @@ def test_existing_symbol_exposure_is_valued_at_current_market_price():
         positions={"BTCUSDT": position},
         market_price=Decimal("120"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert decision.decision == ExecutionDecision.REJECT
     assert decision.reason == "MAX_SYMBOL_EXPOSURE"
@@ -254,6 +269,7 @@ def test_portfolio_exposure_uses_factual_prices_for_every_held_symbol():
         market_price=Decimal("100"),
         market_prices={"BTCUSDT": Decimal("100"), "ETHUSDT": Decimal("200")},
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
 
     assert decision.decision == ExecutionDecision.REJECT
@@ -283,6 +299,7 @@ def test_risk_rejects_non_positive_mtm_equity():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
         risk_equity=Decimal("0"),
     )
     assert decision.decision == ExecutionDecision.REJECT

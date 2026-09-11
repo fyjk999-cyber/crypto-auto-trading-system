@@ -4,6 +4,15 @@ from crypto_trader.domain.enums import ExecutionDecision, OrderSide
 from crypto_trader.domain.models import Account, Position, SignalIntent
 from crypto_trader.risk.engine import RiskConfig, RiskEngine
 
+# CORE CONSTRAINT: new exposure requires a proven, scoped valuation fact.
+PROVEN_VALUATION = {
+    "drawdown": Decimal("0"),
+    "current_equity": Decimal("10000"),
+    "peak_equity": Decimal("10000"),
+    "valuation_id": "val-test-proven",
+    "valuation_quality": "HEALTHY",
+}
+
 
 def test_scale_down_preserves_short_direction_and_records_adjustment():
     decision = RiskEngine(RiskConfig(max_order_notional=Decimal("100"))).check(
@@ -19,6 +28,7 @@ def test_scale_down_preserves_short_direction_and_records_adjustment():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert decision.decision == ExecutionDecision.SCALE_DOWN
     assert decision.side == OrderSide.SELL
@@ -40,6 +50,7 @@ def test_scale_down_uses_contract_size_for_derivative_notional():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert decision.decision == ExecutionDecision.SCALE_DOWN
     assert decision.checks["approved_quantity"] == "100"
@@ -62,6 +73,7 @@ def test_leverage_clamp_is_symmetric_and_preserves_quantity_and_direction():
             positions={},
             market_price=Decimal("100"),
             open_order_count=0,
+            **PROVEN_VALUATION,
         )
         assert decision.decision == ExecutionDecision.SCALE_DOWN
         assert decision.side == side
@@ -88,6 +100,7 @@ def test_volatility_liquidity_missing_and_invalid_leverage_bounds():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     missing = engine.check(SignalIntent(**base), **common)
     assert missing.checks["approved_leverage"] == "1"
@@ -202,6 +215,7 @@ def test_approve_contract_records_supporting_and_empty_contrary_risk_evidence():
         positions={},
         market_price=Decimal("100"),
         open_order_count=0,
+        **PROVEN_VALUATION,
     )
     assert result.decision == ExecutionDecision.APPROVE
     assert "max_leverage" in result.checks["supporting_risk_evidence"]

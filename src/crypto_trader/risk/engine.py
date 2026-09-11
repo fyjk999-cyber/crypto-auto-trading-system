@@ -19,6 +19,7 @@ from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.kill_switch import KillSwitch
 from crypto_trader.risk.leverage import clamp_leverage
+from crypto_trader.valuation.domain import VALUATION_QUALITY_HEALTHY
 
 
 class RiskConfig(BaseModel):
@@ -54,7 +55,7 @@ class RiskEngine:
         market_prices: dict[str, Decimal] | None = None,
         daily_pnl: Decimal | None = Decimal("0"),
         daily_pnl_source: str = "UNSPECIFIED",
-        drawdown: Decimal | None = Decimal("0"),
+        drawdown: Decimal | None = None,
         drawdown_source: str = "UNSPECIFIED",
         current_equity: Decimal | None = None,
         peak_equity: Decimal | None = None,
@@ -207,6 +208,14 @@ class RiskEngine:
             if available_margin is not None
             else effective_equity - account.margin_used
         )
+        # CORE CONSTRAINT: an equity/drawdown fact may only be presented as
+        # factual when it comes from a PROVEN complete valuation batch
+        # (HEALTHY quality + referenceable valuation_id). Otherwise the
+        # numbers are UNKNOWN — never zero, never a ledger fallback dressed
+        # up as a mark-to-market fact (UNKNOWN != ZERO).
+        valuation_proven = (
+            valuation_quality == VALUATION_QUALITY_HEALTHY and bool(valuation_id)
+        )
         checks.update(
             {
                 "original_direction": original_direction,
@@ -218,19 +227,37 @@ class RiskEngine:
                 "approved_leverage": str(approved_leverage),
                 "daily_pnl": str(daily_pnl) if daily_pnl is not None else None,
                 "daily_pnl_source": daily_pnl_source,
-                "drawdown": str(drawdown),
+                "drawdown": (
+                    str(drawdown)
+                    if drawdown is not None and valuation_proven
+                    else None
+                ),
                 "drawdown_source": drawdown_source,
-                "current_equity": str(current_equity) if current_equity is not None else None,
-                "peak_equity": str(peak_equity) if peak_equity is not None else None,
-                "valuation_as_of": valuation_as_of,
+                "current_equity": (
+                    str(current_equity)
+                    if current_equity is not None and valuation_proven
+                    else None
+                ),
+                "peak_equity": (
+                    str(peak_equity)
+                    if peak_equity is not None and valuation_proven
+                    else None
+                ),
+                "valuation_as_of": valuation_as_of if valuation_proven else None,
                 "valuation_currency": valuation_currency,
                 "valuation_source": valuation_source,
                 "valuation_id": valuation_id,
                 "valuation_quality": valuation_quality,
+                "valuation_proven": valuation_proven,
+                "valuation_completeness": (
+                    "COMPLETE" if valuation_proven else "INCOMPLETE"
+                ),
                 "funding_status": funding_status,
                 "pnl_provenance": pnl_provenance or {},
-                "risk_equity": str(effective_equity),
-                "available_margin": str(effective_margin),
+                "risk_equity": str(effective_equity) if valuation_proven else None,
+                "available_margin": (
+                    str(effective_margin) if valuation_proven else None
+                ),
             }
         )
 
@@ -287,6 +314,21 @@ class RiskEngine:
             if drawdown < -abs(self.config.max_drawdown):
                 return fail("MAX_DRAWDOWN")
             checks["max_drawdown"] = True
+
+        # CORE CONSTRAINT (no new exposure from unproven valuation): a
+        # drawdown/equity fact is only usable for NEW exposure when it comes
+        # from a complete, referenceable valuation batch. A caller that omits
+        # or cannot prove valuation completeness fails closed here instead of
+        # silently authorizing risk against an unknown (treated as zero)
+        # drawdown or an unproven ledger equity. Risk-reducing lifecycle
+        # actions keep their existing approved semantics.
+        if not is_risk_reducing and not valuation_proven:
+            checks["valuation_completeness"] = "INCOMPLETE"
+            return fail(
+                "VALUATION_UNAVAILABLE"
+                if valuation_quality != VALUATION_QUALITY_HEALTHY
+                else "VALUATION_LINEAGE_UNPROVEN"
+            )
 
         cash = effective_equity
         if cash <= 0:
