@@ -226,27 +226,35 @@ class TradePlanService:
         """
         if direction not in {"LONG", "SHORT"} or quantity <= 0:
             raise ValueError("recovery plan requires direction and positive quantity")
-        decision_id = f"orphan_recovery_{symbol}"
+        base_decision_id = f"orphan_recovery_{symbol}"
         async with self.session_factory() as session:
-            existing = (
+            open_plan = (
                 await session.execute(
                     select(TradePlanORM)
                     .where(
-                        TradePlanORM.decision_id == decision_id,
+                        TradePlanORM.symbol == symbol,
                         TradePlanORM.state == TradePlanState.RECOVERY.value,
                     )
                     .order_by(TradePlanORM.created_at.desc())
                 )
             ).scalars().first()
-            if existing is not None:
-                return self._to_domain(existing)
-            any_plan = (
+            if open_plan is not None:
+                return self._to_domain(open_plan)
+            # A CLOSED recovery lifecycle belongs to a different orphan
+            # generation. Reuse the stable id only when it is unused so a
+            # later orphan can create a fresh RECOVERY plan.
+            existing_base = (
                 await session.execute(
-                    select(TradePlanORM).where(TradePlanORM.decision_id == decision_id)
+                    select(TradePlanORM).where(
+                        TradePlanORM.decision_id == base_decision_id
+                    )
                 )
             ).scalars().first()
-            if any_plan is not None:
-                return self._to_domain(any_plan)
+            decision_id = (
+                base_decision_id
+                if existing_base is None
+                else new_id("orphan")
+            )
             row = TradePlanORM(
                 trade_plan_id=new_id("plan"),
                 decision_id=decision_id,

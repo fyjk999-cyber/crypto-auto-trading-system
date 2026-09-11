@@ -11,7 +11,11 @@ from crypto_trader.domain.models import Account, Instrument, Position
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.orderbook import OrderBook
-from crypto_trader.persistence.models import LedgerTransactionORM, PositionProjectionORM
+from crypto_trader.persistence.models import (
+    LedgerTransactionORM,
+    PositionProjectionORM,
+    TradePlanORM,
+)
 from crypto_trader.strategy.base import StrategyContext
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 from tests.conftest import make_paper_engine
@@ -68,6 +72,31 @@ async def test_orphan_position_creates_idempotent_recovery_plan_without_fills(da
         "BTCUSDT"
     )
     assert active is not None and active.trade_plan_id == plan.trade_plan_id
+
+
+async def test_closed_recovery_plan_does_not_block_new_orphan(database):
+    engine = make_paper_engine(database)
+    first = await engine.trade_plans.ensure_recovery_plan(
+        symbol="BTCUSDT", direction="LONG", quantity=Decimal("0.5")
+    )
+    async with database.session_factory() as session:
+        row = await session.get(TradePlanORM, first.trade_plan_id)
+        row.state = TradePlanState.CLOSED.value
+        row.closed_at = row.created_at
+        await session.commit()
+
+    second = await engine.trade_plans.ensure_recovery_plan(
+        symbol="BTCUSDT", direction="LONG", quantity=Decimal("0.4")
+    )
+    assert second.state == TradePlanState.RECOVERY
+    assert second.trade_plan_id != first.trade_plan_id
+    assert second.decision_id != first.decision_id
+
+    # The replacement open RECOVERY plan is reused on retry/restart.
+    again = await engine.trade_plans.ensure_recovery_plan(
+        symbol="BTCUSDT", direction="LONG", quantity=Decimal("0.4")
+    )
+    assert again.trade_plan_id == second.trade_plan_id
 
 
 async def test_recovery_plan_is_visible_to_position_manager_review(database):
