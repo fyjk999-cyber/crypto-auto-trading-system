@@ -526,14 +526,32 @@ class TradingEngine:
     async def tick(self, *, include_position_reviews: bool = True) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
         for strategy in self.strategies:
-            desired_symbol = None
+            # Scheduling authority (MASTER DIRECTIVE / Market Intelligence V1):
+            # a strategy that implements desired_symbol() owns its own
+            # new-research attention. ``None`` means "no new autonomous research
+            # this tick" and MUST NOT be turned into a default-symbol review; a
+            # scheduler failure fails closed for that strategy's new-entry path.
             desired_getter = getattr(strategy, "desired_symbol", None)
             if callable(desired_getter):
                 try:
                     desired_symbol = desired_getter()
-                except Exception:
-                    desired_symbol = None  # scheduling failure never gates trading
-            ctx = await self._strategy_context(desired_symbol)
+                except Exception as exc:
+                    self.health.set(
+                        f"strategy:{strategy.name}",
+                        False,
+                        f"DESIRED_SYMBOL_FAILED:{type(exc).__name__}",
+                    )
+                    continue
+                if desired_symbol is None:
+                    # explicit NO_RESEARCH / no-new-entry signal: skip this
+                    # strategy for this tick (existing positions are reviewed
+                    # independently below and are unaffected).
+                    continue
+                ctx = await self._strategy_context(desired_symbol)
+            else:
+                # legacy strategy without a scheduler keeps its previous
+                # default-symbol context behavior
+                ctx = await self._strategy_context()
             if ctx is None:
                 continue
             try:

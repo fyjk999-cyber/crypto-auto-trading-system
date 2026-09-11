@@ -189,6 +189,11 @@ When MarketSelection is enabled there is **no** fallback to
 an exhausted selection queue all yield `None` (no new autonomous research).
 The board agenda is legacy mode only (`selection_service is None`).
 
+End-to-end: `TradingEngine.tick()` honours the same rule. A scheduled strategy
+whose `desired_symbol()` returns `None` (or raises) is SKIPPED — the engine does
+not build a context and does not call `on_market_data`, so no default symbol can
+be substituted. Position review continues independently.
+
 Directory page semantics: `DirectoryQuery.page` is factual — a lookup starts at
 the requested page and returns at most the hard cap of 2 consecutive pages
 (page size <= 25), never silently re-serving page 1.

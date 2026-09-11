@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 
 from crypto_trader.market_data.quality import (
     MISSING,
+    NON_FINITE,
+    STALE,
     UNSUPPORTED,
     VALID,
     Fact,
@@ -75,15 +77,21 @@ class OiTimeSeries:
 
     # ------------------------------------------------------------------ write
     def record(self, sample: OiSample) -> bool:
-        """Store one factual sample. Returns False when it was not usable."""
+        """Store one factual sample. Returns False when it was not usable.
+
+        A provider OI of exactly ``0`` IS a valid factual zero and is stored
+        (see ``window_change``: a zero baseline yields unavailable percentage
+        change, never a division by zero and never a relabelled "invalid"
+        fact). Negative / non-finite values are rejected.
+        """
         if sample.quality != VALID or sample.open_interest is None:
             return False
-        if (
-            not isinstance(sample.open_interest, float)
-            or sample.open_interest != sample.open_interest
-        ):
+        if not isinstance(sample.open_interest, float):
             return False
-        if sample.open_interest <= 0 or sample.open_interest in (float("inf"), float("-inf")):
+        value = sample.open_interest
+        if value != value or value in (float("inf"), float("-inf")):  # NaN / Inf
+            return False
+        if value < 0:
             return False
         observed = (
             sample.observed_at
@@ -115,6 +123,7 @@ class OiTimeSeries:
         """OI change vs the sample closest to ``T - window`` within tolerance."""
         spec = next((w for w in self.windows if w.label == window), None)
         if spec is None:
+            # an unimplemented window is a genuine capability limitation
             return Fact(
                 None,
                 "oi_time_series",
@@ -124,26 +133,38 @@ class OiTimeSeries:
             )
         series = self._samples.get(symbol) or []
         if len(series) < 2:
+            # temporary evidence limitation, NOT provider incapability
             return Fact(
                 None,
                 "oi_time_series",
                 unit="pct",
-                quality=UNSUPPORTED,
-                reason="OI_CHANGE_UNAVAILABLE: fewer than two timestamped samples",
+                quality=MISSING,
+                reason=(
+                    "OI_CHANGE_UNAVAILABLE:INSUFFICIENT_HISTORY: "
+                    "fewer than two timestamped samples"
+                ),
             )
         now = now if now.tzinfo else now.replace(tzinfo=UTC)
         newest = series[-1]
         newest_age = age_seconds(newest.observed_at, now=now)
-        if (
-            newest_age is None
-            or newest_age > spec.seconds + spec.tolerance_seconds
-        ):
+        if newest_age is None or newest_age < 0:
             return Fact(
                 None,
                 "oi_time_series",
                 unit="pct",
-                quality=UNSUPPORTED,
-                reason="OI_CHANGE_UNAVAILABLE: latest sample too old for window",
+                quality=NON_FINITE,
+                reason="OI_CHANGE_UNAVAILABLE:NON_FINITE: latest sample has no usable timestamp",
+            )
+        if newest_age > spec.seconds + spec.tolerance_seconds:
+            return Fact(
+                None,
+                "oi_time_series",
+                unit="pct",
+                quality=STALE,
+                reason=(
+                    "OI_CHANGE_UNAVAILABLE:STALE: latest sample is "
+                    f"{newest_age:.0f}s old, beyond window {spec.label}"
+                ),
             )
         candidates = [s for s in series[:-1] if s.observed_at < newest.observed_at]
         if not candidates:
@@ -151,8 +172,8 @@ class OiTimeSeries:
                 None,
                 "oi_time_series",
                 unit="pct",
-                quality=UNSUPPORTED,
-                reason="OI_CHANGE_UNAVAILABLE: no baseline sample before latest",
+                quality=MISSING,
+                reason="OI_CHANGE_UNAVAILABLE:NO_COMPARABLE_BASELINE: no sample before latest",
             )
         baseline = min(
             candidates,
@@ -164,25 +185,40 @@ class OiTimeSeries:
                 None,
                 "oi_time_series",
                 unit="pct",
-                quality=UNSUPPORTED,
+                quality=MISSING,
                 reason=(
-                    f"OI_CHANGE_UNAVAILABLE: nearest baseline is {baseline_age:.0f}s old, "
-                    f"outside {spec.seconds:.0f}s±{spec.tolerance_seconds:.0f}s"
+                    "OI_CHANGE_UNAVAILABLE:NO_BASELINE_IN_WINDOW: nearest baseline is "
+                    f"{baseline_age:.0f}s old, outside "
+                    f"{spec.seconds:.0f}s±{spec.tolerance_seconds:.0f}s"
                 ),
             )
-        if baseline.open_interest <= 0:
+        baseline_value = baseline.open_interest
+        newest_value = newest.open_interest
+        if not all(
+            isinstance(v, float) and v == v and v not in (float("inf"), float("-inf"))
+            for v in (baseline_value, newest_value)
+        ):
+            return Fact(
+                None,
+                "oi_time_series",
+                unit="pct",
+                quality=NON_FINITE,
+                reason="OI_CHANGE_UNAVAILABLE:NON_FINITE: sample value is not finite",
+            )
+        if baseline_value <= 0:
+            # a factual zero baseline cannot express a percentage change and is
+            # never used as a denominator. The zero itself stays a valid fact.
             return Fact(
                 None,
                 "oi_time_series",
                 unit="pct",
                 quality=MISSING,
-                reason="baseline OI non-positive",
+                reason=(
+                    "OI_CHANGE_UNAVAILABLE:ZERO_BASELINE: baseline OI is zero; "
+                    "percentage change is undefined"
+                ),
             )
-        change_pct = (
-            (newest.open_interest - baseline.open_interest)
-            / baseline.open_interest
-            * 100.0
-        )
+        change_pct = (newest_value - baseline_value) / baseline_value * 100.0
         return Fact(
             change_pct,
             "oi_time_series",

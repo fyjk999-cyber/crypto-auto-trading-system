@@ -134,6 +134,24 @@ Each selected symbol is consumed at most once per selection round
 (`(selection_id, symbol)` bookkeeping), so the retry cooldown cannot resurrect it
 inside the same round.
 
+The authority is enforced END-TO-END, not only in the scheduler:
+
+```
+TradingEngine.tick()
+    strategy implements desired_symbol()?
+        yes -> desired_symbol() is None      => skip this strategy's new research
+                                                      (no context, no on_market_data)
+        yes -> desired_symbol() raised       => fail closed for new research
+                                                      (health: DESIRED_SYMBOL_FAILED)
+        yes -> desired_symbol() -> SYMBOL    => _strategy_context(SYMBOL) exactly
+        no  -> legacy default-symbol context (unchanged compatibility path)
+```
+
+`TradingEngine` therefore never turns `None` into `_strategy_context(None)` /
+BTCUSDT for a scheduled strategy. Position review is a separate path
+(`_review_positions_once` → `_strategy_context(symbol_explicit)`) and is
+unaffected by `NO_RESEARCH`, selection failure or budget deferral.
+
 The OpportunityBoard agenda (factor candidates, then fairness rotation) is used
 **only** when `selection_service is None`, i.e. MarketSelection is explicitly
 disabled (legacy/test wiring). That distinction is explicit and covered by

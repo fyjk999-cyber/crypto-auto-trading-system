@@ -384,12 +384,19 @@ class OpportunityScannerService:
         observed_symbols = [r["symbol"] for r in facts_rows]
         for row in facts_rows:
             self.coverage.mark_observed(row["symbol"], started_at)
-            if row["open_interest"] is not None and row["open_interest"] > 0:
+            # OI samples keep the PROVIDER observation time, never the scan
+            # start time: the fixed-window comparison must be factual.
+            sample_observed_at = row.get("oi_observed_at")
+            if (
+                row.get("oi_quality") == VALID
+                and row["open_interest"] is not None
+                and sample_observed_at is not None
+            ):
                 self.oi_series.record(
                     OiSample(
                         symbol=row["symbol"],
                         open_interest=float(row["open_interest"]),
-                        observed_at=started_at,
+                        observed_at=sample_observed_at,
                         source=OI_SOURCE,
                     )
                 )

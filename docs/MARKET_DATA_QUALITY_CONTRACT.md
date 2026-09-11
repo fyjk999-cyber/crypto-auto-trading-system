@@ -175,9 +175,29 @@ expensive candle analysis.
 Windows are data-driven (`5m`, `15m`, `1h`; default `15m`) with explicit tolerance
 (`15m ± 180s`). Change is measured against the sample closest to `T - window`:
 
-* fewer than 2 samples, stale latest sample, or no baseline within tolerance
-  → `OI_CHANGE_UNAVAILABLE` (`quality = UNSUPPORTED`);
-* irregular "last N calls" are never compared as if elapsed time were equal.
+* samples keep the **provider observation timestamp** (`oi_observed_at` from the
+  OKX payload), never the scan start time; identical provider timestamps
+  deduplicate so a re-published instant cannot fake an acceleration;
+* a provider OI of exactly `0` is a VALID factual sample and is stored; a zero
+  baseline yields `MISSING` (`ZERO_BASELINE`) rather than dividing by zero;
+* a negative or non-finite value never enters the series.
+
+Window-change quality maps evidence limitations to evidence states, reserving
+`UNSUPPORTED` for genuine capability absence:
+
+| Situation | Quality | Reason marker |
+|---|---|---|
+| unimplemented window (e.g. `7h`) | `UNSUPPORTED` | `unknown OI window` |
+| fewer than 2 timestamped samples | `MISSING` | `INSUFFICIENT_HISTORY` |
+| no sample before the latest | `MISSING` | `NO_COMPARABLE_BASELINE` |
+| nearest baseline outside tolerance | `MISSING` | `NO_BASELINE_IN_WINDOW` |
+| baseline OI is zero | `MISSING` | `ZERO_BASELINE` |
+| latest sample older than the window | `STALE` | `STALE` |
+| non-finite sample value | `NON_FINITE` | `NON_FINITE` |
+
+Comparison always selects the factual sample closest to `T - window` within the
+configured tolerance; scan iteration numbers, array positions and request counts
+are never used as time.
 
 ## 8. Estimated turnover semantics
 

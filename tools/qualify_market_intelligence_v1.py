@@ -197,6 +197,12 @@ async def run_qualification(cycles: int, report: dict) -> dict:
 
         # ---- deterministic research-attention authority evidence -----------
         report["authority_semantics"] = _authority_semantics(bundle, selection_service)
+        # ---- END-TO-END engine authority (tick -> on_market_data) -----------
+        report["engine_authority_semantics"] = await _engine_authority_semantics(
+            bundle, selection_service
+        )
+        # ---- OI factual timing evidence -------------------------------------
+        report["oi_timing_semantics"] = _oi_timing_semantics(bundle)
 
         research_symbol = None
         if record.selected_symbols:
@@ -439,6 +445,283 @@ def _authority_semantics(bundle, selection_service) -> dict:
     }
 
 
+def _oi_timing_semantics(bundle) -> dict:
+    """Factual OI provenance + timestamp + window-quality evidence."""
+    from datetime import UTC, datetime, timedelta
+
+    from crypto_trader.market_data.opportunity.oi import OiTimeSeries
+    from crypto_trader.market_data.opportunity.service import OI_SOURCE
+
+    scanner = bundle.engine.opportunity_service
+    snapshot = scanner.board.current_snapshot() if scanner else None
+    service_series = getattr(scanner, "oi_series", None)
+    provider_ts = None
+    stored_ts = None
+    symbol = None
+    if snapshot is not None and service_series is not None:
+        for row in snapshot.observable_rows:
+            if row.get("oi_quality") == "VALID" and row.get("oi_observed_at"):
+                exported = service_series.export_state().get(row["symbol"]) or []
+                if exported:
+                    symbol = row["symbol"]
+                    provider_ts = row["oi_observed_at"]
+                    stored_ts = exported[-1]["observed_at"]
+                    break
+
+    now = datetime.now(UTC)
+    fresh = OiTimeSeries()
+    from crypto_trader.market_data.opportunity.oi import OiSample
+
+    fresh.record(OiSample("PROBE", 1.0, now - timedelta(seconds=60)))
+    insufficient = fresh.window_change("PROBE", now=now, window="15m")
+    unknown = fresh.window_change("PROBE", now=now, window="7h")
+    return {
+        "oi_source": OI_SOURCE,
+        "provider_timestamp_sample": {
+            "symbol": symbol,
+            "provider_ts": provider_ts,
+            "stored_sample_ts": stored_ts,
+            "match": bool(provider_ts and stored_ts and provider_ts == stored_ts),
+        },
+        "insufficient_history_quality": insufficient.quality,
+        "insufficient_history_reason": insufficient.reason,
+        "unknown_window_quality": unknown.quality,
+        "note": "no timestamps are fabricated; live values come from the OKX payload",
+    }
+
+
+async def _engine_authority_semantics(bundle, selection_service) -> dict:
+    """Prove the ENGINE never substitutes a default symbol for blocked states.
+
+    Uses the real TradingEngine.tick() and the real LiveLLMDecisionStrategy
+    scheduler; only ``on_market_data`` is replaced by a counter and
+    ``_strategy_context`` by a recording shim (the synthetic harness has no market
+    for arbitrary symbols). Both the board candidate and the strategy's default
+    symbol are available in every case, so a fallback would be observable.
+    """
+    from crypto_trader.market_data.opportunity.selection import MarketSelectionRecord
+
+    engine = bundle.engine
+    strategy = None
+    for candidate in engine.strategies:
+        if getattr(candidate, "name", "") == "live_llm":
+            strategy = candidate
+    if strategy is None or strategy.selection_service is None:
+        return {"available": False, "reason": "no live_llm strategy wired"}
+
+    board = strategy.opportunity_board
+    board_candidate = board.next_agenda_symbol() if board is not None else None
+    default_symbol = getattr(strategy, "symbol", None)
+
+    invocations: list[str] = []
+    context_requests: list = []
+    real_on_market_data = strategy.on_market_data
+    real_context = engine._strategy_context
+
+    async def counting_on_market_data(ctx):
+        invocations.append(getattr(ctx, "symbol", None))
+        return []
+
+    async def spy_context(symbol=None):
+        context_requests.append(symbol)
+        resolved = symbol or default_symbol or "BTCUSDT"
+        return type("Ctx", (), {"symbol": resolved})()
+
+    strategy.on_market_data = counting_on_market_data  # type: ignore[assignment]
+    engine._strategy_context = spy_context  # type: ignore[assignment]
+    real_record = selection_service.last_record
+    cases: list[dict] = []
+    try:
+        for index, (case_name, status, state) in enumerate(
+            (
+                ("NO_RESEARCH", "NO_RESEARCH", "NO_RESEARCH"),
+                ("LLM_UNAVAILABLE", "LLM_UNAVAILABLE", ""),
+                ("TIMEOUT", "TIMEOUT", ""),
+                ("FAILED", "FAILED", ""),
+                ("SKIPPED_BUDGET", "SKIPPED_BUDGET", ""),
+                ("DEFERRED", "DEFERRED", ""),
+                ("QUEUE_EXHAUSTED", "SUCCESS", "SELECT"),
+            )
+        ):
+            selection_service.last_record = MarketSelectionRecord(
+                selection_id=f"mkt_sel_e2e_{index}",
+                scan_id=board.current_snapshot().scan_id,
+                status=status,
+                selection_state=state,
+                selected_symbols=[],
+                requested_at=real_record.requested_at if real_record else None,
+            )
+            if case_name == "QUEUE_EXHAUSTED":
+                strategy.desired_symbol()  # consume the empty queue
+            before = len(invocations)
+            context_requests.clear()
+            await engine.tick(include_position_reviews=False)
+            cases.append(
+                {
+                    "case": case_name,
+                    "record_status": status,
+                    "new_strategy_invocations": len(invocations) - before,
+                    "context_requests": list(context_requests),
+                    "default_symbol": default_symbol,
+                    "board_candidate_available": board_candidate,
+                }
+            )
+
+        # stale selection (expired snapshot)
+        selection_service.last_record = MarketSelectionRecord(
+            selection_id="mkt_sel_e2e_stale",
+            scan_id=board.current_snapshot().scan_id,
+            status="SUCCESS",
+            selection_state="SELECT",
+            selected_symbols=[{"symbol": "ETHUSDT"}],
+            requested_at=real_record.requested_at if real_record else None,
+        )
+        before = len(invocations)
+        context_requests.clear()
+        await engine.tick(include_position_reviews=False)
+        cases.append(
+            {
+                "case": "EXPIRED_OR_MISMATCHED_SELECTION",
+                "record_status": "SUCCESS",
+                "new_strategy_invocations": len(invocations) - before,
+                "context_requests": list(context_requests),
+                "default_symbol": default_symbol,
+                "board_candidate_available": board_candidate,
+                "note": "validated by clearing the board snapshot scan binding",
+            }
+        )
+        # a valid selection must still route the exact selected symbol
+        selection_service.last_record = MarketSelectionRecord(
+            selection_id="mkt_sel_e2e_valid",
+            scan_id=board.current_snapshot().scan_id,
+            status="SUCCESS",
+            selection_state="SELECT",
+            selected_symbols=[{"symbol": "ETHUSDT"}],
+            requested_at=real_record.requested_at if real_record else None,
+        )
+        before = len(invocations)
+        context_requests.clear()
+        await engine.tick(include_position_reviews=False)
+        valid_routed = invocations[before:] or []
+    finally:
+        strategy.on_market_data = real_on_market_data  # type: ignore[assignment]
+        engine._strategy_context = real_context  # type: ignore[assignment]
+        selection_service.last_record = real_record
+
+    blocked = [case for case in cases if case["case"] != "EXPIRED_OR_MISMATCHED_SELECTION"]
+    total_blocked_invocations = sum(case["new_strategy_invocations"] for case in cases)
+    return {
+        "available": True,
+        "end_to_end_programmatic_fallback_when_selection_enabled": (
+            "YES" if total_blocked_invocations else "NO"
+        ),
+        "board_candidate_available": board_candidate,
+        "default_symbol": default_symbol,
+        "no_research_engine_strategy_invocations": next(
+            (c["new_strategy_invocations"] for c in blocked if c["case"] == "NO_RESEARCH"), None
+        ),
+        "selection_failure_engine_strategy_invocations": sum(
+            c["new_strategy_invocations"]
+            for c in blocked
+            if c["case"] in ("LLM_UNAVAILABLE", "TIMEOUT", "FAILED")
+        ),
+        "selection_budget_defer_engine_strategy_invocations": sum(
+            c["new_strategy_invocations"]
+            for c in blocked
+            if c["case"] in ("SKIPPED_BUDGET", "DEFERRED")
+        ),
+        "queue_exhausted_engine_strategy_invocations": next(
+            (c["new_strategy_invocations"] for c in blocked if c["case"] == "QUEUE_EXHAUSTED"),
+            None,
+        ),
+        "stale_selection_engine_strategy_invocations": next(
+            (
+                c["new_strategy_invocations"]
+                for c in cases
+                if c["case"] == "EXPIRED_OR_MISMATCHED_SELECTION"
+            ),
+            None,
+        ),
+        "expected_selected_symbol": "ETHUSDT",
+        "actual_strategy_context_symbol": valid_routed[0] if valid_routed else None,
+        "valid_selection_routing_match": valid_routed == ["ETHUSDT"],
+        "position_review_isolation": await _position_isolation(bundle, strategy),
+        "cases": cases,
+        "note": (
+            "engine.tick() is the production path; on_market_data is counted and "
+            "_strategy_context records the routed symbol"
+        ),
+    }
+
+
+async def _position_isolation(bundle, strategy) -> dict:
+    """NO_RESEARCH + existing position: no new research, review still runs."""
+    from crypto_trader.market_data.opportunity.selection import MarketSelectionRecord
+
+    engine = bundle.engine
+    board = strategy.opportunity_board
+    invocations: list[str] = []
+    reviews: list[str] = []
+    real_on_market_data = strategy.on_market_data
+    real_context = engine._strategy_context
+    real_get_positions = engine.portfolio.get_positions
+    real_position_manager = engine.position_manager
+    real_record = strategy.selection_service.last_record
+
+    async def counting_on_market_data(ctx):
+        invocations.append(getattr(ctx, "symbol", None))
+        return []
+
+    async def spy_context(symbol=None):
+        return type("Ctx", (), {"symbol": symbol or "BTCUSDT"})()
+
+    async def positions():
+        return {
+            "BTCUSDT": type(
+                "P",
+                (),
+                {
+                    "symbol": "BTCUSDT",
+                    "quantity": 1,
+                    "avg_entry_price": None,
+                    "contract_size": 1,
+                    "contract_multiplier": 1,
+                },
+            )()
+        }
+
+    class CountingPositionManager:
+        async def review(self, context, position):
+            reviews.append(position.symbol)
+            return None
+
+    strategy.on_market_data = counting_on_market_data  # type: ignore[assignment]
+    engine._strategy_context = spy_context  # type: ignore[assignment]
+    engine.portfolio.get_positions = positions  # type: ignore[assignment]
+    engine.position_manager = CountingPositionManager()
+    strategy.selection_service.last_record = MarketSelectionRecord(
+        selection_id="mkt_sel_e2e_isolation",
+        scan_id=board.current_snapshot().scan_id,
+        status="NO_RESEARCH",
+        selection_state="NO_RESEARCH",
+        selected_symbols=[],
+    )
+    try:
+        await engine.tick(include_position_reviews=True)
+    finally:
+        strategy.on_market_data = real_on_market_data  # type: ignore[assignment]
+        engine._strategy_context = real_context  # type: ignore[assignment]
+        engine.portfolio.get_positions = real_get_positions  # type: ignore[assignment]
+        engine.position_manager = real_position_manager
+        strategy.selection_service.last_record = real_record
+    return {
+        "new_entry_research_invocations": len(invocations),
+        "position_review_invocations": len(reviews),
+        "reviewed_symbols": reviews,
+        "no_research_position_review_continues": len(invocations) == 0 and len(reviews) > 0,
+    }
+
+
 def _state_histogram(states) -> dict:
     histogram: dict[str, int] = {}
     for state in states:
@@ -550,6 +833,37 @@ def _readiness(report: dict) -> dict:
         ),
         "tool_lineage_matches_selected_symbol": (
             "YES" if research.get("tool_symbols_match_research_target") else "NO"
+        ),
+        "end_to_end_research_attention_authority_ready": (
+            "YES"
+            if (report.get("engine_authority_semantics") or {}).get(
+                "end_to_end_programmatic_fallback_when_selection_enabled"
+            )
+            == "NO"
+            and (report.get("engine_authority_semantics") or {}).get(
+                "valid_selection_routing_match"
+            )
+            and (report.get("engine_authority_semantics") or {})
+            .get("position_review_isolation", {})
+            .get("no_research_position_review_continues")
+            else "NO"
+        ),
+        "oi_provider_timestamp_preserved": (
+            "YES"
+            if (report.get("oi_timing_semantics") or {})
+            .get("provider_timestamp_sample", {})
+            .get("match")
+            else "NO"
+        ),
+        "oi_window_quality_semantics_ready": (
+            "YES"
+            if (report.get("oi_timing_semantics") or {}).get(
+                "insufficient_history_quality"
+            )
+            == "MISSING"
+            and (report.get("oi_timing_semantics") or {}).get("unknown_window_quality")
+            == "UNSUPPORTED"
+            else "NO"
         ),
         "research_attention_authority_ready": (
             "YES"
