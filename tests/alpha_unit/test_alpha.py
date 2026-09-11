@@ -384,6 +384,40 @@ print("ALPHA_CLEAN")
     assert "ALPHA_CLEAN" in result.stdout
 
 
+def test_direct_market_tools_distinguish_proven_zero_from_unavailable():
+    alpha = MultiStrategyAlpha("BTCUSDT")
+    book = OrderBook(symbol="BTCUSDT")
+    book.apply_snapshot(
+        1,
+        [(Decimal("100"), Decimal("1"))],
+        [(Decimal("100.1"), Decimal("1"))],
+    )
+    ctx = StrategyContext(
+        symbol="BTCUSDT",
+        book=book,
+        account=Account(balances={}, equity=Decimal("10000")),
+        positions={},
+        clock_time=TS,
+        run_id="r-zero",
+        market_timestamp=TS,
+        funding=Decimal("0"),
+        oi=None,
+        basis=Decimal("0"),
+    )
+    funding = alpha.analyze_tool(ctx, "funding")
+    assert funding["data_quality"] == "FACTUAL_OKX"
+    assert funding["features"] == {"funding": "0"}
+    assert funding["timestamp"] == TS
+
+    open_interest = alpha.analyze_tool(ctx, "open_interest")
+    assert open_interest["data_quality"] == "UNAVAILABLE"
+    assert open_interest["features"] == {"open_interest": None}
+
+    basis = alpha.analyze_tool(ctx, "basis")
+    assert basis["data_quality"] == "FACTUAL_OKX"
+    assert basis["features"] == {"basis": "0"}
+
+
 def test_ensemble_produces_evidence_but_no_executable_signal():
     alpha = MultiStrategyAlpha("BTCUSDT")
     # uptrend produces measurable bullish evidence, never an entry intent.
@@ -395,6 +429,7 @@ def test_ensemble_produces_evidence_but_no_executable_signal():
     )
     # seed many bars into alpha.mde directly so features have trend
     alpha.mde = make_mde(uptrend(120))
+    ctx.clock_time = alpha.mde.latest().ts
     signals = __import__("asyncio").run(alpha.on_market_data(ctx))
     evidence = alpha.analyze_evidence(ctx)
     assert signals == []
@@ -423,6 +458,7 @@ def test_ensemble_no_trade_for_flat_market():
         clock_time=TS,
         run_id="r1",
     )
+    ctx.clock_time = alpha.mde.latest().ts
     signals = __import__("asyncio").run(alpha.on_market_data(ctx))
     assert signals == []
     assert alpha.analyze_evidence(ctx)["strategy_fit"]["side"] == "NO_TRADE"

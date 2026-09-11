@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from crypto_trader.domain.identifiers import new_id
+from crypto_trader.llm.tools.registry import MAX_SELECTED_TOOLS
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import (
     ChiefTraderDecision,
@@ -23,7 +24,7 @@ from crypto_trader.market_data.opportunity.context import (
 class ToolSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tools: list[str] = Field(default_factory=list, max_length=12)
+    tools: list[str] = Field(default_factory=list, max_length=MAX_SELECTED_TOOLS)
 
 
 class ChiefTraderEngine:
@@ -32,15 +33,19 @@ class ChiefTraderEngine:
         self.model_version = model_version
 
     async def select_tools(
-        self, ctx: ChiefTraderContext, available_tools: list[str]
+        self, ctx: ChiefTraderContext, available_tools: list[str] | dict[str, str]
     ) -> tuple[list[str] | None, str | None]:
         if self.provider is None:
             return None, "LLM_UNAVAILABLE"
+        names = list(available_tools)
         prompt = (
             "You are the same Chief Trader that will make the final decision. "
             "Select only the factual read-only tools needed for this context. "
             "Return JSON only as {\"tools\":[...]}.\n"
+            f"Select at most {MAX_SELECTED_TOOLS} tools.\n"
             f"Symbol: {ctx.symbol}\nPositionState: {ctx.position_state.value}\n"
+            f"OpenPosition: {ctx.position_context}\n"
+            f"Portfolio: {ctx.portfolio_state}\nRisk: {ctx.risk_summary}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
         response = await self.provider.complete_json(
@@ -60,7 +65,7 @@ class ChiefTraderEngine:
             return None, "INVALID_TOOL_SELECTION"
         if len(selection.tools) != len(set(selection.tools)):
             return None, "INVALID_TOOL_SELECTION"
-        if any(tool not in available_tools for tool in selection.tools):
+        if any(tool not in names for tool in selection.tools):
             return None, "UNKNOWN_TOOL_SELECTED"
         return selection.tools, None
 

@@ -11,11 +11,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
+from crypto_trader.domain.money import round_tick
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
@@ -150,12 +151,14 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             portfolio_state=self._portfolio_state(ctx),
             risk_summary=self.risk_summary,
             opportunity_context=opportunity_context,
+            prepared_at=now.isoformat(),
         )
         if self.context_loader is not None:
             chief_ctx = await self.context_loader.enrich(chief_ctx)
         memory_refs = list(chief_ctx.memory_refs)
         research_refs = list(chief_ctx.research_refs)
         episode_refs = list(chief_ctx.episode_refs)
+        package = None
         try:
             if self.tool_chief is None:
                 decision = await self.chief.decide(chief_ctx)
@@ -199,6 +202,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             research_refs=research_refs,
             episode_refs=episode_refs,
             opportunity_lineage=lineage,
+            evidence_package=(package.model_dump(mode="json") if package else None),
         )
         if self.opportunity_board is not None:
             self.opportunity_board.record_decision(
@@ -317,9 +321,21 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             return []
         valuation = ctx.valuation
         try:
+            if decision.action.value == "LONG":
+                touch = ctx.book.best_ask()
+                entry_limit = (
+                    touch.price if touch else
+                    round_tick(mid, ctx.instrument.tick_size, ROUND_CEILING)
+                )
+            else:
+                touch = ctx.book.best_bid()
+                entry_limit = (
+                    touch.price if touch else
+                    round_tick(mid, ctx.instrument.tick_size, ROUND_FLOOR)
+                )
             plan, signal = await self.planner.create_entry_signal(
                 decision,
-                limit_price=mid,
+                limit_price=entry_limit,
                 quantity=sized.normalized_quantity,
                 execution_metadata={
                     "instrument_type": ctx.instrument.instrument_type,

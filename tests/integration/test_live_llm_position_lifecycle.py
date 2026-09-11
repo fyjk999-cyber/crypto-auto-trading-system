@@ -238,6 +238,13 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         assert patterns[0].sample_count == 1
 
     loader = ChiefContextLoader(database.session_factory)
+    before_close = ChiefTraderContext(
+        symbol="BTCUSDT", market_snapshot={}, regime="TREND", quant_evidence=[],
+        portfolio_state={}, risk_summary={},
+        prepared_at=(episode.closed_at - timedelta(microseconds=1)).isoformat(),
+    )
+    assert (await loader.enrich(before_close)).episode_refs == []
+    assert (await loader.load_tool("episode_search", before_close)).source_refs == []
     chief_context = ChiefTraderContext(
             symbol="BTCUSDT",
             market_snapshot={},

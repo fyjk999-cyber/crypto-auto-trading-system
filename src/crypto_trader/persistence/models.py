@@ -481,6 +481,7 @@ class LLMDecisionORM(Base):
     supporting_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
     contradicting_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
     tool_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    evidence_package_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     memory_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
     research_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
     episode_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)

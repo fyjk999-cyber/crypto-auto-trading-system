@@ -280,6 +280,10 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         book = self.books.get(order.symbol)
         if book is None:
             book = self.seed_book(order.symbol)
+        if book.symbol != order.symbol:
+            raise OrderRejected(
+                f"book symbol mismatch for {order.symbol}: book is {book.symbol}"
+            )
         instrument = self.instruments.get(order.symbol, self.default_instrument)
         remaining = order.quantity
         fill_events: list[ExchangeEvent] = []

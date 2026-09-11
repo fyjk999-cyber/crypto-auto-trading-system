@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
+
+from crypto_trader.factors.evaluator import FactorEvaluator
+from crypto_trader.factors.models import FactorPerformance
 
 
 @dataclass
@@ -84,33 +88,29 @@ class FactorTools:
             return FactorToolResult(False, {}, "FACTOR_SERVICE_UNAVAILABLE")
         perf = await self.get_factor_performance(factor, symbol)
         if not perf.ok or not isinstance(perf.data, dict):
-            return FactorToolResult(
-                True,
-                {
-                    "factor_name": factor,
-                    "symbol": symbol,
-                    "status": "EXPERIMENTAL",
-                    "sample_size": 0,
-                },
-                None,
+            return FactorToolResult(False, {}, "FACTOR_PERFORMANCE_UNAVAILABLE")
+        try:
+            performance = FactorPerformance(
+                factor_name=str(perf.data.get("factor_name") or factor),
+                symbol=str(perf.data.get("symbol") or symbol),
+                timeframe=str(perf.data.get("timeframe") or ""),
+                sample_size=int(perf.data.get("sample_size") or 0),
+                win_rate=Decimal(str(perf.data.get("win_rate") or "0")),
+                average_return=Decimal(
+                    str(perf.data.get("average_return") or "0")
+                ),
+                sharpe=Decimal(str(perf.data.get("sharpe") or "0")),
+                max_drawdown=Decimal(
+                    str(perf.data.get("max_drawdown") or "0")
+                ),
+                profit_factor=Decimal(
+                    str(perf.data.get("profit_factor") or "0")
+                ),
             )
-        data = perf.data
-        sample_size = int(data.get("sample_size", 0))
-        win_rate = float(data.get("win_rate", 0))
-        sharpe = float(data.get("sharpe", 0))
-        if sample_size < 30:
-            status = "EXPERIMENTAL"
-        elif sharpe < 0.2 or win_rate < 0.45:
-            status = "DEGRADING"
-        elif win_rate < 0.52:
-            status = "TESTING"
-        else:
-            status = "HEALTHY"
-        return FactorToolResult(
-            True,
-            {"factor_name": factor, "symbol": symbol, "status": status, "sample_size": sample_size},
-            None,
-        )
+        except Exception:
+            return FactorToolResult(False, {}, "FACTOR_PERFORMANCE_MALFORMED")
+        health = FactorEvaluator().evaluate(performance)
+        return FactorToolResult(True, health.to_dict(), None)
 
     async def get_trade_factor_attribution(self, trade_id: str) -> FactorToolResult:
         if self.factor_service is None:

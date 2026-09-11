@@ -22,7 +22,10 @@ def register_context_tools(
         "coin_profile",
         "factor_intelligence",
     ):
-        registry.register(name, _tool(loader, name))
+        registry.register(
+            name, _tool(loader, name),
+            description=f"Reviewed {name} records available at the decision as-of time",
+        )
 
 
 def _tool(loader: ChiefContextLoader, name: str):
@@ -30,6 +33,6 @@ def _tool(loader: ChiefContextLoader, name: str):
         chief_context = context.get("chief_context")
         if not isinstance(chief_context, ChiefTraderContext) or chief_context.symbol != symbol:
             raise ValueError("canonical ChiefTraderContext required")
-        return await loader.load_tool(name, chief_context)
+        return await loader.load_tool(name, chief_context, as_of=context["as_of"])
 
     return execute

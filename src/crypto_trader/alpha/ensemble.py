@@ -7,8 +7,6 @@ execution APIs.
 
 from __future__ import annotations
 
-from decimal import Decimal
-
 from crypto_trader.alpha.features import compute_features
 from crypto_trader.alpha.learning import FastLearning, SlowLearning
 from crypto_trader.alpha.market_data_engine import MarketDataEngine
@@ -79,14 +77,14 @@ class MultiStrategyAlpha(StrategyPlugin):
         feature, regime, alpha_ctx = prepared
         signals = [s.evaluate(alpha_ctx) for s in self.sub_strategies]
         meta = self.ml_meta.decide(
-            symbol=self.symbol, ts=ctx.clock_time, regime=regime, signals=signals, run_id=ctx.run_id
+            symbol=self.symbol, ts=feature.ts, regime=regime, signals=signals, run_id=ctx.run_id
         )
         self.last_meta = meta
         self.fast_learning.record_regime(regime.regime.value)
         return {
             "tool_name": "multi_strategy_alpha",
             "symbol": self.symbol,
-            "timestamp": ctx.clock_time.isoformat(),
+            "timestamp": feature.ts.isoformat(),
             "features": feature.model_dump(mode="json"),
             "signals": [self._signal_payload(signal) for signal in signals],
             "regime": regime.model_dump(mode="json"),
@@ -94,8 +92,8 @@ class MultiStrategyAlpha(StrategyPlugin):
             "supporting_evidence": list(meta.reason_codes),
             "contrary_evidence": [],
             "confidence_of_measurement": float(meta.confidence),
-            "data_quality": "FACTUAL_ORDERBOOK",
-            "source_refs": [f"orderbook:{self.symbol}", f"alpha:{self.version}"],
+            "data_quality": "FACTUAL_OKX_CLOSED",
+            "source_refs": [f"okx-candles:{self.symbol}", f"alpha:{self.version}"],
         }
 
     def analyze_tool(self, ctx: StrategyContext, name: str) -> dict:
@@ -109,11 +107,14 @@ class MultiStrategyAlpha(StrategyPlugin):
             return self._tool_result(name, {}, data_quality="UNAVAILABLE")
         feature, regime, alpha_ctx = prepared
         if name == "market_regime":
-            return self._tool_result(name, {"regime": regime.model_dump(mode="json")})
+            return self._tool_result(
+                name, {"regime": regime.model_dump(mode="json")}, timestamp=feature.ts
+            )
         if name == "volatility":
             values = feature.model_dump(mode="json")
             return self._tool_result(
-                name, {key: value for key, value in values.items() if "vol" in key.lower()}
+                name, {key: value for key, value in values.items() if "vol" in key.lower()},
+                timestamp=feature.ts,
             )
         strategy_name = {"trend": "trend_following"}.get(name, name)
         strategy = next((item for item in self.sub_strategies if item.name == strategy_name), None)
@@ -125,6 +126,7 @@ class MultiStrategyAlpha(StrategyPlugin):
             {"strategy_evidence": [self._signal_payload(signal)]},
             supporting=list(signal.reason_codes),
             confidence=float(signal.confidence),
+            timestamp=feature.ts,
         )
 
     def _prepare(self, ctx: StrategyContext):
@@ -132,25 +134,12 @@ class MultiStrategyAlpha(StrategyPlugin):
         mid = book.mid_price()
         if mid is None:
             return None
-        ts = ctx.clock_time
-        volume = Decimal("0")
-        best_bid = book.best_bid()
-        best_ask = book.best_ask()
-        if best_bid is not None:
-            volume += best_bid.quantity
-        if best_ask is not None:
-            volume += best_ask.quantity
-        # prevent duplicate/out-of-order ingestion for the same timestamp
         latest = self.mde.latest()
-        if latest is None or ts > latest.ts:
-            self.mde.ingest(
-                ts,
-                mid,
-                max(volume, Decimal("0.0001")),
-                oi=str(ctx.oi) if ctx.oi is not None else None,
-                funding=str(ctx.funding) if ctx.funding is not None else None,
-                basis=str(ctx.basis) if ctx.basis is not None else None,
-            )
+        # Only the candle feed advances this sequence. Order-book depth is
+        # not traded volume and decision attempts are not fixed-period bars.
+        if latest is None or latest.ts > ctx.clock_time or len(self.mde.bars) < 50:
+            return None
+        ts = latest.ts
         feature = compute_features(self.mde, self.symbol, ts)
         regime = self.regime_engine.classify(feature)
         alpha_ctx = AlphaContext(
@@ -160,11 +149,26 @@ class MultiStrategyAlpha(StrategyPlugin):
 
     def _direct_market_tool(self, ctx: StrategyContext, name: str) -> dict | None:
         if name == "funding":
-            return self._tool_result(name, {"funding": _optional(ctx.funding)})
+            return self._tool_result(
+                name,
+                {"funding": _optional(ctx.funding)},
+                data_quality="UNAVAILABLE" if ctx.funding is None else "FACTUAL_OKX",
+                timestamp=ctx.market_timestamp,
+            )
         if name == "open_interest":
-            return self._tool_result(name, {"open_interest": _optional(ctx.oi)})
+            return self._tool_result(
+                name,
+                {"open_interest": _optional(ctx.oi)},
+                data_quality="UNAVAILABLE" if ctx.oi is None else "FACTUAL_OKX",
+                timestamp=ctx.market_timestamp,
+            )
         if name == "basis":
-            return self._tool_result(name, {"basis": _optional(ctx.basis)})
+            return self._tool_result(
+                name,
+                {"basis": _optional(ctx.basis)},
+                data_quality="UNAVAILABLE" if ctx.basis is None else "FACTUAL_OKX",
+                timestamp=ctx.market_timestamp,
+            )
         if name not in {"orderbook", "liquidity"}:
             return None
         bid, ask = ctx.book.best_bid(), ctx.book.best_ask()
@@ -179,6 +183,7 @@ class MultiStrategyAlpha(StrategyPlugin):
                 "spread": str(ask.price - bid.price) if bid and ask else None,
             },
             data_quality=quality,
+            timestamp=ctx.market_timestamp or ctx.book.updated_at,
         )
 
     def _tool_result(
@@ -189,6 +194,7 @@ class MultiStrategyAlpha(StrategyPlugin):
         supporting: list[str] | None = None,
         confidence: float = 1.0,
         data_quality: str = "FACTUAL_OKX",
+        timestamp=None,
     ) -> dict:
         return {
             "tool_name": name,
@@ -198,6 +204,7 @@ class MultiStrategyAlpha(StrategyPlugin):
             "contrary_evidence": [],
             "confidence_of_measurement": confidence,
             "data_quality": data_quality,
+            "timestamp": timestamp,
             "source_refs": [f"okx:{self.symbol}", f"tool:{name}"],
         }
 

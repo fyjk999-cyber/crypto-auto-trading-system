@@ -16,11 +16,14 @@ from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
+from crypto_trader.llm.tools.factor_runtime import register_factor_runtime_tools
+from crypto_trader.llm.tools.market_history import register_market_history_tool
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
@@ -187,6 +190,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     chief = ChiefTraderEngine(provider=llm_provider)
     tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)
+    register_factor_runtime_tools(tools, FactorService(database.session_factory))
+    if feed_client is not None:
+        register_market_history_tool(tools, adapter.feed)
     tool_chief = ToolDrivenChiefTrader(chief, tools)
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
@@ -224,6 +230,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
 
     engine = TradingEngine(
+        evidence_router=evidence_router,
         settings=settings,
         database=database,
         adapter=adapter,

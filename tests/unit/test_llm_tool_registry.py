@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -127,6 +127,12 @@ async def test_real_alpha_selective_strategy_does_not_evaluate_unselected_strate
         Strategy("mean_reversion"),
     ]
     now = datetime.now(UTC)
+    for offset in range(50):
+        alpha.mde.ingest(
+            now - timedelta(minutes=50 - offset),
+            Decimal(100 + offset),
+            Decimal("10"),
+        )
     book = OrderBook(symbol="ETHUSDT", exchange="OKX")
     book.apply_snapshot(
         1,
@@ -192,7 +198,7 @@ async def test_tool_budget_partial_failure_preserves_other_factual_items():
 
     async def fast(symbol: str, context: dict) -> ToolEvidence:
         return ToolEvidence(
-            tool_name="fast", symbol=symbol, timestamp=datetime.now(UTC), features={"ok": 1},
+            tool_name="fast", symbol=symbol, timestamp=context["as_of"], features={"ok": 1},
             supporting_evidence=["fact"], contrary_evidence=[], confidence_of_measurement=1.0,
             data_quality="HEALTHY", source_refs=[],
         )

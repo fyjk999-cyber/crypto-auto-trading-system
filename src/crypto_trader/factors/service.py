@@ -56,7 +56,11 @@ class FactorService:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            return row.snapshot_json if row else None
+            if row is None:
+                return None
+            payload = dict(row.snapshot_json or {})
+            payload.setdefault("timestamp", row.created_at.isoformat())
+            return payload
 
     async def history(self, symbol: str, factor: str, limit: int = 100) -> list[dict]:
         async with self.session_factory() as session:
@@ -83,6 +87,56 @@ class FactorService:
                 }
                 for r in rows
             ]
+
+    async def recent_values(self, symbol: str, limit: int = 100) -> list[dict]:
+        """Return bounded, timestamped factor history for one exact symbol."""
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FactorValueORM)
+                    .where(FactorValueORM.symbol == symbol)
+                    .order_by(FactorValueORM.created_at.desc(), FactorValueORM.id.desc())
+                    .limit(max(1, min(limit, 200)))
+                )
+            ).scalars().all()
+        return [
+            {
+                "factor": row.factor,
+                "symbol": row.symbol,
+                "timeframe": row.timeframe,
+                "value": str(row.value),
+                "confidence": str(row.confidence),
+                "timestamp": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
+
+    async def recent_performance(self, symbol: str, limit: int = 25) -> list[dict]:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(FactorPerformanceORM)
+                    .where(FactorPerformanceORM.symbol == symbol)
+                    .order_by(
+                        FactorPerformanceORM.created_at.desc(),
+                        FactorPerformanceORM.id.desc(),
+                    )
+                    .limit(max(1, min(limit, 100)))
+                )
+            ).scalars().all()
+        return [
+            {
+                "factor_name": row.factor_name,
+                "symbol": row.symbol,
+                "timeframe": row.timeframe,
+                "sample_size": row.sample_size,
+                "win_rate": str(row.win_rate),
+                "sharpe": str(row.sharpe),
+                "profit_factor": str(row.profit_factor),
+                "timestamp": row.created_at.isoformat(),
+            }
+            for row in rows
+        ]
 
     async def ensure_registry(self) -> None:
         from crypto_trader.factors.registry import FactorRegistry

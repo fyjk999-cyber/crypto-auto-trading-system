@@ -17,6 +17,9 @@ Rules enforced here:
 
 from __future__ import annotations
 
+import asyncio
+from collections import OrderedDict
+from time import monotonic
 from typing import Any
 
 from crypto_trader.alpha.ensemble import MultiStrategyAlpha
@@ -49,8 +52,10 @@ class PerSymbolEvidenceRouter:
         self._alpha_params = dict(alpha_params or {})
         self._warmup_bars = int(warmup_bars)
         self._warmup_interval = warmup_interval
-        self._max_engines = int(max_engines)
-        self._engines: dict[str, MultiStrategyAlpha] = {}
+        self._max_engines = max(0, int(max_engines))
+        self._engines: OrderedDict[str, MultiStrategyAlpha] = OrderedDict()
+        self._last_refresh: dict[str, float] = {}
+        self._refresh_lock = asyncio.Lock()
         self._warmup_attempted: set[str] = set()
         self.stats = {
             "engines_created": 0,
@@ -87,26 +92,46 @@ class PerSymbolEvidenceRouter:
         """
         engine = self._engines.get(symbol)
         if engine is not None:
+            self._engines.move_to_end(symbol)
+            await self._refresh(symbol, engine)
             return engine
-        if len(self._engines) >= self._max_engines:
+        if self._max_engines == 0:
             self.stats["resolve_misses"] += 1
             return None
+        if len(self._engines) >= self._max_engines:
+            evicted, _ = self._engines.popitem(last=False)
+            self._warmup_attempted.discard(evicted)
+            self._last_refresh.pop(evicted, None)
         engine = MultiStrategyAlpha(symbol=symbol, **self._alpha_params)
         self._engines[symbol] = engine
         self.stats["engines_created"] += 1
-        if symbol not in self._warmup_attempted:
-            self._warmup_attempted.add(symbol)
-            if self._feed is not None and hasattr(self._feed, "warmup"):
-                try:
-                    await self._feed.warmup(
-                        engine.mde, symbol, bars=self._warmup_bars, interval=self._warmup_interval
-                    )
-                    self.stats["warmups_ok"] += 1
-                except Exception:
-                    # Factual warmup failure is explicit at the feed; keep the
-                    # engine but let tools report their real data quality.
-                    self.stats["warmups_failed"] += 1
+        await self._refresh(symbol, engine)
         return engine
+
+    async def _refresh(self, symbol: str, engine: MultiStrategyAlpha) -> None:
+        if self._feed is None or not hasattr(self._feed, "warmup"):
+            return
+        async with self._refresh_lock:
+            if monotonic() - self._last_refresh.get(symbol, float("-inf")) < 30:
+                return
+            self._last_refresh[symbol] = monotonic()
+            try:
+                loaded = await asyncio.wait_for(
+                    self._feed.warmup(
+                        engine.mde, symbol, bars=self._warmup_bars,
+                        interval=self._warmup_interval,
+                    ), timeout=10,
+                )
+                self.stats["warmups_ok" if loaded else "warmups_failed"] += 1
+            except Exception:
+                self.stats["warmups_failed"] += 1
+
+    async def run_forever(self) -> None:
+        """Advance resident candle histories even when Chief selects no indicators."""
+        while True:
+            for symbol, engine in list(self._engines.items()):
+                await self._refresh(symbol, engine)
+            await asyncio.sleep(5)
 
     # ------------------------------------------------------- evidence surface
     def analyze_evidence(self, ctx: StrategyContext) -> dict:

@@ -40,6 +40,9 @@ async def test_bootstrap_builds_and_starts_single_core(database):
         "research_retrieval",
         "coin_profile",
         "factor_intelligence",
+        "factor_snapshot",
+        "factor_history",
+        "factor_performance",
     }.issubset(bundle.position_manager.tool_chief.tools.available())
     assert bundle.position_manager.__class__.__name__ == "LiveLLMPositionManager"
     assert not hasattr(bundle, "ai_position_bridge")

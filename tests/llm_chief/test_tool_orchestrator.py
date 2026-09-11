@@ -106,6 +106,36 @@ async def test_tool_failure_is_factual_unavailable_evidence_not_fabricated():
     assert package.items[0].supporting_evidence == []
 
 
+async def test_market_regime_is_applied_before_regime_dependent_memory_tool():
+    registry = LLMToolRegistry()
+
+    async def regime(symbol, payload):
+        return ToolEvidence(
+            "market_regime", symbol, payload["as_of"],
+            {"regime": {"regime": "TREND"}}, [], [], 1, "FACTUAL", [],
+        )
+
+    async def patterns(symbol, payload):
+        assert payload["chief_context"].regime == "TREND"
+        return ToolEvidence(
+            "factor_intelligence", symbol, payload["as_of"],
+            {"patterns": []}, [], [], 1, "FACTUAL_REVIEWED", [],
+        )
+
+    registry.register("market_regime", regime)
+    registry.register("factor_intelligence", patterns)
+    provider = Provider([
+        {"tools": ["factor_intelligence", "market_regime"]},
+        {"action": "WAIT", "market_regime": "TREND"},
+    ])
+    decision, package = await ToolDrivenChiefTrader(
+        ChiefTraderEngine(provider=provider), registry
+    ).decide(context(), tool_context={}, now=datetime.now(UTC))
+    assert decision.market_regime == "TREND"
+    assert package is not None
+    assert package.selected_tools == ["factor_intelligence", "market_regime"]
+
+
 async def test_stale_evidence_is_marked_and_unknown_tool_fails_closed():
     async def stale(symbol, _context):
         return ToolEvidence(
@@ -147,7 +177,7 @@ async def test_tool_context_receives_canonical_chief_context_and_categorizes_ref
         return ToolEvidence(
             tool_name="memory_search",
             symbol=symbol,
-            timestamp=datetime.now(UTC),
+            timestamp=payload["as_of"],
             features={"lessons": ["wait for confirmation"]},
             supporting_evidence=[],
             contrary_evidence=[],

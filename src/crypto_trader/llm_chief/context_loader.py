@@ -27,6 +27,7 @@ class ChiefContextLoader:
         self.limit = limit
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
+        as_of = _context_as_of(context)
         async with self.session_factory() as session:
             episodes = (
                 await session.execute(
@@ -34,6 +35,7 @@ class ChiefContextLoader:
                     .where(
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.closed_at <= as_of,
                     )
                     .order_by(
                         case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
@@ -52,13 +54,15 @@ class ChiefContextLoader:
                 reviews = (
                     await session.execute(
                         select(AITradeReviewORM).where(
-                            AITradeReviewORM.episode_id.in_(episode_ids)
+                            AITradeReviewORM.episode_id.in_(episode_ids),
+                            AITradeReviewORM.created_at <= as_of,
                         )
                     )
                 ).scalars().all()
             research = (
                 await session.execute(
                     select(ResearchReportORM)
+                    .where(ResearchReportORM.created_at <= as_of)
                     .order_by(ResearchReportORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -66,6 +70,7 @@ class ChiefContextLoader:
             compressed = (
                 await session.execute(
                     select(AICompressedExperienceORM)
+                    .where(AICompressedExperienceORM.created_at <= as_of)
                     .order_by(AICompressedExperienceORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -73,7 +78,8 @@ class ChiefContextLoader:
             profile = (
                 await session.execute(
                     select(AICoinProfileORM).where(
-                        AICoinProfileORM.symbol == context.symbol
+                        AICoinProfileORM.symbol == context.symbol,
+                        AICoinProfileORM.updated_at <= as_of,
                     )
                 )
             ).scalar_one_or_none()
@@ -81,6 +87,7 @@ class ChiefContextLoader:
                 await session.execute(
                     select(AIMarketPatternORM)
                     .where(AIMarketPatternORM.regime == context.regime)
+                    .where(AIMarketPatternORM.created_at <= as_of)
                     .order_by(AIMarketPatternORM.sample_count.desc())
                     .limit(self.limit)
                 )
@@ -147,7 +154,7 @@ class ChiefContextLoader:
         )
 
     async def load_tool(
-        self, name: str, context: ChiefTraderContext
+        self, name: str, context: ChiefTraderContext, *, as_of: datetime | None = None
     ) -> ToolEvidence:
         """Load only the learned evidence explicitly selected by ChiefTrader."""
 
@@ -161,7 +168,7 @@ class ChiefContextLoader:
         loader = loaders.get(name)
         if loader is None:
             raise ValueError(f"unknown learned-context tool: {name}")
-        finding, refs, timestamp = await loader(context)
+        finding, refs, timestamp = await loader(context, as_of or _context_as_of(context))
         return ToolEvidence(
             tool_name=name,
             symbol=context.symbol,
@@ -174,7 +181,7 @@ class ChiefContextLoader:
             source_refs=refs,
         )
 
-    async def _episode_evidence(self, context: ChiefTraderContext):
+    async def _episode_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -182,6 +189,7 @@ class ChiefContextLoader:
                     .where(
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.closed_at <= as_of,
                     )
                     .order_by(
                         case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
@@ -209,7 +217,7 @@ class ChiefContextLoader:
         } if rows else {}
         return finding, [f"episode:{row.episode_id}" for row in rows], _latest(rows, "closed_at")
 
-    async def _memory_evidence(self, context: ChiefTraderContext):
+    async def _memory_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             reviews = (
                 await session.execute(
@@ -218,7 +226,10 @@ class ChiefContextLoader:
                         TradeEpisodeORM,
                         TradeEpisodeORM.episode_id == AITradeReviewORM.episode_id,
                     )
-                    .where(TradeEpisodeORM.symbol == context.symbol)
+                    .where(
+                        TradeEpisodeORM.symbol == context.symbol,
+                        AITradeReviewORM.created_at <= as_of,
+                    )
                     .order_by(AITradeReviewORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -226,6 +237,7 @@ class ChiefContextLoader:
             compressed = (
                 await session.execute(
                     select(AICompressedExperienceORM)
+                    .where(AICompressedExperienceORM.created_at <= as_of)
                     .order_by(AICompressedExperienceORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -255,11 +267,12 @@ class ChiefContextLoader:
         )
         return finding, refs, timestamp
 
-    async def _research_evidence(self, _context: ChiefTraderContext):
+    async def _research_evidence(self, _context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(ResearchReportORM)
+                    .where(ResearchReportORM.created_at <= as_of)
                     .order_by(ResearchReportORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -277,11 +290,14 @@ class ChiefContextLoader:
         } if rows else {}
         return finding, [f"research:{row.research_id}" for row in rows], _latest(rows, "created_at")
 
-    async def _coin_profile_evidence(self, context: ChiefTraderContext):
+    async def _coin_profile_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             row = (
                 await session.execute(
-                    select(AICoinProfileORM).where(AICoinProfileORM.symbol == context.symbol)
+                    select(AICoinProfileORM).where(
+                        AICoinProfileORM.symbol == context.symbol,
+                        AICoinProfileORM.updated_at <= as_of,
+                    )
                 )
             ).scalar_one_or_none()
         finding = (
@@ -304,12 +320,15 @@ class ChiefContextLoader:
             row.updated_at if row else None,
         )
 
-    async def _pattern_evidence(self, context: ChiefTraderContext):
+    async def _pattern_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(AIMarketPatternORM)
-                    .where(AIMarketPatternORM.regime == context.regime)
+                    .where(
+                        AIMarketPatternORM.regime == context.regime,
+                        AIMarketPatternORM.created_at <= as_of,
+                    )
                     .order_by(AIMarketPatternORM.sample_count.desc())
                     .limit(self.limit)
                 )
@@ -334,3 +353,8 @@ class ChiefContextLoader:
 
 def _latest(rows, field: str):
     return max((getattr(row, field) for row in rows), default=None)
+
+
+def _context_as_of(context: ChiefTraderContext) -> datetime:
+    parsed = datetime.fromisoformat(context.prepared_at)
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)

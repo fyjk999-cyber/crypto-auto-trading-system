@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+MAX_SELECTED_TOOLS = 8
+
 
 @dataclass(frozen=True)
 class ToolEvidence:
@@ -63,14 +65,19 @@ class LLMToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, EvidenceTool] = {}
+        self._descriptions: dict[str, str] = {}
 
-    def register(self, name: str, tool: EvidenceTool) -> None:
+    def register(self, name: str, tool: EvidenceTool, *, description: str = "") -> None:
         if not name or name in self._tools:
             raise ValueError(f"duplicate or invalid LLM evidence tool: {name}")
         self._tools[name] = tool
+        self._descriptions[name] = description
 
     def available(self) -> list[str]:
         return sorted(self._tools)
+
+    def catalog(self) -> dict[str, str]:
+        return {name: self._descriptions[name] for name in self.available()}
 
     async def call(
         self,
@@ -121,16 +128,22 @@ class LLMToolRegistry:
         now: datetime,
         max_age_seconds: float = 30.0,
         timeout_seconds: float = 10.0,
-        max_tools: int = 8,
+        max_tools: int = MAX_SELECTED_TOOLS,
+        overall_timeout_seconds: float = 30.0,
     ) -> DynamicEvidencePackage:
         if len(names) != len(set(names)) or any(name not in self._tools for name in names):
             raise ValueError("tool selection contains unknown or duplicate tools")
         if len(names) > max_tools:
             raise ValueError("tool budget exceeded")
         items: list[EvidenceItem] = []
+        deadline = asyncio.get_running_loop().time() + overall_timeout_seconds
         for name in names:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise ValueError("overall tool deadline exceeded")
             evidence = await self.call(
-                name, symbol, context, timeout_seconds=timeout_seconds
+                name, symbol, {**context, "as_of": now},
+                timeout_seconds=min(timeout_seconds, remaining),
             )
             if evidence.symbol != symbol:
                 evidence = ToolEvidence(
@@ -149,8 +162,17 @@ class LLMToolRegistry:
                 if evidence.timestamp.tzinfo is not None
                 else evidence.timestamp.replace(tzinfo=UTC)
             )
-            age = max(0.0, (now.astimezone(UTC) - timestamp).total_seconds())
+            age = (now.astimezone(UTC) - timestamp).total_seconds()
+            if age < 0:
+                evidence = ToolEvidence(
+                    tool_name=name, symbol=symbol, timestamp=timestamp,
+                    features={}, supporting_evidence=[],
+                    contrary_evidence=["future evidence rejected"],
+                    confidence_of_measurement=0.0, data_quality="UNAVAILABLE", source_refs=[],
+                )
             freshness = "FRESH" if age <= max_age_seconds else "STALE"
+            if age < 0:
+                freshness = "FUTURE_REJECTED"
             items.append(
                 EvidenceItem(
                     tool_name=evidence.tool_name,
@@ -165,4 +187,6 @@ class LLMToolRegistry:
                     source_refs=evidence.source_refs,
                 )
             )
-        return DynamicEvidencePackage(symbol=symbol, selected_tools=names, items=items)
+        return DynamicEvidencePackage(
+            symbol=symbol, selected_tools=names, items=items, created_at=now
+        )

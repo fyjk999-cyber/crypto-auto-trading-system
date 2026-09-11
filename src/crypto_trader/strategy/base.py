@@ -19,6 +19,7 @@ class StrategyContext:
     account: Account
     positions: dict[str, Position]
     clock_time: datetime
+    market_timestamp: datetime | None = None
     run_id: str | None = None
     mark_price: Decimal | None = None
     index_price: Decimal | None = None

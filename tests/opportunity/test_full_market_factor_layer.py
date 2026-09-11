@@ -427,6 +427,47 @@ async def test_evidence_router_is_strictly_per_symbol():
     assert evidence["data_quality"] == "UNAVAILABLE"
 
 
+async def test_evidence_router_evicts_lru_symbol_instead_of_starving_new_market():
+    router = PerSymbolEvidenceRouter(feed=None, max_engines=2)
+    first = await router.resolve("BTCUSDT")
+    await router.resolve("ETHUSDT")
+    await router.resolve("BTCUSDT")  # BTC is now most recently used
+    sol = await router.resolve("SOLUSDT")
+    assert sol is not None and sol.symbol == "SOLUSDT"
+    assert router.get("ETHUSDT") is None
+    assert router.get("BTCUSDT") is first
+
+
+async def test_evidence_router_rotates_over_40_symbols_without_starvation():
+    router = PerSymbolEvidenceRouter(feed=None, max_engines=40)
+    for index in range(45):
+        await router.resolve(f"SYM{index}USDT")
+    resident = set(router.known_symbols())
+    assert len(resident) == 40
+    assert not {f"SYM{index}USDT" for index in range(5)} & resident
+    assert "SYM44USDT" in resident
+
+
+async def test_evidence_router_retries_failed_warmup_after_bounded_delay():
+    class FlakyFeed:
+        def __init__(self):
+            self.calls = 0
+
+        async def warmup(self, *args, **kwargs):
+            self.calls += 1
+            return self.calls > 1
+
+    feed = FlakyFeed()
+    router = PerSymbolEvidenceRouter(feed=feed)
+    engine = await router.resolve("BTCUSDT")
+    assert engine is not None
+    assert router.stats["warmups_failed"] == 1
+    router._last_refresh["BTCUSDT"] -= 31
+    await router.resolve("BTCUSDT")
+    assert router.stats["warmups_ok"] == 1
+    assert feed.calls == 2
+
+
 async def test_board_counters_and_lineage_survive_storage(database):
     """§29/§30: observability proves traded-with vs traded-without factors."""
     events = []

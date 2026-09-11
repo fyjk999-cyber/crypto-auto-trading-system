@@ -119,12 +119,14 @@ class LiveLLMPositionManager:
             risk_summary=self.risk_summary,
             position_state=PositionState.OPEN,
             position_context=position_context,
+            prepared_at=now.isoformat(),
         )
         if self.context_loader is not None:
             chief_ctx = await self.context_loader.enrich(chief_ctx)
         memory_refs = list(chief_ctx.memory_refs)
         research_refs = list(chief_ctx.research_refs)
         episode_refs = list(chief_ctx.episode_refs)
+        package = None
         try:
             if self.tool_chief is None:
                 decision = await self.chief.decide(chief_ctx)
@@ -155,6 +157,7 @@ class LiveLLMPositionManager:
             episode_refs=episode_refs,
             parent_decision_id=plan.decision_id,
             position_context=position_context,
+            evidence_package=(package.model_dump(mode="json") if package else None),
         )
         await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
         max_hold_reached = (

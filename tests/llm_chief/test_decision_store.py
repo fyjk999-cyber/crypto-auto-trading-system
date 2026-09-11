@@ -97,6 +97,37 @@ async def test_store_rejects_conflicting_reuse_of_application_decision_id(databa
     assert persisted.run_id == "run-1"
 
 
+async def test_store_persists_immutable_evidence_package(database):
+    store = LLMDecisionStore(database.session_factory)
+    item = decision("NO_TRADE")
+    package = {
+        "symbol": "ETHUSDT",
+        "selected_tools": ["trend"],
+        "items": [{"tool_name": "trend", "finding": {"return_20": "0.1"}}],
+    }
+    stored = await store.save(
+        item, run_id="run-evidence", prompt_version="prompt-v1",
+        evidence_package=package,
+    )
+    assert stored.evidence_package == package
+    with pytest.raises(ValueError, match="evidence_package_json"):
+        await store.save(
+            item, run_id="run-evidence", prompt_version="prompt-v1",
+            evidence_package={**package, "selected_tools": ["momentum"]},
+        )
+
+
+async def test_fail_closed_decision_has_no_fabricated_evidence_package(database):
+    store = LLMDecisionStore(database.session_factory)
+    stored = await store.save(
+        decision("NO_TRADE"),
+        run_id="run-fail-closed",
+        prompt_version="prompt-v1",
+        evidence_package=None,
+    )
+    assert stored.evidence_package is None
+
+
 class InvalidProvider:
     name = "deepseek"
     model = "deepseek-v4-pro"

@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.config import Settings
 from crypto_trader.domain.clock import Clock, SystemClock
@@ -29,6 +30,7 @@ from crypto_trader.domain.enums import (
 )
 from crypto_trader.domain.errors import (
     ExchangeError,
+    InvalidStateTransition,
     LeaseNotHeld,
     MarketDataUnhealthy,
     OrderRejected,
@@ -112,6 +114,7 @@ class TradingEngine:
         funding_coverage: FundingCoverageService | None = None,
         valuation_service: ValuationService | None = None,
         funding_supervisor=None,
+        evidence_router=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -126,6 +129,7 @@ class TradingEngine:
             portfolio=portfolio, ledger=ledger
         )
         self.funding_supervisor = funding_supervisor
+        self.evidence_router = evidence_router
         # Candidate valuation batches are computed for strategy context
         # (Sizing) and persisted only when a factual signal reaches Risk, so
         # Sizing and Risk reference the exact same valuation_id.
@@ -218,6 +222,14 @@ class TradingEngine:
             asyncio.create_task(self._event_loop(), name="engine-events"),
             asyncio.create_task(self._tick_loop(), name="engine-ticks"),
         ]
+        if self.evidence_router is not None:
+            self._tasks.append(asyncio.create_task(
+                self.evidence_router.run_forever(), name="closed-candle-evidence"
+            ))
+        if self.position_manager is not None:
+            self._tasks.append(asyncio.create_task(
+                self._position_loop(), name="llm-position-reviews"
+            ))
         if self.require_lease:
             self._tasks.append(asyncio.create_task(self._lease_loop(), name="engine-lease"))
         if self.funding_supervisor is not None:
@@ -336,7 +348,7 @@ class TradingEngine:
         while True:
             await asyncio.sleep(self.settings.engine_tick_seconds)
             try:
-                await self.tick()
+                await self.tick(include_position_reviews=False)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -348,6 +360,17 @@ class TradingEngine:
                     run_id=self.run_id,
                     after={"error_type": type(exc).__name__},
                 )
+
+    async def _position_loop(self) -> None:
+        """Review open positions independently from potentially slow entry calls."""
+        while True:
+            try:
+                await self._review_positions_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.health.set("position_manager", False, type(exc).__name__)
+            await asyncio.sleep(self.settings.engine_tick_seconds)
 
     async def _lease_loop(self) -> None:
         # Renew immediately (t=0) and then on the configured cadence so the
@@ -394,7 +417,7 @@ class TradingEngine:
             self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]))
 
     # ------------------------------------------------------------------ tick
-    async def tick(self) -> list[RiskDecision]:
+    async def tick(self, *, include_position_reviews: bool = True) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
         for strategy in self.strategies:
             desired_symbol = None
@@ -421,27 +444,37 @@ class TradingEngine:
                 decision = await self.process_signal(signal)
                 if decision is not None:
                     decisions.append(decision)
-        if self.position_manager is not None:
-            positions = await self.portfolio.get_positions()
-            for position in positions.values():
+        if include_position_reviews:
+            decisions.extend(await self._review_positions_once())
+        self.health.set("engine_loop", True)
+        return decisions
+
+    async def _review_positions_once(self) -> list[RiskDecision]:
+        if self.position_manager is None:
+            return []
+        positions = await self.portfolio.get_positions()
+        semaphore = asyncio.Semaphore(4)
+
+        async def review_one(position):
+            async with semaphore:
                 if position.quantity == 0:
-                    continue
+                    return None
                 ctx = await self._strategy_context(position.symbol)
                 if ctx is None:
-                    continue
+                    return None
                 try:
                     signal = await self.position_manager.review(ctx, position)
                 except Exception as exc:
                     self.consecutive_failures += 1
                     self.health.set("position_manager", False, type(exc).__name__)
-                    continue
+                    return None
                 self.health.set("position_manager", True)
                 if signal is not None:
-                    decision = await self.process_signal(signal)
-                    if decision is not None:
-                        decisions.append(decision)
-        self.health.set("engine_loop", True)
-        return decisions
+                    return await self.process_signal(signal)
+                return None
+
+        reviewed = await asyncio.gather(*(review_one(position) for position in positions.values()))
+        return [decision for decision in reviewed if decision is not None]
 
     def _remember_pending_valuation(self, batch: ValuationBatch) -> None:
         self._pending_valuations[batch.valuation_id] = batch
@@ -621,6 +654,10 @@ class TradingEngine:
             account=account,
             positions=positions,
             clock_time=self.clock.now(),
+            market_timestamp=(
+                market_state.exchange_timestamp or market_state.timestamp
+                if market_state else book.updated_at
+            ),
             run_id=self.run_id,
             mark_price=market_state.mark_price if market_state else None,
             index_price=market_state.index_price if market_state else None,
@@ -1248,25 +1285,12 @@ class TradingEngine:
             )
             return risk_decision
 
-        await self.order_manager.ack(
-            order.internal_order_id, exchange_order.exchange_order_id, event_id=new_id("evt")
+        await self._sync_submitted_order_state(
+            order,
+            exchange_order,
+            client_order_id=client_order_id,
+            run_id=run_id,
         )
-        if exchange_order.status == OrderStatus.OPEN:
-            await self.order_manager.opened(order.internal_order_id, event_id=new_id("evt"))
-        elif exchange_order.status == OrderStatus.CANCELLED:
-            await self.order_manager.cancel_confirm(order.internal_order_id, event_id=new_id("evt"))
-            await self._sync_terminal_entry_plan(
-                order, TradePlanState.CANCELLED, "ORDER_CANCELLED"
-            )
-        elif exchange_order.status == OrderStatus.REJECTED:
-            await self.order_manager.reject(
-                order.internal_order_id,
-                exchange_order.rejection_reason or "rejected on exchange",
-                event_id=new_id("evt"),
-            )
-            await self._sync_terminal_entry_plan(
-                order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
-            )
         # FILLED/PARTIALLY_FILLED are applied exclusively through the event
         # stream to guarantee fill_id uniqueness; recovery reconciles later.
         await self.audit.log(
@@ -1281,6 +1305,55 @@ class TradingEngine:
         )
         self.health.set("submission", True)
         return risk_decision
+
+    async def _sync_submitted_order_state(
+        self, order, exchange_order, *, client_order_id: str, run_id: str | None
+    ) -> None:
+        """Best-effort post-submit sync; the event stream is authoritative.
+
+        The simulator emits ack/open/fill inline while submit_order is in
+        flight, so the event task may already have applied the transition.
+        Duplicate transitions must not abort the tick after the exchange has
+        already mutated its book.
+        """
+        try:
+            await self.order_manager.ack(
+                order.internal_order_id,
+                exchange_order.exchange_order_id,
+                event_id=new_id("evt"),
+            )
+            if exchange_order.status == OrderStatus.OPEN:
+                await self.order_manager.opened(
+                    order.internal_order_id, event_id=new_id("evt")
+                )
+            elif exchange_order.status == OrderStatus.CANCELLED:
+                await self.order_manager.cancel_confirm(
+                    order.internal_order_id, event_id=new_id("evt")
+                )
+                await self._sync_terminal_entry_plan(
+                    order, TradePlanState.CANCELLED, "ORDER_CANCELLED"
+                )
+            elif exchange_order.status == OrderStatus.REJECTED:
+                await self.order_manager.reject(
+                    order.internal_order_id,
+                    exchange_order.rejection_reason or "rejected on exchange",
+                    event_id=new_id("evt"),
+                )
+                await self._sync_terminal_entry_plan(
+                    order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
+                )
+        except (InvalidStateTransition, IntegrityError) as exc:
+            await self.audit.log(
+                "ORDER_STATE_SYNC_SKIPPED",
+                target=client_order_id,
+                run_id=run_id,
+                order_id=order.internal_order_id,
+                exchange_order_id=exchange_order.exchange_order_id,
+                after={
+                    "reason": str(exc),
+                    "exchange_status": exchange_order.status.value,
+                },
+            )
 
     async def _apply_exchange_order_fill(self, local: object, exchange_order: object) -> None:
         if exchange_order.filled_quantity <= local.filled_quantity:

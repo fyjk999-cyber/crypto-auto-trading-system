@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from crypto_trader.llm.tools.registry import LLMToolRegistry, ToolEvidence
@@ -31,7 +32,10 @@ def build_canonical_tool_registry(evidence) -> LLMToolRegistry:
         "orderbook",
         "liquidity",
     ):
-        registry.register(name, _tool(evidence, name))
+        registry.register(
+            name, _tool(evidence, name),
+            description=f"Read-only factual {name} evidence for the exact symbol and as-of time",
+        )
     return registry
 
 
@@ -62,10 +66,13 @@ def _tool(evidence, name: str):
         sources = [str(ref) for ref in analysis.get("source_refs", [])]
         if f"tool:{name}" not in sources:
             sources.append(f"tool:{name}")
+        timestamp = analysis.get("timestamp") or ctx.market_timestamp or ctx.clock_time
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp)
         return ToolEvidence(
             tool_name=name,
             symbol=symbol,
-            timestamp=ctx.clock_time,
+            timestamp=timestamp,
             features=features,
             supporting_evidence=[
                 str(reason) for reason in analysis.get("supporting_evidence", [])

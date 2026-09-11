@@ -186,6 +186,8 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         book = self.books.get(order.symbol)
         if book is None or book.best_bid() is None or book.best_ask() is None:
             raise OrderRejected("MARKET_DATA_UNAVAILABLE")
+        if book.symbol != order.symbol:
+            raise OrderRejected("MARKET_DATA_SYMBOL_MISMATCH")
         return await super().submit_order(order)
 
     async def disconnect(self) -> None:

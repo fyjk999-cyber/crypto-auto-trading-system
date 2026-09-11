@@ -33,6 +33,7 @@ class LLMDecisionRecord:
     opportunity_source: str | None = None
     factor_evidence_present: bool | None = None
     triggered_factors: list[Any] = dataclass_field(default_factory=list)
+    evidence_package: dict[str, Any] | None = None
 
 
 class LLMDecisionStore:
@@ -52,6 +53,7 @@ class LLMDecisionStore:
         parent_decision_id: str | None = None,
         position_context: dict[str, Any] | None = None,
         opportunity_lineage: dict[str, Any] | None = None,
+        evidence_package: dict[str, Any] | None = None,
     ) -> LLMDecisionRecord:
         lineage = opportunity_lineage or {}
         position = position_context or {}
@@ -74,6 +76,7 @@ class LLMDecisionStore:
                     supporting_evidence_json=decision.supporting_evidence,
                     contradicting_evidence_json=decision.contradicting_evidence,
                     tool_refs_json=tool_refs or [],
+                    evidence_package_json=evidence_package,
                     memory_refs_json=memory_refs or decision.memory_refs,
                     research_refs_json=research_refs or decision.knowledge_refs,
                     episode_refs_json=episode_refs or decision.pattern_refs,
@@ -113,6 +116,7 @@ class LLMDecisionStore:
                     "parent_decision_id": parent_decision_id,
                     "original_trade_plan_id": position.get("trade_plan_id"),
                     "original_entry_decision_id": position.get("entry_decision_id"),
+                    "evidence_package_json": evidence_package,
                 }
                 conflicts = [
                     field
@@ -185,6 +189,7 @@ class LLMDecisionStore:
             opportunity_source=row.opportunity_source,
             factor_evidence_present=row.factor_evidence_present,
             triggered_factors=list(row.triggered_factors_json or []),
+            evidence_package=row.evidence_package_json,
         )
 
 
