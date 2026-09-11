@@ -23,8 +23,14 @@ def register_context_tools(
         "factor_intelligence",
     ):
         registry.register(
-            name, _tool(loader, name),
+            name,
+            _tool(loader, name),
             description=f"Reviewed {name} records available at the decision as-of time",
+            version="reviewed-context-1.1.0",
+            source="CANONICAL_REVIEWED_PERSISTENCE",
+            data_time_semantics=(
+                "records must exist by decision as_of; symbol/regime applicability is enforced"
+            ),
         )
 
 

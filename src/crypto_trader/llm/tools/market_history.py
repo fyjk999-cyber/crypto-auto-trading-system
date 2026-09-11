@@ -12,6 +12,11 @@ def register_market_history_tool(registry: LLMToolRegistry, feed) -> None:
     registry.register(
         "multi_timeframe_history", _tool(feed),
         description="Up to 60 factual closed OKX candles for 1m, 15m, and 1H",
+        version="okx-closed-candles-1.1.0",
+        source="OKX_PUBLIC_CANDLES",
+        data_time_semantics=(
+            "confirm=1 closed candles only; candle timestamp must be <= decision as_of"
+        ),
     )
 
 
@@ -25,7 +30,14 @@ def _tool(feed):
                 {
                     "timestamp": datetime.fromtimestamp(int(row[0]) / 1000, tz=UTC).isoformat(),
                     "open": str(row[1]), "high": str(row[2]), "low": str(row[3]),
-                    "close": str(row[4]), "volume": str(row[5]),
+                    "close": str(row[4]),
+                    # OKX SWAP candle schema:
+                    # vol=contracts, volCcy=base currency, volCcyQuote=quote currency.
+                    "volume": str(row[5]),
+                    "volume_contracts": str(row[5]),
+                    "volume_base": str(row[6]),
+                    "volume_quote": str(row[7]),
+                    "volume_unit": "OKX_SWAP_CONTRACTS",
                 }
                 for row in reversed(rows)
                 if isinstance(row, list) and len(row) >= 9 and str(row[8]) == "1"

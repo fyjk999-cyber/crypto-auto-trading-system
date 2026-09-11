@@ -182,12 +182,56 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         return state
 
     async def submit_order(self, order: Order) -> Order:
-        """Reject PAPER_REAL_MARKET orders without a factual same-symbol book."""
-        book = self.books.get(order.symbol)
-        if book is None or book.best_bid() is None or book.best_ask() is None:
-            raise OrderRejected("MARKET_DATA_UNAVAILABLE")
-        if book.symbol != order.symbol:
-            raise OrderRejected("MARKET_DATA_SYMBOL_MISMATCH")
+        """Refresh factual same-symbol OKX depth immediately before PAPER matching.
+
+        A previously cached top-of-book must never become the source of a later
+        fill. Provider-symbol conversion and two-sided depth validation happen
+        on every submit; any refresh failure rejects the order rather than
+        falling back to a synthetic or stale book.
+        """
+
+        try:
+            provider_symbol = self.feed.provider_symbol(order.symbol)
+            payload = await self.feed.client.get_orderbook(provider_symbol)
+            rows = payload.get("data") if isinstance(payload, dict) else None
+            raw = rows[0] if isinstance(rows, list) and rows else None
+            if not isinstance(raw, dict):
+                raise OrderRejected(f"empty factual orderbook for {order.symbol}")
+
+            def levels(values) -> list[tuple[Decimal, Decimal]]:
+                parsed: list[tuple[Decimal, Decimal]] = []
+                for value in values:
+                    if not isinstance(value, (list, tuple)) or len(value) < 2:
+                        continue
+                    price = D(value[0])
+                    quantity = D(value[1])
+                    if price > 0 and quantity > 0:
+                        parsed.append((price, quantity))
+                return parsed
+
+            bids = levels(raw.get("bids", []))
+            asks = levels(raw.get("asks", []))
+            if not bids or not asks:
+                raise OrderRejected(f"no two-sided factual market for {order.symbol}")
+
+            book = OrderBook(symbol=order.symbol, exchange="OKX")
+            book.apply_snapshot(
+                int(raw.get("ts", "0")) or int(datetime.now(UTC).timestamp() * 1000),
+                bids,
+                asks,
+                now=datetime.now(UTC),
+            )
+            if book.symbol != order.symbol:
+                raise OrderRejected("MARKET_DATA_SYMBOL_MISMATCH")
+            self.books[order.symbol] = book
+            self.sequence[order.symbol] = book.sequence or 0
+        except OrderRejected:
+            raise
+        except Exception as exc:
+            raise OrderRejected(
+                f"real market data unavailable for {order.symbol}: {type(exc).__name__}"
+            ) from exc
+
         return await super().submit_order(order)
 
     async def disconnect(self) -> None:

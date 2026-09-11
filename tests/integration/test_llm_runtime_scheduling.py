@@ -68,3 +68,39 @@ async def test_slow_entry_llm_does_not_block_position_review(database):
     await asyncio.wait_for(review_task, timeout=0.2)
     assert not entry_task.done()
     await asyncio.wait_for(entry_task, timeout=1)
+
+
+async def test_position_reviews_are_priority_ordered_and_deadline_bounded(database):
+    engine = make_paper_engine(
+        database,
+        engine_tick_seconds=3600,
+        position_review_concurrency=1,
+        position_review_deadline_seconds=0.02,
+    )
+    calls: list[str] = []
+
+    class ScheduledPositionManager:
+        def review_priority(self, position):
+            return {"ETHUSDT": 0, "BTCUSDT": 1, "SOLUSDT": 2}[position.symbol]
+
+        async def review(self, context, position):
+            calls.append(position.symbol)
+            if position.symbol == "ETHUSDT":
+                await asyncio.sleep(0.05)
+            return None
+
+    async def positions():
+        return {
+            symbol: type("P", (), {"symbol": symbol, "quantity": 1})()
+            for symbol in ("SOLUSDT", "BTCUSDT", "ETHUSDT")
+        }
+
+    async def strategy_context(symbol=None):
+        return object()
+
+    engine.position_manager = ScheduledPositionManager()
+    engine.portfolio.get_positions = positions
+    engine._strategy_context = strategy_context
+
+    await asyncio.wait_for(engine._review_positions_once(), timeout=0.2)
+    assert calls == ["ETHUSDT", "BTCUSDT", "SOLUSDT"]

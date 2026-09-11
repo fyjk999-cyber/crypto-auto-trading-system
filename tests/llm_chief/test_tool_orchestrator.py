@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from crypto_trader.llm.tools.registry import LLMToolRegistry, ToolEvidence
@@ -203,3 +204,44 @@ async def test_tool_context_receives_canonical_chief_context_and_categorizes_ref
     assert package is not None
     assert package.refs_with_prefix("memory:") == ["memory:review:episode_1"]
     assert package.refs_with_prefix("episode:") == ["episode:episode_1"]
+
+
+async def test_tool_selection_and_execution_share_one_wall_clock_deadline():
+    called: list[str] = []
+
+    async def evidence(symbol, payload):
+        called.append(symbol)
+        return ToolEvidence(
+            "trend", symbol, payload["as_of"], {}, [], [], 1.0, "FACTUAL", []
+        )
+
+    class SlowSelectionProvider:
+        name = "deepseek"
+        model = "deepseek-v4-pro"
+
+        async def complete_json(self, **kwargs):
+            if kwargs.get("operation") == "tool_selection":
+                await asyncio.sleep(0.05)
+                return LLMResponse(
+                    text='{"tools":["trend"]}',
+                    provider=self.name,
+                    model=self.model,
+                    latency_ms=50,
+                    parsed_json={"tools": ["trend"]},
+                )
+            raise AssertionError("final decision must not run after tool-round timeout")
+
+    registry = LLMToolRegistry()
+    registry.register("trend", evidence)
+    trader = ToolDrivenChiefTrader(
+        ChiefTraderEngine(provider=SlowSelectionProvider()),
+        registry,
+        tool_round_timeout_seconds=0.01,
+    )
+    decision, package = await trader.decide(
+        context(), tool_context={}, now=datetime.now(UTC)
+    )
+    assert decision.action == "FAIL_CLOSED"
+    assert decision.reason_codes == ["TOOL_ROUND_TIMEOUT"]
+    assert package is None
+    assert called == []

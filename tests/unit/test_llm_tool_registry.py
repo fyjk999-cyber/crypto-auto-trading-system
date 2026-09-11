@@ -270,3 +270,31 @@ async def test_wrong_symbol_tool_evidence_is_rejected():
     assert item.symbol == "BTCUSDT"
     assert item.data_quality == "UNAVAILABLE"
     assert item.finding == {}
+
+
+async def test_tool_contract_and_version_are_persisted_with_evidence():
+    tools = LLMToolRegistry()
+
+    async def tool(symbol, context):
+        return ToolEvidence(
+            "versioned", symbol, context["as_of"], {"ok": True},
+            [], [], 1.0, "FACTUAL", ["source:test"],
+        )
+
+    tools.register(
+        "versioned",
+        tool,
+        description="versioned test tool",
+        version="7.2.1",
+        source="TEST_SOURCE",
+    )
+    contract = tools.contract_catalog()["versioned"]
+    assert contract["version"] == "7.2.1"
+    assert contract["source"] == "TEST_SOURCE"
+    assert "symbol" in contract["parameters"]
+    assert "as_of" in contract["parameters"]
+
+    package = await tools.build_package(
+        ["versioned"], "BTCUSDT", {}, now=datetime.now(UTC)
+    )
+    assert package.items[0].tool_version == "7.2.1"

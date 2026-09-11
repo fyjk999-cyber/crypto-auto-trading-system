@@ -25,6 +25,10 @@ async def test_factor_service_tools_are_selectively_callable_and_symbol_bound():
         "factor_health",
     } <= set(registry.available())
     assert registry.catalog()["factor_history"] == "Last 100 factor observations"
+    contract = registry.contract_catalog()["factor_history"]
+    assert contract["version"] == "factor-runtime-1.1.0"
+    assert contract["source"] == "CANONICAL_FACTOR_STORE"
+    assert "as_of" in contract["data_time_semantics"]
     result = await registry.call(
         "factor_snapshot", "ETHUSDT", {"as_of": datetime(2026, 1, 2, tzinfo=UTC)}
     )

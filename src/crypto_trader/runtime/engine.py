@@ -186,7 +186,7 @@ class TradingEngine:
         await self._load_instruments()
         await self._restore_paper_adapter_state()
         self.order_manager.settlement_callback = self._settle_fill
-        await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        await self._run_recovery(self.run_id)
         await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
         # Daily review recovery is not an execution mutation and must not
@@ -302,6 +302,24 @@ class TradingEngine:
                 if state == RuntimeState.STOPPED:
                     row.ended_at = now
             await session.commit()
+
+    async def _run_recovery(self, run_id: str | None) -> list[str]:
+        """Recover orders and PAPER position/ledger invariants before acquiring the lease."""
+
+        return await RecoveryService(
+            self.order_manager,
+            self.adapter,
+            self.audit,
+            positions_provider=self.portfolio.get_positions,
+            plans=self.trade_plans,
+            ledger_state_provider=self._ledger_state,
+            recovery_mode=self.settings.effective_mode(),
+        ).recover(run_id)
+
+    async def _ledger_state(self) -> tuple[dict, dict]:
+        account = await self.portfolio.get_account(self.settings.effective_mode())
+        positions = await self.portfolio.get_positions()
+        return account.balances, positions
 
     async def _reconcile_stale_runs(self) -> list[str]:
         """Close abandoned rows only after this process owns the fenced lease."""
@@ -453,17 +471,42 @@ class TradingEngine:
         if self.position_manager is None:
             return []
         positions = await self.portfolio.get_positions()
-        semaphore = asyncio.Semaphore(4)
+        active = [position for position in positions.values() if position.quantity != 0]
+        priority = getattr(self.position_manager, "review_priority", None)
+        if callable(priority):
+            active.sort(key=priority)
+        else:
+            active.sort(key=lambda position: position.symbol)
+
+        concurrency = max(1, int(self.settings.position_review_concurrency))
+        deadline_seconds = max(
+            0.001, float(self.settings.position_review_deadline_seconds)
+        )
+        semaphore = asyncio.Semaphore(concurrency)
 
         async def review_one(position):
             async with semaphore:
-                if position.quantity == 0:
-                    return None
-                ctx = await self._strategy_context(position.symbol)
-                if ctx is None:
-                    return None
                 try:
-                    signal = await self.position_manager.review(ctx, position)
+                    # Deadline covers context acquisition + LLM review only.
+                    # A resulting execution is deliberately outside this
+                    # cancellation scope to avoid half-executed order paths.
+                    async with asyncio.timeout(deadline_seconds):
+                        ctx = await self._strategy_context(position.symbol)
+                        if ctx is None:
+                            return None
+                        signal = await self.position_manager.review(ctx, position)
+                except TimeoutError:
+                    self.consecutive_failures += 1
+                    self.health.set(
+                        "position_manager", False, "review deadline exceeded"
+                    )
+                    await self.audit.log(
+                        "POSITION_REVIEW_DEADLINE_EXCEEDED",
+                        target=position.symbol,
+                        run_id=self.run_id,
+                        after={"deadline_seconds": deadline_seconds},
+                    )
+                    return None
                 except Exception as exc:
                     self.consecutive_failures += 1
                     self.health.set("position_manager", False, type(exc).__name__)
@@ -473,7 +516,7 @@ class TradingEngine:
                     return await self.process_signal(signal)
                 return None
 
-        reviewed = await asyncio.gather(*(review_one(position) for position in positions.values()))
+        reviewed = await asyncio.gather(*(review_one(position) for position in active))
         return [decision for decision in reviewed if decision is not None]
 
     def _remember_pending_valuation(self, batch: ValuationBatch) -> None:

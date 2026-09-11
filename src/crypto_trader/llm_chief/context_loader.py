@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from sqlalchemy import case, select
+from sqlalchemy import and_, or_, select
 
 from crypto_trader.llm.tools.registry import ToolEvidence
 from crypto_trader.llm_chief.context import ChiefTraderContext
@@ -35,16 +35,11 @@ class ChiefContextLoader:
                     .where(
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.entry_market_regime == context.regime,
                         TradeEpisodeORM.closed_at <= as_of,
                     )
-                    .order_by(
-                        case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
-                        case(
-                            (TradeEpisodeORM.entry_market_regime == context.regime, 0),
-                            else_=1,
-                        ),
-                        TradeEpisodeORM.closed_at.desc(),
-                    )
+                    .order_by(TradeEpisodeORM.closed_at.desc())
                     .limit(self.limit)
                 )
             ).scalars().all()
@@ -62,7 +57,10 @@ class ChiefContextLoader:
             research = (
                 await session.execute(
                     select(ResearchReportORM)
-                    .where(ResearchReportORM.created_at <= as_of)
+                    .where(
+                        ResearchReportORM.created_at <= as_of,
+                        _research_scope_clause(context),
+                    )
                     .order_by(ResearchReportORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -99,6 +97,9 @@ class ChiefContextLoader:
                 {
                     "kind": "RESEARCH",
                     "research_id": row.research_id,
+                    "scope_type": row.scope_type,
+                    "symbol": row.symbol,
+                    "regime": row.regime,
                     "summary": row.summary,
                     "conclusion": row.conclusion,
                     "confidence": row.confidence,
@@ -139,7 +140,12 @@ class ChiefContextLoader:
                 else {}
             ),
             compressed_experience=[
-                {"rule_id": row.rule_id, "title": row.title, "content": row.content}
+                {
+                    "rule_id": row.rule_id,
+                    "title": row.title,
+                    "content": row.content,
+                    "scope_type": "GLOBAL",
+                }
                 for row in compressed
             ],
             failure_warnings=[
@@ -189,16 +195,11 @@ class ChiefContextLoader:
                     .where(
                         TradeEpisodeORM.factual.is_(True),
                         TradeEpisodeORM.review_status == "REVIEWED",
+                        TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.entry_market_regime == context.regime,
                         TradeEpisodeORM.closed_at <= as_of,
                     )
-                    .order_by(
-                        case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
-                        case(
-                            (TradeEpisodeORM.entry_market_regime == context.regime, 0),
-                            else_=1,
-                        ),
-                        TradeEpisodeORM.closed_at.desc(),
-                    )
+                    .order_by(TradeEpisodeORM.closed_at.desc())
                     .limit(self.limit)
                 )
             ).scalars().all()
@@ -227,7 +228,11 @@ class ChiefContextLoader:
                         TradeEpisodeORM.episode_id == AITradeReviewORM.episode_id,
                     )
                     .where(
+                        TradeEpisodeORM.factual.is_(True),
+                        TradeEpisodeORM.review_status == "REVIEWED",
                         TradeEpisodeORM.symbol == context.symbol,
+                        TradeEpisodeORM.entry_market_regime == context.regime,
+                        TradeEpisodeORM.closed_at <= as_of,
                         AITradeReviewORM.created_at <= as_of,
                     )
                     .order_by(AITradeReviewORM.created_at.desc())
@@ -256,7 +261,12 @@ class ChiefContextLoader:
             ]
         if compressed:
             finding["compressed_experience"] = [
-                {"rule_id": row.rule_id, "title": row.title, "content": row.content}
+                {
+                    "rule_id": row.rule_id,
+                    "title": row.title,
+                    "content": row.content,
+                    "scope_type": "GLOBAL",
+                }
                 for row in compressed
             ]
         refs = [f"memory:review:{row.episode_id}" for row in reviews]
@@ -267,12 +277,15 @@ class ChiefContextLoader:
         )
         return finding, refs, timestamp
 
-    async def _research_evidence(self, _context: ChiefTraderContext, as_of: datetime):
+    async def _research_evidence(self, context: ChiefTraderContext, as_of: datetime):
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(ResearchReportORM)
-                    .where(ResearchReportORM.created_at <= as_of)
+                    .where(
+                        ResearchReportORM.created_at <= as_of,
+                        _research_scope_clause(context),
+                    )
                     .order_by(ResearchReportORM.created_at.desc())
                     .limit(self.limit)
                 )
@@ -281,6 +294,9 @@ class ChiefContextLoader:
             "research": [
                 {
                     "research_id": row.research_id,
+                    "scope_type": row.scope_type,
+                    "symbol": row.symbol,
+                    "regime": row.regime,
                     "summary": row.summary,
                     "conclusion": row.conclusion,
                     "confidence": row.confidence,
@@ -349,6 +365,27 @@ class ChiefContextLoader:
             ]
         } if rows else {}
         return finding, [f"pattern:{row.pattern_id}" for row in rows], _latest(rows, "created_at")
+
+
+def _research_scope_clause(context: ChiefTraderContext):
+    """Only research explicitly applicable to this decision context may be read."""
+
+    return or_(
+        ResearchReportORM.scope_type == "GLOBAL",
+        and_(
+            ResearchReportORM.scope_type == "SYMBOL",
+            ResearchReportORM.symbol == context.symbol,
+        ),
+        and_(
+            ResearchReportORM.scope_type == "REGIME",
+            ResearchReportORM.regime == context.regime,
+        ),
+        and_(
+            ResearchReportORM.scope_type == "SYMBOL_REGIME",
+            ResearchReportORM.symbol == context.symbol,
+            ResearchReportORM.regime == context.regime,
+        ),
+    )
 
 
 def _latest(rows, field: str):

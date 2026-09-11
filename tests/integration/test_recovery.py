@@ -103,3 +103,146 @@ async def test_recovery_rejects_order_missing_from_exchange(database):
     restored = await mgr.get(local.internal_order_id)
     assert restored.status == OrderStatus.REJECTED
     assert any("not on exchange" in a for a in actions)
+
+
+
+class _HealthyMarketAdapter:
+    def __init__(self, bid: str, ask: str):
+        self.bid = Decimal(bid)
+        self.ask = Decimal(ask)
+        self.restored = None
+
+    async def get_market_state(self, symbol):
+        from crypto_trader.market_data.state import DataHealth, MarketState
+
+        return MarketState(
+            symbol=symbol,
+            provider="OKX_PUBLIC",
+            best_bid=self.bid,
+            best_ask=self.ask,
+            health=DataHealth.HEALTHY,
+            sources={},
+        )
+
+    async def restore_from_canonical_state(self, *, balances, positions):
+        self.restored = (balances, positions)
+
+
+class _NoPlans:
+    async def get_active_for_symbol(self, symbol):
+        return None
+
+
+class _ActivePlan:
+    async def get_active_for_symbol(self, symbol):
+        return object()
+
+
+def _provider(value):
+    async def provide():
+        return value
+
+    return provide
+
+
+async def test_recovery_flattens_orphan_linear_perp_at_factual_touch(database):
+    from crypto_trader.domain.models import Position
+
+    mgr = OrderManager(database.session_factory)
+    settled = []
+
+    async def settle(fill):
+        settled.append(fill)
+
+    mgr.settlement_callback = settle
+    position = Position(
+        symbol="VVVUSDT",
+        base_asset="VVV",
+        quote_asset="USDT",
+        instrument_type="LINEAR_PERP",
+        contract_size=Decimal("0.1"),
+        contract_multiplier=Decimal("1"),
+        quantity=Decimal("-3"),
+        avg_entry_price=Decimal("12"),
+        leverage=Decimal("2"),
+        updated_at=datetime.now(UTC),
+    )
+    adapter = _HealthyMarketAdapter("25.99", "26.01")
+    actions = await RecoveryService(
+        mgr,
+        adapter,
+        positions_provider=_provider({"VVVUSDT": position}),
+        plans=_NoPlans(),
+    ).recover("run-orphan")
+
+    orders = await mgr.list_all(limit=10)
+    recovery = [o for o in orders if o.metadata.get("recovery") == "orphan_position_close"]
+    assert len(recovery) == 1
+    order = recovery[0]
+    assert order.status == OrderStatus.FILLED
+    assert order.side == OrderSide.BUY
+    assert order.avg_fill_price == Decimal("26.01")
+    assert order.metadata["reduce_only"] is True
+    assert order.metadata["instrument_type"] == "LINEAR_PERP"
+    assert order.metadata["contract_size"] == "0.1"
+    assert len(settled) == 1
+    assert any("factual touch 26.01" in action for action in actions)
+
+
+async def test_recovery_does_not_flatten_position_with_active_plan(database):
+    from crypto_trader.domain.models import Position
+
+    mgr = OrderManager(database.session_factory)
+    position = Position(
+        symbol="BTCUSDT",
+        base_asset="BTC",
+        quote_asset="USDT",
+        quantity=Decimal("1"),
+        avg_entry_price=Decimal("100"),
+        updated_at=datetime.now(UTC),
+    )
+    actions = await RecoveryService(
+        mgr,
+        _HealthyMarketAdapter("100", "100.1"),
+        positions_provider=_provider({"BTCUSDT": position}),
+        plans=_ActivePlan(),
+    ).recover("run-linked")
+    assert actions == []
+    assert await mgr.list_open() == []
+
+
+async def test_recovery_resyncs_paper_adapter_from_ledger(database):
+    from crypto_trader.domain.models import Balance, Position
+
+    mgr = OrderManager(database.session_factory)
+    adapter = _HealthyMarketAdapter("100", "101")
+    balances = {
+        "USDT": Balance(
+            currency="USDT",
+            total=Decimal("1234"),
+            available=Decimal("1234"),
+            frozen=Decimal("0"),
+        )
+    }
+    positions = {
+        "BTCUSDT": Position(
+            symbol="BTCUSDT",
+            base_asset="BTC",
+            quote_asset="USDT",
+            quantity=Decimal("2"),
+            avg_entry_price=Decimal("100"),
+            updated_at=datetime.now(UTC),
+        )
+    }
+
+    actions = await RecoveryService(
+        mgr,
+        adapter,
+        ledger_state_provider=_provider((balances, positions)),
+    ).recover("run-resync")
+
+    assert adapter.restored is not None
+    restored_balances, restored_positions = adapter.restored
+    assert restored_balances == {"USDT": Decimal("1234")}
+    assert restored_positions["BTCUSDT"].quantity == Decimal("2")
+    assert "sim resynced from ledger" in actions

@@ -169,10 +169,38 @@ class MultiStrategyAlpha(StrategyPlugin):
                 data_quality="UNAVAILABLE" if ctx.basis is None else "FACTUAL_OKX",
                 timestamp=ctx.market_timestamp,
             )
-        if name not in {"orderbook", "liquidity"}:
+        if name not in {"orderbook", "liquidity", "execution_cost"}:
             return None
         bid, ask = ctx.book.best_bid(), ctx.book.best_ask()
         quality = "FACTUAL_ORDERBOOK" if bid is not None and ask is not None else "UNAVAILABLE"
+        if name == "execution_cost":
+            mid = ctx.book.mid_price()
+            spread = ask.price - bid.price if bid and ask else None
+            spread_bps = (
+                spread / mid * D("10000")
+                if spread is not None and mid is not None and mid > 0
+                else None
+            )
+            return self._tool_result(
+                name,
+                {
+                    "spread": str(spread) if spread is not None else None,
+                    "spread_bps": str(spread_bps) if spread_bps is not None else None,
+                    "configured_slippage_bps": str(self.slippage_bps),
+                    "fee_rate": None,
+                },
+                supporting=["spread derived from factual best bid/ask"]
+                if spread is not None
+                else [],
+                contrary=["exchange fee rate unavailable to this evidence layer"],
+                confidence=0.7 if spread is not None else 0.0,
+                data_quality=(
+                    "FACTUAL_OKX_PLUS_CONFIGURED_ASSUMPTION"
+                    if spread is not None
+                    else "UNAVAILABLE"
+                ),
+                timestamp=ctx.market_timestamp or ctx.book.updated_at,
+            )
         return self._tool_result(
             name,
             {
@@ -192,6 +220,7 @@ class MultiStrategyAlpha(StrategyPlugin):
         features: dict,
         *,
         supporting: list[str] | None = None,
+        contrary: list[str] | None = None,
         confidence: float = 1.0,
         data_quality: str = "FACTUAL_OKX",
         timestamp=None,
@@ -201,7 +230,7 @@ class MultiStrategyAlpha(StrategyPlugin):
             "symbol": self.symbol,
             "features": features,
             "supporting_evidence": supporting or [],
-            "contrary_evidence": [],
+            "contrary_evidence": contrary or [],
             "confidence_of_measurement": confidence,
             "data_quality": data_quality,
             "timestamp": timestamp,
