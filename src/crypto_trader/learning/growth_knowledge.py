@@ -166,7 +166,11 @@ class KnowledgeStore:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if current is not None and current.content_hash == values.get("content_hash"):
+            if (
+                current is not None
+                and current.content_hash == values.get("content_hash")
+                and current.status == values.get("status", current.status)
+            ):
                 return current, False
             version = (current.version if current else 0) + 1
             row = GrowthLessonORM(
@@ -189,7 +193,11 @@ class KnowledgeStore:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if current is not None and current.content_hash == values.get("content_hash"):
+            if (
+                current is not None
+                and current.content_hash == values.get("content_hash")
+                and current.status == values.get("status", current.status)
+            ):
                 return current, False
             version = (current.version if current else 0) + 1
             row = GrowthPatternORM(**values, version=version)
@@ -729,7 +737,80 @@ class GrowthKnowledgePublisher:
                 "known_at": known_at,
             }
         )
+        await self._sync_lessons_with_pattern(
+            row,
+            known_at=known_at,
+            episode_ids=set(success_refs) | set(contrary_refs),
+        )
         return row, created
+
+    async def _sync_lessons_with_pattern(
+        self,
+        pattern: GrowthPatternORM,
+        *,
+        known_at: datetime,
+        episode_ids: set[str],
+    ) -> None:
+        """Promote/downgrade lesson status only when the independent pattern does.
+
+        A single-case lesson stays CANDIDATE; it becomes VALIDATED/CONTESTED
+        only with the pattern's independent sample verdict.  PnL is not used.
+        """
+        if not episode_ids or pattern.status not in {PATTERN_VALIDATED, PATTERN_CONTESTED}:
+            return
+        lessons = await self.store.current_lessons_for_scope(
+            account_id=pattern.account_id,
+            mode=pattern.mode,
+            symbol=pattern.symbol,
+            regime=pattern.regime,
+            direction=pattern.direction,
+        )
+        target_status = (
+            PATTERN_VALIDATED if pattern.status == PATTERN_VALIDATED else PATTERN_CONTESTED
+        )
+        reason = (
+            "PATTERN_VALIDATED_INDEPENDENT_SAMPLES"
+            if target_status == PATTERN_VALIDATED
+            else "PATTERN_CONTESTED_INDEPENDENT_SAMPLES"
+        )
+        for lesson in lessons:
+            if (lesson.episode_id or lesson.source_id) not in episode_ids:
+                continue
+            if lesson.status == target_status and lesson.hypothesis_support == (
+                "SUPPORTED" if target_status == PATTERN_VALIDATED else "CONTESTED"
+            ):
+                continue
+            await self.store.upsert_lesson(
+                {
+                    "lesson_id": lesson.lesson_id,
+                    "source_kind": lesson.source_kind,
+                    "source_id": lesson.source_id,
+                    "review_attempt_id": lesson.review_attempt_id,
+                    "episode_id": lesson.episode_id,
+                    "account_id": lesson.account_id,
+                    "mode": lesson.mode,
+                    "symbol": lesson.symbol,
+                    "direction": lesson.direction,
+                    "regime": lesson.regime,
+                    "statement": lesson.statement,
+                    "observation_refs_json": lesson.observation_refs_json,
+                    "support_refs_json": lesson.support_refs_json,
+                    "contrary_refs_json": lesson.contrary_refs_json,
+                    "scope_json": lesson.scope_json,
+                    "content_hash": lesson.content_hash,
+                    "status": target_status,
+                    "status_reason": reason,
+                    "sample_count": lesson.sample_count,
+                    "independent_sample_count": lesson.independent_sample_count,
+                    "data_completeness": lesson.data_completeness,
+                    "measurement_quality": lesson.measurement_quality,
+                    "hypothesis_support": (
+                        "SUPPORTED" if target_status == PATTERN_VALIDATED else "CONTESTED"
+                    ),
+                    "confidence": lesson.confidence,
+                    "known_at": known_at,
+                }
+            )
 
     async def _update_coin_profile(
         self, symbol: str, *, known_at: datetime
@@ -930,7 +1011,51 @@ class GrowthKnowledgePublisher:
             row = model(**values)
             session.add(row)
             await session.commit()
-            return row
+        if kind == "pattern":
+            episode_ids = set(current.success_refs_json or []) | set(
+                current.contrary_refs_json or []
+            )
+            lessons = await self.store.current_lessons_for_scope(
+                account_id=current.account_id,
+                mode=current.mode,
+                symbol=current.symbol,
+                regime=current.regime,
+                direction=current.direction,
+            )
+            for lesson in lessons:
+                if (lesson.episode_id or lesson.source_id) not in episode_ids:
+                    continue
+                await self.store.upsert_lesson(
+                    {
+                        "lesson_id": lesson.lesson_id,
+                        "source_kind": lesson.source_kind,
+                        "source_id": lesson.source_id,
+                        "review_attempt_id": lesson.review_attempt_id,
+                        "episode_id": lesson.episode_id,
+                        "account_id": lesson.account_id,
+                        "mode": lesson.mode,
+                        "symbol": lesson.symbol,
+                        "direction": lesson.direction,
+                        "regime": lesson.regime,
+                        "statement": lesson.statement,
+                        "observation_refs_json": lesson.observation_refs_json,
+                        "support_refs_json": lesson.support_refs_json,
+                        "contrary_refs_json": lesson.contrary_refs_json,
+                        "scope_json": lesson.scope_json,
+                        "content_hash": lesson.content_hash,
+                        "status": LESSON_REVOKED,
+                        "status_reason": "SOURCE_PATTERN_REVOKED",
+                        "sample_count": lesson.sample_count,
+                        "independent_sample_count": lesson.independent_sample_count,
+                        "data_completeness": lesson.data_completeness,
+                        "measurement_quality": lesson.measurement_quality,
+                        "hypothesis_support": lesson.hypothesis_support,
+                        "confidence": lesson.confidence,
+                        "known_at": at,
+                        "revoked_at": at,
+                    }
+                )
+        return row
 
     async def expire(self, *, kind: str, logical_id: str, valid_until: datetime):
         model, column = self._model_for_kind(kind)

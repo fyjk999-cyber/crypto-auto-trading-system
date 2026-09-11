@@ -107,5 +107,18 @@ Rollback contract: `MIGRATION_AND_ROLLBACK.md`.
 
 ## C6 — Chief retrieval (G06)
 
-Status: retrieval adapter in `src/crypto_trader/learning/growth_retrieval.py`;
-production bootstrap wiring is an integration package (public file).
+Implementation: `src/crypto_trader/learning/growth_retrieval.py`.
+Tests: `tests/growth_system/test_chief_memory_integration.py`
+(including `build_system` with an injected test provider and the real
+`ToolDrivenChiefTrader`/`LLMToolRegistry` path).
+
+| Rule | Contract |
+| --- | --- |
+| Same Chief | Tools are registered through the existing `register_context_tools` + `LLMToolRegistry`; the same `ChiefTraderEngine` selects tools and makes the final decision; no forced direction gate |
+| Scope | account/mode/instrument/symbol/regime/scope; future `known_at`, revoked, expired and unvalidated (`CANDIDATE`) knowledge excluded |
+| Visibility | Historical queries select the version visible at `as_of`, not the latest version regardless of `known_at` |
+| Budget | At most 5 records per category plus a unified approximate token budget per retrieval; over-budget items are dropped |
+| Injection | Retrieved source text is wrapped as `untrusted_data` with `handling=DATA_ONLY_NEVER_INSTRUCTION` and an `injection_suspected` flag; it is never executed |
+| Evidence proof | `growth_tool_selections` persists selected tools, returned refs, the evidence package and the final prompt hash; the test asserts the final decision prompt contains the retrieved refs |
+| No memory | An empty result returns `NO_MATCHES` and the Chief can still decide `NO_TRADE`; no exception or forced trade |
+| Integration | Bootstrap wiring of the growth loader is a public-file integration item; the test injects it through `build_system` without changing the shared file |
