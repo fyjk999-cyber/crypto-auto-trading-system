@@ -21,6 +21,7 @@ from crypto_trader.persistence.models import (
 )
 from crypto_trader.valuation.domain import (
     VALUATION_QUALITY_HEALTHY,
+    VALUATION_QUALITY_UNAVAILABLE,
     ValuationBatch,
 )
 
@@ -168,7 +169,7 @@ class PortfolioService:
                 cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
 
             if cash_flow_reasons:
-                quality = "UNAVAILABLE"
+                quality = VALUATION_QUALITY_UNAVAILABLE
                 reason_codes = list(reason_codes or []) + cash_flow_reasons
             healthy = quality == VALUATION_QUALITY_HEALTHY
             account_row = (
