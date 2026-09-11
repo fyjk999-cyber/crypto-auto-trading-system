@@ -126,9 +126,28 @@ def compression_logical_id(account_id: str, mode: str, scope_key: str) -> str:
     return f"compression_{sha256(raw.encode('utf-8')).hexdigest()[:40]}"
 
 
+class ClaimLostError(RuntimeError):
+    """Raised inside a publish transaction when claim ownership was lost.
+
+    The transaction is rolled back, so nothing written by the stale publisher
+    becomes retrievable knowledge.
+    """
+
+
 class KnowledgeStore:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
+        # Optional in-transaction claim guard (see ClaimLostError). When set,
+        # every retrievable write re-verifies claim ownership inside its own
+        # transaction and rolls back if the claim was lost.
+        self.claim_guard = None
+
+    async def _commit_with_claim_guard(self, session) -> None:
+        """Commit only while the claim that authorized this write still holds."""
+        if self.claim_guard is not None and not await self.claim_guard(session):
+            await session.rollback()
+            raise ClaimLostError("claim lost during publish; write rolled back")
+        await session.commit()
 
     # ------------------------------------------------------------------
     async def _current_row(self, model, logical_column, logical_id: str):
@@ -179,7 +198,7 @@ class KnowledgeStore:
                 supersedes_version_id=current.id if current is not None else None,
             )
             session.add(row)
-            await session.commit()
+            await self._commit_with_claim_guard(session)
             return row, True
 
     async def upsert_pattern(self, values: dict) -> tuple[GrowthPatternORM, bool]:
@@ -202,7 +221,7 @@ class KnowledgeStore:
             version = (current.version if current else 0) + 1
             row = GrowthPatternORM(**values, version=version)
             session.add(row)
-            await session.commit()
+            await self._commit_with_claim_guard(session)
             return row, True
 
     async def upsert_compression(self, values: dict) -> tuple[GrowthCompressionORM, bool]:
@@ -221,7 +240,7 @@ class KnowledgeStore:
             version = (current.version if current else 0) + 1
             row = GrowthCompressionORM(**values, version=version)
             session.add(row)
-            await session.commit()
+            await self._commit_with_claim_guard(session)
             return row, True
 
     async def version_row(self, model, logical_column, logical_id: str, version: int):
@@ -311,9 +330,18 @@ class KnowledgeStore:
 
 
 class GrowthKnowledgePublisher:
-    def __init__(self, session_factory, *, min_pattern_samples: int = 3) -> None:
+    def __init__(
+        self,
+        session_factory,
+        *,
+        min_pattern_samples: int = 3,
+        claim_guard=None,
+    ) -> None:
         self.session_factory = session_factory
         self.store = KnowledgeStore(session_factory)
+        # In-transaction claim guard: when provided, no publish write commits
+        # unless the authorizing claim still holds (G-BLOCKER-1).
+        self.store.claim_guard = claim_guard
         self.min_pattern_samples = max(1, min_pattern_samples)
 
     # ------------------------------------------------------------------
@@ -456,10 +484,23 @@ class GrowthKnowledgePublisher:
             StageOutcome,
         )
 
-        async def publisher(stats, review_attempts, *, fence) -> StageOutcome:
+        async def publisher(stats, review_attempts, *, fence, claim_guard=None) -> StageOutcome:
             if not await fence():
                 return StageOutcome(STAGE_CLAIM_LOST, detail="claim lost before publish")
-            report = await self.publish_attempts(review_attempts, bindings=bindings)
+            # The guard is re-checked atomically inside every publish
+            # transaction: a claim that is lost/expires during the publish can
+            # no longer commit retrievable knowledge.
+            if claim_guard is not None:
+                self.store.claim_guard = claim_guard
+            try:
+                report = await self.publish_attempts(review_attempts, bindings=bindings)
+            except ClaimLostError:
+                return StageOutcome(
+                    STAGE_CLAIM_LOST,
+                    detail="claim lost during publish; writes rolled back",
+                )
+            finally:
+                self.store.claim_guard = None
             return StageOutcome(
                 STAGE_SUCCEEDED,
                 payload={

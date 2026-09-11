@@ -327,6 +327,21 @@ ReviewRunner = Callable[[Any], Awaitable[Any]]
 Publisher = Callable[..., Awaitable[StageOutcome]]
 
 
+async def _call_publisher(publisher, stats, publish_inputs, *, fence, claim_guard=None):
+    """Call a publisher, passing the claim guard only when it accepts one."""
+    import inspect
+
+    try:
+        parameters = inspect.signature(publisher).parameters
+    except (TypeError, ValueError):  # builtins / partials
+        parameters = {}
+    if "claim_guard" in parameters:
+        return await publisher(
+            stats, publish_inputs, fence=fence, claim_guard=claim_guard
+        )
+    return await publisher(stats, publish_inputs, fence=fence)
+
+
 class GrowthLearningPipeline:
     def __init__(
         self,
@@ -591,8 +606,16 @@ class GrowthLearningPipeline:
                 return _result_from_row(
                     job, idempotent=False, stats=stats, error_type="CLAIM_LOST"
                 )
+            claim_guard = None
+            build_guard = getattr(self.persistence, "build_claim_guard", None)
+            if callable(build_guard):
+                claim_guard = build_guard(
+                    review_date, token, owner=self.owner, lease_seconds=self.lease_seconds
+                )
             try:
-                outcome = await publisher(stats, publish_inputs, fence=fence)
+                outcome = await _call_publisher(
+                    publisher, stats, publish_inputs, fence=fence, claim_guard=claim_guard
+                )
             except Exception as exc:
                 outcome = StageOutcome(
                     STAGE_FAILED, detail=f"PUBLISH_EXCEPTION:{type(exc).__name__}"
