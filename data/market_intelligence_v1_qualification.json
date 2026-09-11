@@ -1,5 +1,5 @@
 {
-  "started_at": "2026-09-11T13:10:23.623232+00:00",
+  "started_at": "2026-09-11T13:40:54.827399+00:00",
   "llm_credential_available": true,
   "paper_only": true,
   "orders_submitted": 0,
@@ -7,7 +7,7 @@
     "cycles": [
       {
         "cycle": 1,
-        "scan_id": "scan_9b2cb29abab94dbda84f782f29c634ee",
+        "scan_id": "scan_f971fe54a58447e597f64ac4d8f82620",
         "status": "COMPLETE",
         "counts": {
           "discovered_count": 463,
@@ -30,17 +30,14 @@
           "min_contiguous_candles": 2
         },
         "candidate_symbols": [
-          "AAOIUSDT",
-          "ACTUSDT",
           "SNDKUSDT",
           "AAPLUSDT",
-          "ZECUSDT",
-          "BTCUSDT",
-          "0GUSDT",
-          "SOLUSDT",
-          "AAVEUSDT",
           "ETHUSDT",
-          "XAUUSDT"
+          "AAOIUSDT",
+          "ZECUSDT",
+          "AAVEUSDT",
+          "0GUSDT",
+          "ACTUSDT"
         ],
         "rotation_symbols": [
           "0GUSDT",
@@ -536,11 +533,11 @@
           "ZROUSDT",
           "ZRXUSDT"
         ],
-        "oi_usd_sample": 2207495224.36081
+        "oi_usd_sample": 2218891320.3600097
       },
       {
         "cycle": 2,
-        "scan_id": "scan_de8b3189a8514362947d966ae79a3db2",
+        "scan_id": "scan_55130dac1b7a40fba1afc8c468f5e10e",
         "status": "COMPLETE",
         "counts": {
           "discovered_count": 463,
@@ -563,16 +560,14 @@
           "min_contiguous_candles": 2
         },
         "candidate_symbols": [
-          "ALLOUSDT",
-          "ZECUSDT",
-          "BTCUSDT",
-          "SOLUSDT",
-          "AEROUSDT",
-          "AEONUSDT",
-          "ADBEUSDT",
           "SNDKUSDT",
           "ALGOUSDT",
-          "AIUSDT"
+          "AEROUSDT",
+          "ADBEUSDT",
+          "XAUUSDT",
+          "AEONUSDT",
+          "ETHUSDT",
+          "ZECUSDT"
         ],
         "rotation_symbols": [
           "ADBEUSDT",
@@ -1068,7 +1063,7 @@
           "ZROUSDT",
           "ZRXUSDT"
         ],
-        "oi_usd_sample": 2208005238.98473
+        "oi_usd_sample": 2218891320.3600097
       }
     ],
     "discovery_universe_label": "OKX Live USDT Perpetual Discovery Universe",
@@ -1085,55 +1080,54 @@
     "snapshot_immutable_ids_unique": true
   },
   "selection": {
-    "selection_id": "mkt_sel_d2e05d52169a4089820048110a07769c",
-    "scan_id": "scan_de8b3189a8514362947d966ae79a3db2",
+    "selection_id": "mkt_sel_7a3f2e196565469da817c5f72365e534",
+    "scan_id": "scan_55130dac1b7a40fba1afc8c468f5e10e",
     "status": "SUCCESS",
     "selection_state": "SELECT",
     "provider": "deepseek",
     "model": "deepseek-flash",
-    "latency_ms": 2152,
-    "input_tokens": 6364,
-    "output_tokens": 219,
+    "latency_ms": 1617,
+    "input_tokens": 6336,
+    "output_tokens": 191,
     "pool_size": 30,
     "selected_symbols": [
       {
-        "symbol": "BZUSDT",
-        "brief_reason": "Funding anomaly: -0.1726% with $105M turnover and 21.2M OI, extreme negative funding outlier.",
-        "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_change_24h",
-          "basis_vs_spot"
-        ],
-        "selection_source": "DEEPSEEK_SELECTION",
-        "pool_reasons": [
-          "funding anomaly"
-        ],
-        "from_initial_pool": true,
-        "discovered_via_directory": false
-      },
-      {
-        "symbol": "CLUSDT",
-        "brief_reason": "Funding anomaly: -0.1618% with $330M turnover and 5.76M OI, large-cap negative funding extreme.",
-        "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_change_24h",
-          "basis_vs_spot"
-        ],
-        "selection_source": "DEEPSEEK_SELECTION",
-        "pool_reasons": [
-          "active turnover",
-          "funding anomaly"
-        ],
-        "from_initial_pool": true,
-        "discovered_via_directory": false
-      },
-      {
         "symbol": "CNPYUSDT",
-        "brief_reason": "Large +13.77% move with $39M turnover and negative funding -0.116%, move/funding divergence.",
+        "brief_reason": "Largest absolute move in pool (+19.8%) with meaningful turnover ~39.5M and negative funding, suggesting crowded positioning worth factual review.",
         "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_change_24h",
-          "recent_news_catalyst"
+          "recent news/catalyst timeline",
+          "order book depth and spread",
+          "funding rate history"
+        ],
+        "selection_source": "DEEPSEEK_SELECTION",
+        "pool_reasons": [
+          "large absolute move"
+        ],
+        "from_initial_pool": true,
+        "discovered_via_directory": false
+      },
+      {
+        "symbol": "BZUSDT",
+        "brief_reason": "Funding anomaly (-0.185%) on ~105M turnover with flat price, indicating persistent one-sided positioning.",
+        "requested_additional_data": [
+          "funding rate history",
+          "open interest trend",
+          "basis vs spot"
+        ],
+        "selection_source": "DEEPSEEK_SELECTION",
+        "pool_reasons": [
+          "funding anomaly"
+        ],
+        "from_initial_pool": true,
+        "discovered_via_directory": false
+      },
+      {
+        "symbol": "EGLDUSDT",
+        "brief_reason": "Large negative move (-10.3%) with positive funding, a divergence worth verifying against fundamentals.",
+        "requested_additional_data": [
+          "recent news/catalyst timeline",
+          "order book depth and spread",
+          "open interest trend"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
@@ -1152,7 +1146,7 @@
     "duplicate_guard": true
   },
   "selection_exploration": {
-    "scan_id": "scan_893de92431d5404d891ef8f134155b5c",
+    "scan_id": "scan_cfa48c1f70744a488454ffffc2142bd7",
     "status": "SUCCESS",
     "selection_state": "SELECT",
     "exploration_rounds": 1,
@@ -1161,18 +1155,18 @@
       "page": 1
     },
     "directory_page_refs": [
-      "market_directory:scan_id=scan_893de92431d5404d891ef8f134155b5c;page=1;page_size=20;rows=20",
-      "market_directory:scan_id=scan_893de92431d5404d891ef8f134155b5c;page=2;page_size=20;rows=20"
+      "market_directory:scan_id=scan_cfa48c1f70744a488454ffffc2142bd7;page=1;page_size=20;rows=20",
+      "market_directory:scan_id=scan_cfa48c1f70744a488454ffffc2142bd7;page=2;page_size=20;rows=20"
     ],
     "selected_symbols": [
       {
         "symbol": "RAYUSDT",
-        "brief_reason": "Largest 24h gainer at +27.2% with $181M estimated turnover and 4.41M open interest; extreme move with negative funding -0.0192% suggests crowded short positioning worth factual verification.",
+        "brief_reason": "Largest absolute 24h move in the directory (+24.2%) with substantial turnover ~180.6M and negative funding, indicating crowded one-sided positioning worth factual verification.",
         "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_change_24h",
-          "recent_news_catalyst",
-          "basis_vs_spot"
+          "recent news/catalyst timeline",
+          "order book depth and spread",
+          "funding rate history",
+          "open interest trend"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
@@ -1180,17 +1174,16 @@
         ],
         "from_initial_pool": false,
         "discovered_via_directory": true,
-        "directory_query_ref": "market_directory_query:scan_893de92431d5404d891ef8f134155b5c:sort=abs_move|page=1",
-        "directory_page_ref": "market_directory:scan_893de92431d5404d891ef8f134155b5c:page=1"
+        "directory_query_ref": "market_directory_query:scan_cfa48c1f70744a488454ffffc2142bd7:sort=abs_move|page=1",
+        "directory_page_ref": "market_directory:scan_cfa48c1f70744a488454ffffc2142bd7:page=1"
       },
       {
         "symbol": "IOSTUSDT",
-        "brief_reason": "Largest 24h decliner at -15.1% with $60.7M estimated turnover and negative funding -0.0764%; sharp selloff with meaningful liquidity warrants catalyst and positioning research.",
+        "brief_reason": "Large negative move (-15.1%) on meaningful turnover ~57.9M with negative funding, a divergence between price action and positioning worth factual review.",
         "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_change_24h",
-          "recent_news_catalyst",
-          "basis_vs_spot"
+          "recent news/catalyst timeline",
+          "order book depth and spread",
+          "funding rate history"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
@@ -1198,16 +1191,16 @@
         ],
         "from_initial_pool": false,
         "discovered_via_directory": true,
-        "directory_query_ref": "market_directory_query:scan_893de92431d5404d891ef8f134155b5c:sort=abs_move|page=1",
-        "directory_page_ref": "market_directory:scan_893de92431d5404d891ef8f134155b5c:page=1"
+        "directory_query_ref": "market_directory_query:scan_cfa48c1f70744a488454ffffc2142bd7:sort=abs_move|page=1",
+        "directory_page_ref": "market_directory:scan_cfa48c1f70744a488454ffffc2142bd7:page=1"
       },
       {
-        "symbol": "ICXUSDT",
-        "brief_reason": "Funding anomaly: -0.3732% (extreme negative) despite +5.73% price move and $410K turnover; large divergence between price direction and funding sign merits factual investigation.",
+        "symbol": "METUSDT",
+        "brief_reason": "Second-largest gainer (+20.9%) with ~34.4M turnover and negative funding, suggesting crowded short positioning against a strong move.",
         "requested_additional_data": [
-          "funding_rate_history_24h",
-          "open_interest_change_24h",
-          "basis_vs_spot"
+          "recent news/catalyst timeline",
+          "order book depth and spread",
+          "open interest trend"
         ],
         "selection_source": "DEEPSEEK_SELECTION",
         "pool_reasons": [
@@ -1215,54 +1208,111 @@
         ],
         "from_initial_pool": false,
         "discovered_via_directory": true,
-        "directory_query_ref": "market_directory_query:scan_893de92431d5404d891ef8f134155b5c:sort=abs_move|page=1",
-        "directory_page_ref": "market_directory:scan_893de92431d5404d891ef8f134155b5c:page=2"
+        "directory_query_ref": "market_directory_query:scan_cfa48c1f70744a488454ffffc2142bd7:sort=abs_move|page=1",
+        "directory_page_ref": "market_directory:scan_cfa48c1f70744a488454ffffc2142bd7:page=1"
       }
     ],
     "discovered_via_directory": [
       "RAYUSDT",
       "IOSTUSDT",
-      "ICXUSDT"
+      "METUSDT"
     ],
     "real_phase2_provider": "harness",
     "real_phase2_model": null,
-    "phase2_input_tokens": 16056,
-    "phase2_output_tokens": 280,
+    "phase2_input_tokens": 16041,
+    "phase2_output_tokens": 223,
     "snapshot_id_matches": true
+  },
+  "authority_semantics": {
+    "available": true,
+    "programmatic_fallback_when_selection_enabled": "NO",
+    "board_candidate_available": "AMDUSDT",
+    "cases": [
+      {
+        "case": "NO_RESEARCH",
+        "record_status": "NO_RESEARCH",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      },
+      {
+        "case": "SELECTION_LLM_UNAVAILABLE",
+        "record_status": "LLM_UNAVAILABLE",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      },
+      {
+        "case": "SELECTION_TIMEOUT",
+        "record_status": "TIMEOUT",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      },
+      {
+        "case": "SELECTION_FAILED",
+        "record_status": "FAILED",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      },
+      {
+        "case": "SELECTION_SKIPPED_BUDGET",
+        "record_status": "SKIPPED_BUDGET",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      },
+      {
+        "case": "SELECTION_DEFERRED",
+        "record_status": "DEFERRED",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      },
+      {
+        "case": "SELECTION_QUEUE_EXHAUSTED",
+        "record_status": "SUCCESS",
+        "desired_symbol": null,
+        "board_candidate_available": "AMDUSDT",
+        "board_candidate_consumed": false
+      }
+    ],
+    "note": "desired_symbol() is the canonical production path; the board always had a candidate/rotation symbol available, so a value returned here would prove a programmatic fallback"
   },
   "research": {
     "executed": true,
-    "symbol": "BZUSDT",
-    "decision_action": "WAIT",
+    "symbol": "CNPYUSDT",
+    "decision_action": "NO_TRADE",
     "selected_tools": [
       "multi_timeframe_history",
-      "orderbook",
-      "liquidity",
-      "volatility",
       "momentum",
-      "trend",
-      "market_regime",
-      "funding"
+      "volatility",
+      "liquidity",
+      "orderbook",
+      "funding",
+      "open_interest",
+      "market_regime"
     ],
     "tool_versions": {
       "multi_timeframe_history": "v1",
-      "orderbook": "v1",
-      "liquidity": "v1",
-      "volatility": "v1",
       "momentum": "v1",
-      "trend": "v1",
-      "market_regime": "v1",
-      "funding": "v1"
+      "volatility": "v1",
+      "liquidity": "v1",
+      "orderbook": "v1",
+      "funding": "v1",
+      "open_interest": "v1",
+      "market_regime": "v1"
     },
     "evidence_items": 8,
     "tool_symbols_match_research_target": true,
-    "stored_scan_id": "scan_de8b3189a8514362947d966ae79a3db2",
-    "stored_selection_id": "mkt_sel_d2e05d52169a4089820048110a07769c",
+    "stored_scan_id": "scan_55130dac1b7a40fba1afc8c468f5e10e",
+    "stored_selection_id": "mkt_sel_7a3f2e196565469da817c5f72365e534",
     "lineage_matches_selection": true,
     "risk_engine_downstream_authority": "UNCHANGED (no order submitted by qualification)"
   },
   "natural_trade": "NO_NATURAL_TRADE_OBSERVED",
-  "elapsed_seconds": 22.7,
+  "elapsed_seconds": 19.4,
   "readiness": {
     "real_okx_discovery_universe_obtained": "YES",
     "market_snapshots_repeatedly_created": "YES",
@@ -1276,6 +1326,8 @@
     "no_research_is_supported": "YES",
     "selected_symbol_invokes_real_tools": "YES",
     "tool_lineage_matches_selected_symbol": "YES",
+    "research_attention_authority_ready": "YES",
+    "no_research_fails_closed_on_production_path": "YES",
     "chief_controlled_directory_exploration": "YES",
     "final_decision_persists_with_lineage": "YES",
     "position_management_loop_independent": "YES (separate task; see tests/opportunity/test_lineage_isolation_gate4.py)",

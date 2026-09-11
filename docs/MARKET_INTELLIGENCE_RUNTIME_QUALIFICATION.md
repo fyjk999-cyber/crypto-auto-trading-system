@@ -45,16 +45,16 @@ Additional observed facts:
 
 | Fact | Value |
 |---|---|
-| `selection_id` | `mkt_sel_d2e05d52...` |
+| `selection_id` | `mkt_sel_7a3f2e19...` |
 | `scan_id` | `scan_de8b3189a85...` (matches the snapshot) |
 | status | `SUCCESS` |
 | selection_state | `SELECT` |
 | provider / model | `deepseek` / `deepseek-flash` |
-| latency_ms | 2152 |
-| input / output tokens | 6364 / 219 |
+| latency_ms | 1617 |
+| input / output tokens | 6336 / 191 |
 | pool size | 30 (bounded) |
 | directory pages in phase 1 | NONE (duplicate/bounded pages are fetched only on REQUEST_DIRECTORY) |
-| selected symbols | `BZUSDT`, `CLUSDT`, `CNPYUSDT` |
+| selected symbols | `CNPYUSDT`, `BZUSDT`, `EGLDUSDT` |
 | persisted to `market_selections` | YES |
 | duplicate guard (`scan_id` re-request) | YES — same `selection_id`, no second model call |
 
@@ -85,6 +85,43 @@ real**:
 
 So the system can answer, from persisted lineage, whether a symbol came from the
 initial pool or from the ChiefTrader's own bounded exploration.
+
+## 2c. Research-attention authority (deterministic, production path)
+
+`LiveLLMDecisionStrategy.desired_symbol()` is the canonical production path that
+decides which symbol receives autonomous NEW research. The OpportunityBoard in
+this run always had a programmatic candidate/rotation symbol available
+(`AMDUSDT`), so any returned symbol would prove a
+fallback.
+
+```
+PROGRAMMATIC_FALLBACK_WHEN_SELECTION_ENABLED = NO
+```
+
+| Selection state | `desired_symbol()` | board candidate consumed |
+|---|---|---|
+| `NO_RESEARCH` | `None` | False |
+| `SELECTION_LLM_UNAVAILABLE` | `None` | False |
+| `SELECTION_TIMEOUT` | `None` | False |
+| `SELECTION_FAILED` | `None` | False |
+| `SELECTION_SKIPPED_BUDGET` | `None` | False |
+| `SELECTION_DEFERRED` | `None` | False |
+| `SELECTION_QUEUE_EXHAUSTED` | `None` | False |
+
+```
+NO_RESEARCH_WITH_EXISTING_BOARD_CANDIDATE:
+desired_symbol = None
+
+SELECTION_LLM_UNAVAILABLE_WITH_EXISTING_BOARD_CANDIDATE:
+desired_symbol = None
+
+SELECTION_QUEUE_EXHAUSTED_WITH_EXISTING_BOARD_CANDIDATE:
+desired_symbol = None
+```
+
+The board agenda is used only when MarketSelection is disabled
+(`selection_service is None`), which is covered separately by the production-path
+unit tests in `tests/opportunity/test_research_attention_authority.py`.
 
 ## 3. Real research round + lineage
 
