@@ -59,7 +59,7 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
                 continue
             if raw.get("state") != "live":
                 continue
-            if raw.get("ctType", "linear") != "linear":
+            if raw.get("ctType") != "linear":
                 continue
             instrument = self._instrument_from_okx_row(raw)
             if instrument is None:
@@ -77,26 +77,39 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         return []
 
     def _instrument_from_okx_row(self, raw: dict) -> Instrument | None:
+        """Build only a fully proven LINEAR_PERP executable instrument.
+
+        Missing/empty/malformed ctVal, ctMult or ctType never becomes a
+        default; the row is excluded instead.
+        """
         inst_id = str(raw.get("instId") or "")
         try:
             canonical = SymbolMapper().to_canonical(inst_id)
         except ValueError:
             return None
-        tick_size = D(raw.get("tickSz", "0"))
-        lot_size = D(raw.get("lotSz", "0"))
-        min_size = D(raw.get("minSz", "0"))
-        contract_size = D(raw.get("ctVal", "0"))
-        contract_multiplier = D(raw.get("ctMult") or "1")
-        if min(tick_size, lot_size, min_size, contract_size, contract_multiplier) <= 0:
+        inst_type = str(raw.get("instType") or "")
+        ct_type = str(raw.get("ctType") or "")
+        if inst_type != "SWAP" or ct_type != "linear":
+            return None
+        if str(raw.get("state") or "") != "live":
+            return None
+        tick_size = _positive_decimal(raw.get("tickSz"))
+        lot_size = _positive_decimal(raw.get("lotSz"))
+        min_size = _positive_decimal(raw.get("minSz"))
+        contract_size = _positive_decimal(raw.get("ctVal"))
+        contract_multiplier = _positive_decimal(raw.get("ctMult"))
+        if any(
+            value is None
+            for value in (
+                tick_size,
+                lot_size,
+                min_size,
+                contract_size,
+                contract_multiplier,
+            )
+        ):
             return None
         base, quote, *_ = inst_id.split("-")
-        inst_type = str(raw.get("instType") or "SWAP")
-        ct_type = raw.get("ctType")
-        instrument_type = (
-            "LINEAR_PERP"
-            if inst_type == "SWAP" and ct_type == "linear"
-            else inst_type
-        )
         return Instrument(
             symbol=canonical,
             base_asset=base,
@@ -109,21 +122,21 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             price_precision=_precision(tick_size),
             quantity_precision=_precision(lot_size),
             exchange="OKX",
-            instrument_type=instrument_type,
+            instrument_type="LINEAR_PERP",
             contract_size=contract_size,
             contract_multiplier=contract_multiplier,
             inst_id=inst_id,
             inst_type=inst_type,
             ct_type=ct_type,
-            ct_val=raw.get("ctVal"),
-            ct_mult=raw.get("ctMult"),
+            ct_val=str(raw.get("ctVal")),
+            ct_mult=str(raw.get("ctMult")),
             ct_val_ccy=raw.get("ctValCcy"),
             settle_ccy=raw.get("settleCcy"),
-            state=raw.get("state", "TRADING"),
+            state="live",
             list_time=raw.get("listTime"),
             expiry_time=raw.get("expTime"),
-            lot_size=raw.get("lotSz"),
-            min_size=raw.get("minSz"),
+            lot_size=str(raw.get("lotSz")),
+            min_size=str(raw.get("minSz")),
         )
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
@@ -178,6 +191,21 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
     async def disconnect(self) -> None:
         await self.feed.close()
         await super().disconnect()
+
+
+def _positive_decimal(value) -> Decimal | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = D(text)
+    except Exception:
+        return None
+    if not parsed.is_finite() or parsed <= 0:
+        return None
+    return parsed
 
 
 def _precision(step: Decimal) -> int:

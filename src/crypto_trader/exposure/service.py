@@ -88,13 +88,21 @@ class ExposureService:
         }
         if raw_price is None and not inverse:
             raise ValueError("canonical exposure requires a factual position price")
+        if instrument_type.upper() == "LINEAR_PERP":
+            contract_size = _required_linear_spec(position, "contract_size")
+            contract_multiplier = _required_linear_spec(
+                position, "contract_multiplier"
+            )
+        else:
+            contract_size = D(position.get("contract_size", "1"))
+            contract_multiplier = D(position.get("contract_multiplier", "1"))
         return ExposureService.calculate(
             quantity=quantity,
             price=raw_price or "1",
             spec=InstrumentExposureSpec(
                 instrument_type=instrument_type,
-                contract_size=D(position.get("contract_size", "1")),
-                contract_multiplier=D(position.get("contract_multiplier", "1")),
+                contract_size=contract_size,
+                contract_multiplier=contract_multiplier,
             ),
             side="LONG" if quantity >= 0 else "SHORT",
         )
@@ -116,3 +124,13 @@ class ExposureService:
             gross += exposure.gross_notional
             signed += exposure.signed_notional
         return Exposure(gross_notional=gross, signed_notional=signed)
+
+
+def _required_linear_spec(position: Mapping[str, object], key: str) -> Decimal:
+    raw = position.get(key)
+    if raw in (None, ""):
+        raise ValueError(f"LINEAR_PERP position missing factual {key}")
+    value = D(raw)
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"LINEAR_PERP position has invalid {key}")
+    return value

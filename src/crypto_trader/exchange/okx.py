@@ -15,6 +15,7 @@ import hmac
 import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import httpx
 
@@ -35,6 +36,21 @@ from crypto_trader.domain.models import (
 )
 from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exchange.base import ExchangeAdapter
+
+
+def _positive_decimal_or_none(value) -> Decimal | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = D(text)
+    except Exception:
+        return None
+    if not parsed.is_finite() or parsed <= 0:
+        return None
+    return parsed
 
 
 def _decimal_places(value: str) -> int:
@@ -310,17 +326,48 @@ class OKXAdapter(ExchangeAdapter):
                     if state in {"suspend", "halt"}
                     else "PENDING"
                 )
-                tick_sz = str(raw.get("tickSz") or "0.00000001")
-                lot_sz = str(raw.get("lotSz") or "0.00000001")
-                min_sz = str(raw.get("minSz") or lot_sz)
-                ct_val = str(raw.get("ctVal") or "1")
-                ct_mult = str(raw.get("ctMult") or "1")
+                if inst_type in {"SWAP", "FUTURES"}:
+                    # Derivative contract math must be provider-explicit.
+                    # Missing ctType/ctVal/ctMult is never defaulted to 1.
+                    ct_type = str(raw.get("ctType") or "")
+                    if ct_type != "linear":
+                        continue
+                    contract_size = _positive_decimal_or_none(raw.get("ctVal"))
+                    contract_multiplier = _positive_decimal_or_none(
+                        raw.get("ctMult")
+                    )
+                    tick_size = _positive_decimal_or_none(raw.get("tickSz"))
+                    lot_size = _positive_decimal_or_none(raw.get("lotSz"))
+                    min_size = _positive_decimal_or_none(raw.get("minSz"))
+                    if any(
+                        value is None
+                        for value in (
+                            contract_size,
+                            contract_multiplier,
+                            tick_size,
+                            lot_size,
+                            min_size,
+                        )
+                    ):
+                        continue
+                    ct_val = str(raw.get("ctVal"))
+                    ct_mult = str(raw.get("ctMult"))
+                else:
+                    ct_type = None
+                    tick_size = D(str(raw.get("tickSz") or "0.00000001"))
+                    lot_size = D(str(raw.get("lotSz") or "0.00000001"))
+                    min_size = D(str(raw.get("minSz") or lot_size))
+                    if min(tick_size, lot_size, min_size) <= 0:
+                        continue
+                    contract_size = Decimal("1")
+                    contract_multiplier = Decimal("1")
+                    ct_val = None
+                    ct_mult = None
                 base = str(raw.get("baseCcy") or "")
                 quote = str(raw.get("quoteCcy") or "")
                 if not base and canonical.endswith("USDT"):
                     base = canonical.removesuffix("USDT")
                     quote = "USDT"
-                instrument_type = inst_type
                 instruments.append(
                     Instrument(
                         symbol=canonical,
@@ -328,12 +375,12 @@ class OKXAdapter(ExchangeAdapter):
                         quote_asset=quote,
                         status=status,
                         exchange="OKX",
-                        instrument_type=instrument_type,
-                        contract_size=D(ct_val),
-                        contract_multiplier=D(ct_mult),
+                        instrument_type=inst_type,
+                        contract_size=contract_size,
+                        contract_multiplier=contract_multiplier,
                         inst_id=inst_id,
                         inst_type=inst_type,
-                        ct_type=str(raw.get("ctType") or "") or None,
+                        ct_type=ct_type,
                         ct_val=ct_val,
                         ct_mult=ct_mult,
                         ct_val_ccy=str(raw.get("ctValCcy") or "") or None,
@@ -341,13 +388,13 @@ class OKXAdapter(ExchangeAdapter):
                         state=str(raw.get("state") or "") or "live",
                         list_time=str(raw.get("listTime") or "") or None,
                         expiry_time=str(raw.get("expTime") or "") or None,
-                        lot_size=lot_sz,
-                        min_size=min_sz,
-                        tick_size=D(tick_sz),
-                        step_size=D(lot_sz),
-                        min_qty=D(min_sz),
-                        quantity_precision=_decimal_places(lot_sz),
-                        price_precision=_decimal_places(tick_sz),
+                        lot_size=str(lot_size),
+                        min_size=str(min_size),
+                        tick_size=tick_size,
+                        step_size=lot_size,
+                        min_qty=min_size,
+                        quantity_precision=_decimal_places(str(lot_size)),
+                        price_precision=_decimal_places(str(tick_size)),
                     )
                 )
         return instruments

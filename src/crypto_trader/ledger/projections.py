@@ -143,15 +143,26 @@ class ProjectionBuilder:
         side = OrderSide(metadata["side"])
         quantity = D(metadata["quantity"])
         price = D(metadata["price"])
+        instrument_type = metadata.get("instrument_type", "SPOT")
+        if instrument_type == "LINEAR_PERP":
+            contract_size = _required_positive_spec(
+                metadata, "contract_size", symbol
+            )
+            contract_multiplier = _required_positive_spec(
+                metadata, "contract_multiplier", symbol
+            )
+        else:
+            contract_size = D(metadata.get("contract_size", "1"))
+            contract_multiplier = D(metadata.get("contract_multiplier", "1"))
         pos = self.snapshot.positions.get(symbol)
         if pos is None:
             pos = PositionView(
                 symbol=symbol,
                 base_asset=metadata.get("base_asset", symbol.replace("USDT", "")),
                 quote_asset=metadata.get("quote_currency", "USDT"),
-                instrument_type=metadata.get("instrument_type", "SPOT"),
-                contract_size=D(metadata.get("contract_size", "1")),
-                contract_multiplier=D(metadata.get("contract_multiplier", "1")),
+                instrument_type=instrument_type,
+                contract_size=contract_size,
+                contract_multiplier=contract_multiplier,
                 leverage=D(metadata.get("approved_leverage", "1")),
             )
             self.snapshot.positions[symbol] = pos
@@ -291,3 +302,22 @@ async def rebuild_projections(
         )
     await session.commit()
     return snapshot
+
+
+def _required_positive_spec(metadata: dict, key: str, symbol: str) -> Decimal:
+    raw = metadata.get(key)
+    if raw in (None, ""):
+        raise ValueError(
+            f"LINEAR_PERP {symbol} metadata missing factual {key}"
+        )
+    try:
+        value = D(raw)
+    except Exception as exc:
+        raise ValueError(
+            f"LINEAR_PERP {symbol} metadata has malformed {key}"
+        ) from exc
+    if not value.is_finite() or value <= 0:
+        raise ValueError(
+            f"LINEAR_PERP {symbol} metadata has non-positive {key}"
+        )
+    return value

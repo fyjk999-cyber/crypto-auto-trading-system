@@ -138,15 +138,25 @@ class RiskEngine:
             expected_direction = "LONG" if intent.side.value == "BUY" else "SHORT"
         if str(original_direction).upper() != expected_direction:
             return fail("DIRECTION_METADATA_MISMATCH")
-        contract_size = D(str(getattr(intent, "metadata", {}).get("contract_size", "1")))
-        contract_multiplier = D(
-            str(getattr(intent, "metadata", {}).get("contract_multiplier", "1"))
-        )
+        intent_metadata = getattr(intent, "metadata", {}) or {}
+        instrument_type = str(intent_metadata.get("instrument_type", "SPOT"))
+        if instrument_type == "LINEAR_PERP":
+            contract_size = _required_linear_contract_spec(
+                intent_metadata, "contract_size"
+            )
+            contract_multiplier = _required_linear_contract_spec(
+                intent_metadata, "contract_multiplier"
+            )
+        else:
+            contract_size = D(str(intent_metadata.get("contract_size", "1")))
+            contract_multiplier = D(
+                str(intent_metadata.get("contract_multiplier", "1"))
+            )
         exposure = ExposureService.calculate(
             quantity=qty,
             price=price,
             spec=InstrumentExposureSpec(
-                instrument_type=str(getattr(intent, "metadata", {}).get("instrument_type", "SPOT")),
+                instrument_type=instrument_type,
                 contract_size=contract_size,
                 contract_multiplier=contract_multiplier,
             ),
@@ -375,3 +385,13 @@ class RiskEngine:
             timestamp=now,
             run_id=run_id,
         )
+
+
+def _required_linear_contract_spec(metadata: dict, key: str) -> Decimal:
+    raw = metadata.get(key)
+    if raw in (None, ""):
+        raise ValueError(f"LINEAR_PERP intent missing factual {key}")
+    value = D(str(raw))
+    if not value.is_finite() or value <= 0:
+        raise ValueError(f"LINEAR_PERP intent has invalid {key}")
+    return value

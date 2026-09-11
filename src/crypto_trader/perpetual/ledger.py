@@ -292,8 +292,13 @@ def _apply_txn(snap: FuturesProjectionSnapshot, txn: LedgerTransactionORM) -> No
         pos.avg_entry_price = D(meta["entry_price"])
         pos.initial_margin = D(meta["initial_margin"])
         pos.leverage = D(meta["leverage"])
-        pos.contract_size = D(meta.get("contract_size", "1"))
-        pos.contract_multiplier = D(meta.get("contract_multiplier", "1"))
+        for key in ("contract_size", "contract_multiplier"):
+            if meta.get(key) in (None, ""):
+                raise ValueError(
+                    f"FUTURES ledger OPEN metadata missing factual {key}"
+                )
+        pos.contract_size = D(meta["contract_size"])
+        pos.contract_multiplier = D(meta["contract_multiplier"])
         snap.margin_balance += D(meta["initial_margin"])
     elif action == "CLOSE":
         pos = snap.positions.get(symbol)
