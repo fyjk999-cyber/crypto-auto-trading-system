@@ -70,7 +70,21 @@ Detailed design and integration package: `CONCURRENCY_AND_INTEGRATION.md`.
 
 ## C4 — Knowledge promotion and compression (G04)
 
-Status: implemented in `src/crypto_trader/learning/growth_knowledge.py`.
+Implementation: `src/crypto_trader/learning/growth_knowledge.py`.
+Tests: `tests/growth_system/test_knowledge_revision.py`.
+Schema draft and field-gap table: `MIGRATION_AND_ROLLBACK.md`.
+
+| Rule | Contract |
+| --- | --- |
+| Lesson | A single case produces a `CANDIDATE` lesson with `sample_count=1`, explicit scope, support/contrary refs and separate `data_completeness`/`measurement_quality`/`hypothesis_support` axes; no PnL-derived confidence |
+| Pattern | Requires `min_pattern_samples` distinct episode ids; duplicate publication of the same episode never increases the sample count |
+| Non-profitability | Pattern support is derived only from structured-review evidence refs; `features_json.profitability_used=false`; no win-rate/profit-factor is derived from PnL |
+| Contradiction | Contrary evidence creates a new retained version and downgrades to `CONTESTED` with an explicit grade; old versions stay auditable |
+| Default retrieval | `CANDIDATE`, `REVOKED`, `EXPIRED` and future `known_at` knowledge are excluded |
+| Revocation/expiry | Append-only `REVOKED`/`EXPIRED` version rows with reason; old versions retained |
+| Compression | Only published (`VALIDATED`/`CONTESTED`) patterns with enough samples; stores source ids/versions/sample counts, contrary refs, invalidation conditions and `known_at`; repeated compression of the same source set is idempotent |
+| Absolute rules | `always/never/must/guaranteed/all trades` language is rejected; output is phrased as a conditional hypothesis |
+| Coin profile | Reuses `AICoinProfileORM`, counts distinct episodes and evidence grades, and is labelled `NOT_A_WIN_RATE` |
 
 ## C5 — Legacy import (G05)
 

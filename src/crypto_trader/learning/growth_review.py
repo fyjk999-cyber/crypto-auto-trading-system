@@ -58,6 +58,16 @@ class ReviewAttempt:
     error_detail: str | None = None
     usage_status: str = "UNKNOWN"
     idempotent: bool = False
+    # Metadata mirrors the attempt row so downstream knowledge publication and
+    # retrieval do not need to re-read the provider input.
+    account_id: str | None = None
+    mode: str | None = None
+    symbol: str | None = None
+    direction: str | None = None
+    regime: str | None = None
+    currency: str | None = None
+    review_date: str | None = None
+    input_hash: str | None = None
 
 
 class ReviewAttemptStore:
@@ -100,6 +110,12 @@ class ReviewAttemptStore:
                 review=review,
                 usage_status=row.usage_status,
                 idempotent=True,
+                account_id=row.account_id,
+                mode=row.mode,
+                symbol=row.symbol,
+                direction=row.direction,
+                review_date=row.review_date,
+                input_hash=row.input_hash,
             )
 
     async def next_attempt_no(
@@ -164,6 +180,19 @@ def _attempt_id(
         f"{review_date}|{episode_id}|{profile_version}|{input_hash}|{attempt_no}"
     )
     return f"attempt_{digest[:40]}"
+
+
+def _attempt_meta(review_input: EpisodeReviewInput, review_date: str, input_hash: str) -> dict:
+    return {
+        "account_id": review_input.account_id,
+        "mode": review_input.mode,
+        "symbol": review_input.symbol,
+        "direction": review_input.direction,
+        "regime": review_input.entry_market_regime,
+        "currency": review_input.currency,
+        "review_date": review_date,
+        "input_hash": input_hash,
+    }
 
 
 class StructuredReviewService:
@@ -300,6 +329,7 @@ class StructuredReviewService:
                 review=None,
                 error_type="CLAIM_LOST",
                 usage_status="UNKNOWN",
+                **_attempt_meta(review_input, review_date, input_hash),
             )
 
         # Provider call: deliberately outside any DB transaction.
@@ -332,6 +362,7 @@ class StructuredReviewService:
                 review=None,
                 error_type="CLAIM_LOST_AFTER_PROVIDER_CALL",
                 usage_status=usage_status,
+                **_attempt_meta(review_input, review_date, input_hash),
             )
 
         if not response.ok:
@@ -355,6 +386,7 @@ class StructuredReviewService:
                 error_type=error_type,
                 error_detail="provider call failed",
                 usage_status=usage_status,
+                **_attempt_meta(review_input, review_date, input_hash),
             )
 
         try:
@@ -377,6 +409,7 @@ class StructuredReviewService:
                 review=None,
                 error_type="REF_NOT_ALLOWED",
                 usage_status=usage_status,
+                **_attempt_meta(review_input, review_date, input_hash),
             )
         except (ValidationError, ValueError, TypeError) as exc:
             await self._persist_invalid(
@@ -388,6 +421,7 @@ class StructuredReviewService:
                 review=None,
                 error_type="SCHEMA_INVALID",
                 usage_status=usage_status,
+                **_attempt_meta(review_input, review_date, input_hash),
             )
 
         persisted = await self.store.persist(
@@ -416,12 +450,14 @@ class StructuredReviewService:
                 review=None,
                 error_type="PERSIST_CONFLICT",
                 usage_status=usage_status,
+                **_attempt_meta(review_input, review_date, input_hash),
             )
         return ReviewAttempt(
             status=STATUS_SUCCEEDED,
             attempt_id=base["attempt_id"],
             review=review,
             usage_status=usage_status,
+            **_attempt_meta(review_input, review_date, input_hash),
         )
 
     async def _persist_invalid(
