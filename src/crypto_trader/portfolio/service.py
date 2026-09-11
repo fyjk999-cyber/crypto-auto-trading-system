@@ -112,30 +112,65 @@ class PortfolioService:
                 await session.execute(
                     select(LedgerTransactionORM).where(
                         LedgerTransactionORM.account_id == account_id,
-                        LedgerTransactionORM.ownership_status == "VERIFIED",
                         LedgerTransactionORM.entry_type.in_(("DEPOSIT", "WITHDRAWAL")),
                     )
                 )
             ).scalars().all()
             cumulative_flow = Decimal("0")
+            cash_flow_reasons: list[str] = []
+            valuation_currency = currency.strip().upper()
             for txn in flow_rows:
                 metadata = txn.metadata_json or {}
-                raw_amount = (
-                    metadata.get("amount")
-                    or metadata.get("quantity")
-                    or metadata.get("total")
-                    or "0"
-                )
-                row_currency = (
+                raw_currency = (
                     metadata.get("currency")
                     or metadata.get("settleCcy")
                     or metadata.get("quote_currency")
-                    or currency
                 )
-                if row_currency != currency:
+                if raw_currency in (None, ""):
+                    cash_flow_reasons.append(
+                        f"CASH_FLOW_CURRENCY_UNPROVEN:{txn.transaction_id}"
+                    )
                     continue
-                amount = abs(D(raw_amount))
+                row_currency = str(raw_currency).strip().upper()
+                if row_currency != valuation_currency:
+                    continue
+                if txn.ownership_status != "VERIFIED":
+                    cash_flow_reasons.append(
+                        f"CASH_FLOW_OWNERSHIP_UNVERIFIED:{txn.transaction_id}"
+                    )
+                    continue
+
+                raw_amount = None
+                for amount_key in ("amount", "quantity", "total"):
+                    candidate = metadata.get(amount_key)
+                    if candidate not in (None, ""):
+                        raw_amount = candidate
+                        break
+                if raw_amount is None:
+                    cash_flow_reasons.append(
+                        f"CASH_FLOW_AMOUNT_UNPROVEN:{txn.transaction_id}"
+                    )
+                    continue
+                try:
+                    amount_value = D(str(raw_amount))
+                except Exception:
+                    cash_flow_reasons.append(
+                        f"CASH_FLOW_AMOUNT_UNPROVEN:{txn.transaction_id}"
+                    )
+                    continue
+                if not amount_value.is_finite():
+                    cash_flow_reasons.append(
+                        f"CASH_FLOW_AMOUNT_UNPROVEN:{txn.transaction_id}"
+                    )
+                    continue
+
+                amount = abs(amount_value)
                 cumulative_flow += amount if txn.entry_type == "DEPOSIT" else -amount
+
+            if cash_flow_reasons:
+                quality = "UNAVAILABLE"
+                reason_codes = list(reason_codes or []) + cash_flow_reasons
+            healthy = quality == VALUATION_QUALITY_HEALTHY
             account_row = (
                 await session.execute(
                     select(AccountProjectionORM).where(
