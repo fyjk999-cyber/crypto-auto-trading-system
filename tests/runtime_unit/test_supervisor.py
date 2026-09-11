@@ -69,3 +69,31 @@ async def test_scanner_can_run_readonly_without_lease(database):
     )
     with pytest.raises(RuntimeError):
         await supervisor.start()
+
+
+async def test_failed_supervised_loop_restarts_with_fresh_coroutine(database):
+    leases = LeaseManager(database.session_factory)
+    attempts = 0
+    recovered = asyncio.Event()
+
+    async def flaky_market_callback():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient")
+        recovered.set()
+
+    supervisor = TradingRuntimeSupervisor(
+        lease_manager=leases,
+        interval_seconds=0.01,
+        renew_interval=3600,
+        market_data_callback=flaky_market_callback,
+    )
+    await supervisor.start()
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=1)
+        assert attempts >= 2
+        assert supervisor.status.restart_count >= 1
+        assert supervisor.status.runtime_state == RuntimeState.RUNNING
+    finally:
+        await supervisor.stop()
