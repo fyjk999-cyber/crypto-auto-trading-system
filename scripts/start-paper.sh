@@ -26,7 +26,7 @@ elif [ ! -d .venv ]; then
 else
   PYTHON_BIN=.venv/bin/python
 fi
-if [ "$PYTHON_BIN" != "$PAPER_RUNTIME_PYTHON" ]; then
+if [ -z "${PAPER_RUNTIME_PYTHON:-}" ]; then
   "$PYTHON_BIN" -m pip install -e '.[dev]' -q
 fi
 mkdir -p data
@@ -37,6 +37,7 @@ fi
 export TRADING_MODE=PAPER
 export PAPER_MODE=PAPER_REAL_MARKET
 export LIVE_TRADING_ENABLED=false
+export LLM_PROVIDER="${LLM_PROVIDER:-deepseek}"
 export RUNNING_SHA="$(git rev-parse HEAD)"
 echo "Trading Mode: PAPER"
 echo "Market Data Mode: PAPER_REAL_MARKET"
