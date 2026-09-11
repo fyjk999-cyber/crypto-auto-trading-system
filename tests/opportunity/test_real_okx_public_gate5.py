@@ -43,6 +43,18 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _run(coro):
+    """Run a live call, turning a transient transport failure into an explicit SKIP.
+
+    An environment/network failure is never reported as PASS: it is skipped with
+    the transport error in the reason (per the directive's honesty rule).
+    """
+    try:
+        return asyncio.run(coro)
+    except httpx.RequestError as exc:  # pragma: no cover - depends on the network
+        pytest.skip(f"NETWORK_FLAKE: {type(exc).__name__} (environment failure, not a pass)")
+
+
 def _client() -> OKXAdapter:
     return OKXAdapter(
         base_url=PUBLIC_BASE,
@@ -64,7 +76,7 @@ def test_real_okx_batch_funding_contract_returns_rows_not_empty():
             await client.disconnect()
         return rows
 
-    rows = asyncio.run(run())
+    rows = _run(run())
     assert isinstance(rows, list)
     assert len(rows) > 100, f"batch funding returned only {len(rows)} rows"
     sample = rows[0]
@@ -88,7 +100,7 @@ def test_real_okx_insttype_only_funding_request_is_rejected():
         except httpx.RequestError as exc:  # pragma: no cover - network flake
             pytest.skip(f"NETWORK_FLAKE: {type(exc).__name__}")
 
-    response = asyncio.run(run())
+    response = _run(run())
     assert response.status_code in (400, 200)
     body = response.json()
     assert str(body.get("code")) != "0"
@@ -105,7 +117,7 @@ def test_real_okx_discovery_universe_is_usdt_perpetuals():
             await client.disconnect()
         return snapshot
 
-    snapshot = asyncio.run(run())
+    snapshot = _run(run())
     assert snapshot.size > 100
     for symbol, instrument in list(snapshot.instruments.items())[:50]:
         assert instrument.inst_id.endswith("-USDT-SWAP")
@@ -140,7 +152,7 @@ def test_real_okx_scan_publishes_truthful_immutable_snapshot():
         finally:
             await client.disconnect()
 
-    board, summary = asyncio.run(run())
+    board, summary = _run(run())
     snapshot = board.current_snapshot()
     assert snapshot is not None
     assert snapshot.scan_id == summary["scan_id"]
@@ -172,7 +184,7 @@ def test_real_okx_candles_are_closed_and_contiguous_enough():
             await client.disconnect()
         return rows
 
-    rows = asyncio.run(run())
+    rows = _run(run())
     assert len(rows) >= 5
     # OKX returns the in-progress candle too; only CLOSED candles may feed
     # history, and the truth contract must report the difference.
@@ -211,5 +223,5 @@ def test_real_okx_funding_failure_semantics_are_truthful():
             await client.disconnect()
         return None
 
-    error = asyncio.run(run())
+    error = _run(run())
     assert error is not None
