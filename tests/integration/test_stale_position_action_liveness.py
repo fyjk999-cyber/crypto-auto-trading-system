@@ -20,8 +20,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-import pytest
-
 from crypto_trader.order.manager import (
     DEFAULT_STALE_POSITION_ACTION_SECONDS,
     POSITION_ACTION_RECONCILIATION_REQUIRED,
