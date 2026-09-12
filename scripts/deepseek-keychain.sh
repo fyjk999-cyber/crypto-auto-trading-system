@@ -29,7 +29,7 @@ case "${1:-}" in
     [[ -n "$key" ]] || { echo "DeepSeek credential is empty." >&2; exit 1; }
     export DEEPSEEK_API_KEY="$key"
     export LLM_PROVIDER=deepseek
-    export LLM_MODEL=deepseek-v4-pro
+    export LLM_MODEL=deepseek-flash
     export LLM_BASE_URL=https://api.deepseek.com
     export LIVE_TRADING_ENABLED=false
     unset key
