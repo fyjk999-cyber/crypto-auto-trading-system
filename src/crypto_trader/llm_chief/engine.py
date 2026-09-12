@@ -208,6 +208,17 @@ class ChiefTraderEngine:
             )
         return MarketSelectionResult(ok=True, status=ST_SUCCESS, output=parsed, **result_kwargs)
 
+    def note_review_suppressed(self, *, reason: str, operation: str) -> None:
+        """Report a call deliberately NOT made (redundant), not a budget miss.
+
+        Routed through the single global budget authority so the runtime can
+        publish ``coalesced_calls`` / ``duplicate_calls_avoided`` and a
+        supervisor can tell suppression apart from exhaustion.
+        """
+        if self.budget is None:
+            return
+        self.budget.note_suppressed(reason=reason, operation=operation)
+
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
         priority = (

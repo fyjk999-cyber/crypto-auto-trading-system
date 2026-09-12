@@ -48,6 +48,19 @@ STATUS_GRANTED = "GRANTED"
 STATUS_SKIPPED_BUDGET = "SKIPPED_BUDGET"
 #: Distinct exhaustion reasons so a supervisor can tell WHY a call was refused.
 #: ``SKIPPED_BUDGET`` stays the generic status; these two carry the precise one.
+#: Intentional suppression reasons. These are NOT budget exhaustion: the call
+#: was deliberately not made because it would have been redundant. Keeping them
+#: distinct is what lets a supervisor tell "we ran out of budget" apart from
+#: "this call was never necessary".
+REASON_REVIEW_COALESCED = "REVIEW_COALESCED"
+REASON_UNCHANGED_CONTEXT = "UNCHANGED_CONTEXT"
+REASON_DUPLICATE_INPUT = "DUPLICATE_INPUT"
+SUPPRESSION_REASONS: tuple[str, ...] = (
+    REASON_REVIEW_COALESCED,
+    REASON_UNCHANGED_CONTEXT,
+    REASON_DUPLICATE_INPUT,
+)
+
 REASON_ENTRY_BUDGET_EXHAUSTED = "ENTRY_BUDGET_EXHAUSTED"
 REASON_POSITION_MANAGEMENT_BUDGET_EXHAUSTED = "POSITION_MANAGEMENT_BUDGET_EXHAUSTED"
 STATUS_DEFERRED = "DEFERRED"
@@ -214,6 +227,14 @@ class GlobalLLMBudget:
         self.skipped_by_priority: dict[str, int] = {}
         self.granted_by_priority: dict[str, int] = {}
         self.skipped_by_reason: dict[str, int] = {}
+        #: Intentional suppressions (redundant calls avoided). Counted OUTSIDE
+        #: the quota: a coalesced call consumed no capacity and is not a miss.
+        self.suppressed_by_reason: dict[str, int] = {}
+        #: Per-priority token and latency attribution (observability only; the
+        #: quota authority stays call-count based).
+        self.input_tokens_by_priority: dict[str, int] = {}
+        self.output_tokens_by_priority: dict[str, int] = {}
+        self._latency_by_priority: dict[str, list] = {}
 
     # ------------------------------------------------------------------ quota
     def _prune(self, now: float) -> None:
@@ -302,6 +323,31 @@ class GlobalLLMBudget:
                 _budget=self,
             )
 
+    def note_suppressed(self, *, reason: str, operation: str) -> None:
+        """Record a call deliberately NOT made because it was redundant.
+
+        Deliberately separate from ``try_acquire``: suppression is not a budget
+        event, so it must never touch ``_granted``, ``skipped_by_reason`` or the
+        rolling window. It exists so the runtime can report
+        ``coalesced_calls`` / ``duplicate_calls_avoided`` instead of hiding the
+        saving inside an opaque skip.
+        """
+        if reason not in SUPPRESSION_REASONS:
+            raise ValueError(f"unknown suppression reason: {reason}")
+        with self._lock:
+            self.suppressed_by_reason[reason] = (
+                self.suppressed_by_reason.get(reason, 0) + 1
+            )
+            self._events.append(
+                {
+                    "priority": None,
+                    "operation": operation,
+                    "state": reason,
+                    "suppressed": True,
+                    "at": datetime.now(UTC).isoformat(),
+                }
+            )
+
     def note_deferred(self, priority: str, *, operation: str, reason: str) -> None:
         with self._lock:
             self._events.append(
@@ -330,7 +376,24 @@ class GlobalLLMBudget:
         started_at: datetime,
     ) -> None:
         elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        effective_latency = latency_ms if latency_ms is not None else elapsed_ms
         with self._lock:
+            # Observability only. The quota authority remains call-count based;
+            # these aggregates exist so a supervisor can see WHO spent the
+            # window and how expensive each priority actually was.
+            if input_tokens is not None:
+                self.input_tokens_by_priority[priority] = (
+                    self.input_tokens_by_priority.get(priority, 0) + int(input_tokens)
+                )
+            if output_tokens is not None:
+                self.output_tokens_by_priority[priority] = (
+                    self.output_tokens_by_priority.get(priority, 0) + int(output_tokens)
+                )
+            total, count = self._latency_by_priority.get(priority, [0, 0])
+            self._latency_by_priority[priority] = [
+                total + int(effective_latency),
+                count + 1,
+            ]
             self._events.append(
                 {
                     "priority": priority,
@@ -372,6 +435,21 @@ class GlobalLLMBudget:
                 "priority_order": list(PRIORITY_ORDER),
                 "position_management_reserve": self.config.reserve_calls,
                 "general_pool": self.config.general_pool,
+                "suppressed_by_reason": dict(self.suppressed_by_reason),
+                "coalesced_calls": int(
+                    self.suppressed_by_reason.get(REASON_REVIEW_COALESCED, 0)
+                ),
+                "duplicate_calls_avoided": int(
+                    self.suppressed_by_reason.get(REASON_DUPLICATE_INPUT, 0)
+                    + self.suppressed_by_reason.get(REASON_UNCHANGED_CONTEXT, 0)
+                ),
+                "input_tokens_by_priority": dict(self.input_tokens_by_priority),
+                "output_tokens_by_priority": dict(self.output_tokens_by_priority),
+                "avg_latency_ms_by_priority": {
+                    priority: round(total / count, 1)
+                    for priority, (total, count) in self._latency_by_priority.items()
+                    if count
+                },
                 "position_management_calls_in_window": sum(
                     1
                     for priority in self._granted_priorities

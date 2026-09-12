@@ -817,14 +817,36 @@ class TradingEngine:
             # Material change observed: remember it, do not act outside the window.
             state["position_review_dirty"] = True
         if state["next_due_at"] > now_epoch:
+            state["last_suppression_reason"] = "REVIEW_COALESCED"
             return False
         last_started = state.get("last_started_at")
         if last_started is None:
+            state.pop("last_suppression_reason", None)
             return True
         elapsed = now_epoch - float(last_started)
         if elapsed >= self.position_review_min_interval_seconds:
+            state.pop("last_suppression_reason", None)
             return True
+        # Inside the coalescing window with an unchanged signature: this call is
+        # deliberately NOT made. Recording it as REVIEW_COALESCED (never as
+        # SKIPPED_BUDGET) is what separates "redundant" from "starved".
+        state["last_suppression_reason"] = "REVIEW_COALESCED"
         return False
+
+    def _note_review_suppressed(self, reason: str, symbol: str) -> None:
+        """Publish an intentionally suppressed position review.
+
+        Best effort by design: observability must never break the review loop.
+        """
+        manager = self.position_manager
+        chief = getattr(manager, "chief", None)
+        note = getattr(chief, "note_review_suppressed", None)
+        if note is None:
+            return
+        try:
+            note(reason=reason, operation=f"position_review:{symbol}")
+        except Exception:
+            logger.debug("suppression note failed", exc_info=True)
 
     async def _review_positions_once(self) -> list[RiskDecision]:
         if self.position_manager is None:
@@ -845,6 +867,10 @@ class TradingEngine:
                     position, state, now_wall, now_epoch
                 )
                 due.append((score, symbol, position))
+            else:
+                suppressed_reason = state.get("last_suppression_reason")
+                if suppressed_reason is not None:
+                    self._note_review_suppressed(suppressed_reason, symbol)
         if not due:
             return []
         due.sort(key=lambda row: row[0], reverse=True)
