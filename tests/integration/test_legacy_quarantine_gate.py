@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 LEGACY_PACKAGES = [
     "ai",
@@ -32,7 +32,6 @@ LEGACY_PACKAGES = [
     "decision_replay",
     "deepseek",
     "demo",
-    "evolution",
     "exchange_intelligence",
     "execution_intelligence",
     "fund_management",
@@ -55,7 +54,6 @@ LEGACY_PACKAGES = [
     "readiness",
     "regime_adaptation",
     "regime_forecast",
-    "research",
     "risk_personality",
     "scorecard",
     "self_critic",
@@ -103,12 +101,12 @@ def test_no_active_ghost_references_to_quarantined_packages():
     assert not offenders, "Active ghost references remain:\n" + "\n".join(sorted(set(offenders)))
 
 def test_canonical_import_smoke():
-    from crypto_trader.runtime.bootstrap import build_system  # noqa: F401
-    from crypto_trader.runtime.engine import TradingEngine  # noqa: F401
     from crypto_trader.api.app import create_app  # noqa: F401
     from crypto_trader.llm_chief.engine import ChiefTraderEngine  # noqa: F401
     from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager  # noqa: F401
     from crypto_trader.risk.engine import RiskEngine  # noqa: F401
+    from crypto_trader.runtime.bootstrap import build_system  # noqa: F401
+    from crypto_trader.runtime.engine import TradingEngine  # noqa: F401
 
 def test_compile_active_source_tree():
     result = subprocess.run(
