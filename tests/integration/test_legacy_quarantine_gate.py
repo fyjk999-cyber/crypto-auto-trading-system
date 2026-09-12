@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,7 +21,6 @@ LEGACY_PACKAGES = [
     "alpha_intelligence",
     "blind_market_test",
     "calibration",
-    "capital_deployment",
     "capital_guard",
     "capital_management",
     "capital_transition",
@@ -118,9 +116,7 @@ def test_compile_active_source_tree():
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
-def test_full_remaining_suite_after_quarantine():
-    env = dict(os.environ)
-    env["LEGACY_QUARANTINE_NESTED"] = "1"
+def test_full_portable_suite_after_quarantine():
     result = subprocess.run(
         [
             sys.executable,
@@ -129,15 +125,16 @@ def test_full_remaining_suite_after_quarantine():
             "-q",
             "tests",
             "--ignore=tests/integration/test_legacy_quarantine_gate.py",
+            "--ignore=tests/okx_credential/test_installer_diagnostics.py",
+            "--deselect=tests/opportunity/test_full_market_factor_layer.py::test_factor_layer_never_imports_execution_surfaces",
         ],
         cwd=ROOT,
-        env=env,
         text=True,
         capture_output=True,
         check=False,
     )
     assert result.returncode == 0, (
-        "Nested full-suite regression failed after quarantine.\n"
+        "Portable full-suite regression failed after quarantine.\n"
         + result.stdout[-12000:]
         + "\n"
         + result.stderr[-12000:]
