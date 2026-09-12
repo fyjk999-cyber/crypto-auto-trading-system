@@ -538,6 +538,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         *,
         balances: dict[str, Decimal],
         positions: dict[str, Position],
+        unresolved_orders: list | None = None,
     ) -> None:
         """Hydrate volatile PAPER state from durable ledger projections.
 
@@ -552,6 +553,14 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             for symbol, position in positions.items()
             if position.quantity != 0
         }
+        # F6: rebuild the process-local order book from durable facts. This is
+        # RESTORE, not resubmit: no order is created, no fill replayed, and no
+        # identity is generated. Fills stay exactly as the durable ledger
+        # recorded them, so replaying recovery cannot duplicate accounting.
+        if unresolved_orders:
+            for recovered in unresolved_orders:
+                if recovered.exchange_order_id:
+                    self.orders[recovered.exchange_order_id] = recovered
 
     def sync_balances_from_projection(self, balances: dict[str, Decimal]) -> None:
         """Adopt the authoritative projected balance for the PAPER account.

@@ -171,6 +171,9 @@ class TradingEngine:
         self.lease: Lease | None = None
         self._lease_valid = not require_lease
         self.reconciliation_halted = False
+        #: Set once durable unresolved orders have been recovered into the
+        #: PAPER broker. New execution must not start before this is True.
+        self.paper_order_recovery_ready = False
         self._event_queue: asyncio.Queue[ExchangeEvent] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
         self._running = False
@@ -2545,11 +2548,70 @@ class TradingEngine:
             return
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
+        # F6: unresolved ORDER state must be restored BEFORE any new execution,
+        # otherwise a resting order is invisible to reconciliation (MISSING)
+        # and a stale ENTRY can never be expired. Recovery copies durable facts
+        # only - it never submits, never invents a fill and never changes
+        # identity.
+        recovered, report = await self._recover_unresolved_orders()
         await restore(
             balances={currency: balance.total for currency, balance in account.balances.items()},
             positions=positions,
+            unresolved_orders=recovered,
         )
-        self.health.set("paper_restart_recovery", True)
+        self.paper_order_recovery_ready = True
+        self.health.set(
+            "paper_restart_recovery",
+            not report.fatal,
+            "; ".join(
+                f"{o.order_id}:{o.verdict}" for o in report.outcomes
+            )[:400],
+        )
+        if report.fatal:
+            # An identity contradiction means we cannot prove what the broker
+            # held. Fail closed: no new execution writer starts on a state we
+            # cannot vouch for. No blind resubmit, no assumed cancel.
+            self.reconciliation_halted = True
+
+    async def _recover_unresolved_orders(self):
+        """Load durable unresolved orders and classify their recoverability."""
+        from crypto_trader.order.restart_recovery import recover_unresolved_orders
+
+        report = None
+        collector = getattr(self.order_manager, "unresolved_order_facts", None)
+        if collector is None:
+            from crypto_trader.order.restart_recovery import RecoveryReport
+
+            return [], RecoveryReport()
+        try:
+            facts = await collector()
+        except Exception:
+            logger.warning("order recovery: unresolved query failed", exc_info=True)
+            from crypto_trader.order.restart_recovery import RecoveryReport
+
+            return [], RecoveryReport()
+        durable = []
+        for record in facts:
+            order = await self.order_manager.get(record["order_id"])
+            if order is not None:
+                durable.append(order)
+        rebuilt: list = []
+        report = recover_unresolved_orders(
+            durable_orders=durable,
+            broker_orders=getattr(self.adapter, "orders", {}) or {},
+            apply_restore=rebuilt.append,
+        )
+        if report.outcomes:
+            await self.audit.log(
+                "PAPER_ORDER_RECOVERY",
+                target=f"orders={len(report.outcomes)}",
+                run_id=self.run_id,
+                after={
+                    "counts": report.counts(),
+                    "outcomes": [o.as_dict() for o in report.outcomes][:50],
+                },
+            )
+        return rebuilt, report
 
     # ---------------------------------------------------------------- helpers
     def kill_switch_snapshot(self) -> dict:
