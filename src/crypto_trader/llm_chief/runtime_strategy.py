@@ -59,6 +59,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         attempt_clock: Callable[[], datetime] | None = None,
         opportunity_board: OpportunityBoard | None = None,
         evidence_router: PerSymbolEvidenceRouter | None = None,
+        shadow_tap: Any | None = None,
         selection_service=None,
     ) -> None:
         self.evidence_engine = evidence_engine
@@ -78,6 +79,10 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # cooldown replaces the single-symbol clock (same semantics).
         self.opportunity_board = opportunity_board
         self.evidence_router = evidence_router
+        # Shadow sidecar tap. Invoked ONLY after the decision above is
+        # durably committed; observe() never awaits, so the realtime path
+        # cannot be delayed by shadow work.
+        self.shadow_tap = shadow_tap
         # ChiefTrader ACTIVE market selection (research-attention only). The
         # selected symbols form the research queue; the SAME ChiefTrader still
         # owns the final directional decision.
@@ -310,6 +315,10 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             opportunity_lineage=lineage,
             evidence_package=(package.model_dump(mode="json") if package else None),
         )
+        # Shadow sidecar observation, strictly AFTER the durable commit above.
+        # Deliberately placed last and wrapped: it cannot alter the decision, and
+        # a shadow fault is swallowed so it can never reach the trading loop.
+        self._observe_for_shadow(ctx=ctx, decision=decision)
         if self.opportunity_board is not None:
             self.opportunity_board.record_decision(
                 symbol=ctx.symbol,
@@ -564,3 +573,52 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 else None
             ),
         }
+
+
+    def _observe_for_shadow(self, *, ctx, decision) -> None:
+        """Best-effort, non-blocking hand-off to the isolated shadow sidecar.
+
+        Contract: the decision is ALREADY committed when this runs. It performs
+        no LLM call, reads no market provider, mutates nothing on the real path
+        and never raises — ``ShadowDecisionTap.observe`` is synchronous and only
+        attempts a bounded ``put_nowait``.
+        """
+        tap = getattr(self, "shadow_tap", None)
+        if tap is None:
+            return
+        try:
+            from crypto_trader.shadow.tap import ShadowObservation
+
+            reason_codes = [
+                str(code) for code in (getattr(decision, "reason_codes", None) or [])
+            ]
+            reference_price = None
+            for attr in ("mark_price", "entry_price"):
+                value = getattr(decision, attr, None)
+                if value is not None:
+                    try:
+                        if float(value) > 0:
+                            reference_price = value
+                            break
+                    except (TypeError, ValueError):
+                        continue
+            tap.observe(
+                ShadowObservation(
+                    decision_id=str(decision.decision_id),
+                    symbol=str(ctx.symbol),
+                    action=str(getattr(decision.action, "value", decision.action)),
+                    reason_codes=reason_codes,
+                    thesis=getattr(decision, "thesis", None),
+                    market_data_quality=str(getattr(ctx, "data_quality", None) or "") or None,
+                    reference_price=reference_price,
+                    market_regime=str(getattr(ctx, "regime", None) or "") or None,
+                    strategy_id=str(getattr(self, "name", "live_llm")),
+                    strategy_version=str(getattr(self, "version", "unknown")),
+                    market_snapshot_id=getattr(ctx, "snapshot_id", None),
+                    factor_snapshot_id=getattr(ctx, "factor_snapshot_id", None),
+                    decided_at=getattr(decision, "created_at", None),
+                )
+            )
+        except Exception:
+            # Fail open toward real trading: shadow never propagates.
+            return
