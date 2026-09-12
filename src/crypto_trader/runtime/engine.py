@@ -62,7 +62,10 @@ from crypto_trader.ledger.service import (
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
-from crypto_trader.order.manager import OrderManager
+from crypto_trader.order.manager import (
+    POSITION_ACTION_STALE,
+    OrderManager,
+)
 from crypto_trader.perpetual.funding_coverage import FundingCoverageService
 from crypto_trader.persistence.database import Database
 from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
@@ -1086,6 +1089,114 @@ class TradingEngine:
         )
 
 
+    async def _resolve_stale_position_action(
+        self, order_id: str, *, trade_plan_id: str | None = None
+    ) -> None:
+        """RECONCILE_THEN_CANCEL_ONLY for a stale position-reducing order.
+
+        A resting order genuinely is pending, so the duplicate guard stays. But
+        a partially filled order must not lock position management forever. The
+        authorised policy is cancel-ONLY:
+
+          1. reconcile against authoritative state FIRST, so a fill that lands
+             at the last moment is consumed instead of being cancelled away;
+          2. only cancel when the refreshed class is still STALE;
+          3. never cancel an ambiguous (UNKNOWN / CANCEL_PENDING) state — that
+             stays fail-closed and keeps reconciling.
+
+        No replacement, no repricing, no market conversion, no resubmission. The
+        duplicate guard keeps blocking until a terminal state is acknowledged,
+        and the newest position intent is replayed through a fresh ChiefTrader
+        review rather than being re-submitted mechanically.
+        """
+        try:
+            facts = await self.order_manager.reconcile_pending_position_action(order_id)
+            if facts is None:
+                return
+            classification = facts.get("classification")
+            await self.audit.log(
+                "POSITION_ACTION_STALE_RECONCILED",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={
+                    "trade_plan_id": trade_plan_id,
+                    "status": facts["status"],
+                    "filled_quantity": facts["filled_quantity"],
+                    "remaining_quantity": facts["remaining_quantity"],
+                    "age_seconds": facts["age_seconds"],
+                    "classification": classification,
+                },
+            )
+            if classification != POSITION_ACTION_STALE:
+                # Ambiguous or already resolved: never act on top of it.
+                return
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_STALE_CANCEL_BLOCKED",
+                    target=order_id,
+                    run_id=self.run_id,
+                    order_id=order_id,
+                    after={"reason": "EXECUTION_LEASE_NOT_HELD"},
+                )
+                return
+            order = await self.order_manager.get(order_id)
+            if order is None:
+                return
+            await self.order_manager.cancel_pending(
+                order_id, reason="STALE_POSITION_REDUCING_ORDER"
+            )
+            # Re-check immediately before the exchange mutation.
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_STALE_CANCEL_BLOCKED",
+                    target=order_id,
+                    run_id=self.run_id,
+                    order_id=order_id,
+                    after={"reason": "EXECUTION_LEASE_LOST_BEFORE_CANCEL"},
+                )
+                return
+            await self.adapter.cancel_order(order.symbol, order.exchange_order_id)
+            await self.audit.log(
+                "POSITION_ACTION_STALE_CANCEL_REQUESTED",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={
+                    "trade_plan_id": trade_plan_id,
+                    "status": "CANCEL_PENDING",
+                    "policy": "RECONCILE_THEN_CANCEL_ONLY",
+                    "remaining_quantity": facts["remaining_quantity"],
+                },
+            )
+            # Once the cancel is acknowledged the blocking action is gone, so
+            # re-arm a fresh review instead of replaying an old intent: the
+            # newest HOLD/REDUCE/EXIT must come from ChiefTrader against current
+            # evidence, not from a mechanically re-submitted historical signal.
+            symbol = order.symbol
+            state = self._position_review_state.get(symbol)
+            if state is not None:
+                state["next_due_at"] = 0.0
+                state.pop("last_review_signature", None)
+            await self.audit.log(
+                "POSITION_REVIEW_REARMED_AFTER_STALE_CANCEL",
+                target=symbol,
+                run_id=self.run_id,
+                after={"trade_plan_id": trade_plan_id, "order_id": order_id},
+            )
+        except Exception:
+            # Fail closed: an ambiguous cancel must never become a new order.
+            logger.exception(
+                "POSITION_ACTION_STALE_CANCEL_FAILED order_id=%s", order_id
+            )
+            await self.audit.log(
+                "POSITION_ACTION_STALE_CANCEL_UNKNOWN",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={"reason": "CANCEL_RESULT_AMBIGUOUS", "fail_closed": True},
+            )
+
     async def _cancel_unsettled_entry_order(self, entry_order) -> None:
         """Cancel a non-terminal entry order before a later EXIT/REDUCE.
 
@@ -1306,8 +1417,12 @@ class TradingEngine:
                             "remaining_quantity": facts["remaining_quantity"],
                             "age_seconds": facts["age_seconds"],
                             "stale_after_seconds": facts["stale_after_seconds"],
+                            "classification": facts.get("classification"),
                             "blocked_action": signal.metadata.get("lifecycle_action"),
                         },
+                    )
+                    await self._resolve_stale_position_action(
+                        facts["order_id"], trade_plan_id=trade_plan_id
                     )
                 return None
 
