@@ -453,7 +453,7 @@ class ChiefContextLoader:
             compressed = [
                 row
                 for row in self._visible_legacy_cards(
-                    compressed, as_of, self.account_id, self.mode
+                    compressed, as_of, account_id, mode
                 )
                 if _scope_applies(
                     row.applicability_scope_json, context.symbol, context.regime

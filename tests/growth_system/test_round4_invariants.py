@@ -169,9 +169,16 @@ async def _seed_card(
         await session.commit()
 
 
-async def _memory_search(growth_db, *, account_id: str, as_of=KNOWN_AT):
+async def _memory_search(
+    growth_db, *, account_id: str, as_of=KNOWN_AT, loader_account: str = "default"
+):
     registry = LLMToolRegistry()
-    register_context_tools(registry, ChiefContextLoader(growth_db.session_factory))
+    register_context_tools(
+        registry,
+        ChiefContextLoader(
+            growth_db.session_factory, account_id=loader_account
+        ),
+    )
     return await registry.call(
         "memory_search",
         SYMBOL,
@@ -187,6 +194,14 @@ async def _memory_search(growth_db, *, account_id: str, as_of=KNOWN_AT):
 async def test_t05_foreign_private_card_does_not_leak(growth_db):
     await _seed_card(growth_db, rule_id="t05_foreign", account_id="acct-b")
     evidence = await _memory_search(growth_db, account_id="acct-a")
+    assert evidence.source_refs == []
+
+
+async def test_t05b_loader_instance_scope_cannot_override_request(growth_db):
+    await _seed_card(growth_db, rule_id="t05b_private", account_id="acct-a")
+    evidence = await _memory_search(
+        growth_db, account_id="acct-b", loader_account="acct-a"
+    )
     assert evidence.source_refs == []
 
 
