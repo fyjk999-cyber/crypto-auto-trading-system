@@ -45,13 +45,15 @@ from crypto_trader.learning.growth_models import (
     GrowthToolSelectionORM,
     utcnow,
 )
-from crypto_trader.llm.tools.registry import ToolEvidence
+from crypto_trader.llm.tools.registry import (
+    EvidenceBudgetConfigurationError,
+    ToolEvidence,
+)
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.persistence.models import TradeEpisodeORM
 
 MAX_ITEMS_PER_CATEGORY = 5
 DEFAULT_TOKEN_BUDGET = 4000
-MIN_EVIDENCE_BUDGET_TOKENS = 80
 
 _INJECTION_PATTERNS = re.compile(
     r"(ignore (all )?previous|disregard .*instructions|system prompt|"
@@ -168,10 +170,21 @@ class GrowthContextLoader:
         until the final serialized payload fits.  Per-category limits are
         already enforced by the individual loaders.
         """
-        if self.budget.token_budget < MIN_EVIDENCE_BUDGET_TOKENS:
-            raise ValueError(
+        minimal = ToolEvidence(
+            tool_name=evidence.tool_name,
+            symbol=evidence.symbol,
+            timestamp=evidence.timestamp,
+            features={"scope_unavailable": True},
+            supporting_evidence=[],
+            contrary_evidence=[],
+            confidence_of_measurement=0.0,
+            data_quality="NO_MATCHES",
+            source_refs=[],
+        )
+        if self._serialized_cost(minimal) > self.budget.token_budget:
+            raise EvidenceBudgetConfigurationError(
                 "TOKEN_BUDGET_CONFIGURATION_INVALID:"
-                f"{self.budget.token_budget}<{MIN_EVIDENCE_BUDGET_TOKENS}"
+                f"{self.budget.token_budget}"
             )
         features = dict(evidence.features or {})
         refs = list(evidence.source_refs or [])
@@ -217,7 +230,7 @@ class GrowthContextLoader:
             if not dropped:
                 # Nothing left to drop: fail closed explicitly rather than
                 # returning an over-budget evidence object.
-                raise ValueError(
+                raise EvidenceBudgetConfigurationError(
                     "TOKEN_BUDGET_CONFIGURATION_INVALID:"
                     f"{self.budget.token_budget}"
                 )

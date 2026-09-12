@@ -46,8 +46,6 @@ from crypto_trader.vector_memory.schemas import MemoryVector
 from crypto_trader.vector_memory.vector_store import MemoryVectorStore
 
 HARD_FILTER_VERSION = "card-hard-filter-v1"
-MIN_CARD_BUDGET_TOKENS = 80
-TRACE_ID_RESERVE_TOKENS = 60
 
 
 @dataclass(frozen=True)
@@ -605,6 +603,9 @@ class CardDecisionTraceStore:
             f"cardtrace_{sha256_text(canonical_json(trace_payload))[:40]}"
         )
         trace_id = trace_id_override or computed_trace_id
+        policy_fingerprint = str(
+            result.metrics.get("policy_fingerprint") or result.policy_version
+        )
         scores = {f"card:{item.rule_id}": item.score for item in result.selected}
         async with self.session_factory() as session:
             existing = await session.get(GrowthCardDecisionTraceORM, trace_id)
@@ -617,6 +618,10 @@ class CardDecisionTraceStore:
                     and existing.context_signature_json == result.context.to_json()
                     and existing.selected_card_refs_json == selected_refs
                     and existing.card_versions_json == versions
+                    and (existing.applicability_json or {}).get(
+                        "_policy_fingerprint"
+                    )
+                    == policy_fingerprint
                 )
                 if compatible:
                     return existing
@@ -651,7 +656,14 @@ class CardDecisionTraceStore:
                 },
                 card_versions_json=versions,
                 retrieval_scores_json=scores,
-                applicability_json={f"card:{item.rule_id}": item.why for item in result.selected},
+                applicability_json={
+                    f"card:{item.rule_id}": item.why
+                    for item in result.selected
+                }
+                | {
+                    "_policy_fingerprint": policy_fingerprint,
+                    "_policy_version": result.policy_version,
+                },
                 candidate_count=int(result.metrics.get("loaded_card_count", 0)),
                 filtered_count=int(result.metrics.get("filtered_card_count", 0)),
                 selected_count=int(result.metrics.get("selected_card_count", 0)),
@@ -692,7 +704,10 @@ def register_experience_card_tool(
     """Register the read-only ``experience_cards`` tool on the official registry."""
 
     async def execute(symbol: str, context: dict[str, Any]):
-        from crypto_trader.llm.tools.registry import ToolEvidence
+        from crypto_trader.llm.tools.registry import (
+            EvidenceBudgetConfigurationError,
+            ToolEvidence,
+        )
 
         chief_context = context.get("chief_context")
         if chief_context is None or getattr(chief_context, "symbol", None) != symbol:
@@ -722,11 +737,6 @@ def register_experience_card_tool(
             "current factual evidence. Cards cannot emit LONG/SHORT/ORDER."
         )
         budget = int(getattr(retriever.policy, "token_budget", 1200))
-        if budget < MIN_CARD_BUDGET_TOKENS:
-            raise ValueError(
-                f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
-                f"<{MIN_CARD_BUDGET_TOKENS}"
-            )
 
         def _card_payload(items) -> list[dict]:
             return [
@@ -764,6 +774,16 @@ def register_experience_card_tool(
             }
             return max(1, len(json.dumps(payload, sort_keys=True, default=str)) // 4)
 
+        minimal_features = {
+            "cards": [],
+            "card_evidence_available": False,
+            "prompt_semantics": "EVIDENCE_ONLY",
+        }
+        if _cost(minimal_features, []) > budget:
+            raise EvidenceBudgetConfigurationError(
+                f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
+            )
+
         # F12/F13: finalize selection under the serialized budget BEFORE the
         # durable trace is written, so trace, metrics and released evidence all
         # describe the same cards.
@@ -779,8 +799,7 @@ def register_experience_card_tool(
             "prompt_semantics": prompt_semantics,
         }
         refs = _refs(selected)
-        # Reserve a bounded trace-id allowance while pruning.
-        while _cost(features, refs) + TRACE_ID_RESERVE_TOKENS > budget:
+        while _cost(features, refs) > budget:
             if selected:
                 dropped = selected.pop()
                 excluded[f"card:{dropped.rule_id}:v{dropped.version}"] = [
@@ -802,7 +821,7 @@ def register_experience_card_tool(
             elif len(str(features.get("prompt_semantics", ""))) > 40:
                 features["prompt_semantics"] = "EVIDENCE_ONLY"
             else:
-                raise ValueError(
+                raise EvidenceBudgetConfigurationError(
                     f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
                 )
         pruned = replace(
@@ -843,7 +862,7 @@ def register_experience_card_tool(
                 elif len(str(failure_features.get("prompt_semantics", ""))) > 40:
                     failure_features["prompt_semantics"] = "EVIDENCE_ONLY"
                 else:
-                    raise ValueError(
+                    raise EvidenceBudgetConfigurationError(
                         f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
                     ) from None
             return ToolEvidence(
@@ -879,7 +898,9 @@ def register_experience_card_tool(
             elif "card_trace_id" in final_features:
                 final_features.pop("card_trace_id", None)
             else:
-                raise ValueError(f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}")
+                raise EvidenceBudgetConfigurationError(
+                    f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
+                )
         return ToolEvidence(
             tool_name="experience_cards",
             symbol=symbol,

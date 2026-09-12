@@ -37,39 +37,67 @@ class ChiefContextLoader:
 
     @staticmethod
     def _legacy_card_allowed(row, as_of: datetime, account_id: str, mode: str) -> bool:
-        created = getattr(row, "created_at", None)
-        if created is not None:
-            created = created.replace(tzinfo=UTC) if created.tzinfo is None else created
-            if created > as_of:
-                return False
-        status = str(getattr(row, "status", None) or "ACTIVE").upper()
-        if status in {"RETIRED", "REVOKED", "EXPIRED", "QUARANTINED"}:
+        """Legacy card gate: allowlist + share_scope + effective request scope.
+
+        The legacy memory tool must not become a permissive fallback for V2
+        cards.  Only explicitly retrievable statuses are allowed, the effective
+        request account/mode is authoritative, and historical visibility is
+        resolved before this check by ``_visible_legacy_cards``.
+        """
+        status = str(getattr(row, "status", None) or "CANDIDATE").upper()
+        if status not in {"ACTIVE", "WATCH"}:
             return False
-        row_account = getattr(row, "account_id", None)
-        row_mode = getattr(row, "mode", None)
-        if row_account in (None, "", "UNKNOWN", "default") and row_mode in (
-            None,
-            "",
-            "UNKNOWN",
-            "PAPER",
-        ):
-            # Legacy unbound card: support-only, still account/mode safe for
-            # the default/PAPER scope and never a cross-account LIVE card.
+        known = getattr(row, "known_at", None) or getattr(row, "created_at", None)
+        if known is not None:
+            known = known.replace(tzinfo=UTC) if known.tzinfo is None else known
+            if known > as_of:
+                return False
+        share_scope = str(
+            getattr(row, "share_scope", None) or "ACCOUNT_MODE"
+        ).upper()
+        if share_scope == "GLOBAL_EXPLICIT":
             return True
-        return row_account == account_id and row_mode == mode
+        return (
+            getattr(row, "account_id", None) == account_id
+            and getattr(row, "mode", None) == mode
+        )
 
     @classmethod
     def _visible_legacy_cards(cls, rows, as_of: datetime, account_id: str, mode: str):
-        latest = {}
+        """Resolve the latest visible version first, then apply the status gate.
+
+        A revoked/CANDIDATE/future latest version must never fall back to an
+        older allowlisted version.
+        """
+        def _known_at(item):
+            value = getattr(item, "known_at", None) or getattr(
+                item, "created_at", None
+            )
+            if value is None:
+                return datetime.min.replace(tzinfo=UTC)
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+        latest: dict[str, object] = {}
         for row in sorted(
             rows,
-            key=lambda item: (item.version or 1, item.id or 0),
+            key=lambda item: (
+                _known_at(item),
+                item.version or 1,
+                item.id or 0,
+            ),
             reverse=True,
         ):
-            if not cls._legacy_card_allowed(row, as_of, account_id, mode):
-                continue
+            known = getattr(row, "known_at", None) or getattr(row, "created_at", None)
+            if known is not None:
+                known = known.replace(tzinfo=UTC) if known.tzinfo is None else known
+                if known > as_of:
+                    continue
             latest.setdefault(row.rule_id, row)
-        return list(latest.values())
+        return [
+            row
+            for row in latest.values()
+            if cls._legacy_card_allowed(row, as_of, account_id, mode)
+        ]
 
     async def _scoped_episode_scope(self, account_id: str, mode: str):
         from crypto_trader.learning.growth_models import GrowthEpisodeBindingORM

@@ -256,7 +256,9 @@ async def test_f04_impossible_budget_is_explicit_configuration_failure(
     loader = GrowthContextLoader(
         growth_db.session_factory, budget=ToolBudget(token_budget=1)
     )
-    with pytest.raises(ValueError, match="TOKEN_BUDGET_CONFIGURATION_INVALID"):
+    from crypto_trader.llm.tools.registry import EvidenceBudgetConfigurationError
+
+    with pytest.raises(EvidenceBudgetConfigurationError):
         await loader.load_tool(
             "memory_search",
             ChiefTraderContext(

@@ -220,7 +220,9 @@ async def test_per_category_limit_and_token_budget(growth_db):
     tiny = GrowthContextLoader(
         growth_db.session_factory, budget=ToolBudget(limit=5, token_budget=1)
     )
-    with pytest.raises(ValueError, match="TOKEN_BUDGET_CONFIGURATION_INVALID"):
+    from crypto_trader.llm.tools.registry import EvidenceBudgetConfigurationError
+
+    with pytest.raises(EvidenceBudgetConfigurationError):
         await tiny.load_tool("memory_search", _context(), as_of=AS_OF)
 
 

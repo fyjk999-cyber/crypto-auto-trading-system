@@ -67,6 +67,10 @@ class DynamicEvidencePackage(BaseModel):
 EvidenceTool = Callable[[str, dict[str, Any]], Awaitable[ToolEvidence]]
 
 
+class EvidenceBudgetConfigurationError(RuntimeError):
+    """The configured evidence budget cannot represent any valid payload."""
+
+
 class LLMToolRegistry:
     """A registry; it does not schedule or require every tool to run."""
 
@@ -127,6 +131,11 @@ class LLMToolRegistry:
                 data_quality="UNAVAILABLE",
                 source_refs=[],
             )
+        except EvidenceBudgetConfigurationError:
+            # A hard-budget configuration error is not normal evidence.  It
+            # must reach the canonical caller instead of being converted into
+            # an oversized UNAVAILABLE payload.
+            raise
         except Exception as exc:
             return ToolEvidence(
                 tool_name=name,

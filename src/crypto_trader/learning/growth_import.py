@@ -305,7 +305,13 @@ class LegacyImporter:
             )
 
     async def _assert_actual_binds(self) -> None:
-        """Resolve the real bind for every import model before mutating."""
+        """Resolve and verify the ACTUAL connection used by every import model.
+
+        Engine URL equality is insufficient: a custom ``async_creator`` can
+        open a different SQLite file while the labelled URL matches.  Each
+        mapper route is therefore exercised with ``PRAGMA database_list`` on the
+        same session that performs the mutation.
+        """
         expected = self._expected_target_path()
         models = (
             GrowthImportBatchORM,
@@ -321,27 +327,36 @@ class LegacyImporter:
                     )
                 engine = getattr(bind, "engine", bind)
                 self._verify_bound_engine(engine, expected)
-            # The engine URL can be a label when an async_creator supplies a
-            # different real SQLite connection.  Verify the database the
-            # session actually opened.
-            rows = (await session.execute(text("PRAGMA database_list"))).all()
-            main_paths = [str(row[2]) for row in rows if len(row) > 2 and row[1] == "main"]
-            if not main_paths or not main_paths[0]:
-                raise ImportSafetyError("cannot resolve actual opened SQLite database")
-            opened = self._normalize_path(main_paths[0])
-            if opened != expected:
-                raise ImportSafetyError(
-                    "legacy importer opened SQLite database does not match target_path"
-                )
-            opened_stat = os.stat(opened)
-            expected_stat = os.stat(expected)
-            if (opened_stat.st_dev, opened_stat.st_ino) != (
-                expected_stat.st_dev,
-                expected_stat.st_ino,
-            ):
-                raise ImportSafetyError(
-                    "legacy importer opened database inode/device mismatch"
-                )
+                rows = (
+                    await session.execute(
+                        text("PRAGMA database_list"),
+                        bind_arguments={"mapper": model.__mapper__},
+                    )
+                ).all()
+                main_paths = [
+                    str(row[2])
+                    for row in rows
+                    if len(row) > 2 and row[1] == "main"
+                ]
+                if not main_paths or not main_paths[0]:
+                    raise ImportSafetyError(
+                        "cannot resolve actual opened SQLite database"
+                    )
+                opened = self._normalize_path(main_paths[0])
+                if opened != expected:
+                    raise ImportSafetyError(
+                        "legacy importer opened SQLite database does not match "
+                        "target_path"
+                    )
+                opened_stat = os.stat(opened)
+                expected_stat = os.stat(expected)
+                if (opened_stat.st_dev, opened_stat.st_ino) != (
+                    expected_stat.st_dev,
+                    expected_stat.st_ino,
+                ):
+                    raise ImportSafetyError(
+                        "legacy importer opened database inode/device mismatch"
+                    )
 
     @staticmethod
     def _assert_test_target(path: str) -> None:
@@ -354,7 +369,10 @@ class LegacyImporter:
             os.path.realpath("/var/folders"),
             os.path.realpath("/private/var/folders"),
         }
-        if not any(absolute == root or absolute.startswith(root + os.sep) for root in allowed):
+        if not any(
+            absolute == root or absolute.startswith(root + os.sep)
+            for root in allowed
+        ):
             raise ImportSafetyError(
                 f"import target must be an ephemeral test database, got {absolute}"
             )

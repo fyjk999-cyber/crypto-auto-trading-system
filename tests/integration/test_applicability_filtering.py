@@ -125,6 +125,8 @@ async def test_context_loader_filters_symbol_scope_future_and_missing_scope(data
                     content="content",
                     source_episode_count=3,
                     applicability_scope_json=SYMBOL_SCOPE,
+                    status="ACTIVE",
+                    known_at=AS_OF - timedelta(hours=1),
                     created_at=AS_OF - timedelta(hours=1),
                 ),
                 AICompressedExperienceORM(
@@ -179,6 +181,8 @@ async def test_loader_tool_memory_and_research_apply_same_scope_rules(database):
                 content="content",
                 source_episode_count=3,
                 applicability_scope_json=SYMBOL_SCOPE,
+                status="ACTIVE",
+                known_at=AS_OF - timedelta(hours=1),
                 created_at=AS_OF - timedelta(hours=1),
             )
         )
