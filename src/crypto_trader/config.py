@@ -88,12 +88,16 @@ class Settings(BaseSettings):
     #: the scheduler stricter than before. Safety cadences still re-arm a
     #: review immediately: any material change (size, price, entry-order state)
     #: bypasses this floor entirely.
-    position_review_min_interval_seconds: float = 30.0
+    #: Also the per-position LLM review ELIGIBILITY window. Scheduled reviews and
+    #: material-event reviews share it, so material events cannot raise the call
+    #: rate above one review per window per position — which is what makes the
+    #: capacity guarantee provable.
+    position_review_min_interval_seconds: float = 60.0
     #: Enforce the position-management capacity gate on NEW entries.
     #: Off by default: the gate is resource readiness, not direction authority,
     #: and flipping default entry behaviour is a policy decision that must be
     #: explicit. Production PAPER/LIVE enables it in bootstrap.
-    enforce_position_management_capacity: bool = False
+    enforce_position_management_capacity: bool = True
     reconciliation_interval_seconds: int = 30
     funding_refresh_interval_seconds: int = 900
     funding_lookback_hours: int = 24

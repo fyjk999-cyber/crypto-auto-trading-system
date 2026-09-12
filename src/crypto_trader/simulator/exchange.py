@@ -50,7 +50,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         # Resource-readiness inputs (authority-neutral): the LLM management
         # budget and the review floor decide how many positions can be managed.
         self.llm_budget = None
-        self.position_review_min_interval_seconds = 30.0
+        # Must match Settings.position_review_min_interval_seconds, otherwise the
+        # capacity guarantee is computed from a cadence the runtime does not use.
+        self.position_review_min_interval_seconds = 60.0
         self.books: dict[str, OrderBook] = {}
         self.sequence: dict[str, int] = {}
         self.fee_rate = D(fee_rate)

@@ -181,13 +181,14 @@ class TradingEngine:
         self.position_review_interval_seconds = max(
             0.5, min(30.0, float(settings.engine_tick_seconds))
         )
-        # Ceiling on position-review REPEAT RATE for an unchanged position.
-        #
-        # The safety cadence above still applies: a material change (fill, size,
-        # price move, order state) re-arms a review immediately, and PnL
-        # deterioration keeps its 5s cadence. What this floor removes is the
-        # blind "nothing changed, ask the LLM again" storm that saturated the
-        # rolling budget and starved active-position management.
+        # Per-position LLM review ELIGIBILITY window. Every review path —
+        # scheduled, material-change, partial-fill, order-state — shares it, so
+        # the call rate per position can never exceed one per window. That is
+        # what makes the management-capacity guarantee provable: a material
+        # event marks the position dirty and is coalesced into the next
+        # eligible review instead of buying an extra call. Deterministic
+        # safety (RiskEngine limits, kill switch, TIME_STOP, duplicate guard,
+        # reconciliation halt) is NOT rate-limited by this.
         self.position_review_min_interval_seconds = float(
             settings.position_review_min_interval_seconds
         )
@@ -655,23 +656,31 @@ class TradingEngine:
     async def _is_due_for_review(
         self, symbol: str, position, state: dict, now_epoch: float
     ) -> bool:
-        """Due AND worth an LLM call.
+        """Single eligibility gate for EVERY kind of position review.
 
-        A material change re-arms the review immediately. Otherwise the review
-        is coalesced to ``position_review_min_interval_seconds`` so an unchanged
-        position cannot burn budget in a blind polling loop.
+        Scheduled reviews, material-change reviews, partial-fill reviews and
+        order-state reviews all pass through here. A material change does NOT
+        buy an extra call: it marks the position dirty so that the NEXT eligible
+        review is prioritised and coalesces every event that landed in the
+        window. That is what keeps the capacity guarantee provable — without it,
+        material events could raise the call rate without bound.
+
+        Evidence freshness is unaffected: a coalesced review still re-reads the
+        current position, order, fills, book and PnL when it runs.
         """
+        signature = await self._position_change_signature(symbol, position)
+        if signature != state.get("last_review_signature"):
+            # Material change observed: remember it, do not act outside the window.
+            state["position_review_dirty"] = True
         if state["next_due_at"] > now_epoch:
             return False
-        signature = await self._position_change_signature(symbol, position)
-        last_signature = state.get("last_review_signature")
         last_started = state.get("last_started_at")
-        if signature != last_signature:
-            return True
         if last_started is None:
             return True
-        unchanged_for = now_epoch - float(last_started)
-        return unchanged_for >= self.position_review_min_interval_seconds
+        elapsed = now_epoch - float(last_started)
+        if elapsed >= self.position_review_min_interval_seconds:
+            return True
+        return False
 
     async def _review_positions_once(self) -> list[RiskDecision]:
         if self.position_manager is None:
@@ -740,6 +749,7 @@ class TradingEngine:
                 state["last_review_signature"] = (
                     await self._position_change_signature(symbol, position)
                 )
+                state["position_review_dirty"] = False
                 return signal
 
         reviewed = await asyncio.gather(
@@ -764,6 +774,10 @@ class TradingEngine:
         overdue = max(0.0, now_epoch - state.get("next_due_at", 0.0))
         hold_bonus = 0.0
         risk_bonus = 0.0
+        # A position whose evidence changed inside the eligibility window is
+        # prioritised, so coalesced events are acted on at the next opportunity
+        # instead of waiting a further full window behind idle positions.
+        dirty_bonus = 5000.0 if state.get("position_review_dirty") else 0.0
         try:
             plan = await self.trade_plans.get_active_for_symbol(position.symbol)
         except Exception:
@@ -786,7 +800,10 @@ class TradingEngine:
             notional = abs(position.quantity) * entry * spec
             if notional > 0 and unrealized < 0:
                 risk_bonus = float(abs(unrealized) / notional) * 1000.0
-        return (1 if overdue > 0 else 0, overdue + hold_bonus + risk_bonus)
+        return (
+            1 if overdue > 0 else 0,
+            overdue + hold_bonus + risk_bonus + dirty_bonus,
+        )
 
     def _review_backoff(self, state: dict) -> float:
         failures = max(1, int(state.get("failures", 0)))

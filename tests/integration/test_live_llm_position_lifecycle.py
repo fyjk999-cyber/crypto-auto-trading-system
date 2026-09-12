@@ -38,7 +38,10 @@ class MutableClock(Clock):
     def now(self) -> datetime:
         return self.value
 
-    def advance(self, seconds: int = 31) -> None:
+    # Default step matches the per-position LLM review eligibility window
+    # (Settings.position_review_min_interval_seconds = 60): a review is only
+    # eligible once that window has elapsed for that position.
+    def advance(self, seconds: int = 61) -> None:
         self.value += timedelta(seconds=seconds)
 
 
