@@ -1089,6 +1089,43 @@ class TradingEngine:
         )
 
 
+    async def _position_management_capacity_available(self) -> bool:
+        """Resource-readiness gate for admitting one more position.
+
+        NOT direction authority: this never chooses or rewrites a direction; it
+        only answers whether the position-management capacity a new position
+        would consume is actually guaranteed. ChiefTrader stays the sole LONG /
+        SHORT authority and this gate can only ever make an entry wait.
+
+        Fail closed: if capacity cannot be computed, no new position is admitted.
+        A safe result of "zero new positions" is acceptable — trading frequency
+        must never be bought with unmanageable positions.
+        """
+        probe = getattr(self.adapter, "position_management_capacity", None)
+        if probe is None:
+            return True
+        try:
+            open_positions = len(
+                [
+                    p
+                    for p in (await self.portfolio.get_positions()).values()
+                    if p.quantity != 0
+                ]
+            )
+            facts = probe(open_positions=open_positions)
+        except Exception:
+            logger.warning("position management capacity check failed", exc_info=True)
+            return False
+        if facts.get("position_management_capacity_available"):
+            return True
+        await self.audit.log(
+            "POSITION_MANAGEMENT_CAPACITY_UNAVAILABLE",
+            target=f"open={open_positions}",
+            run_id=self.run_id,
+            after=facts,
+        )
+        return False
+
     async def _resolve_stale_position_action(
         self, order_id: str, *, trade_plan_id: str | None = None
     ) -> None:
@@ -1258,6 +1295,16 @@ class TradingEngine:
         run_id = self.run_id
         symbol = signal.symbol
         client_order_id = f"{signal.strategy_id}_{signal.signal_id}"[:60]
+        # Resource readiness for a NEW entry only: a position-reducing action
+        # must never be gated by management capacity, or an unmanageable
+        # position could never be reduced. Authority-neutral: this can only make
+        # an entry wait, never pick or change a direction.
+        if (
+            signal.strategy_id == "live_llm"
+            and self.settings.enforce_position_management_capacity
+        ):
+            if not await self._position_management_capacity_available():
+                return None
         if self.enforce_llm_entry_authority and signal.strategy_id not in {
             "live_llm",
             "live_llm_position",

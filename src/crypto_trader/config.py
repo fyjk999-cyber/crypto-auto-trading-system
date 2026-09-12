@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     #: review immediately: any material change (size, price, entry-order state)
     #: bypasses this floor entirely.
     position_review_min_interval_seconds: float = 30.0
+    #: Enforce the position-management capacity gate on NEW entries.
+    #: Off by default: the gate is resource readiness, not direction authority,
+    #: and flipping default entry behaviour is a policy decision that must be
+    #: explicit. Production PAPER/LIVE enables it in bootstrap.
+    enforce_position_management_capacity: bool = False
     reconciliation_interval_seconds: int = 30
     funding_refresh_interval_seconds: int = 900
     funding_lookback_hours: int = 24
