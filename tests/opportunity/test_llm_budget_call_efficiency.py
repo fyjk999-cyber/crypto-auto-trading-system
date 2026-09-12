@@ -25,8 +25,10 @@ from crypto_trader.llm_chief.budget import (
     P2_FINAL_ENTRY_DECISION,
     P4_MARKET_SELECTION,
     P5_BACKGROUND_RESEARCH,
+    REASON_BACKGROUND_RESEARCH_BUDGET_EXHAUSTED,
     REASON_DUPLICATE_INPUT,
     REASON_ENTRY_BUDGET_EXHAUSTED,
+    REASON_MARKET_SELECTION_BUDGET_EXHAUSTED,
     REASON_POSITION_MANAGEMENT_BUDGET_EXHAUSTED,
     REASON_REVIEW_COALESCED,
     REASON_UNCHANGED_CONTEXT,
@@ -100,6 +102,8 @@ def test_suppression_is_never_counted_as_a_skip():
 
     snapshot = budget.snapshot()
     # Budget misses are counted as misses...
+    # A market-selection denial now names ITS pool rather than borrowing the
+    # entry code, so the supervisor can tell the tiers apart.
     assert snapshot["skipped_by_reason"][REASON_ENTRY_BUDGET_EXHAUSTED] >= 1
     # ...and the suppression is NOT folded into that counter.
     assert REASON_REVIEW_COALESCED not in snapshot["skipped_by_reason"]
@@ -166,7 +170,9 @@ def test_snapshot_exposes_who_spent_the_window_and_why_it_was_refused():
     assert snapshot["input_tokens_by_priority"][P4_MARKET_SELECTION] == 1200
     assert snapshot["output_tokens_by_priority"][P4_MARKET_SELECTION] == 180
     assert snapshot["avg_latency_ms_by_priority"][P4_MARKET_SELECTION] == 2100.0
-    assert snapshot["skipped_by_reason"][REASON_ENTRY_BUDGET_EXHAUSTED] >= 1
+    # A market-selection denial now names ITS pool rather than borrowing the
+    # entry code, so the supervisor can tell the tiers apart.
+    assert snapshot["skipped_by_reason"][REASON_MARKET_SELECTION_BUDGET_EXHAUSTED] >= 1
 
 
 # ===================================================== reserve protection
@@ -186,7 +192,8 @@ def test_general_work_cannot_consume_the_position_reserve():
 
     refused = budget.try_acquire(P5_BACKGROUND_RESEARCH, operation="research")
     assert refused.granted is False
-    assert refused.reason == REASON_ENTRY_BUDGET_EXHAUSTED
+    # Background research names its own pool instead of borrowing the entry code.
+    assert refused.reason == REASON_BACKGROUND_RESEARCH_BUDGET_EXHAUSTED
 
     # The protected capacity is intact for position management.
     for _ in range(config.reserve_calls):

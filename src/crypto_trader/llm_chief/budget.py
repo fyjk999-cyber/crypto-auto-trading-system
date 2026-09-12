@@ -62,6 +62,23 @@ SUPPRESSION_REASONS: tuple[str, ...] = (
 )
 
 REASON_ENTRY_BUDGET_EXHAUSTED = "ENTRY_BUDGET_EXHAUSTED"
+#: Research tiers get their own code so a spent P3/P4/P5 pool is never confused
+#: with a spent entry pool or a spent position reserve.
+REASON_SELECTED_SYMBOL_RESEARCH_BUDGET_EXHAUSTED = (
+    "SELECTED_SYMBOL_RESEARCH_BUDGET_EXHAUSTED"
+)
+REASON_MARKET_SELECTION_BUDGET_EXHAUSTED = "MARKET_SELECTION_BUDGET_EXHAUSTED"
+REASON_BACKGROUND_RESEARCH_BUDGET_EXHAUSTED = "BACKGROUND_RESEARCH_BUDGET_EXHAUSTED"
+#: The whole rolling window (not just a pool) was spent.
+REASON_GLOBAL_BUDGET_EXHAUSTED = "GLOBAL_BUDGET_EXHAUSTED"
+
+#: Priority -> precise denial reason. Extends (never replaces) the existing
+#: entry/position split so every pool is individually observable.
+REASON_BY_PRIORITY: dict[str, str] = {
+    P3_SELECTED_SYMBOL_RESEARCH: REASON_SELECTED_SYMBOL_RESEARCH_BUDGET_EXHAUSTED,
+    P4_MARKET_SELECTION: REASON_MARKET_SELECTION_BUDGET_EXHAUSTED,
+    P5_BACKGROUND_RESEARCH: REASON_BACKGROUND_RESEARCH_BUDGET_EXHAUSTED,
+}
 REASON_POSITION_MANAGEMENT_BUDGET_EXHAUSTED = "POSITION_MANAGEMENT_BUDGET_EXHAUSTED"
 STATUS_DEFERRED = "DEFERRED"
 STATUS_OK = "OK"
@@ -156,14 +173,70 @@ class BudgetConfig:
     def is_position_management(priority: str) -> bool:
         return priority in POSITION_MANAGEMENT_PRIORITIES
 
-    def exhaustion_reason_for(self, priority: str) -> str:
-        """Precise reason a priority was refused (see ``REASON_*``)."""
-        return (
-            REASON_POSITION_MANAGEMENT_BUDGET_EXHAUSTED
-            if self.is_position_management(priority)
-            else REASON_ENTRY_BUDGET_EXHAUSTED
+    def exhaustion_reason_for(self, priority: str, *, in_window: int | None = None) -> str:
+        """Precise reason a priority was refused (see ``REASON_*``).
+
+        ``in_window`` lets the caller distinguish a spent POOL from a fully spent
+        WINDOW: when the whole rolling window is used up, no pool has capacity
+        left and the honest answer is GLOBAL_LLM_BUDGET_EXHAUSTED.
+        """
+        # Position management is checked FIRST: the reserve bounds only
+        # non-position work, so a position priority can legitimately consume the
+        # whole window. When that happens the honest label is "position
+        # management capacity spent", not the generic global code.
+        if self.is_position_management(priority):
+            return REASON_POSITION_MANAGEMENT_BUDGET_EXHAUSTED
+        if in_window is not None and in_window >= self.max_calls_per_window:
+            return REASON_GLOBAL_BUDGET_EXHAUSTED
+        return REASON_BY_PRIORITY.get(priority, REASON_ENTRY_BUDGET_EXHAUSTED)
+
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetDenial:
+    """Structured, entity-complete refusal for one budget request.
+
+    Replaces the bare ``"SKIPPED_BUDGET"`` string that the tool-selection path
+    used to return: that string forced every consumer (tool orchestrator,
+    decision trace, supervisor) to treat a spent research pool, a spent entry
+    pool and a spent position reserve as the same opaque event.
+    """
+
+    reason: str
+    priority: str
+    operation: str
+    pool: str
+    effective_ceiling: int
+    current_usage: int
+    total_limit: int
+
+    @classmethod
+    def from_ticket(cls, ticket: BudgetTicket) -> BudgetDenial:
+        return cls(
+            reason=str(ticket.reason or STATUS_SKIPPED_BUDGET),
+            priority=ticket.priority,
+            operation=ticket.operation,
+            pool=("POSITION_MANAGEMENT"
+                  if ticket.priority in POSITION_MANAGEMENT_PRIORITIES
+                  else "GENERAL"),
+            effective_ceiling=int(ticket.effective_ceiling or 0),
+            current_usage=int(ticket.current_usage or 0),
+            total_limit=int(ticket.total_limit or 0),
         )
 
+    def as_reason_code(self) -> str:
+        return self.reason
+
+    def as_facts(self) -> dict:
+        return {
+            "reason": self.reason,
+            "priority": self.priority,
+            "operation": self.operation,
+            "budget_pool": self.pool,
+            "effective_ceiling": self.effective_ceiling,
+            "current_usage": self.current_usage,
+            "total_limit": self.total_limit,
+        }
 
 
 @dataclass(slots=True)
@@ -177,6 +250,10 @@ class BudgetTicket:
     started_at: datetime
     #: Precise refusal reason when ``granted`` is False (see ``REASON_*``).
     reason: str | None = None
+    #: Diagnostics captured at decision time so a denial is self-explaining.
+    effective_ceiling: int | None = None
+    current_usage: int | None = None
+    total_limit: int | None = None
     _budget: GlobalLLMBudget | None = None
     _completed: bool = False
 
@@ -251,9 +328,11 @@ class GlobalLLMBudget:
             if not self.config.is_position_management(priority)
         )
 
-    def _refuse(self, priority: str, operation: str) -> BudgetTicket:
+    def _refuse(
+        self, priority: str, operation: str, *, in_window: int | None = None
+    ) -> BudgetTicket:
         """Record and return a refused ticket carrying the precise reason."""
-        reason = self.config.exhaustion_reason_for(priority)
+        reason = self.config.exhaustion_reason_for(priority, in_window=in_window)
         self.skipped_by_priority[priority] = (
             self.skipped_by_priority.get(priority, 0) + 1
         )
@@ -274,6 +353,13 @@ class GlobalLLMBudget:
             state=STATUS_SKIPPED_BUDGET,
             started_at=datetime.now(UTC),
             reason=reason,
+            effective_ceiling=self.config.ceiling_for(priority),
+            current_usage=(
+                in_window
+                if in_window is not None
+                else len(self._granted)
+            ),
+            total_limit=self.config.max_calls_per_window,
         )
 
     def try_acquire(self, priority: str, *, operation: str) -> BudgetTicket:
@@ -285,7 +371,7 @@ class GlobalLLMBudget:
             in_window = len(self._granted)
             ceiling = self.config.ceiling_for(priority)
             if in_window >= ceiling:
-                return self._refuse(priority, operation)
+                return self._refuse(priority, operation, in_window=in_window)
             # Protected position-management reserve. The effective limit for
             # non-position work is ``min(ceiling, general_pool)`` so this can
             # only ever tighten the OLD contract (ceiling), never loosen it:
@@ -302,7 +388,7 @@ class GlobalLLMBudget:
                 and self.config.reserve_calls > 0
                 and in_window >= effective
             ):
-                return self._refuse(priority, operation)
+                return self._refuse(priority, operation, in_window=in_window)
             self._granted.append(now)
             self._granted_priorities.append(priority)
             self.granted_by_priority[priority] = self.granted_by_priority.get(priority, 0) + 1
