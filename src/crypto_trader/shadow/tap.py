@@ -86,6 +86,7 @@ class ShadowTapStats:
     dropped_ineligible: int = 0
     dropped_queue_full: int = 0
     dropped_store_error: int = 0
+    dropped_capacity: int = 0
     created: int = 0
     deduplicated: int = 0
 
@@ -96,6 +97,7 @@ class ShadowTapStats:
             "dropped_ineligible": self.dropped_ineligible,
             "dropped_queue_full": self.dropped_queue_full,
             "dropped_store_error": self.dropped_store_error,
+            "dropped_capacity": self.dropped_capacity,
             "created": self.created,
             "deduplicated": self.deduplicated,
         }
@@ -203,6 +205,11 @@ class ShadowDecisionTap:
                     self.stats.created += 1
                     if self.on_persisted is not None:
                         self.on_persisted(result.candidate_id)
+                elif str(result.reason).startswith("SHADOW_SAMPLE_DROPPED"):
+                    # Capacity refusal is the DESIGNED outcome of the resource
+                    # caps, not a fault: counting it as an error would make a
+                    # healthy saturated sidecar look broken.
+                    self.stats.dropped_capacity += 1
                 else:
                     self.stats.dropped_store_error += 1
                 persisted += 1
