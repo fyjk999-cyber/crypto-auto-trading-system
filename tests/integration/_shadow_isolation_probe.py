@@ -35,6 +35,55 @@ FEED_REFRESH_METHODS = (
 SYMBOL = "BTCUSDT"
 
 
+
+class _StubOkxClient:
+    """Offline OKX client: identical answers in every mode, no network."""
+
+    async def get_candles(self, symbol, *a, **k):
+        return []
+
+    async def get_ticker(self, symbol):
+        return {"last": "100"}
+
+    async def get_orderbook(self, symbol, limit: int = 100):
+        return {"bids": [["100", "1"]], "asks": [["101", "1"]]}
+
+    async def get_mark_price(self, symbol):
+        return {"markPx": "100"}
+
+    async def get_index_price(self, symbol):
+        return {"idxPx": "100"}
+
+    async def get_funding_rate(self, symbol):
+        return {"fundingRate": "0.0001"}
+
+    async def get_open_interest(self, symbol):
+        return {"oi": "1000"}
+
+
+async def _exercise_market_data() -> int:
+    """Drive the REAL feed once so the provider counter is genuinely armed.
+
+    Without this the counter records nothing and every mode reports 0, making the
+    A/B delta a vacuous proof. Uses a stub client, so no network is involved.
+    """
+    from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
+
+    feed = OKXPublicMarketFeed(
+        symbol=SYMBOL, client=_StubOkxClient(), min_refresh_interval_seconds=0.0
+    )
+    attempted = 0
+    for _ in range(1):
+        try:
+            await feed.refresh(SYMBOL)
+        except Exception:
+            # A parse error still means the provider WAS consulted, which is what
+            # the counter measures.
+            pass
+        attempted += 1
+    return attempted
+
+
 def _observation(index: int):
     from crypto_trader.shadow.tap import ShadowObservation
 
@@ -162,6 +211,9 @@ async def _run_mode(*, mode: str, observations: int, duration: float) -> dict:
     seen: list[float] = []
     result = {"mode": mode, "observations": observations}
     with ProviderRequestCounter() as record_requests:
+        # Arm the counter by exercising the real market-data path in EVERY mode,
+        # with identical work, so A/B differ only by the shadow sidecar.
+        await _exercise_market_data()
         if mode != "A":
             store = ShadowCandidateStore(_session_factory())
             tap = ShadowDecisionTap(store=store)

@@ -64,14 +64,27 @@ def test_shadow_enabling_adds_zero_provider_requests(isolation_report):
 
 
 def test_provider_delta_is_not_vacuous(isolation_report):
-    """Guard against a hollow proof: the counter must have been armed.
+    """Guard against a hollow proof: the counter must have FIRED, not just exist.
 
-    If instrumentation silently failed, every mode would report 0 and the delta
-    test above would pass for the wrong reason. A non-empty breakdown of
-    instrumented feed methods fails loudly instead.
+    The counter pre-populates one key per patched feed method, so a non-empty
+    dict proves nothing. What matters is that every instrumented method was
+    actually CALLED at least once in every mode; otherwise each mode reports 0
+    and the A/B delta passes for the wrong reason.
     """
-    breakdown = isolation_report["A"]["provider_breakdown"]
-    assert breakdown, "provider counter was never armed - delta proof would be hollow"
+    for mode in ("A", "B_100", "C_SATURATION"):
+        breakdown = isolation_report[mode]["provider_breakdown"]
+        instrumented = [name for name, count in breakdown.items() if count > 0]
+        assert len(instrumented) > 0, (
+            f"{mode}: provider counter never fired — A/B delta would be vacuous "
+            f"(breakdown={breakdown})"
+        )
+        assert all(count > 0 for count in breakdown.values()), (
+            f"{mode}: some instrumented provider method never fired "
+            f"(breakdown={breakdown})"
+        )
+        assert isolation_report[mode]["provider_requests"] > 0, (
+            f"{mode}: provider request total is 0"
+        )
 
 
 # ------------------------------------------------------------ §8 event loop lag
@@ -127,3 +140,45 @@ def test_tap_cost_is_linear_not_quadratic(isolation_report):
     assert large < max(small, 0.05) * 10, (
         f"per-observation cost grew from {small}ms to {large}ms"
     )
+
+
+# ------------------------------------------------- §7 non-blocking contract
+
+
+def test_shadow_consumer_yields_to_the_event_loop():
+    """The consumer must await between passes rather than monopolise the loop.
+
+    The out-of-process probe proves the OBSERVED result (no sustained
+    starvation); this guards the mechanical reason it holds, so a future edit
+    cannot remove the yield and leave the probe as the only detector.
+    """
+    import inspect
+
+    from crypto_trader.shadow import tap as tap_module
+
+    src = inspect.getsource(tap_module.ShadowDecisionTap._drain)
+    assert "await asyncio.sleep" in src, "consumer must yield to the loop"
+    # Bounded work per pass, not an unbounded drain of the whole queue.
+    assert "drain_once()" in src
+
+
+def test_tap_producer_cannot_block_the_caller():
+    """`observe` is synchronous with no await: nothing can block the loop on it."""
+    import inspect
+
+    from crypto_trader.shadow.tap import ShadowDecisionTap
+
+    src = inspect.getsource(ShadowDecisionTap.observe)
+    assert "async def" not in src
+    assert "await " not in src
+    assert "put_nowait" in src
+    assert "QueueFull" in src
+
+
+def test_scheduler_starvation_metrics_are_non_vacuous(isolation_report):
+    """Guard the starvation proof itself: the schedulers must have actually run."""
+    schedulers = isolation_report["schedulers"]
+    for name in ("position_review", "market_scan", "reconciliation"):
+        entry = schedulers[name]
+        assert entry["runs"] > 0, f"{name} never ran — the proof would be hollow"
+        assert set(entry) >= {"runs", "misses"}
