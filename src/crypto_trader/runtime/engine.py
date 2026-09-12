@@ -193,6 +193,11 @@ class TradingEngine:
             settings.position_review_min_interval_seconds
         )
         self._position_review_state: dict[str, dict] = {}
+        # Bounded episode-materialization retry bookkeeping (per closed plan).
+        self._episode_retry_state: dict[str, dict] = {}
+        self._episode_retry_max_attempts = 5
+        self._episode_retry_window_seconds = 300.0
+        self._episode_retry_limit = 50
 
     # ------------------------------------------------------------------ state
     async def start(self, run_id: str | None = None) -> str:
@@ -538,6 +543,54 @@ class TradingEngine:
                 self.health.set("funding_accounting", False, type(exc).__name__)
             await asyncio.sleep(max(1, self.settings.funding_refresh_interval_seconds))
 
+    async def _retry_episode_materialization(self) -> int:
+        """Retry closed-but-unmaterialised episodes, bounded and idempotent.
+
+        Reuses the project's existing formal path
+        (``TradeEpisodeStore.materialize_pending_closed``) instead of adding a
+        second mechanism. The builder re-reads durable facts on every attempt
+        and is write-once per plan (``episode_<trade_plan_id>``), so racing
+        triggers still yield exactly one Episode.
+
+        Bounded on purpose: no infinite retry, no busy loop, no LLM calls. Once
+        the attempt budget is exhausted the plan stays un-materialised and the
+        existing fail-closed signal remains — completeness rules are NOT relaxed
+        to make health green.
+        """
+        if self.trade_episodes is None:
+            return 0
+        now = self.clock.now().timestamp()
+        try:
+            pending = await self.trade_episodes.pending_closed_plan_ids(
+                limit=self._episode_retry_limit
+            )
+        except Exception:
+            logger.warning("episode retry scan failed", exc_info=True)
+            return 0
+        if not pending:
+            return 0
+        eligible = []
+        for plan_id in pending:
+            state = self._episode_retry_state.setdefault(
+                plan_id, {"attempts": 0, "first_attempt_at": now}
+            )
+            elapsed = now - float(state["first_attempt_at"])
+            if state["attempts"] >= self._episode_retry_max_attempts:
+                continue
+            if elapsed > self._episode_retry_window_seconds:
+                continue
+            state["attempts"] += 1
+            eligible.append(plan_id)
+        if not eligible:
+            return 0
+        try:
+            return await self.trade_episodes.materialize_pending_closed(
+                limit=len(eligible)
+            )
+        except Exception:
+            logger.warning("episode retry pass failed", exc_info=True)
+            return 0
+
     async def _resync_paper_balance_from_projection(self) -> None:
         """Refresh the PAPER account cache from committed ledger projections.
 
@@ -562,6 +615,16 @@ class TradingEngine:
             report = await self.reconciliation.reconcile(self.adapter)
             self.reconciliation_halted = report.halt
             self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]))
+            # Bounded episode-materialization retry on an EXISTING cadence.
+            #
+            # A close writes the plan synchronously, but the builder can still
+            # return None on that first attempt (the factual position
+            # projection may not be visible yet). Previously the only retry came
+            # from the funding loop at funding_refresh_interval_seconds (900s),
+            # so episode creation waited on an UNRELATED future event — measured
+            # 700.3s. Running the same idempotent builder here bounds that to the
+            # reconciliation cadence.
+            await self._retry_episode_materialization()
 
     # ------------------------------------------------------------------ tick
     async def tick(self, *, include_position_reviews: bool = True) -> list[RiskDecision]:
