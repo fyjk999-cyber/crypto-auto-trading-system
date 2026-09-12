@@ -1,12 +1,69 @@
-INFO:     Started server process [7293]
+INFO:     Started server process [41750]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-INFO:     127.0.0.1:59258 - "GET /market HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59262 - "GET /market/sources HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59264 - "GET /exchange-health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:59428 - "GET /market/klines?symbol=BTCUSDT&interval=1m&limit=5 HTTP/1.1" 200 OK
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [7293]
+INFO:     127.0.0.1:63237 - "GET /ready HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63253 - "GET /version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63254 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63255 - "GET /llm/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63267 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63268 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63269 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63270 - "GET /llm/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63271 - "GET /llm/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63277 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63287 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63289 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63292 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63291 - "GET /version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63294 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63295 - "GET /opportunity/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63290 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63303 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63304 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63296 - "GET /llm/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63300 - "GET /trade-episodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63299 - "GET /trade-plans HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63293 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63302 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63297 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63301 - "GET /llm/decisions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63288 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63298 - "GET /market HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63322 - "GET /version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63325 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63326 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63327 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63333 - "GET /opportunity/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63335 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63337 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63328 - "GET /llm/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63330 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63324 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63332 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63338 - "GET /trade-episodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63331 - "GET /trade-plans HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63329 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63336 - "GET /llm/decisions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63323 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63334 - "GET /market HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63464 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63465 - "GET /version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63468 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63472 - "GET /killswitch HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63474 - "GET /opportunity/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63475 - "GET /regime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63478 - "GET /strategies HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63470 - "GET /llm/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63469 - "GET /orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63463 - "GET /account HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63467 - "GET /trade-plans HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63476 - "GET /trade-episodes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63466 - "GET /risk HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63477 - "GET /learning HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63471 - "GET /llm/decisions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63473 - "GET /positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63479 - "GET /market HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63497 - "GET /version HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63499 - "GET /runtime HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63500 - "GET /health HTTP/1.1" 200 OK

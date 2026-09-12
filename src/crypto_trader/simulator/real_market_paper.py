@@ -182,8 +182,31 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         return state
 
     async def submit_order(self, order: Order) -> Order:
-        """Reject PAPER_REAL_MARKET orders without a factual same-symbol book."""
+        """Reject PAPER_REAL_MARKET orders without a factual same-symbol book.
+
+        The factual book is populated from OKX public levels by
+        ``refresh_market_state``. Historically nothing called it, while the
+        base matcher falls back to ``seed_book`` (a SYNTHETIC book), so this
+        guard rejected EVERY order and the PAPER runtime could never fill.
+        The guard is correct — the wiring was missing — hence the factual book
+        is materialised here, immediately before the guard runs.
+
+        Semantics unchanged: when the factual book genuinely cannot be built
+        (unhealthy feed, non-positive best bid/ask, non-factual depth) this
+        still fails closed with ``OrderRejected`` and never falls back to a
+        synthetic book.
+        """
         book = self.books.get(order.symbol)
+        if book is None or book.best_bid() is None or book.best_ask() is None:
+            try:
+                await self.refresh_market_state(order.symbol)
+            except MarketDataUnhealthy as exc:
+                # Same controlled outcome the guard always produced: a factual
+                # book could not be built, so reject instead of falling back to
+                # seed_book(). Re-raised as OrderRejected so the engine's
+                # existing submit error contract is unchanged.
+                raise OrderRejected("MARKET_DATA_UNAVAILABLE") from exc
+            book = self.books.get(order.symbol)
         if book is None or book.best_bid() is None or book.best_ask() is None:
             raise OrderRejected("MARKET_DATA_UNAVAILABLE")
         if book.symbol != order.symbol:
