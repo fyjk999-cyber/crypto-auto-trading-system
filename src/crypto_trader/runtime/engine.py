@@ -198,6 +198,10 @@ class TradingEngine:
         self._episode_retry_max_attempts = 5
         self._episode_retry_window_seconds = 300.0
         self._episode_retry_limit = 50
+        #: Plans whose bounded retry window closed without an Episode. Kept
+        #: separate from the attempt budget so the health report can tell a
+        #: genuine materialization failure from a transient one.
+        self._episode_retry_exhausted: set[str] = set()
 
     # ------------------------------------------------------------------ state
     async def start(self, run_id: str | None = None) -> str:
@@ -571,15 +575,24 @@ class TradingEngine:
             return 0
         eligible = []
         for plan_id in pending:
-            state = self._episode_retry_state.setdefault(
-                plan_id, {"attempts": 0, "first_attempt_at": now}
-            )
-            elapsed = now - float(state["first_attempt_at"])
-            if state["attempts"] >= self._episode_retry_max_attempts:
+            # The retry window is anchored at the FIRST ACTUAL ATTEMPT. Creating
+            # the entry with ``first_attempt_at=now`` from a mere observation
+            # would restart the window on every scan and, once the attempt
+            # budget was spent, would let the plan look permanently exhausted
+            # without the retry budget ever having been honoured.
+            state = self._episode_retry_state.setdefault(plan_id, {"attempts": 0})
+            attempts = int(state["attempts"])
+            first_attempt_at = state.get("first_attempt_at")
+            elapsed = (now - float(first_attempt_at)) if first_attempt_at else 0.0
+            if attempts >= self._episode_retry_max_attempts:
+                self._episode_retry_exhausted.add(plan_id)
                 continue
-            if elapsed > self._episode_retry_window_seconds:
+            if first_attempt_at is not None and elapsed > self._episode_retry_window_seconds:
+                self._episode_retry_exhausted.add(plan_id)
                 continue
-            state["attempts"] += 1
+            if first_attempt_at is None:
+                state["first_attempt_at"] = now
+            state["attempts"] = attempts + 1
             eligible.append(plan_id)
         if not eligible:
             return 0
@@ -590,6 +603,69 @@ class TradingEngine:
         except Exception:
             logger.warning("episode retry pass failed", exc_info=True)
             return 0
+
+    async def _refresh_trade_episode_health(self) -> str:
+        """Report trade_episode health from DURABLE state, not from close time.
+
+        Observed control-plane defect: the close path sets this component once
+        and never revisits it, so an Episode that legitimately materialises
+        later (bounded retry, or any other legal path) left the component falsely
+        unhealthy forever.
+
+        Health only OBSERVES facts here: it reads the durable store and updates
+        one health component. It never builds, mutates or deletes an Episode and
+        never touches orders, fills, positions, balances or funding.
+
+        Aggregation over every CLOSED plan lacking an Episode (worst state wins):
+
+        * none pending              -> healthy
+        * pending, retry budget left -> not-ok with detail MATERIALIZATION_PENDING
+        * retry budget exhausted     -> not-ok with detail
+          EPISODE_MATERIALIZATION_FAILED (+ plan id, attempts, window age)
+
+        The severity order is FAILED > PENDING > HEALTHY, so one successful
+        Episode can never mask a failure elsewhere. The project's health
+        framework is boolean-only; no new DEGRADED state is invented, the
+        distinction is carried in ``detail``.
+        """
+        if self.trade_episodes is None:
+            return "UNAVAILABLE"
+        try:
+            outstanding = await self.trade_episodes.pending_closed_plan_ids(
+                limit=self._episode_retry_limit
+            )
+        except Exception:
+            logger.warning("trade episode health scan failed", exc_info=True)
+            self.health.set("trade_episode", False, "EPISODE_STATE_UNREADABLE")
+            return "UNREADABLE"
+        if not outstanding:
+            self.health.set("trade_episode", True)
+            self._episode_retry_exhausted.clear()
+            return "HEALTHY"
+        exhausted = [p for p in outstanding if p in self._episode_retry_exhausted]
+        if exhausted:
+            plan_id = sorted(exhausted)[0]
+            state = self._episode_retry_state.get(plan_id) or {}
+            self.health.set(
+                "trade_episode",
+                False,
+                "EPISODE_MATERIALIZATION_FAILED"
+                f" trade_plan_id={plan_id}"
+                f" attempts={int(state.get('attempts', 0))}"
+                f" max_attempts={self._episode_retry_max_attempts}"
+                f" window_seconds={self._episode_retry_window_seconds}"
+                f" outstanding={len(outstanding)}",
+            )
+            return "FAILED"
+        self.health.set(
+            "trade_episode",
+            False,
+            "EPISODE_MATERIALIZATION_PENDING"
+            f" closed_plans_without_episode={len(outstanding)}"
+            f" max_attempts={self._episode_retry_max_attempts}"
+            f" window_seconds={self._episode_retry_window_seconds}",
+        )
+        return "PENDING"
 
     async def _resync_paper_balance_from_projection(self) -> None:
         """Refresh the PAPER account cache from committed ledger projections.
@@ -625,6 +701,11 @@ class TradingEngine:
             # 700.3s. Running the same idempotent builder here bounds that to the
             # reconciliation cadence.
             await self._retry_episode_materialization()
+            # Health must observe the durable result of the pass above, not the
+            # pass's return value: the component has to reflect what is actually
+            # persisted, whether the Episode came from this retry or from any
+            # other legal materialisation path.
+            await self._refresh_trade_episode_health()
 
     # ------------------------------------------------------------------ tick
     async def tick(self, *, include_position_reviews: bool = True) -> list[RiskDecision]:
