@@ -540,12 +540,31 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         """
 
         self._ensure_connected()
-        self.balances = {currency: D(amount) for currency, amount in balances.items()}
+        self.sync_balances_from_projection(balances)
         self.positions = {
             symbol: position.model_copy(deep=True)
             for symbol, position in positions.items()
             if position.quantity != 0
         }
+
+    def sync_balances_from_projection(self, balances: dict[str, Decimal]) -> None:
+        """Adopt the authoritative projected balance for the PAPER account.
+
+        Narrow runtime counterpart of ``restore_from_canonical_state``: the
+        durable ledger projection is authoritative, and this only COPIES it.
+        It performs no arithmetic of its own, creates no order/fill/event, and
+        is idempotent — replaying the same projection twice cannot move the
+        balance twice.
+
+        Needed because some facts (funding settlements in particular) are
+        posted to the ledger while this process-local cache keeps its previous
+        value; without this the cache stays permanently stale and
+        reconciliation ends up comparing two different points in time.
+
+        Deliberately does NOT touch ``orders``, positions, execution state or
+        any pending order — those keep their own lifecycle.
+        """
+        self.balances = {currency: D(amount) for currency, amount in balances.items()}
 
     # ------------------------------------------------------------ normalize
     def normalize_symbol(self, raw: object) -> str:

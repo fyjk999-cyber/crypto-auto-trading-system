@@ -521,9 +521,36 @@ class TradingEngine:
                 ok = not report.errors
                 detail = "; ".join(report.errors[:3]) if report.errors else ""
                 self.health.set("funding_accounting", ok, detail)
+                if report.settled > 0 and ok:
+                    # The settlement is now COMMITTED to the durable ledger,
+                    # which is the authoritative cash truth; the process-local
+                    # PAPER cache has not seen it. Post-commit ordering: re-read
+                    # the committed projection and COPY it (no independent
+                    # arithmetic), so a retry cannot double-apply it.
+                    await self._resync_paper_balance_from_projection()
             except Exception as exc:
+                # A failed resync must NOT roll back the committed funding fact;
+                # reconciliation stays fail-closed and the next pass retries.
                 self.health.set("funding_accounting", False, type(exc).__name__)
             await asyncio.sleep(max(1, self.settings.funding_refresh_interval_seconds))
+
+    async def _resync_paper_balance_from_projection(self) -> None:
+        """Refresh the PAPER account cache from committed ledger projections.
+
+        Narrow by design: only the account balance is adopted. Orders, positions
+        and execution state keep their own lifecycle, so a pending partial order
+        cannot be rewound, duplicated or marked terminal here.
+        """
+        sync = getattr(self.adapter, "sync_balances_from_projection", None)
+        if sync is None:
+            return
+        async with self.database.session_factory() as session:
+            snapshot = await replay_projections(session)
+        if not snapshot.balances:
+            return
+        balances = {currency: row["total"] for currency, row in snapshot.balances.items()}
+        sync(balances)
+        self._initial_balances = balances
 
     async def _reconciliation_loop(self) -> None:
         while True:
