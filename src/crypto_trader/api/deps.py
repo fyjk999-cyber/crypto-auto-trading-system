@@ -156,6 +156,8 @@ class AppState:
     supervisor: TradingRuntimeSupervisor | None = None
     # MASTER DIRECTIVE §29: evidence-only opportunity snapshot (no authority).
     opportunity_board: Any | None = None
+    # Operator-switchable LLM model control (frontend; non-secret).
+    model_control: Any | None = None
     # Market-Intelligence V1 (research-attention only; no trading authority).
     market_selection_service: Any | None = None
     market_directory: Any | None = None

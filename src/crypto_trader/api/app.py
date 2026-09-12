@@ -27,6 +27,7 @@ from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.llm_chief.model_control import ModelSwitchUnavailable, UnknownModelError
 from crypto_trader.okx_vault.client import BrokerClient
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
@@ -316,7 +317,44 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/llm/health")
     async def llm_health():
-        return state.llm_runtime.snapshot()
+        payload = state.llm_runtime.snapshot()
+        provider = state.llm_runtime.provider_instance
+        # Report the LIVE provider model (it can be switched at runtime from
+        # the UI), not the process-start environment value.
+        if provider is not None and getattr(provider, "model", None):
+            payload["model"] = provider.model
+        if state.model_control is not None:
+            control = await state.model_control.state()
+            payload["model_source"] = control["source"]
+            payload["available_models"] = control["available"]
+        return payload
+
+    @app.get("/llm/models")
+    async def llm_models():
+        """Selectable LLM models + the operator's current selection."""
+        if state.model_control is None:
+            return {"model": None, "available": [], "switch_supported": False}
+        return await state.model_control.state()
+
+    @app.post("/llm/model", dependencies=[Depends(require_role_dependency(Role.ADMIN))])
+    async def llm_model_switch(body: dict):
+        """Switch the ChiefTrader LLM model (persisted + audited).
+
+        Operational only: it never changes decision authority, Risk limits or
+        Execution behaviour — the live LLM remains the sole new-direction
+        authority regardless of which allowed model is selected.
+        """
+        if state.model_control is None:
+            raise HTTPException(status_code=409, detail="MODEL_CONTROL_UNAVAILABLE")
+        requested = str(body.get("model") or "").strip()
+        if not requested:
+            raise HTTPException(status_code=400, detail="MODEL_REQUIRED")
+        try:
+            return await state.model_control.switch(requested, actor="frontend_operator")
+        except UnknownModelError:
+            raise HTTPException(status_code=400, detail="UNSUPPORTED_MODEL") from None
+        except ModelSwitchUnavailable:
+            raise HTTPException(status_code=409, detail="LLM_PROVIDER_UNAVAILABLE") from None
 
     @app.get("/llm/decisions")
     async def llm_decisions(limit: int = 100):
