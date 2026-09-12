@@ -211,7 +211,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         lookback_hours=settings.funding_lookback_hours,
     )
     llm_decisions = LLMDecisionStore(database.session_factory)
-    chief_context = ChiefContextLoader(database.session_factory)
+    chief_context = ChiefContextLoader(
+        database.session_factory,
+        account_id="default",
+        mode=settings.trading_mode.value,
+    )
     llm_provider = DeepSeekProvider()
     # Single logical global model-budget authority (8): created
     # before the engine so every model call site shares it.

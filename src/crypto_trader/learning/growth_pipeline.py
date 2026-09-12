@@ -504,15 +504,16 @@ class GrowthLearningPipeline:
                     attempt = None
                     review_error = f"REVIEW_RUNNER_EXCEPTION:{type(exc).__name__}"
                 if getattr(attempt, "attempt_id", None):
-                    # Best-effort binding for durable service attempts.  Test
-                    # doubles / injected runners may not have a persisted row;
-                    # exact recovery still filters by account/mode/date and
-                    # treats unbound legacy rows conservatively.
-                    await self.review_store.bind_job(
+                    # Best-effort binding for durable service attempts.  A
+                    # conflicting prior binding returns a separate immutable
+                    # copy so historical job membership is never overwritten.
+                    bound_attempt = await self.review_store.bind_job(
                         attempt_id=attempt.attempt_id,
                         job_key=job_key,
                         job_revision=job.revision,
                     )
+                    if bound_attempt is not None:
+                        attempt = bound_attempt
                 status = getattr(attempt, "status", None)
                 if status == STAGE_SUCCEEDED:
                     reviewed_count += 1
@@ -582,6 +583,9 @@ class GrowthLearningPipeline:
             # failure.  It must never satisfy _job_complete/succeeded and must
             # remain retryable.
             blocked = "BLOCKED_NO_PUBLISH_INPUT"
+            # Absent required review input is not a successful review stage.
+            # Keep it retryable so the loader runs again on the next attempt.
+            await stage_update("review", STAGE_FAILED, blocked)
             await stage_update("publish", STAGE_FAILED, blocked)
             await self._fail_day(
                 review_date,

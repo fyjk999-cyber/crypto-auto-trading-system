@@ -16,6 +16,7 @@ from crypto_trader.learning.growth_contracts import (
 )
 from crypto_trader.learning.growth_knowledge import (
     LESSON_CANDIDATE,
+    LESSON_VALIDATED,
     PATTERN_CANDIDATE,
     PATTERN_CONTESTED,
     PATTERN_VALIDATED,
@@ -366,41 +367,44 @@ async def test_compression_refuses_absolute_rule_language(publisher, growth_db):
         await publisher.publish_review(
             attempt=_attempt(f"normal_{index}"), binding=_binding(), known_at=KNOWN_AT
         )
-    # Simulate a source lesson that smuggled in absolute language (publication
-    # normally rejects it at lesson level).
+    pattern_row = (
+        await publisher.store.current_patterns_for_scope(
+            account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME
+        )
+    )[0]
+    proposition_key = (pattern_row.scope_json or {}).get("proposition_key", "legacy")
+    # Simulate an eligible source lesson that smuggled in absolute language
+    # (publication normally rejects it at lesson level).
     async with growth_db.session_factory() as session:
         session.add(
             GrowthLessonORM(
                 lesson_id="lesson_smuggled",
                 version=1,
                 source_kind="EPISODE",
-                source_id="support_0",
-                episode_id="support_0",
+                source_id=(pattern_row.success_refs_json or ["support_0"])[0],
+                episode_id=(pattern_row.success_refs_json or ["support_0"])[0],
                 account_id="default",
                 mode="PAPER",
                 symbol=SYMBOL,
                 direction=DIRECTION,
                 regime=REGIME,
                 statement="Always enter after volume.",
-                observation_refs_json=["episode:support_0"],
-                support_refs_json=["episode:support_0"],
+                observation_refs_json=[
+                    f"episode:{(pattern_row.success_refs_json or ['support_0'])[0]}"
+                ],
+                support_refs_json=[
+                    f"episode:{(pattern_row.success_refs_json or ['support_0'])[0]}"
+                ],
                 contrary_refs_json=[],
-                scope_json={"scope": "SYMBOL_REGIME"},
-                status=LESSON_CANDIDATE,
+                scope_json={
+                    "scope": "SYMBOL_REGIME",
+                    "proposition_key": proposition_key,
+                },
+                status=LESSON_VALIDATED,
                 sample_count=1,
                 known_at=KNOWN_AT,
             )
         )
-        await session.commit()
-    # Link the smuggled lesson to the pattern's episode set so compression sees it.
-    pattern_row = (
-        await publisher.store.current_patterns_for_scope(
-            account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME
-        )
-    )[0]
-    async with growth_db.session_factory() as session:
-        row = await session.get(GrowthPatternORM, pattern_row.id)
-        row.success_refs_json = sorted(set((row.success_refs_json or []) + ["support_0"]))
         await session.commit()
     with pytest.raises(ValueError, match="ABSOLUTE_RULE_LANGUAGE"):
         await publisher.compress(

@@ -33,6 +33,12 @@ def _tool(loader: ChiefContextLoader, name: str):
         chief_context = context.get("chief_context")
         if not isinstance(chief_context, ChiefTraderContext) or chief_context.symbol != symbol:
             raise ValueError("canonical ChiefTraderContext required")
-        return await loader.load_tool(name, chief_context, as_of=context["as_of"])
+        return await loader.load_tool(
+            name,
+            chief_context,
+            as_of=context["as_of"],
+            account_id=context.get("account_id"),
+            mode=context.get("mode"),
+        )
 
     return execute

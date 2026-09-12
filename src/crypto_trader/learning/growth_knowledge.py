@@ -27,6 +27,7 @@ from dataclasses import field as dc_field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import or_, select, update
 
@@ -55,18 +56,42 @@ LESSON_CONTESTED = "CONTESTED"
 LESSON_REVOKED = "REVOKED"
 LESSON_EXPIRED = "EXPIRED"
 LESSON_QUARANTINED = "QUARANTINED"
+LESSON_STAGED = "STAGED"
+STAGED_REASON_PREFIX = "STAGED:"
 
 PATTERN_CANDIDATE = LESSON_CANDIDATE
 PATTERN_VALIDATED = LESSON_VALIDATED
 PATTERN_CONTESTED = LESSON_CONTESTED
 PATTERN_REVOKED = LESSON_REVOKED
 PATTERN_EXPIRED = LESSON_EXPIRED
+PATTERN_STAGED = LESSON_STAGED
 
 COMPRESSION_PUBLISHED = "PUBLISHED"
 COMPRESSION_REVOKED = LESSON_REVOKED
 COMPRESSION_EXPIRED = LESSON_EXPIRED
 
 RETRIEVABLE_STATUSES = {LESSON_VALIDATED, LESSON_CONTESTED}
+
+
+def _stage_token_for(row) -> str | None:
+    """Return the staging token for a staged lesson/pattern row."""
+    if isinstance(row, GrowthPatternORM):
+        features = row.features_json or {}
+        return str(features.get("stage_token")) if features.get("staged") else None
+    status_reason = getattr(row, "status_reason", None) or ""
+    if status_reason.startswith(STAGED_REASON_PREFIX):
+        return status_reason[len(STAGED_REASON_PREFIX):]
+    return None
+
+
+def _is_staged_row(row) -> bool:
+    if isinstance(row, GrowthPatternORM):
+        return bool((row.features_json or {}).get("staged"))
+    return getattr(row, "status", None) == LESSON_STAGED
+
+
+def _authoritative_only(rows):
+    return [row for row in rows if not _is_staged_row(row)]
 
 def _aware(value: datetime | None) -> datetime | None:
     """SQLite returns naive DATETIME values; normalize before comparing."""
@@ -125,9 +150,9 @@ def proposition_identity(statement: str, scope: dict[str, Any]) -> str:
     not part of the key so a contrary observation of the same proposition
     still lands in the same pattern.
     """
-    normalized = " ".join(
-        re.sub(r"[^\w\u4e00-\u9fff]+", " ", (statement or "").casefold()).split()
-    )
+    # Preserve semantic characters (comparison operators, punctuation) so
+    # "RSI > 70" and "RSI < 70" can never collapse to one identity.
+    normalized = " ".join((statement or "").casefold().split())
     applicability = {
         key: scope.get(key)
         for key in ("scope", "symbols", "regimes", "directions")
@@ -173,6 +198,8 @@ class KnowledgeStore:
                 )
             ).scalars().all()
         for row in rows:
+            if _is_staged_row(row):
+                continue
             known = _aware(getattr(row, "known_at", None))
             if as_of is not None and known is not None and known > as_of:
                 continue
@@ -207,14 +234,14 @@ class KnowledgeStore:
     async def upsert_lesson(self, values: dict) -> tuple[GrowthLessonORM, bool]:
         lesson_id = values["lesson_id"]
         async with self.session_factory() as session:
-            current = (
+            rows = (
                 await session.execute(
                     select(GrowthLessonORM)
                     .where(GrowthLessonORM.lesson_id == lesson_id)
                     .order_by(GrowthLessonORM.version.desc())
-                    .limit(1)
                 )
-            ).scalar_one_or_none()
+            ).scalars().all()
+            current = next((row for row in rows if not _is_staged_row(row)), None)
             if (
                 current is not None
                 and current.content_hash == values.get("content_hash")
@@ -234,14 +261,14 @@ class KnowledgeStore:
     async def upsert_pattern(self, values: dict) -> tuple[GrowthPatternORM, bool]:
         pattern_id = values["pattern_id"]
         async with self.session_factory() as session:
-            current = (
+            rows = (
                 await session.execute(
                     select(GrowthPatternORM)
                     .where(GrowthPatternORM.pattern_id == pattern_id)
                     .order_by(GrowthPatternORM.version.desc())
-                    .limit(1)
                 )
-            ).scalar_one_or_none()
+            ).scalars().all()
+            current = next((row for row in rows if not _is_staged_row(row)), None)
             if (
                 current is not None
                 and current.content_hash == values.get("content_hash")
@@ -273,6 +300,86 @@ class KnowledgeStore:
             await session.commit()
             return row, True
 
+    async def _next_version(self, model, logical_column, logical_id: str) -> int:
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(model.version).where(logical_column == logical_id)
+                )
+            ).scalars().all()
+        return (max(rows) if rows else 0) + 1
+
+    async def stage_lesson(
+        self, values: dict, *, stage_token: str
+    ) -> GrowthLessonORM:
+        """Persist a lesson candidate as staged; it is invisible until adoption."""
+        version = await self._next_version(
+            GrowthLessonORM, GrowthLessonORM.lesson_id, values["lesson_id"]
+        )
+        values = {
+            key: value
+            for key, value in values.items()
+            if key not in {"status", "status_reason"}
+        }
+        async with self.session_factory() as session:
+            row = GrowthLessonORM(
+                **values,
+                version=version,
+                status=LESSON_STAGED,
+                status_reason=f"{STAGED_REASON_PREFIX}{stage_token}",
+            )
+            session.add(row)
+            await session.commit()
+            return row, True
+
+    async def stage_pattern(
+        self, values: dict, *, stage_token: str
+    ) -> GrowthPatternORM:
+        """Persist a pattern candidate as staged; it is invisible until adoption."""
+        version = await self._next_version(
+            GrowthPatternORM, GrowthPatternORM.pattern_id, values["pattern_id"]
+        )
+        features = dict(values.get("features_json") or {})
+        features.update({"staged": True, "stage_token": stage_token})
+        values = {
+            key: value
+            for key, value in values.items()
+            if key not in {"status", "status_reason"}
+        }
+        async with self.session_factory() as session:
+            row = GrowthPatternORM(
+                **{**values, "features_json": features},
+                version=version,
+                status=PATTERN_STAGED,
+                status_reason="STAGED_PENDING_FENCED_ACTIVATION",
+            )
+            session.add(row)
+            await session.commit()
+            return row, True
+
+    async def staged_rows(self, stage_token: str):
+        async with self.session_factory() as session:
+            lessons = (
+                await session.execute(
+                    select(GrowthLessonORM).where(
+                        GrowthLessonORM.status == LESSON_STAGED,
+                        GrowthLessonORM.status_reason
+                        == f"{STAGED_REASON_PREFIX}{stage_token}",
+                    )
+                )
+            ).scalars().all()
+            patterns = (
+                await session.execute(
+                    select(GrowthPatternORM).where(
+                        GrowthPatternORM.status == PATTERN_STAGED
+                    )
+                )
+            ).scalars().all()
+        patterns = [
+            row for row in patterns if _stage_token_for(row) == stage_token
+        ]
+        return list(lessons), list(patterns)
+
     async def version_row(self, model, logical_column, logical_id: str, version: int):
         async with self.session_factory() as session:
             return (
@@ -294,6 +401,7 @@ class KnowledgeStore:
         direction: str | None = None,
         include_candidates: bool = True,
         as_of: datetime | None = None,
+        include_stage_token: str | None = None,
     ) -> list[GrowthLessonORM]:
         conditions = [
             GrowthLessonORM.account_id == account_id,
@@ -315,6 +423,8 @@ class KnowledgeStore:
             ).scalars().all()
         latest: dict[str, GrowthLessonORM] = {}
         for row in rows:
+            if _is_staged_row(row) and _stage_token_for(row) != include_stage_token:
+                continue
             known = _aware(row.known_at)
             if as_of is not None and known is not None and known > as_of:
                 continue
@@ -336,6 +446,7 @@ class KnowledgeStore:
         direction: str | None = None,
         statuses: set[str] | None = None,
         as_of: datetime | None = None,
+        include_stage_token: str | None = None,
     ) -> list[GrowthPatternORM]:
         conditions = [
             GrowthPatternORM.account_id == account_id,
@@ -361,6 +472,8 @@ class KnowledgeStore:
             ).scalars().all()
         latest: dict[str, GrowthPatternORM] = {}
         for row in rows:
+            if _is_staged_row(row) and _stage_token_for(row) != include_stage_token:
+                continue
             known = _aware(row.known_at)
             if as_of is not None and known is not None and known > as_of:
                 continue
@@ -378,6 +491,7 @@ class GrowthKnowledgePublisher:
         self.session_factory = session_factory
         self.store = KnowledgeStore(session_factory)
         self.min_pattern_samples = max(1, min_pattern_samples)
+        self._stage_token: str | None = None
 
     # ------------------------------------------------------------------
     async def publish_review(
@@ -387,12 +501,16 @@ class GrowthKnowledgePublisher:
         binding: EpisodeBinding,
         known_at: datetime | None = None,
         staged: bool = False,
+        stage_token: str | None = None,
     ) -> PublishReport:
         if attempt.status != STATUS_SUCCEEDED or attempt.review is None:
             raise ValueError("only a SUCCEEDED structured review can be published")
         if attempt.account_id and attempt.account_id != binding.account_id:
             raise ValueError("attempt account does not match binding account")
         known_at = known_at or utcnow()
+        stage_token = stage_token or self._stage_token
+        if staged and not stage_token:
+            stage_token = f"stage_{uuid4().hex}"
         report = PublishReport()
         review: StructuredReview = attempt.review
 
@@ -419,8 +537,7 @@ class GrowthKnowledgePublisher:
                     }
                 )
             )
-            row, created = await self.store.upsert_lesson(
-                {
+            lesson_values = {
                     "lesson_id": lesson_logical_id(
                         attempt.review.episode_id, statement
                     ),
@@ -456,8 +573,13 @@ class GrowthKnowledgePublisher:
                     ),
                     "confidence": None,
                     "known_at": known_at,
-                }
-            )
+            }
+            if staged:
+                row, created = await self.store.stage_lesson(
+                    lesson_values, stage_token=stage_token or ""
+                )
+            else:
+                row, created = await self.store.upsert_lesson(lesson_values)
             report.lessons += 1
             if created:
                 report.lessons_revised += 1
@@ -467,6 +589,7 @@ class GrowthKnowledgePublisher:
             binding=binding,
             known_at=known_at,
             staged=staged,
+            stage_token=stage_token,
         )
         if patterns:
             pattern, pattern_created = patterns[0]
@@ -521,6 +644,8 @@ class GrowthKnowledgePublisher:
         """
         report = PublishReport()
         binding_map = bindings or {}
+        stage_token = f"stage_{uuid4().hex}"
+        self._stage_token = stage_token
         for attempt in attempts:
             if attempt.status != STATUS_SUCCEEDED or attempt.review is None:
                 continue
@@ -534,7 +659,11 @@ class GrowthKnowledgePublisher:
                 funding_provenance="PROVEN",
             )
             one = await self.publish_review(
-                attempt=attempt, binding=binding, known_at=known_at, staged=True
+                attempt=attempt,
+                binding=binding,
+                known_at=known_at,
+                staged=True,
+                stage_token=stage_token,
             )
             report.lessons += one.lessons
             report.lessons_revised += one.lessons_revised
@@ -545,9 +674,12 @@ class GrowthKnowledgePublisher:
             report.profile_version = one.profile_version or report.profile_version
             report.staged_patterns.extend(one.staged_patterns)
 
-        activated = await self._activate_staged(
-            report.staged_patterns, claim_context=claim_context
-        )
+        try:
+            activated = await self._activate_staged(
+                stage_token, claim_context=claim_context
+            )
+        finally:
+            self._stage_token = None
         report.published_count = max(report.published_count, activated)
         return {
             "lessons": report.lessons,
@@ -595,21 +727,100 @@ class GrowthKnowledgePublisher:
 
         return publisher
 
+    @staticmethod
+    def _lesson_copy_values(
+        row: GrowthLessonORM, *, version: int, status: str, reason: str
+    ) -> dict:
+        return {
+            "lesson_id": row.lesson_id,
+            "version": version,
+            "source_kind": row.source_kind,
+            "source_id": row.source_id,
+            "review_attempt_id": row.review_attempt_id,
+            "episode_id": row.episode_id,
+            "account_id": row.account_id,
+            "mode": row.mode,
+            "symbol": row.symbol,
+            "direction": row.direction,
+            "regime": row.regime,
+            "statement": row.statement,
+            "observation_refs_json": row.observation_refs_json,
+            "support_refs_json": row.support_refs_json,
+            "contrary_refs_json": row.contrary_refs_json,
+            "scope_json": row.scope_json,
+            "content_hash": row.content_hash,
+            "status": status,
+            "status_reason": reason,
+            "sample_count": row.sample_count,
+            "independent_sample_count": row.independent_sample_count,
+            "data_completeness": row.data_completeness,
+            "measurement_quality": row.measurement_quality,
+            "hypothesis_support": (
+                "SUPPORTED"
+                if status == LESSON_VALIDATED
+                else "CONTESTED"
+                if status == LESSON_CONTESTED
+                else row.hypothesis_support
+            ),
+            "confidence": row.confidence,
+            "known_at": row.known_at,
+            "valid_until": row.valid_until,
+        }
+
+    @staticmethod
+    def _pattern_copy_values(
+        row: GrowthPatternORM, *, version: int, status: str, grade: str, reason: str
+    ) -> dict:
+        features = dict(row.features_json or {})
+        features.pop("staged", None)
+        features.pop("stage_token", None)
+        return {
+            "pattern_id": row.pattern_id,
+            "version": version,
+            "account_id": row.account_id,
+            "mode": row.mode,
+            "symbol": row.symbol,
+            "regime": row.regime,
+            "direction": row.direction,
+            "pattern_key": row.pattern_key,
+            "features_json": features,
+            "scope_json": row.scope_json,
+            "sample_count": row.sample_count,
+            "independent_sample_count": row.independent_sample_count,
+            "support_count": row.support_count,
+            "contrary_count": row.contrary_count,
+            "breakeven_count": row.breakeven_count,
+            "success_refs_json": row.success_refs_json,
+            "contrary_refs_json": row.contrary_refs_json,
+            "support_grade": grade,
+            "content_hash": row.content_hash,
+            "status": status,
+            "status_reason": reason,
+            "known_at": row.known_at,
+            "valid_until": row.valid_until,
+        }
+
+    async def _next_version_in_session(self, session, model, logical_column, logical_id):
+        rows = (
+            await session.execute(
+                select(model.version).where(logical_column == logical_id)
+            )
+        ).scalars().all()
+        return (max(rows) if rows else 0) + 1
+
     async def _activate_staged(
         self,
-        staged: list[dict[str, Any]],
+        stage_token: str,
         *,
         claim_context: tuple[str, str, str] | None = None,
     ) -> int:
-        """Atomic fenced visibility transition for staged knowledge.
+        """Adopt exactly one staging token inside one fenced transaction.
 
-        The claim CAS and every VALIDATED/CONTESTED status change happen in the
-        same transaction.  Any stale claim or exception rolls the whole
-        transaction back, so a stale worker can never publish reusable
-        knowledge.
+        Staged rows never participate in authoritative visibility.  The claim
+        CAS and every authoritative insert happen in the same transaction; a
+        stale claim rolls everything back and leaves the staged rows isolated
+        and unactivated.
         """
-        if not staged:
-            return 0
         from sqlalchemy import and_
 
         from crypto_trader.learning.growth_experience import ClaimLostError
@@ -642,112 +853,139 @@ class GrowthKnowledgePublisher:
                 if result.rowcount != 1:
                     await session.rollback()
                     raise ClaimLostError("claim lost before staged activation")
-            for item in staged:
-                row = await session.get(GrowthPatternORM, item["row_id"])
-                if row is None or row.status != PATTERN_CANDIDATE:
-                    continue
-                features = dict(row.features_json or {})
-                if not features.get("staged"):
-                    continue
-                intended_status = item["intended_status"] or PATTERN_CANDIDATE
-                intended_reason = item["intended_reason"] or row.status_reason
-                row.status = intended_status
-                row.status_reason = intended_reason
-                row.support_grade = item["intended_grade"] or row.support_grade
-                row.known_at = item["known_at"]
-                features["staged"] = False
-                row.features_json = features
+            staged_lessons = (
+                await session.execute(
+                    select(GrowthLessonORM).where(
+                        GrowthLessonORM.status == LESSON_STAGED,
+                        GrowthLessonORM.status_reason
+                        == f"{STAGED_REASON_PREFIX}{stage_token}",
+                    )
+                )
+            ).scalars().all()
+            staged_patterns = (
+                await session.execute(
+                    select(GrowthPatternORM).where(
+                        GrowthPatternORM.status == PATTERN_STAGED
+                    )
+                )
+            ).scalars().all()
+            staged_patterns = [
+                row for row in staged_patterns if _stage_token_for(row) == stage_token
+            ]
+            if not staged_lessons and not staged_patterns:
+                return 0
+
+            activated_lesson_ids: set[str] = set()
+            for pattern in staged_patterns:
+                features = dict(pattern.features_json or {})
+                intended_status = str(
+                    features.get("staged_status") or PATTERN_CANDIDATE
+                )
+                intended_grade = str(
+                    features.get("staged_grade") or pattern.support_grade or "INSUFFICIENT"
+                )
+                intended_reason = str(
+                    features.get("staged_reason") or intended_status
+                )
+                proposition_key = str(
+                    (pattern.scope_json or {}).get("proposition_key")
+                    or features.get("proposition_key")
+                    or "legacy"
+                )
+                version = await self._next_version_in_session(
+                    session,
+                    GrowthPatternORM,
+                    GrowthPatternORM.pattern_id,
+                    pattern.pattern_id,
+                )
+                session.add(
+                    GrowthPatternORM(
+                        **self._pattern_copy_values(
+                            pattern,
+                            version=version,
+                            status=intended_status,
+                            grade=intended_grade,
+                            reason=intended_reason,
+                        )
+                    )
+                )
                 activated += 1
                 if intended_status not in {PATTERN_VALIDATED, PATTERN_CONTESTED}:
                     continue
-                lesson_target = (
+                target_lesson_status = (
                     LESSON_VALIDATED
                     if intended_status == PATTERN_VALIDATED
                     else LESSON_CONTESTED
                 )
-                episode_ids = set(row.success_refs_json or []) | set(
-                    row.contrary_refs_json or []
+                episode_ids = set(pattern.success_refs_json or []) | set(
+                    pattern.contrary_refs_json or []
                 )
-                lesson_rows = (
-                    await session.execute(
-                        select(GrowthLessonORM)
-                        .where(
-                            GrowthLessonORM.account_id == row.account_id,
-                            GrowthLessonORM.mode == row.mode,
-                            GrowthLessonORM.symbol == row.symbol,
-                            GrowthLessonORM.regime == row.regime,
-                            GrowthLessonORM.direction == row.direction,
-                            GrowthLessonORM.episode_id.in_(tuple(episode_ids)),
-                        )
-                        .order_by(GrowthLessonORM.id.desc())
-                    )
-                ).scalars().all()
-                proposition_key = str(
-                    (row.scope_json or {}).get("proposition_key")
-                    or (row.features_json or {}).get("proposition_key")
-                    or "legacy"
-                )
-                latest: dict[str, GrowthLessonORM] = {}
-                for lesson in lesson_rows:
-                    latest.setdefault(lesson.lesson_id, lesson)
-                for lesson in latest.values():
+                for lesson in staged_lessons:
                     if (
-                        str(
-                            (lesson.scope_json or {}).get("proposition_key")
-                            or "legacy"
-                        )
-                        != proposition_key
+                        lesson.account_id != pattern.account_id
+                        or lesson.mode != pattern.mode
+                        or lesson.symbol != pattern.symbol
+                        or (lesson.regime or "UNKNOWN") != (pattern.regime or "UNKNOWN")
+                        or (lesson.direction or "UNKNOWN")
+                        != (pattern.direction or "UNKNOWN")
+                        or (lesson.episode_id or lesson.source_id) not in episode_ids
                     ):
                         continue
-                    if lesson.status in {
-                        LESSON_REVOKED,
-                        LESSON_EXPIRED,
-                        LESSON_QUARANTINED,
-                    }:
+                    lesson_key = str(
+                        (lesson.scope_json or {}).get("proposition_key") or "legacy"
+                    )
+                    if lesson_key != proposition_key:
                         continue
-                    if lesson.status == lesson_target:
+                    if lesson.lesson_id in activated_lesson_ids:
                         continue
-                    # Append a new lesson version; never rewrite the historical
-                    # validated/contested row that an as_of query may still see.
+                    lesson_version = await self._next_version_in_session(
+                        session,
+                        GrowthLessonORM,
+                        GrowthLessonORM.lesson_id,
+                        lesson.lesson_id,
+                    )
                     session.add(
                         GrowthLessonORM(
-                            lesson_id=lesson.lesson_id,
-                            version=lesson.version + 1,
-                            source_kind=lesson.source_kind,
-                            source_id=lesson.source_id,
-                            review_attempt_id=lesson.review_attempt_id,
-                            episode_id=lesson.episode_id,
-                            account_id=lesson.account_id,
-                            mode=lesson.mode,
-                            symbol=lesson.symbol,
-                            direction=lesson.direction,
-                            regime=lesson.regime,
-                            statement=lesson.statement,
-                            observation_refs_json=lesson.observation_refs_json,
-                            support_refs_json=lesson.support_refs_json,
-                            contrary_refs_json=lesson.contrary_refs_json,
-                            scope_json=lesson.scope_json,
-                            content_hash=lesson.content_hash,
-                            status=lesson_target,
-                            status_reason=(
-                                "PATTERN_VALIDATED_INDEPENDENT_SAMPLES"
-                                if lesson_target == LESSON_VALIDATED
-                                else "PATTERN_CONTESTED_INDEPENDENT_SAMPLES"
-                            ),
-                            sample_count=lesson.sample_count,
-                            independent_sample_count=lesson.independent_sample_count,
-                            data_completeness=lesson.data_completeness,
-                            measurement_quality=lesson.measurement_quality,
-                            hypothesis_support=(
-                                "SUPPORTED"
-                                if lesson_target == LESSON_VALIDATED
-                                else "CONTESTED"
-                            ),
-                            confidence=lesson.confidence,
-                            known_at=item["known_at"],
-                            supersedes_version_id=lesson.id,
+                            **self._lesson_copy_values(
+                                lesson,
+                                version=lesson_version,
+                                status=target_lesson_status,
+                                reason=(
+                                    "PATTERN_VALIDATED_INDEPENDENT_SAMPLES"
+                                    if target_lesson_status == LESSON_VALIDATED
+                                    else "PATTERN_CONTESTED_INDEPENDENT_SAMPLES"
+                                ),
+                            )
                         )
                     )
+                    activated_lesson_ids.add(lesson.lesson_id)
+
+            for lesson in staged_lessons:
+                if lesson.lesson_id in activated_lesson_ids:
+                    continue
+                lesson_version = await self._next_version_in_session(
+                    session,
+                    GrowthLessonORM,
+                    GrowthLessonORM.lesson_id,
+                    lesson.lesson_id,
+                )
+                session.add(
+                    GrowthLessonORM(
+                        **self._lesson_copy_values(
+                            lesson,
+                            version=lesson_version,
+                            status=LESSON_CANDIDATE,
+                            reason=(
+                                "SINGLE_CASE_CANDIDATE"
+                                if not lesson.contrary_refs_json
+                                else "SINGLE_CASE_CONTRARY"
+                            ),
+                        )
+                    )
+                )
+
+            for row in staged_lessons + staged_patterns:
+                await session.delete(row)
             await session.commit()
         return activated
 
@@ -862,30 +1100,59 @@ class GrowthKnowledgePublisher:
     async def _statements_for_pattern(
         self, pattern: GrowthPatternORM, *, known_at: datetime
     ) -> list[str]:
-        episode_ids = set(pattern.success_refs_json or []) | set(pattern.contrary_refs_json or [])
+        """Return statements only from the exact proposition membership.
+
+        A lesson from the same episode but a different proposition (or an
+        ineligible CANDIDATE version) must not borrow the pattern's validation.
+        """
+        episode_ids = set(pattern.success_refs_json or []) | set(
+            pattern.contrary_refs_json or []
+        )
         if not episode_ids:
             return []
+        proposition_key = str(
+            (pattern.scope_json or {}).get("proposition_key")
+            or (pattern.features_json or {}).get("proposition_key")
+            or "legacy"
+        )
+        conditions = [
+            GrowthLessonORM.episode_id.in_(tuple(episode_ids)),
+            GrowthLessonORM.account_id == pattern.account_id,
+            GrowthLessonORM.mode == pattern.mode,
+            GrowthLessonORM.known_at <= known_at,
+            GrowthLessonORM.valid_until.is_(None),
+            GrowthLessonORM.status.notin_(
+                (LESSON_REVOKED, LESSON_EXPIRED, LESSON_QUARANTINED, LESSON_STAGED)
+            ),
+        ]
+        if pattern.symbol is not None:
+            conditions.append(GrowthLessonORM.symbol == pattern.symbol)
+        if pattern.regime is not None:
+            conditions.append(GrowthLessonORM.regime == pattern.regime)
+        if pattern.direction is not None:
+            conditions.append(GrowthLessonORM.direction == pattern.direction)
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
                     select(GrowthLessonORM)
-                    .where(
-                        GrowthLessonORM.episode_id.in_(tuple(episode_ids)),
-                        GrowthLessonORM.known_at <= known_at,
-                        GrowthLessonORM.valid_until.is_(None),
-                    )
-                    .order_by(GrowthLessonORM.id.desc())
+                    .where(*conditions)
+                    .order_by(GrowthLessonORM.version.desc(), GrowthLessonORM.id.desc())
                 )
             ).scalars().all()
         latest: dict[str, GrowthLessonORM] = {}
         for row in rows:
-            if row.lesson_id not in latest:
-                latest[row.lesson_id] = row
-        return [
-            row.statement
-            for row in latest.values()
-            if row.status not in {LESSON_REVOKED, LESSON_EXPIRED, LESSON_QUARANTINED}
-        ]
+            latest.setdefault(row.lesson_id, row)
+        out: list[str] = []
+        for row in latest.values():
+            lesson_key = str(
+                (row.scope_json or {}).get("proposition_key") or "legacy"
+            )
+            if lesson_key != proposition_key:
+                continue
+            if row.status not in RETRIEVABLE_STATUSES:
+                continue
+            out.append(row.statement)
+        return out
 
     async def _rebuild_pattern(
         self,
@@ -894,6 +1161,7 @@ class GrowthKnowledgePublisher:
         binding: EpisodeBinding,
         known_at: datetime,
         staged: bool = False,
+        stage_token: str | None = None,
     ) -> list[tuple[GrowthPatternORM, bool]]:
         """Rebuild one pattern per proposition identity in this scope.
 
@@ -911,6 +1179,8 @@ class GrowthKnowledgePublisher:
             symbol=None,
             regime=None,
             direction=None,
+            as_of=known_at,
+            include_stage_token=stage_token if staged else None,
         )
         scoped = [
             row
@@ -1034,8 +1304,7 @@ class GrowthKnowledgePublisher:
                         "staged_reason": reason,
                     }
                 )
-            row, created = await self.store.upsert_pattern(
-                {
+            pattern_values = {
                     "pattern_id": pattern_id,
                     "account_id": binding.account_id,
                     "mode": binding.mode,
@@ -1062,13 +1331,16 @@ class GrowthKnowledgePublisher:
                     "contrary_refs_json": contrary_refs,
                     "support_grade": grade,
                     "content_hash": content_hash,
-                    "status": PATTERN_CANDIDATE if staged else status,
-                    "status_reason": (
-                        "STAGED_PENDING_FENCED_ACTIVATION" if staged else reason
-                    ),
+                    "status": status,
+                    "status_reason": reason,
                     "known_at": known_at,
-                }
-            )
+            }
+            if staged:
+                row, created = await self.store.stage_pattern(
+                    pattern_values, stage_token=stage_token or ""
+                )
+            else:
+                row, created = await self.store.upsert_pattern(pattern_values)
             if not staged:
                 await self._sync_lessons_with_pattern(
                     row,
@@ -1358,6 +1630,11 @@ class GrowthKnowledgePublisher:
             episode_ids = set(current.success_refs_json or []) | set(
                 current.contrary_refs_json or []
             )
+            revoked_proposition = str(
+                (current.scope_json or {}).get("proposition_key")
+                or (current.features_json or {}).get("proposition_key")
+                or "legacy"
+            )
             lessons = await self.store.current_lessons_for_scope(
                 account_id=current.account_id,
                 mode=current.mode,
@@ -1367,6 +1644,11 @@ class GrowthKnowledgePublisher:
             )
             for lesson in lessons:
                 if (lesson.episode_id or lesson.source_id) not in episode_ids:
+                    continue
+                lesson_proposition = str(
+                    (lesson.scope_json or {}).get("proposition_key") or "legacy"
+                )
+                if lesson_proposition != revoked_proposition:
                     continue
                 await self.store.upsert_lesson(
                     {
@@ -1570,12 +1852,13 @@ class GrowthKnowledgePublisher:
             ).scalars().all()
         latest: dict[str, GrowthCompressionORM] = {}
         for row in rows:
+            known = _aware(row.known_at) or as_of
+            if known > as_of:
+                continue
             latest.setdefault(row.compression_id, row)
         out = []
         for row in latest.values():
             if row.status != COMPRESSION_PUBLISHED:
-                continue
-            if (_aware(row.known_at) or as_of) > as_of:
                 continue
             scope = row.scope_json or {}
             if symbol and scope.get("symbols") and symbol not in scope["symbols"]:

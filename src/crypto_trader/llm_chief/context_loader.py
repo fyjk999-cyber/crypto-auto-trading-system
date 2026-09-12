@@ -6,11 +6,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from sqlalchemy import case, or_, select
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from crypto_trader.llm.tools.registry import ToolEvidence
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.persistence.models import (
-    AICoinProfileORM,
     AICompressedExperienceORM,
     AIMarketPatternORM,
     AITradeReviewORM,
@@ -22,9 +22,82 @@ from crypto_trader.persistence.models import (
 class ChiefContextLoader:
     """Read-only retrieval; retrieved records never become an execution gate."""
 
-    def __init__(self, session_factory, *, limit: int = 5) -> None:
+    def __init__(
+        self,
+        session_factory,
+        *,
+        limit: int = 5,
+        account_id: str = "default",
+        mode: str = "PAPER",
+    ) -> None:
         self.session_factory = session_factory
         self.limit = limit
+        self.account_id = account_id or "default"
+        self.mode = mode or "PAPER"
+
+    @staticmethod
+    def _legacy_card_allowed(row, as_of: datetime, account_id: str, mode: str) -> bool:
+        created = getattr(row, "created_at", None)
+        if created is not None:
+            created = created.replace(tzinfo=UTC) if created.tzinfo is None else created
+            if created > as_of:
+                return False
+        status = str(getattr(row, "status", None) or "ACTIVE").upper()
+        if status in {"RETIRED", "REVOKED", "EXPIRED", "QUARANTINED"}:
+            return False
+        row_account = getattr(row, "account_id", None)
+        row_mode = getattr(row, "mode", None)
+        if row_account in (None, "", "UNKNOWN", "default") and row_mode in (
+            None,
+            "",
+            "UNKNOWN",
+            "PAPER",
+        ):
+            # Legacy unbound card: support-only, still account/mode safe for
+            # the default/PAPER scope and never a cross-account LIVE card.
+            return True
+        return row_account == account_id and row_mode == mode
+
+    @classmethod
+    def _visible_legacy_cards(cls, rows, as_of: datetime, account_id: str, mode: str):
+        latest = {}
+        for row in sorted(
+            rows,
+            key=lambda item: (item.version or 1, item.id or 0),
+            reverse=True,
+        ):
+            if not cls._legacy_card_allowed(row, as_of, account_id, mode):
+                continue
+            latest.setdefault(row.rule_id, row)
+        return list(latest.values())
+
+    async def _scoped_episode_scope(self, account_id: str, mode: str):
+        from crypto_trader.learning.growth_models import GrowthEpisodeBindingORM
+
+        try:
+            async with self.session_factory() as session:
+                rows = (
+                    await session.execute(select(GrowthEpisodeBindingORM))
+                ).scalars().all()
+        except (OperationalError, ProgrammingError):
+            # Core database may not have the Growth V2 binding table; preserve
+            # the legacy support path in that isolated database.
+            return set(), set()
+        all_ids = {row.episode_id for row in rows}
+        scoped_ids = {
+            row.episode_id
+            for row in rows
+            if row.account_id == account_id and row.mode == mode
+        }
+        return scoped_ids, all_ids
+
+    @staticmethod
+    def _filter_episodes(rows, scoped_ids, all_ids):
+        if not all_ids:
+            # Legacy database without explicit bindings: preserve the existing
+            # support path; once any binding exists the check fails closed.
+            return rows
+        return [row for row in rows if row.episode_id in scoped_ids]
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
         as_of = _context_as_of(context)
@@ -49,13 +122,17 @@ class ChiefContextLoader:
                     .limit(self.limit * 5)
                 )
             ).scalars().all()
+            scoped_ids, all_ids = await self._scoped_episode_scope(
+                self.account_id, self.mode
+            )
             episodes = [
                 row
                 for row in episodes
                 if _scope_applies(
                     row.applicability_scope_json, context.symbol, context.regime
                 )
-            ][: self.limit]
+            ]
+            episodes = self._filter_episodes(episodes, scoped_ids, all_ids)[: self.limit]
             episode_ids = [row.episode_id for row in episodes]
             reviews = []
             if episode_ids:
@@ -104,19 +181,14 @@ class ChiefContextLoader:
             ).scalars().all()
             compressed = [
                 row
-                for row in compressed
+                for row in self._visible_legacy_cards(
+                    compressed, as_of, self.account_id, self.mode
+                )
                 if _scope_applies(
                     row.applicability_scope_json, context.symbol, context.regime
                 )
             ][: self.limit]
-            profile = (
-                await session.execute(
-                    select(AICoinProfileORM).where(
-                        AICoinProfileORM.symbol == context.symbol,
-                        AICoinProfileORM.updated_at <= as_of,
-                    )
-                )
-            ).scalar_one_or_none()
+            profile = None
             patterns = (
                 await session.execute(
                     select(AIMarketPatternORM)
@@ -201,10 +273,18 @@ class ChiefContextLoader:
         )
 
     async def load_tool(
-        self, name: str, context: ChiefTraderContext, *, as_of: datetime | None = None
+        self,
+        name: str,
+        context: ChiefTraderContext,
+        *,
+        as_of: datetime | None = None,
+        account_id: str | None = None,
+        mode: str | None = None,
     ) -> ToolEvidence:
         """Load only the learned evidence explicitly selected by ChiefTrader."""
 
+        effective_account = account_id or self.account_id
+        effective_mode = mode or self.mode
         loaders = {
             "memory_search": self._memory_evidence,
             "episode_search": self._episode_evidence,
@@ -215,7 +295,12 @@ class ChiefContextLoader:
         loader = loaders.get(name)
         if loader is None:
             raise ValueError(f"unknown learned-context tool: {name}")
-        finding, refs, timestamp = await loader(context, as_of or _context_as_of(context))
+        finding, refs, timestamp = await loader(
+            context,
+            as_of or _context_as_of(context),
+            account_id=effective_account,
+            mode=effective_mode,
+        )
         return ToolEvidence(
             tool_name=name,
             symbol=context.symbol,
@@ -228,7 +313,15 @@ class ChiefContextLoader:
             source_refs=refs,
         )
 
-    async def _episode_evidence(self, context: ChiefTraderContext, as_of: datetime):
+    async def _episode_evidence(
+        self,
+        context: ChiefTraderContext,
+        as_of: datetime,
+        *,
+        account_id: str = "default",
+        mode: str = "PAPER",
+    ):
+        scoped_ids, all_ids = await self._scoped_episode_scope(account_id, mode)
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -256,7 +349,8 @@ class ChiefContextLoader:
                 if _scope_applies(
                     row.applicability_scope_json, context.symbol, context.regime
                 )
-            ][: self.limit]
+            ]
+            rows = self._filter_episodes(rows, scoped_ids, all_ids)[: self.limit]
         finding = {
             "episodes": [
                 {
@@ -272,7 +366,15 @@ class ChiefContextLoader:
         } if rows else {}
         return finding, [f"episode:{row.episode_id}" for row in rows], _latest(rows, "closed_at")
 
-    async def _memory_evidence(self, context: ChiefTraderContext, as_of: datetime):
+    async def _memory_evidence(
+        self,
+        context: ChiefTraderContext,
+        as_of: datetime,
+        *,
+        account_id: str = "default",
+        mode: str = "PAPER",
+    ):
+        scoped_ids, all_ids = await self._scoped_episode_scope(account_id, mode)
         async with self.session_factory() as session:
             review_rows = (
                 await session.execute(
@@ -292,6 +394,11 @@ class ChiefContextLoader:
                     .limit(self.limit * 5)
                 )
             ).all()
+            review_rows = [
+                (review, episode)
+                for review, episode in review_rows
+                if episode.episode_id in scoped_ids
+            ] if all_ids else review_rows
             reviews = [
                 review
                 for review, episode in review_rows
@@ -317,7 +424,9 @@ class ChiefContextLoader:
             ).scalars().all()
             compressed = [
                 row
-                for row in compressed
+                for row in self._visible_legacy_cards(
+                    compressed, as_of, self.account_id, self.mode
+                )
                 if _scope_applies(
                     row.applicability_scope_json, context.symbol, context.regime
                 )
@@ -347,7 +456,15 @@ class ChiefContextLoader:
         )
         return finding, refs, timestamp
 
-    async def _research_evidence(self, context: ChiefTraderContext, as_of: datetime):
+    async def _research_evidence(
+        self,
+        context: ChiefTraderContext,
+        as_of: datetime,
+        *,
+        account_id: str = "default",
+        mode: str = "PAPER",
+    ):
+        _ = (account_id, mode)
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -383,7 +500,15 @@ class ChiefContextLoader:
         } if rows else {}
         return finding, [f"research:{row.research_id}" for row in rows], _latest(rows, "created_at")
 
-    async def _coin_profile_evidence(self, context: ChiefTraderContext, as_of: datetime):
+    async def _coin_profile_evidence(
+        self,
+        context: ChiefTraderContext,
+        as_of: datetime,
+        *,
+        account_id: str = "default",
+        mode: str = "PAPER",
+    ):
+        _ = (account_id, mode)
         # R12 fail-closed: AICoinProfileORM has no account/mode provenance, so
         # a symbol-only profile must not cross account/mode boundaries.  The
         # canonical runtime path is the Growth V2 Adaptive Experience Card
@@ -395,7 +520,14 @@ class ChiefContextLoader:
             None,
         )
 
-    async def _pattern_evidence(self, context: ChiefTraderContext, as_of: datetime):
+    async def _pattern_evidence(
+        self,
+        context: ChiefTraderContext,
+        as_of: datetime,
+        *,
+        account_id: str = "default",
+        mode: str = "PAPER",
+    ):
         async with self.session_factory() as session:
             rows = (
                 await session.execute(

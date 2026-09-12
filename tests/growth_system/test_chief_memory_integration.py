@@ -215,11 +215,13 @@ async def test_per_category_limit_and_token_budget(growth_db):
     assert 0 < len(pattern_refs) <= 5
     assert len(evidence.source_refs) > 5
 
+    # An impossible budget is an explicit configuration failure, never an
+    # over-budget evidence object or a hang.
     tiny = GrowthContextLoader(
         growth_db.session_factory, budget=ToolBudget(limit=5, token_budget=1)
     )
-    tiny_evidence = await tiny.load_tool("memory_search", _context(), as_of=AS_OF)
-    assert len(tiny_evidence.source_refs) < len(evidence.source_refs)
+    with pytest.raises(ValueError, match="TOKEN_BUDGET_CONFIGURATION_INVALID"):
+        await tiny.load_tool("memory_search", _context(), as_of=AS_OF)
 
 
 async def test_prompt_injection_text_is_wrapped_as_untrusted_data(growth_db):
@@ -360,7 +362,7 @@ async def test_official_build_system_path_with_injected_provider(tmp_path, monke
 
     monkeypatch.setattr(bootstrap_module, "DeepSeekProvider", lambda: fake_provider)
 
-    def loader_factory(session_factory):
+    def loader_factory(session_factory, **_kwargs):
         loader = GrowthContextLoader(session_factory)
         captured_loaders.append(loader)
         return loader

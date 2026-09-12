@@ -51,6 +51,7 @@ from crypto_trader.persistence.models import TradeEpisodeORM
 
 MAX_ITEMS_PER_CATEGORY = 5
 DEFAULT_TOKEN_BUDGET = 4000
+MIN_EVIDENCE_BUDGET_TOKENS = 80
 
 _INJECTION_PATTERNS = re.compile(
     r"(ignore (all )?previous|disregard .*instructions|system prompt|"
@@ -117,7 +118,10 @@ class GrowthContextLoader:
         context: ChiefTraderContext,
         *,
         as_of: datetime | None = None,
+        account_id: str | None = None,
+        mode: str | None = None,
     ) -> ToolEvidence:
+        _ = (account_id, mode)
         as_of = _aware(as_of) or _context_as_of(context)
         loaders = {
             "memory_search": self._memory_evidence,
@@ -164,6 +168,11 @@ class GrowthContextLoader:
         until the final serialized payload fits.  Per-category limits are
         already enforced by the individual loaders.
         """
+        if self.budget.token_budget < MIN_EVIDENCE_BUDGET_TOKENS:
+            raise ValueError(
+                "TOKEN_BUDGET_CONFIGURATION_INVALID:"
+                f"{self.budget.token_budget}<{MIN_EVIDENCE_BUDGET_TOKENS}"
+            )
         features = dict(evidence.features or {})
         refs = list(evidence.source_refs or [])
         if self._serialized_cost(evidence) <= self.budget.token_budget:
@@ -206,17 +215,11 @@ class GrowthContextLoader:
                     dropped = True
                     break
             if not dropped:
-                # Nothing left to drop; return the minimal factual shell.
-                return ToolEvidence(
-                    tool_name=evidence.tool_name,
-                    symbol=evidence.symbol,
-                    timestamp=evidence.timestamp,
-                    features={},
-                    supporting_evidence=[],
-                    contrary_evidence=[],
-                    confidence_of_measurement=0.0,
-                    data_quality="NO_MATCHES",
-                    source_refs=[],
+                # Nothing left to drop: fail closed explicitly rather than
+                # returning an over-budget evidence object.
+                raise ValueError(
+                    "TOKEN_BUDGET_CONFIGURATION_INVALID:"
+                    f"{self.budget.token_budget}"
                 )
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:

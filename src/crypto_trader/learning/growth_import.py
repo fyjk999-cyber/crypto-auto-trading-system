@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from crypto_trader.learning.growth_contracts import canonical_json, sha256_text
 from crypto_trader.learning.growth_models import (
@@ -263,6 +263,85 @@ class LegacyImporter:
             expected_stat.st_ino,
         ):
             raise ImportSafetyError("legacy importer target inode/device mismatch")
+        kw = getattr(self.session_factory, "kw", None) or {}
+        binds = kw.get("binds") or {}
+        for engine in binds.values():
+            url = getattr(engine, "url", None)
+            if url is None or url.get_backend_name() != "sqlite":
+                raise ImportSafetyError(
+                    "legacy importer refuses non-SQLite mapper bind"
+                )
+            bound = os.path.realpath(os.path.abspath(url.database or ""))
+            if bound != expected:
+                raise ImportSafetyError(
+                    "legacy importer has an alternate mapper bind; refusing mutation"
+                )
+
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        return os.path.realpath(os.path.abspath(path or ""))
+
+    def _expected_target_path(self) -> str:
+        return self._normalize_path(self.target_path or "")
+
+    @staticmethod
+    def _verify_bound_engine(engine, expected: str) -> None:
+        url = getattr(engine, "url", None)
+        if url is None or url.get_backend_name() != "sqlite":
+            raise ImportSafetyError("legacy importer requires checked SQLite binds")
+        bound = os.path.realpath(os.path.abspath(url.database or ""))
+        if bound != expected:
+            raise ImportSafetyError(
+                "legacy importer mapper bind does not match target_path"
+            )
+        stat = os.stat(bound)
+        expected_stat = os.stat(expected)
+        if (stat.st_dev, stat.st_ino) != (
+            expected_stat.st_dev,
+            expected_stat.st_ino,
+        ):
+            raise ImportSafetyError(
+                "legacy importer mapper bind inode/device mismatch"
+            )
+
+    async def _assert_actual_binds(self) -> None:
+        """Resolve the real bind for every import model before mutating."""
+        expected = self._expected_target_path()
+        models = (
+            GrowthImportBatchORM,
+            GrowthImportItemORM,
+            GrowthLegacyObservationORM,
+        )
+        async with self.session_factory() as session:
+            for model in models:
+                bind = session.get_bind(mapper=model.__mapper__)
+                if bind is None:
+                    raise ImportSafetyError(
+                        f"cannot resolve actual bind for {model.__tablename__}"
+                    )
+                engine = getattr(bind, "engine", bind)
+                self._verify_bound_engine(engine, expected)
+            # The engine URL can be a label when an async_creator supplies a
+            # different real SQLite connection.  Verify the database the
+            # session actually opened.
+            rows = (await session.execute(text("PRAGMA database_list"))).all()
+            main_paths = [str(row[2]) for row in rows if len(row) > 2 and row[1] == "main"]
+            if not main_paths or not main_paths[0]:
+                raise ImportSafetyError("cannot resolve actual opened SQLite database")
+            opened = self._normalize_path(main_paths[0])
+            if opened != expected:
+                raise ImportSafetyError(
+                    "legacy importer opened SQLite database does not match target_path"
+                )
+            opened_stat = os.stat(opened)
+            expected_stat = os.stat(expected)
+            if (opened_stat.st_dev, opened_stat.st_ino) != (
+                expected_stat.st_dev,
+                expected_stat.st_ino,
+            ):
+                raise ImportSafetyError(
+                    "legacy importer opened database inode/device mismatch"
+                )
 
     @staticmethod
     def _assert_test_target(path: str) -> None:
@@ -596,6 +675,7 @@ class LegacyImporter:
         on_item: Callable[[int], None] | None = None,
     ) -> ImportReport:
         self.require_import_authorization()
+        await self._assert_actual_binds()
         batch_id = batch_id or f"batch_{plan.plan_hash[:32]}"
         resolved_batch_id = resume_batch_id or batch_id
 
@@ -628,6 +708,26 @@ class LegacyImporter:
                     )
                 )
                 await session.commit()
+            else:
+                # Any already-existing resolved batch ID must prove the same
+                # source/plan identity; ordinary batch_id reuse is not a
+                # bypass around the explicit resume guard.
+                if (
+                    bound_batch.source_db_sha256 != plan.source_sha256
+                    or bound_batch.plan_hash != plan.plan_hash
+                ):
+                    raise ImportSafetyError(
+                        "existing batch source/plan identity mismatch; refusing mutation"
+                    )
+                if bound_batch.status not in {
+                    BATCH_PLANNED,
+                    BATCH_IMPORTING,
+                    BATCH_FAILED,
+                    BATCH_COMPLETED,
+                }:
+                    raise ImportSafetyError(
+                        f"existing batch has non-resumable status {bound_batch.status}"
+                    )
 
         if resume_batch_id is None:
             async with self.session_factory() as session:
@@ -810,6 +910,7 @@ class LegacyImporter:
     ) -> dict[str, int]:
         """Delete only this exact batch; authorization/target identity required."""
         self.require_import_authorization()
+        await self._assert_actual_binds()
         async with self.session_factory() as session:
             batch = await session.get(GrowthImportBatchORM, batch_id)
             if batch is None:

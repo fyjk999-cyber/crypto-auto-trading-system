@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -46,6 +46,8 @@ from crypto_trader.vector_memory.schemas import MemoryVector
 from crypto_trader.vector_memory.vector_store import MemoryVectorStore
 
 HARD_FILTER_VERSION = "card-hard-filter-v1"
+MIN_CARD_BUDGET_TOKENS = 80
+TRACE_ID_RESERVE_TOKENS = 60
 
 
 @dataclass(frozen=True)
@@ -580,26 +582,55 @@ class CardDecisionTraceStore:
         mode: str = "PAPER",
         trace_id_override: str | None = None,
     ) -> GrowthCardDecisionTraceORM:
+        versions = {
+            f"card:{item.rule_id}": item.version for item in result.selected
+        }
+        selected_refs = [
+            f"card:{item.rule_id}:v{item.version}" for item in result.selected
+        ]
         trace_payload = {
             "decision_id": decision_id,
             "account_id": account_id,
             "mode": mode,
             "as_of": result.as_of.isoformat(),
             "symbol": result.context.symbol,
-            "selected": [item.rule_id for item in result.selected],
+            "selected": selected_refs,
+            "card_versions": versions,
+            "trigger": result.trigger.to_json(),
+            "context": result.context.to_json(),
             "policy": result.policy_version,
+            "policy_fingerprint": result.metrics.get("policy_fingerprint"),
         }
-        trace_id = trace_id_override or (
+        computed_trace_id = (
             f"cardtrace_{sha256_text(canonical_json(trace_payload))[:40]}"
         )
-        versions = {
-            f"card:{item.rule_id}": item.version for item in result.selected
-        }
+        trace_id = trace_id_override or computed_trace_id
         scores = {f"card:{item.rule_id}": item.score for item in result.selected}
         async with self.session_factory() as session:
             existing = await session.get(GrowthCardDecisionTraceORM, trace_id)
             if existing is not None:
-                return existing
+                compatible = (
+                    existing.account_id == account_id
+                    and existing.mode == mode
+                    and existing.symbol == result.context.symbol
+                    and existing.trigger_signature_json == result.trigger.to_json()
+                    and existing.context_signature_json == result.context.to_json()
+                    and existing.selected_card_refs_json == selected_refs
+                    and existing.card_versions_json == versions
+                )
+                if compatible:
+                    return existing
+                if trace_id_override:
+                    # Never reuse an incompatible override; fall back to the
+                    # exact retrieval-identity hash.
+                    trace_id = computed_trace_id
+                    existing = await session.get(
+                        GrowthCardDecisionTraceORM, trace_id
+                    )
+                    if existing is not None:
+                        return existing
+                else:
+                    raise RuntimeError("trace identity collision with incompatible payload")
             row = GrowthCardDecisionTraceORM(
                 trace_id=trace_id,
                 decision_id=decision_id,
@@ -613,9 +644,7 @@ class CardDecisionTraceStore:
                 candidate_card_refs_json=[
                     f"card:{item.rule_id}:v{item.version}" for item in result.candidates
                 ],
-                selected_card_refs_json=[
-                    f"card:{item.rule_id}:v{item.version}" for item in result.selected
-                ],
+                selected_card_refs_json=selected_refs,
                 excluded_card_refs_json=sorted(result.excluded_reasons),
                 excluded_reasons_json={
                     key: list(value) for key, value in result.excluded_reasons.items()
@@ -692,11 +721,101 @@ def register_experience_card_tool(
             "incomplete, contradictory or stale; make the final decision from "
             "current factual evidence. Cards cannot emit LONG/SHORT/ORDER."
         )
+        budget = int(getattr(retriever.policy, "token_budget", 1200))
+        if budget < MIN_CARD_BUDGET_TOKENS:
+            raise ValueError(
+                f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
+                f"<{MIN_CARD_BUDGET_TOKENS}"
+            )
+
+        def _card_payload(items) -> list[dict]:
+            return [
+                {
+                    "rule_id": item.rule_id,
+                    "version": item.version,
+                    "status": item.status,
+                    "score": item.score,
+                    "why": item.why,
+                    "guidance": item.card.guidance if item.card else {},
+                    "evidence_refs": item.evidence_refs,
+                    **(
+                        item.card.semantics()
+                        if item.card is not None
+                        else {"evidence_only": True, "can_emit_direction": False}
+                    ),
+                }
+                for item in items
+            ]
+
+        def _refs(items) -> list[str]:
+            return [f"card:{item.rule_id}:v{item.version}" for item in items]
+
+        def _cost(features: dict, refs: list[str]) -> int:
+            payload = {
+                "tool_name": "experience_cards",
+                "symbol": symbol,
+                "timestamp": as_of,
+                "features": features,
+                "supporting_evidence": [],
+                "contrary_evidence": [],
+                "confidence_of_measurement": 1.0 if refs else 0.0,
+                "data_quality": "FACTUAL_PUBLISHED" if refs else "NO_MATCHES",
+                "source_refs": list(refs),
+            }
+            return max(1, len(json.dumps(payload, sort_keys=True, default=str)) // 4)
+
+        # F12/F13: finalize selection under the serialized budget BEFORE the
+        # durable trace is written, so trace, metrics and released evidence all
+        # describe the same cards.
+        selected = list(result.selected)
+        metrics = dict(result.metrics)
+        excluded = {key: list(value) for key, value in result.excluded_reasons.items()}
+        features = {
+            "cards": _card_payload(selected),
+            "card_evidence_available": bool(selected),
+            "retrieval": metrics,
+            "trigger_signature": result.trigger.to_json(),
+            "context_signature": result.context.to_json(),
+            "prompt_semantics": prompt_semantics,
+        }
+        refs = _refs(selected)
+        # Reserve a bounded trace-id allowance while pruning.
+        while _cost(features, refs) + TRACE_ID_RESERVE_TOKENS > budget:
+            if selected:
+                dropped = selected.pop()
+                excluded[f"card:{dropped.rule_id}:v{dropped.version}"] = [
+                    "TOKEN_BUDGET_FINAL"
+                ]
+                metrics["selected_card_count"] = len(selected)
+                metrics["context_tokens_estimate"] = sum(
+                    retriever._estimate_tokens(item.card) for item in selected
+                )
+                features["cards"] = _card_payload(selected)
+                features["card_evidence_available"] = bool(selected)
+                refs = _refs(selected)
+            elif "retrieval" in features:
+                features.pop("retrieval", None)
+            elif "trigger_signature" in features:
+                features.pop("trigger_signature", None)
+            elif "context_signature" in features:
+                features.pop("context_signature", None)
+            elif len(str(features.get("prompt_semantics", ""))) > 40:
+                features["prompt_semantics"] = "EVIDENCE_ONLY"
+            else:
+                raise ValueError(
+                    f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
+                )
+        pruned = replace(
+            result,
+            selected=selected,
+            metrics=metrics,
+            excluded_reasons=excluded,
+        )
         try:
-            # TRACE BEFORE USE: card evidence is only exposed after the
-            # retrieval trace is durably persisted.
+            # TRACE BEFORE USE: trace is persisted only for the finalized
+            # selection, then the identical evidence is released.
             trace = await store.record(
-                result,
+                pruned,
                 decision_id=None,
                 evidence_package_id=None,
                 account_id=account_id,
@@ -705,105 +824,73 @@ def register_experience_card_tool(
             )
             sink = context.get("card_trace_sink")
             if sink is not None:
-                await sink(result)
+                await sink(pruned)
         except Exception:
+            failure_features = {
+                "cards": [],
+                "card_evidence_available": False,
+                "reason": "TRACE_PERSIST_FAILED",
+                "prompt_semantics": prompt_semantics,
+            }
+            failure_refs: list[str] = []
+            while _cost(failure_features, failure_refs) > budget:
+                if "retrieval" in failure_features:
+                    failure_features.pop("retrieval", None)
+                elif "trigger_signature" in failure_features:
+                    failure_features.pop("trigger_signature", None)
+                elif "context_signature" in failure_features:
+                    failure_features.pop("context_signature", None)
+                elif len(str(failure_features.get("prompt_semantics", ""))) > 40:
+                    failure_features["prompt_semantics"] = "EVIDENCE_ONLY"
+                else:
+                    raise ValueError(
+                        f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}"
+                    ) from None
             return ToolEvidence(
                 tool_name="experience_cards",
                 symbol=symbol,
                 timestamp=as_of,
-                features={
-                    "cards": [],
-                    "card_evidence_available": False,
-                    "reason": "TRACE_PERSIST_FAILED",
-                    "retrieval": result.metrics,
-                    "prompt_semantics": prompt_semantics,
-                },
+                features=failure_features,
                 supporting_evidence=[],
                 contrary_evidence=[],
                 confidence_of_measurement=0.0,
                 data_quality="TRACE_UNAVAILABLE",
-                source_refs=[],
+                source_refs=failure_refs,
             )
-        cards = [
-            {
-                "rule_id": item.rule_id,
-                "version": item.version,
-                "status": item.status,
-                "score": item.score,
-                "why": item.why,
-                "guidance": item.card.guidance if item.card else {},
-                "evidence_refs": item.evidence_refs,
-                **(
-                    item.card.semantics()
-                    if item.card is not None
-                    else {"evidence_only": True, "can_emit_direction": False}
-                ),
-            }
-            for item in result.selected
-        ]
-        refs = [f"card:{item.rule_id}:v{item.version}" for item in result.selected]
-        features = {
-            "cards": cards,
-            "card_evidence_available": bool(cards),
+        final_features = {
+            "cards": _card_payload(selected),
+            "card_evidence_available": bool(selected),
             "card_trace_id": trace.trace_id,
-            "retrieval": result.metrics,
+            "retrieval": metrics,
             "trigger_signature": result.trigger.to_json(),
             "context_signature": result.context.to_json(),
             "prompt_semantics": prompt_semantics,
         }
-
-        def _make_evidence() -> ToolEvidence:
-            features["card_evidence_available"] = bool(cards)
-            return ToolEvidence(
-                tool_name="experience_cards",
-                symbol=symbol,
-                timestamp=as_of,
-                features=features,
-                supporting_evidence=[],
-                contrary_evidence=[],
-                confidence_of_measurement=1.0 if cards else 0.0,
-                data_quality="FACTUAL_PUBLISHED" if cards else "NO_MATCHES",
-                source_refs=list(refs),
-            )
-
-        def _cost(evidence: ToolEvidence) -> int:
-            payload = {
-                "tool_name": evidence.tool_name,
-                "symbol": evidence.symbol,
-                "timestamp": evidence.timestamp,
-                "features": evidence.features,
-                "supporting_evidence": evidence.supporting_evidence,
-                "contrary_evidence": evidence.contrary_evidence,
-                "confidence_of_measurement": evidence.confidence_of_measurement,
-                "data_quality": evidence.data_quality,
-                "source_refs": evidence.source_refs,
-            }
-            return max(1, len(json.dumps(payload, sort_keys=True, default=str)) // 4)
-
-        # R13 hard budget on the final serialized evidence object.  Whole cards
-        # are dropped first (with their refs), then non-card observability
-        # fields; ids/versions are never partially truncated.
-        budget = int(getattr(retriever.policy, "token_budget", 1200))
-        evidence = _make_evidence()
-        while _cost(evidence) > budget:
-            if cards:
-                cards.pop()
-                if refs:
-                    refs.pop()
-            elif features.get("retrieval") is not None:
-                features.pop("retrieval", None)
-            elif features.get("trigger_signature") is not None:
-                features.pop("trigger_signature", None)
-            elif features.get("context_signature") is not None:
-                features.pop("context_signature", None)
-            elif features.get("prompt_semantics"):
-                features["prompt_semantics"] = "HISTORICAL_EXPERIENCE_EVIDENCE_NOT_COMMANDS"
-            elif "card_trace_id" in features:
-                features.pop("card_trace_id", None)
+        final_refs = _refs(selected)
+        while _cost(final_features, final_refs) > budget:
+            if "retrieval" in final_features:
+                final_features.pop("retrieval", None)
+            elif "trigger_signature" in final_features:
+                final_features.pop("trigger_signature", None)
+            elif "context_signature" in final_features:
+                final_features.pop("context_signature", None)
+            elif len(str(final_features.get("prompt_semantics", ""))) > 40:
+                final_features["prompt_semantics"] = "EVIDENCE_ONLY"
+            elif "card_trace_id" in final_features:
+                final_features.pop("card_trace_id", None)
             else:
-                break
-            evidence = _make_evidence()
-        return evidence
+                raise ValueError(f"TOKEN_BUDGET_CONFIGURATION_INVALID:{budget}")
+        return ToolEvidence(
+            tool_name="experience_cards",
+            symbol=symbol,
+            timestamp=as_of,
+            features=final_features,
+            supporting_evidence=[],
+            contrary_evidence=[],
+            confidence_of_measurement=1.0 if final_refs else 0.0,
+            data_quality="FACTUAL_PUBLISHED" if final_refs else "NO_MATCHES",
+            source_refs=final_refs,
+        )
 
     registry.register(
         "experience_cards",

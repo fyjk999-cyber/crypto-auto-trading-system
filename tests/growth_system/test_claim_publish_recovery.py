@@ -239,7 +239,9 @@ async def test_publish_failure_isolated_and_retry_is_idempotent(growth_db):
     # retry path refuses to publish and reports BLOCKED_NO_PUBLISH_INPUT.
     # COMPLETE + zero publish input is never a success (R04).
     assert second.stats_status == STAGE_SUCCEEDED
-    assert second.review_status == STAGE_SUCCEEDED
+    # F08: absent required publish input rolls the review stage back to a
+    # retryable state instead of a permanent SUCCEEDED/blocked combination.
+    assert second.review_status == STAGE_FAILED
     assert second.publish_status == STAGE_FAILED
     assert second.succeeded is False
     assert second.error_type == "BLOCKED_NO_PUBLISH_INPUT"

@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from pydantic import ValidationError
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.learning.growth_contracts import (
@@ -39,7 +39,11 @@ from crypto_trader.learning.growth_contracts import (
     sha256_text,
     validate_review,
 )
-from crypto_trader.learning.growth_models import GrowthReviewAttemptORM, utcnow
+from crypto_trader.learning.growth_models import (
+    GrowthReviewAttemptBindingORM,
+    GrowthReviewAttemptORM,
+    utcnow,
+)
 from crypto_trader.llm_chief.provider import LLMResponse
 
 ClaimChecker = Callable[[], Awaitable[bool]]
@@ -118,18 +122,68 @@ class ReviewAttemptStore:
                 input_hash=row.input_hash,
             )
 
+    @staticmethod
+    def _row_to_attempt(row: GrowthReviewAttemptORM) -> ReviewAttempt:
+        review = (
+            StructuredReview.model_validate(row.result_json)
+            if row.result_json is not None
+            else None
+        )
+        return ReviewAttempt(
+            status=row.status,
+            attempt_id=row.attempt_id,
+            review=review,
+            error_type=row.error_type,
+            error_detail=row.error_detail_sanitized,
+            usage_status=row.usage_status,
+            idempotent=False,
+            account_id=row.account_id,
+            mode=row.mode,
+            symbol=row.symbol,
+            direction=row.direction,
+            review_date=row.review_date,
+            input_hash=row.input_hash,
+        )
+
     async def bind_job(
         self, *, attempt_id: str, job_key: str, job_revision: int
-    ) -> bool:
-        """Bind one durable attempt to the exact growth job revision."""
+    ) -> ReviewAttempt | None:
+        """Record immutable job membership without rewriting prior attempts.
+
+        The provider attempt remains bound to its original job in
+        ``growth_review_attempts``; every additional source/job revision gets
+        its own row in ``growth_review_attempt_bindings``.  Recovery then
+        resolves any historical membership exactly.
+        """
         async with self.session_factory() as session:
-            result = await session.execute(
-                update(GrowthReviewAttemptORM)
-                .where(GrowthReviewAttemptORM.attempt_id == attempt_id)
-                .values(job_key=job_key, job_revision=job_revision)
-            )
-            await session.commit()
-            return result.rowcount == 1
+            row = await session.get(GrowthReviewAttemptORM, attempt_id)
+            if row is None:
+                return None
+            existing = (
+                await session.execute(
+                    select(GrowthReviewAttemptBindingORM).where(
+                        GrowthReviewAttemptBindingORM.attempt_id == attempt_id,
+                        GrowthReviewAttemptBindingORM.job_key == job_key,
+                        GrowthReviewAttemptBindingORM.job_revision == job_revision,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(
+                    GrowthReviewAttemptBindingORM(
+                        attempt_id=attempt_id,
+                        job_key=job_key,
+                        job_revision=job_revision,
+                    )
+                )
+                # Keep the legacy primary binding for compatibility, but never
+                # overwrite an already-bound job.
+                if row.job_key is None and row.job_revision is None:
+                    row.job_key = job_key
+                    row.job_revision = job_revision
+                await session.commit()
+            refreshed = await session.get(GrowthReviewAttemptORM, attempt_id)
+            return self._row_to_attempt(refreshed) if refreshed else None
 
     async def load_succeeded_for_date(
         self,
@@ -159,12 +213,36 @@ class ReviewAttemptStore:
                 query = query.where(GrowthReviewAttemptORM.mode == mode)
             if input_hash is not None:
                 query = query.where(GrowthReviewAttemptORM.input_hash == input_hash)
-            if job_key is not None:
-                query = query.where(GrowthReviewAttemptORM.job_key == job_key)
-            if job_revision is not None:
-                query = query.where(
-                    GrowthReviewAttemptORM.job_revision == job_revision
-                )
+            if job_key is not None or job_revision is not None:
+                binding_query = select(GrowthReviewAttemptBindingORM.attempt_id)
+                if job_key is not None:
+                    binding_query = binding_query.where(
+                        GrowthReviewAttemptBindingORM.job_key == job_key
+                    )
+                if job_revision is not None:
+                    binding_query = binding_query.where(
+                        GrowthReviewAttemptBindingORM.job_revision == job_revision
+                    )
+                bound_ids = (
+                    await session.execute(binding_query)
+                ).scalars().all()
+                membership = [
+                    GrowthReviewAttemptORM.attempt_id.in_(tuple(bound_ids))
+                ]
+                if job_key is not None and job_revision is not None:
+                    membership.append(
+                        and_(
+                            GrowthReviewAttemptORM.job_key == job_key,
+                            GrowthReviewAttemptORM.job_revision == job_revision,
+                        )
+                    )
+                elif job_key is not None:
+                    membership.append(GrowthReviewAttemptORM.job_key == job_key)
+                elif job_revision is not None:
+                    membership.append(
+                        GrowthReviewAttemptORM.job_revision == job_revision
+                    )
+                query = query.where(or_(*membership))
             if episode_ids:
                 query = query.where(
                     GrowthReviewAttemptORM.episode_id.in_(tuple(episode_ids))

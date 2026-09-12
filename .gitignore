@@ -30,3 +30,6 @@ node_modules/
 
 # Round-2 repair evidence
 .ops-growth-r2/
+
+# Round-3 repair evidence
+.ops-growth-r3/

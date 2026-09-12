@@ -288,6 +288,30 @@ class GrowthCompressionORM(GrowthBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class GrowthReviewAttemptBindingORM(GrowthBase):
+    """Immutable many-to-many job membership for one durable review attempt.
+
+    A cached review/attempt can legitimately serve multiple source revisions or
+    job revisions, but those memberships must never overwrite each other.
+    """
+
+    __tablename__ = "growth_review_attempt_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "attempt_id",
+            "job_key",
+            "job_revision",
+            name="uq_growth_review_attempt_binding",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    job_key: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    job_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class GrowthImportBatchORM(GrowthBase):
     __tablename__ = "growth_import_batches"
 
