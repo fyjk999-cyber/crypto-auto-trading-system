@@ -35,7 +35,14 @@ from crypto_trader.market_data.opportunity.snapshot import (
 from crypto_trader.persistence.models import LLMDecisionORM, TradePlanORM
 from tests.conftest import make_paper_engine
 
-NOW = datetime.now(UTC)
+
+# Snapshot freshness is judged against REAL wall time (OpportunityBoard uses
+# time.time() internally), so a module-level constant captured at import would
+# drift by the length of the whole suite and make expiry assertions
+# non-deterministic. Read the clock at CALL time instead.
+def NOW() -> datetime:
+    return datetime.now(UTC)
+
 DEFAULT_SYMBOL = "BTCUSDT"
 BOARD_CANDIDATE = "PROGRAMUSDT"
 
@@ -50,17 +57,18 @@ def _candidate(symbol: str = BOARD_CANDIDATE) -> FactorCandidate:
                 factor="MOMENTUM_EXPANSION",
                 status="TRIGGERED",
                 strength=0.9,
-                observed_at=NOW.isoformat(),
+                observed_at=NOW().isoformat(),
             )
         ],
         priority=0.9,
         scan_id="scan-1",
-        created_at=NOW,
-        expires_at=NOW + timedelta(seconds=180),
+        created_at=NOW(),
+        expires_at=NOW() + timedelta(seconds=180),
     )
 
 
-def _board(*, scan_id: str = "scan-1", now: datetime = NOW) -> OpportunityBoard:
+def _board(*, scan_id: str = "scan-1", now: datetime | None = None) -> OpportunityBoard:
+    now = now or NOW()
     board = OpportunityBoard()
     board.publish_snapshot(
         MarketObservationSnapshot(
@@ -112,8 +120,8 @@ def _record(
         status=status,
         selection_state=selection_state or ("NO_RESEARCH" if not symbols else "SELECT"),
         selected_symbols=[{"symbol": s} for s in symbols],
-        requested_at=NOW,
-        completed_at=NOW,
+        requested_at=NOW(),
+        completed_at=NOW(),
     )
 
 
@@ -147,7 +155,7 @@ def _build(database, record: MarketSelectionRecord | None, *, board=None):
         audit=None,
         opportunity_board=board,
         selection_service=CountingSelectionService(record),
-        attempt_clock=lambda: NOW,
+        attempt_clock=lambda: NOW(),
     )
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     engine.strategies = [strategy]
@@ -190,7 +198,7 @@ async def test_blocked_selection_states_never_invoke_strategy(database):
 
 async def test_expired_and_mismatched_selections_never_invoke_strategy(database):
     """Case 5: expired snapshot and scan_id mismatch."""
-    stale_board = _board(now=NOW - timedelta(seconds=600))
+    stale_board = _board(now=NOW() - timedelta(seconds=600))
     engine, strategy, _, requests = _build(
         database, _record(status="SUCCESS", symbols=("ETHUSDT",)), board=stale_board
     )
@@ -278,7 +286,7 @@ async def test_scheduler_failure_fails_closed_without_crashing(database):
         audit=None,
         opportunity_board=board,
         selection_service=CountingSelectionService(_record(status="SUCCESS", symbols=("ETHUSDT",))),
-        attempt_clock=lambda: NOW,
+        attempt_clock=lambda: NOW(),
     )
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     engine.strategies = [strategy]

@@ -29,7 +29,14 @@ from crypto_trader.market_data.opportunity.snapshot import (
     MarketObservationSnapshot,
 )
 
-NOW = datetime.now(UTC)
+
+# Snapshot freshness is judged against REAL wall time (OpportunityBoard uses
+# time.time() internally), so a module-level constant captured at import would
+# drift by the length of the whole suite and make expiry assertions
+# non-deterministic. Read the clock at CALL time instead.
+def NOW() -> datetime:
+    return datetime.now(UTC)
+
 
 
 def _candidate(symbol: str, strength: float = 0.9) -> FactorCandidate:
@@ -41,17 +48,18 @@ def _candidate(symbol: str, strength: float = 0.9) -> FactorCandidate:
                 factor="MOMENTUM_EXPANSION",
                 status="TRIGGERED",
                 strength=strength,
-                observed_at=NOW.isoformat(),
+                observed_at=NOW().isoformat(),
             )
         ],
         priority=strength,
         scan_id="scan-1",
-        created_at=NOW,
-        expires_at=NOW + timedelta(seconds=180),
+        created_at=NOW(),
+        expires_at=NOW() + timedelta(seconds=180),
     )
 
 
-def _board(*, scan_id: str = "scan-1", now: datetime = NOW) -> OpportunityBoard:
+def _board(*, scan_id: str = "scan-1", now: datetime | None = None) -> OpportunityBoard:
+    now = now or NOW()
     """A board that ALWAYS has a programmatic candidate + rotation symbol."""
     board = OpportunityBoard()
     board.publish_snapshot(
@@ -92,8 +100,8 @@ def _record(
         status=status,
         selection_state=selection_state or ("NO_RESEARCH" if not symbols else "SELECT"),
         selected_symbols=[{"symbol": s} for s in symbols],
-        requested_at=NOW,
-        completed_at=NOW,
+        requested_at=NOW(),
+        completed_at=NOW(),
     )
 
 
@@ -106,7 +114,7 @@ def _strategy(board: OpportunityBoard, service=None) -> LiveLLMDecisionStrategy:
         audit=None,
         opportunity_board=board,
         selection_service=service,
-        attempt_clock=lambda: NOW,
+        attempt_clock=lambda: NOW(),
     )
 
 
@@ -178,7 +186,7 @@ def test_selection_budget_deferral_does_not_fall_back_to_board(status):
 
 
 def test_expired_selection_does_not_fall_back_to_board():
-    board = _board(now=NOW - timedelta(seconds=600))
+    board = _board(now=NOW() - timedelta(seconds=600))
     service = FakeSelectionService(_record(status="SUCCESS", symbols=("AAAUSDT",)))
     strategy = _strategy(board, service)
     assert strategy.desired_symbol() is None
