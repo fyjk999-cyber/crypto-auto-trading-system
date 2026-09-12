@@ -706,6 +706,154 @@ class TradingEngine:
             # persisted, whether the Episode came from this retry or from any
             # other legal materialisation path.
             await self._refresh_trade_episode_health()
+            # F3 ENTRY TTL, on the SAME cadence: no new timer, no new task, no
+            # provider polling. Bounded to the unresolved-order query.
+            await self._enforce_entry_order_ttl()
+
+    # ------------------------------------------------- F3 ENTRY TTL enforcement
+    async def _enforce_entry_order_ttl(self) -> int:
+        """Expire short-term ENTRY intents that are past their resting lifetime.
+
+        Reuses F4 reconciliation, F5 purpose classification and the F3 evaluator;
+        it creates no second reconciler, no second cancel engine and no second
+        scheduler. Cancellation goes through the existing lease-fenced
+        cancel-only path.
+        """
+        collector = getattr(self.order_manager, "unresolved_order_facts", None)
+        if collector is None:
+            return 0
+
+        from crypto_trader.order.entry_ttl import (
+            ACTION_CANCEL_REMAINING,
+            evaluate_entry_ttl,
+        )
+        from crypto_trader.order.reconciliation import (
+            ORDER_PURPOSE_ENTRY,
+            reconcile_order,
+        )
+
+        try:
+            facts = await collector()
+        except Exception:
+            logger.warning("entry ttl: unresolved order query failed", exc_info=True)
+            return 0
+
+        cancelled = 0
+        for record in facts:
+            if record.get("purpose") != ORDER_PURPOSE_ENTRY:
+                continue
+            order = await self.order_manager.get(record["order_id"])
+            if order is None:
+                continue
+
+            # Fresh factual reconciliation FIRST: the durable row is exactly the
+            # thing that may be stale, so it can never authorise a cancel alone.
+            broker_order = None
+            broker_error: Exception | None = None
+            try:
+                broker_order = await self._observe_broker_order(order)
+            except Exception as exc:  # observation failure != terminal fact
+                broker_error = exc
+            recon = reconcile_order(
+                order=order,
+                purpose=record["purpose"],
+                broker_order=broker_order,
+                broker_error=broker_error,
+            )
+
+            # Resting age comes ONLY from brokered acceptance.
+            accepted_at = await self._order_accepted_at(order)
+            decision = evaluate_entry_ttl(
+                fact=recon,
+                durable_status=record["status"],
+                resting_age=accepted_at,
+            )
+            if decision.action != ACTION_CANCEL_REMAINING:
+                if decision.action != "HOLD":
+                    await self.audit.log(
+                        "ENTRY_TTL_EVALUATED",
+                        target=str(record["order_id"]),
+                        run_id=self.run_id,
+                        after=decision.as_dict(),
+                    )
+                continue
+
+            # Lease-fenced: the TTL never bypasses execution ownership.
+            cancel = getattr(self, "_cancel_unsettled_entry_order", None)
+            if cancel is None or not await self._current_lease_valid():
+                await self.audit.log(
+                    "ENTRY_TTL_CANCEL_BLOCKED",
+                    target=str(record["order_id"]),
+                    run_id=self.run_id,
+                    after={
+                        **decision.as_dict(),
+                        "block_reason": "EXECUTION_LEASE_NOT_HELD",
+                    },
+                )
+                continue
+
+            await cancel(order)
+            cancelled += 1
+            await self.audit.log(
+                "ENTRY_TTL_EXPIRED",
+                target=str(record["order_id"]),
+                run_id=self.run_id,
+                order_id=str(record["order_id"]),
+                after={
+                    **decision.as_dict(),
+                    "cancel_remaining_only": True,
+                    "terminal_reason": (
+                        # A factual fill means a real position exists, so the
+                        # PLAN must keep living; only the unfilled remainder
+                        # expired.
+                        "ENTRY_REMAINDER_EXPIRED"
+                        if recon.state == "CONFIRMED_PARTIALLY_FILLED"
+                        else "ENTRY_ORDER_TTL_EXPIRED"
+                    ),
+                },
+            )
+        return cancelled
+
+    async def _observe_broker_order(self, order):
+        """Best-effort broker read. Absence/errors stay UNKNOWN, never terminal."""
+        getter = getattr(self.adapter, "get_order", None)
+        if getter is None:
+            return None
+        from crypto_trader.order.reconciliation import _decimal  # noqa: F401
+
+        exchange_id = getattr(order, "exchange_order_id", None)
+        if not exchange_id:
+            return None
+        return await getter(order.symbol, exchange_id)
+
+    async def _order_accepted_at(self, order) -> float | None:
+        """Confirmed RESTING age, from the factual broker acceptance events.
+
+        OPENED is preferred, then ACKNOWLEDGED. ``created_at`` is deliberately
+        never used here: a local object does not prove the broker accepted it.
+        """
+        from crypto_trader.order.entry_ttl import resting_age_seconds
+
+        opened_at = None
+        acknowledged_at = None
+        lister = getattr(self.order_manager, "list_events", None)
+        if callable(lister):
+            try:
+                for event in await lister(order.internal_order_id):
+                    raw = getattr(event, "event_type", "") or ""
+                    etype = str(getattr(raw, "value", raw))
+                    ts = getattr(event, "timestamp", None)
+                    if ts is None:
+                        continue
+                    if etype.endswith("ORDER_OPENED") and opened_at is None:
+                        opened_at = ts
+                    elif etype.endswith("ORDER_ACKNOWLEDGED") and acknowledged_at is None:
+                        acknowledged_at = ts
+            except Exception:
+                logger.debug("entry ttl: order event read failed", exc_info=True)
+        return resting_age_seconds(
+            opened_at=opened_at, acknowledged_at=acknowledged_at, created_at=None
+        )
 
     # ------------------------------------------------------------------ tick
     async def tick(self, *, include_position_reviews: bool = True) -> list[RiskDecision]:

@@ -99,17 +99,22 @@ def resting_age_seconds(
     *,
     opened_at: datetime | None,
     acknowledged_at: datetime | None,
-    created_at: datetime | None,
+    created_at: datetime | None = None,
     now: datetime | None = None,
 ) -> float | None:
-    """Age of the order's RESTING state, in seconds.
+    """Age of the order's CONFIRMED RESTING time, in seconds.
 
-    Prefers the factual broker acceptance instant (opened, else acknowledged).
-    Falls back to ``created_at`` only when neither exists, and returns None when
-    there is no timestamp at all - an unknown resting age must never be treated
-    as "old enough", because that would cancel an order we cannot time.
+    Only brokered acceptance counts: ``opened_at`` (the factual resting start)
+    or ``acknowledged_at`` (the factual acceptance). ``created_at`` is accepted
+    as an argument for diagnostic callers but is deliberately NOT a fallback,
+    because a locally created object proves nothing about whether a broker ever
+    accepted it - and cancelling on local age would expire an intent that may
+    still be in submission.
+
+    Returns None when no acceptance instant exists. None means UNKNOWN, and an
+    unknown resting age must never be treated as "old enough".
     """
-    reference = opened_at or acknowledged_at or created_at
+    reference = opened_at or acknowledged_at
     if reference is None:
         return None
     if reference.tzinfo is None:
@@ -118,6 +123,11 @@ def resting_age_seconds(
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
     return (moment - reference).total_seconds()
+
+
+#: Statuses that do NOT prove broker acceptance. An order in one of these may be
+#: well past 60s by local age and must still not be TTL-cancelled.
+NOT_YET_RESTING_STATUSES = ("CREATED", "VALIDATED", "SUBMITTING")
 
 
 def evaluate_entry_ttl(
@@ -163,6 +173,11 @@ def evaluate_entry_ttl(
         RECON_CONFIRMED_REJECTED,
     ):
         return decide(ACTION_NO_CANCEL_TERMINAL, f"TERMINAL_{state}")
+
+    # Not yet resting at the broker: this is a SUBMISSION diagnostic, not an
+    # EXPIRE condition. Local age cannot authorise a cancel.
+    if str(durable_status) in NOT_YET_RESTING_STATUSES:
+        return decide(ACTION_HOLD, "NOT_YET_RESTING_AT_BROKER")
 
     # Idempotency: a cancel is already in flight.
     if str(durable_status) in _CANCEL_IN_FLIGHT_STATUSES:

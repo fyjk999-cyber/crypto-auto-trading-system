@@ -316,9 +316,61 @@ def test_resting_age_prefers_opened_then_acknowledged():
     assert resting_age_seconds(
         opened_at=None, acknowledged_at=acknowledged, created_at=created, now=NOW
     ) == 120.0
-    assert resting_age_seconds(
-        opened_at=None, acknowledged_at=None, created_at=created, now=NOW
-    ) == 600.0
+
+
+def test_E10_created_at_alone_never_establishes_resting_age():
+    """§2/§3: a locally created object proves nothing about broker acceptance.
+
+    60s TTL means 60s of CONFIRMED RESTING time, not 60s since local creation.
+    """
+    created = NOW - timedelta(seconds=300)
+    assert (
+        resting_age_seconds(
+            opened_at=None, acknowledged_at=None, created_at=created, now=NOW
+        )
+        is None
+    )
+
+
+def test_E10b_created_at_old_but_acknowledged_recently_does_not_cancel():
+    """created_at age = 5min, ACK age = 10s -> NO CANCEL."""
+    decision = evaluate_entry_ttl(
+        fact=_fact(state=RECON_CONFIRMED_OPEN),
+        durable_status=OrderStatus.OPEN.value,
+        resting_age=10.0,
+    )
+    assert decision.action == ACTION_HOLD
+    assert decision.should_cancel is False
+
+
+def test_E10c_no_acknowledgement_no_opened_means_unknown_and_holds():
+    """created_at age = 5min, no ACK, no OPEN -> RESTING_AGE_UNKNOWN, NO CANCEL."""
+    decision = evaluate_entry_ttl(
+        fact=_fact(state=RECON_CONFIRMED_OPEN),
+        durable_status=OrderStatus.OPEN.value,
+        resting_age=resting_age_seconds(
+            opened_at=None,
+            acknowledged_at=None,
+            created_at=NOW - timedelta(seconds=300),
+            now=NOW,
+        ),
+    )
+    assert decision.action == ACTION_HOLD
+    assert decision.reason == "RESTING_AGE_UNKNOWN"
+    assert decision.should_cancel is False
+
+
+def test_E10d_pre_acceptance_statuses_are_submission_diagnostics_only():
+    """§3: CREATED / VALIDATED / SUBMITTING never enter TTL cancel."""
+    for status in ("CREATED", "VALIDATED", "SUBMITTING"):
+        decision = evaluate_entry_ttl(
+            fact=_fact(state=RECON_CONFIRMED_OPEN),
+            durable_status=status,
+            resting_age=600.0,
+        )
+        assert decision.action == ACTION_HOLD, status
+        assert decision.reason == "NOT_YET_RESTING_AT_BROKER", status
+        assert decision.should_cancel is False
 
 
 def test_resting_age_is_none_without_any_timestamp():
