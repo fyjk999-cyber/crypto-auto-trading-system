@@ -47,6 +47,12 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         }
         self.positions: dict[str, Position] = {}
         self.orders: dict[str, Order] = {}
+        # Resource-readiness inputs (authority-neutral): the LLM management
+        # budget and the review floor decide how many positions can be managed.
+        self.llm_budget = None
+        # Must match Settings.position_review_min_interval_seconds, otherwise the
+        # capacity guarantee is computed from a cadence the runtime does not use.
+        self.position_review_min_interval_seconds = 60.0
         self.books: dict[str, OrderBook] = {}
         self.sequence: dict[str, int] = {}
         self.fee_rate = D(fee_rate)
@@ -540,11 +546,74 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         """
 
         self._ensure_connected()
-        self.balances = {currency: D(amount) for currency, amount in balances.items()}
+        self.sync_balances_from_projection(balances)
         self.positions = {
             symbol: position.model_copy(deep=True)
             for symbol, position in positions.items()
             if position.quantity != 0
+        }
+
+    def sync_balances_from_projection(self, balances: dict[str, Decimal]) -> None:
+        """Adopt the authoritative projected balance for the PAPER account.
+
+        Narrow runtime counterpart of ``restore_from_canonical_state``: the
+        durable ledger projection is authoritative, and this only COPIES it.
+        It performs no arithmetic of its own, creates no order/fill/event, and
+        is idempotent — replaying the same projection twice cannot move the
+        balance twice.
+
+        Needed because some facts (funding settlements in particular) are
+        posted to the ledger while this process-local cache keeps its previous
+        value; without this the cache stays permanently stale and
+        reconciliation ends up comparing two different points in time.
+
+        Deliberately does NOT touch ``orders``, positions, execution state or
+        any pending order — those keep their own lifecycle.
+        """
+        self.balances = {currency: D(amount) for currency, amount in balances.items()}
+
+    def position_management_capacity(self, *, open_positions: int) -> dict:
+        """How many concurrent positions the LLM management budget can cover.
+
+        Resource readiness, NOT direction authority: this never picks or changes
+        a direction, it only reports whether the position-management capacity a
+        new position would consume is actually guaranteed.
+
+        The worst case is the binding one. Worst-case per-position demand is one
+        review per ``position_review_min_interval_seconds`` — the configured
+        floor below which an unchanged position is never re-reviewed — and the
+        reserve is the capacity non-position work cannot touch. An optional
+        additional position must fit inside what is left.
+        """
+        config = getattr(self, "llm_budget", None)
+        config = config.config if config is not None else None
+        if config is None:
+            from crypto_trader.llm_chief.budget import BudgetConfig
+
+            config = BudgetConfig()
+        window = float(config.window_seconds)
+        interval = max(1.0, float(getattr(self, "position_review_min_interval_seconds", 30.0)))
+        worst_case_per_position = window / interval
+        guaranteed = int(config.reserve_calls)
+        max_safe = (
+            int(guaranteed // worst_case_per_position)
+            if worst_case_per_position > 0
+            else 0
+        )
+        projected = open_positions + 1
+        available = projected <= max_safe and projected > 0
+        return {
+            "max_safe_concurrent_positions": max_safe,
+            "open_positions": open_positions,
+            "projected_open_positions": projected,
+            "guaranteed_position_management_capacity_per_hour": guaranteed,
+            "worst_case_demand_per_position_per_hour": int(worst_case_per_position),
+            "position_management_capacity_available": available,
+            "reason": (
+                "POSITION_MANAGEMENT_CAPACITY_AVAILABLE"
+                if available
+                else "POSITION_MANAGEMENT_CAPACITY_UNAVAILABLE"
+            ),
         }
 
     # ------------------------------------------------------------ normalize

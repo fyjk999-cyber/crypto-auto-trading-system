@@ -222,6 +222,18 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             max_calls_per_window=settings.llm_budget_max_calls_per_window,
         )
     )
+    # Resource-readiness inputs for the position-management capacity gate.
+    # Authority-neutral: these only let the runtime report how many concurrent
+    # positions the management budget can actually cover.
+    adapter.llm_budget = llm_budget
+    adapter.position_review_min_interval_seconds = float(
+        settings.position_review_min_interval_seconds
+    )
+    # The official runtime enforces the capacity gate; ad-hoc/test engines keep
+    # the historical admission behaviour unless they opt in.
+    settings = settings.model_copy(
+        update={"enforce_position_management_capacity": True}
+    )
     chief = ChiefTraderEngine(provider=llm_provider, budget=llm_budget)
     tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)

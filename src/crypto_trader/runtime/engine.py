@@ -62,7 +62,10 @@ from crypto_trader.ledger.service import (
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
-from crypto_trader.order.manager import OrderManager
+from crypto_trader.order.manager import (
+    POSITION_ACTION_STALE,
+    OrderManager,
+)
 from crypto_trader.perpetual.funding_coverage import FundingCoverageService
 from crypto_trader.persistence.database import Database
 from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
@@ -177,6 +180,17 @@ class TradingEngine:
         self.position_review_timeout_seconds = 30.0
         self.position_review_interval_seconds = max(
             0.5, min(30.0, float(settings.engine_tick_seconds))
+        )
+        # Per-position LLM review ELIGIBILITY window. Every review path —
+        # scheduled, material-change, partial-fill, order-state — shares it, so
+        # the call rate per position can never exceed one per window. That is
+        # what makes the management-capacity guarantee provable: a material
+        # event marks the position dirty and is coalesced into the next
+        # eligible review instead of buying an extra call. Deterministic
+        # safety (RiskEngine limits, kill switch, TIME_STOP, duplicate guard,
+        # reconciliation halt) is NOT rate-limited by this.
+        self.position_review_min_interval_seconds = float(
+            settings.position_review_min_interval_seconds
         )
         self._position_review_state: dict[str, dict] = {}
 
@@ -511,9 +525,36 @@ class TradingEngine:
                 ok = not report.errors
                 detail = "; ".join(report.errors[:3]) if report.errors else ""
                 self.health.set("funding_accounting", ok, detail)
+                if report.settled > 0 and ok:
+                    # The settlement is now COMMITTED to the durable ledger,
+                    # which is the authoritative cash truth; the process-local
+                    # PAPER cache has not seen it. Post-commit ordering: re-read
+                    # the committed projection and COPY it (no independent
+                    # arithmetic), so a retry cannot double-apply it.
+                    await self._resync_paper_balance_from_projection()
             except Exception as exc:
+                # A failed resync must NOT roll back the committed funding fact;
+                # reconciliation stays fail-closed and the next pass retries.
                 self.health.set("funding_accounting", False, type(exc).__name__)
             await asyncio.sleep(max(1, self.settings.funding_refresh_interval_seconds))
+
+    async def _resync_paper_balance_from_projection(self) -> None:
+        """Refresh the PAPER account cache from committed ledger projections.
+
+        Narrow by design: only the account balance is adopted. Orders, positions
+        and execution state keep their own lifecycle, so a pending partial order
+        cannot be rewound, duplicated or marked terminal here.
+        """
+        sync = getattr(self.adapter, "sync_balances_from_projection", None)
+        if sync is None:
+            return
+        async with self.database.session_factory() as session:
+            snapshot = await replay_projections(session)
+        if not snapshot.balances:
+            return
+        balances = {currency: row["total"] for currency, row in snapshot.balances.items()}
+        sync(balances)
+        self._initial_balances = balances
 
     async def _reconciliation_loop(self) -> None:
         while True:
@@ -573,6 +614,74 @@ class TradingEngine:
         self.health.set("engine_loop", True)
         return decisions
 
+    async def _position_change_signature(self, symbol: str, position) -> tuple:
+        """Factual state a position review may legitimately need to react to.
+
+        Built from observed facts only — position size / entry / leverage /
+        realised PnL, the live book, and the lifecycle state of the entry order
+        — so "materially unchanged" is a factual statement rather than a
+        heuristic guess. Order-state changes are explicit material events: an
+        entry order becoming terminal is exactly what unblocks a pending
+        REDUCE/EXIT, so it must re-arm a review immediately.
+        """
+        book = self.market_data.books.get(symbol)
+        bid = book.best_bid() if book is not None else None
+        ask = book.best_ask() if book is not None else None
+        plan_state = None
+        entry_order_status = None
+        plan = (
+            await self.trade_plans.get_active_for_symbol(symbol)
+            if self.trade_plans is not None
+            else None
+        )
+        if plan is not None:
+            plan_state = str(getattr(plan, "state", None))
+            order_id = getattr(plan, "order_id", None)
+            if order_id:
+                entry_order = await self.order_manager.get(order_id)
+                if entry_order is not None:
+                    entry_order_status = str(entry_order.status.value)
+        return (
+            str(getattr(position, "quantity", None)),
+            str(getattr(position, "avg_entry_price", None)),
+            str(getattr(position, "cost_basis", None)),
+            str(getattr(position, "leverage", None)),
+            str(getattr(position, "realized_pnl", None)),
+            str(bid.price if bid else None),
+            str(ask.price if ask else None),
+            plan_state,
+            entry_order_status,
+        )
+
+    async def _is_due_for_review(
+        self, symbol: str, position, state: dict, now_epoch: float
+    ) -> bool:
+        """Single eligibility gate for EVERY kind of position review.
+
+        Scheduled reviews, material-change reviews, partial-fill reviews and
+        order-state reviews all pass through here. A material change does NOT
+        buy an extra call: it marks the position dirty so that the NEXT eligible
+        review is prioritised and coalesces every event that landed in the
+        window. That is what keeps the capacity guarantee provable — without it,
+        material events could raise the call rate without bound.
+
+        Evidence freshness is unaffected: a coalesced review still re-reads the
+        current position, order, fills, book and PnL when it runs.
+        """
+        signature = await self._position_change_signature(symbol, position)
+        if signature != state.get("last_review_signature"):
+            # Material change observed: remember it, do not act outside the window.
+            state["position_review_dirty"] = True
+        if state["next_due_at"] > now_epoch:
+            return False
+        last_started = state.get("last_started_at")
+        if last_started is None:
+            return True
+        elapsed = now_epoch - float(last_started)
+        if elapsed >= self.position_review_min_interval_seconds:
+            return True
+        return False
+
     async def _review_positions_once(self) -> list[RiskDecision]:
         if self.position_manager is None:
             return []
@@ -587,7 +696,7 @@ class TradingEngine:
                 symbol,
                 {"next_due_at": 0.0, "failures": 0, "last_started_at": None},
             )
-            if state["next_due_at"] <= now_epoch:
+            if await self._is_due_for_review(symbol, position, state, now_epoch):
                 score = await self._position_review_priority(
                     position, state, now_wall, now_epoch
                 )
@@ -635,6 +744,12 @@ class TradingEngine:
                     position, now_wall
                 )
                 self.health.set("position_manager", True)
+                # Remember WHAT was reviewed so an unchanged position can be
+                # coalesced instead of re-asked every tick.
+                state["last_review_signature"] = (
+                    await self._position_change_signature(symbol, position)
+                )
+                state["position_review_dirty"] = False
                 return signal
 
         reviewed = await asyncio.gather(
@@ -659,6 +774,10 @@ class TradingEngine:
         overdue = max(0.0, now_epoch - state.get("next_due_at", 0.0))
         hold_bonus = 0.0
         risk_bonus = 0.0
+        # A position whose evidence changed inside the eligibility window is
+        # prioritised, so coalesced events are acted on at the next opportunity
+        # instead of waiting a further full window behind idle positions.
+        dirty_bonus = 5000.0 if state.get("position_review_dirty") else 0.0
         try:
             plan = await self.trade_plans.get_active_for_symbol(position.symbol)
         except Exception:
@@ -681,7 +800,10 @@ class TradingEngine:
             notional = abs(position.quantity) * entry * spec
             if notional > 0 and unrealized < 0:
                 risk_bonus = float(abs(unrealized) / notional) * 1000.0
-        return (1 if overdue > 0 else 0, overdue + hold_bonus + risk_bonus)
+        return (
+            1 if overdue > 0 else 0,
+            overdue + hold_bonus + risk_bonus + dirty_bonus,
+        )
 
     def _review_backoff(self, state: dict) -> float:
         failures = max(1, int(state.get("failures", 0)))
@@ -984,6 +1106,151 @@ class TradingEngine:
         )
 
 
+    async def _position_management_capacity_available(self) -> bool:
+        """Resource-readiness gate for admitting one more position.
+
+        NOT direction authority: this never chooses or rewrites a direction; it
+        only answers whether the position-management capacity a new position
+        would consume is actually guaranteed. ChiefTrader stays the sole LONG /
+        SHORT authority and this gate can only ever make an entry wait.
+
+        Fail closed: if capacity cannot be computed, no new position is admitted.
+        A safe result of "zero new positions" is acceptable — trading frequency
+        must never be bought with unmanageable positions.
+        """
+        probe = getattr(self.adapter, "position_management_capacity", None)
+        if probe is None:
+            return True
+        try:
+            open_positions = len(
+                [
+                    p
+                    for p in (await self.portfolio.get_positions()).values()
+                    if p.quantity != 0
+                ]
+            )
+            facts = probe(open_positions=open_positions)
+        except Exception:
+            logger.warning("position management capacity check failed", exc_info=True)
+            return False
+        if facts.get("position_management_capacity_available"):
+            return True
+        await self.audit.log(
+            "POSITION_MANAGEMENT_CAPACITY_UNAVAILABLE",
+            target=f"open={open_positions}",
+            run_id=self.run_id,
+            after=facts,
+        )
+        return False
+
+    async def _resolve_stale_position_action(
+        self, order_id: str, *, trade_plan_id: str | None = None
+    ) -> None:
+        """RECONCILE_THEN_CANCEL_ONLY for a stale position-reducing order.
+
+        A resting order genuinely is pending, so the duplicate guard stays. But
+        a partially filled order must not lock position management forever. The
+        authorised policy is cancel-ONLY:
+
+          1. reconcile against authoritative state FIRST, so a fill that lands
+             at the last moment is consumed instead of being cancelled away;
+          2. only cancel when the refreshed class is still STALE;
+          3. never cancel an ambiguous (UNKNOWN / CANCEL_PENDING) state — that
+             stays fail-closed and keeps reconciling.
+
+        No replacement, no repricing, no market conversion, no resubmission. The
+        duplicate guard keeps blocking until a terminal state is acknowledged,
+        and the newest position intent is replayed through a fresh ChiefTrader
+        review rather than being re-submitted mechanically.
+        """
+        try:
+            facts = await self.order_manager.reconcile_pending_position_action(order_id)
+            if facts is None:
+                return
+            classification = facts.get("classification")
+            await self.audit.log(
+                "POSITION_ACTION_STALE_RECONCILED",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={
+                    "trade_plan_id": trade_plan_id,
+                    "status": facts["status"],
+                    "filled_quantity": facts["filled_quantity"],
+                    "remaining_quantity": facts["remaining_quantity"],
+                    "age_seconds": facts["age_seconds"],
+                    "classification": classification,
+                },
+            )
+            if classification != POSITION_ACTION_STALE:
+                # Ambiguous or already resolved: never act on top of it.
+                return
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_STALE_CANCEL_BLOCKED",
+                    target=order_id,
+                    run_id=self.run_id,
+                    order_id=order_id,
+                    after={"reason": "EXECUTION_LEASE_NOT_HELD"},
+                )
+                return
+            order = await self.order_manager.get(order_id)
+            if order is None:
+                return
+            await self.order_manager.cancel_pending(
+                order_id, reason="STALE_POSITION_REDUCING_ORDER"
+            )
+            # Re-check immediately before the exchange mutation.
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_STALE_CANCEL_BLOCKED",
+                    target=order_id,
+                    run_id=self.run_id,
+                    order_id=order_id,
+                    after={"reason": "EXECUTION_LEASE_LOST_BEFORE_CANCEL"},
+                )
+                return
+            await self.adapter.cancel_order(order.symbol, order.exchange_order_id)
+            await self.audit.log(
+                "POSITION_ACTION_STALE_CANCEL_REQUESTED",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={
+                    "trade_plan_id": trade_plan_id,
+                    "status": "CANCEL_PENDING",
+                    "policy": "RECONCILE_THEN_CANCEL_ONLY",
+                    "remaining_quantity": facts["remaining_quantity"],
+                },
+            )
+            # Once the cancel is acknowledged the blocking action is gone, so
+            # re-arm a fresh review instead of replaying an old intent: the
+            # newest HOLD/REDUCE/EXIT must come from ChiefTrader against current
+            # evidence, not from a mechanically re-submitted historical signal.
+            symbol = order.symbol
+            state = self._position_review_state.get(symbol)
+            if state is not None:
+                state["next_due_at"] = 0.0
+                state.pop("last_review_signature", None)
+            await self.audit.log(
+                "POSITION_REVIEW_REARMED_AFTER_STALE_CANCEL",
+                target=symbol,
+                run_id=self.run_id,
+                after={"trade_plan_id": trade_plan_id, "order_id": order_id},
+            )
+        except Exception:
+            # Fail closed: an ambiguous cancel must never become a new order.
+            logger.exception(
+                "POSITION_ACTION_STALE_CANCEL_FAILED order_id=%s", order_id
+            )
+            await self.audit.log(
+                "POSITION_ACTION_STALE_CANCEL_UNKNOWN",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={"reason": "CANCEL_RESULT_AMBIGUOUS", "fail_closed": True},
+            )
+
     async def _cancel_unsettled_entry_order(self, entry_order) -> None:
         """Cancel a non-terminal entry order before a later EXIT/REDUCE.
 
@@ -1045,6 +1312,16 @@ class TradingEngine:
         run_id = self.run_id
         symbol = signal.symbol
         client_order_id = f"{signal.strategy_id}_{signal.signal_id}"[:60]
+        # Resource readiness for a NEW entry only: a position-reducing action
+        # must never be gated by management capacity, or an unmanageable
+        # position could never be reduced. Authority-neutral: this can only make
+        # an entry wait, never pick or change a direction.
+        if (
+            signal.strategy_id == "live_llm"
+            and self.settings.enforce_position_management_capacity
+        ):
+            if not await self._position_management_capacity_available():
+                return None
         if self.enforce_llm_entry_authority and signal.strategy_id not in {
             "live_llm",
             "live_llm_position",
@@ -1167,12 +1444,50 @@ class TradingEngine:
                     await self._cancel_unsettled_entry_order(entry_order)
                 return None
             if await self.order_manager.has_pending_position_action(trade_plan_id):
+                # The duplicate guard MUST stay (a resting order is genuinely
+                # pending, and a second independent REDUCE/EXIT could over-reduce
+                # or flip the position). What must not happen is the resulting
+                # management gap staying invisible: report the pending action's
+                # factual remaining quantity and age, and escalate to an explicit
+                # PARTIAL_ORDER_REVIEW_REQUIRED state once it outlives the stale
+                # window. This never cancels/amends/replaces anything — that is
+                # execution policy — and it never drops the newest intent, which
+                # remains the plan's latest position decision and is re-evaluated
+                # on every subsequent review once the order settles.
+                facts = await self.order_manager.pending_position_action_facts(
+                    trade_plan_id
+                )
                 await self.audit.log(
                     "POSITION_ACTION_ALREADY_PENDING",
                     target=client_order_id,
                     run_id=run_id,
-                    after={"trade_plan_id": trade_plan_id},
+                    after={
+                        "trade_plan_id": trade_plan_id,
+                        "pending_action": facts,
+                        "requested_action": signal.metadata.get("lifecycle_action"),
+                        "requested_decision_id": signal.metadata.get("decision_id"),
+                        "latest_intent_preserved": True,
+                    },
                 )
+                if facts is not None and facts.get("stale"):
+                    await self.audit.log(
+                        "PARTIAL_ORDER_REVIEW_REQUIRED",
+                        target=client_order_id,
+                        run_id=run_id,
+                        after={
+                            "trade_plan_id": trade_plan_id,
+                            "order_id": facts["order_id"],
+                            "status": facts["status"],
+                            "remaining_quantity": facts["remaining_quantity"],
+                            "age_seconds": facts["age_seconds"],
+                            "stale_after_seconds": facts["stale_after_seconds"],
+                            "classification": facts.get("classification"),
+                            "blocked_action": signal.metadata.get("lifecycle_action"),
+                        },
+                    )
+                    await self._resolve_stale_position_action(
+                        facts["order_id"], trade_plan_id=trade_plan_id
+                    )
                 return None
 
         await self._refresh_execution_market(symbol)

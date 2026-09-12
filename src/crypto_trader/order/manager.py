@@ -98,12 +98,32 @@ def _orm_to_fill(row: FillORM) -> Fill:
     )
 
 
+#: Liveness classes for a blocking position-reducing order. These are durable
+#: facts, not policy: choosing what to DO about a class is execution policy.
+POSITION_ACTION_RESTING_VALID = "RESTING_VALID"
+POSITION_ACTION_STALE = "STALE"
+POSITION_ACTION_RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+POSITION_ACTION_TERMINAL = "TERMINAL"
+
+#: A position-reducing order that rests (partially filled with quantity left)
+#: longer than this is reported as STALE so a supervisor / execution policy can
+#: react. Detection is deliberately separate from the duplicate guard: the guard
+#: stays indefinite (a resting order IS pending), while staleness makes the
+#: resulting management gap observable instead of silently permanent.
+DEFAULT_STALE_POSITION_ACTION_SECONDS = 900.0
+
+
 class OrderManager:
     def __init__(
-        self, session_factory, settlement_callback: SettlementCallback | None = None
+        self,
+        session_factory,
+        settlement_callback: SettlementCallback | None = None,
+        *,
+        stale_position_action_seconds: float = DEFAULT_STALE_POSITION_ACTION_SECONDS,
     ) -> None:
         self.session_factory = session_factory
         self.settlement_callback = settlement_callback
+        self.stale_position_action_seconds = float(stale_position_action_seconds)
 
     async def create_from_intent(self, intent: OrderIntent, *, trading_mode: TradingMode) -> Order:
         now = datetime.now(UTC)
@@ -246,6 +266,154 @@ class OrderManager:
                 (row.metadata_json or {}).get("trade_plan_id") == trade_plan_id
                 for row in rows
             )
+
+    async def pending_position_action_facts(
+        self, trade_plan_id: str
+    ) -> dict | None:
+        """Factual state of the pending position-reducing order, if any.
+
+        The duplicate guard is intentionally indefinite (a resting order really
+        is pending), but ``PARTIALLY_FILLED`` must not be allowed to mean
+        "management locked forever" with no observable state. This reports the
+        facts a supervisor / execution policy needs — remaining quantity, age,
+        and whether the order has outlived the stale window — without deciding
+        to cancel, amend or replace anything (that is execution policy).
+        """
+        pending = [
+            OrderStatus.CREATED.value,
+            OrderStatus.VALIDATED.value,
+            OrderStatus.SUBMITTING.value,
+            OrderStatus.SUBMITTED.value,
+            OrderStatus.ACKNOWLEDGED.value,
+            OrderStatus.OPEN.value,
+            OrderStatus.PARTIALLY_FILLED.value,
+            OrderStatus.CANCEL_PENDING.value,
+            OrderStatus.UNKNOWN.value,
+        ]
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OrderORM).where(
+                            OrderORM.strategy_id == "live_llm_position",
+                            OrderORM.status.in_(pending),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            matching = [
+                row
+                for row in rows
+                if (row.metadata_json or {}).get("trade_plan_id") == trade_plan_id
+            ]
+            if not matching:
+                return None
+            # Oldest pending action is the one blocking the plan.
+            row = min(matching, key=lambda r: r.created_at)
+            filled = Decimal(str(row.filled_quantity or 0))
+            remaining = Decimal(str(row.quantity or 0)) - filled
+            created = row.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age_seconds = (
+                (datetime.now(UTC) - created).total_seconds()
+                if created is not None
+                else None
+            )
+            stale = (
+                age_seconds is not None
+                and age_seconds >= self.stale_position_action_seconds
+                and remaining > 0
+            )
+            return {
+                "order_id": row.internal_order_id,
+                "status": row.status,
+                "quantity": str(row.quantity),
+                "filled_quantity": str(filled),
+                "remaining_quantity": str(remaining),
+                "age_seconds": age_seconds,
+                "stale": stale,
+                "stale_after_seconds": self.stale_position_action_seconds,
+                "classification": self.classify_pending_position_action(
+                    status=row.status,
+                    remaining=remaining,
+                    age_seconds=age_seconds,
+                ),
+            }
+
+    def classify_pending_position_action(
+        self,
+        *,
+        status: str,
+        remaining: Decimal,
+        age_seconds: float | None,
+    ) -> str:
+        """Explicit liveness class for a blocking position-reducing order.
+
+        ``PARTIALLY_FILLED`` must not silently mean "management locked
+        forever", so every blocking order lands in exactly one class and the
+        caller never has to guess.
+
+        ``MARKET_MOVED`` is deliberately NOT decided here: it needs a
+        price-distance threshold, and inventing one would be an execution
+        policy change rather than liveness reporting. The durable facts a
+        policy needs (limit price, live book, age) are already exposed.
+        """
+        if remaining <= 0:
+            # Fully filled: nothing left resting, so it cannot block.
+            return POSITION_ACTION_TERMINAL
+        if status in (OrderStatus.UNKNOWN.value, OrderStatus.CANCEL_PENDING.value):
+            # Broker state is not authoritative right now. Never act on top of
+            # an ambiguous state; reconcile until it resolves.
+            return POSITION_ACTION_RECONCILIATION_REQUIRED
+        if status in (
+            OrderStatus.FILLED.value,
+            OrderStatus.CANCELLED.value,
+            OrderStatus.REJECTED.value,
+            OrderStatus.EXPIRED.value,
+        ):
+            return POSITION_ACTION_TERMINAL
+        if age_seconds is not None and age_seconds >= self.stale_position_action_seconds:
+            return POSITION_ACTION_STALE
+        return POSITION_ACTION_RESTING_VALID
+
+    async def reconcile_pending_position_action(self, order_id: str) -> dict | None:
+        """Re-read an order against authoritative state BEFORE acting on it.
+
+        Runs ahead of any cancel so a fill landing at the last moment is
+        consumed first: the order is re-read, its factual fill state is used and
+        its remaining quantity recomputed. Returns refreshed facts, or ``None``
+        when the order no longer exists.
+        """
+        async with self.session_factory() as session:
+            row = await session.get(OrderORM, order_id)
+            if row is None:
+                return None
+            filled = Decimal(str(row.filled_quantity or 0))
+            remaining = Decimal(str(row.quantity or 0)) - filled
+            created = row.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age_seconds = (
+                (datetime.now(UTC) - created).total_seconds()
+                if created is not None
+                else None
+            )
+            return {
+                "order_id": row.internal_order_id,
+                "status": row.status,
+                "quantity": str(row.quantity),
+                "filled_quantity": str(filled),
+                "remaining_quantity": str(remaining),
+                "age_seconds": age_seconds,
+                "classification": self.classify_pending_position_action(
+                    status=row.status,
+                    remaining=remaining,
+                    age_seconds=age_seconds,
+                ),
+            }
 
     async def list_all(self, limit: int = 200) -> list[Order]:
         async with self.session_factory() as session:

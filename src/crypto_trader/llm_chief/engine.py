@@ -222,8 +222,13 @@ class ChiefTraderEngine:
         )
         if ticket is not None and not ticket.granted:
             # Budget exhaustion is an explicit skip: never a crash, and never a
-            # silent WAIT that could be mistaken for analysis.
-            return self.fail_closed(ctx, "SKIPPED_BUDGET")
+            # silent WAIT that could be mistaken for analysis. The reason
+            # distinguishes a spent ENTRY pool from a spent POSITION MANAGEMENT
+            # reserve so a supervisor can act on the difference instead of
+            # treating both as one opaque SKIPPED_BUDGET.
+            return self.fail_closed(
+                ctx, "SKIPPED_BUDGET", detail=ticket.reason or "SKIPPED_BUDGET"
+            )
         response = (
             await self.provider.complete_json(
                 prompt=prompt,
@@ -264,7 +269,19 @@ class ChiefTraderEngine:
                 return self.fail_closed(ctx, "INVALID_LLM_OUTPUT")
         return self.fail_closed(ctx, response.error if response is not None else "LLM_UNAVAILABLE")
 
-    def fail_closed(self, ctx: ChiefTraderContext, reason: str | None) -> ChiefTraderDecision:
+    def fail_closed(
+        self,
+        ctx: ChiefTraderContext,
+        reason: str | None,
+        *,
+        detail: str | None = None,
+    ) -> ChiefTraderDecision:
+        # ``reason`` stays the primary code (callers/tests rely on it);
+        # ``detail`` appends the precise sub-reason, e.g. distinguishing a
+        # spent entry pool from a spent position-management reserve.
+        codes = [reason or "LLM_UNAVAILABLE"]
+        if detail and detail not in codes:
+            codes.append(detail)
         return ChiefTraderDecision(
             decision_id=new_id("llm"),
             symbol=ctx.symbol,
@@ -274,7 +291,7 @@ class ChiefTraderEngine:
             else OpenAction.FAIL_CLOSED,
             market_regime=ctx.regime,
             thesis="FAIL_CLOSED",
-            reason_codes=[reason or "LLM_UNAVAILABLE"],
+            reason_codes=codes,
             model_version=self.model_version,
             created_at=datetime.now(UTC).isoformat(),
             model_provider=getattr(self.provider, "name", "unconfigured"),
