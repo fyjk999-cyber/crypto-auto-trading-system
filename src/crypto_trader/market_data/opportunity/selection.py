@@ -20,6 +20,7 @@ selection while observation and position management continue.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -71,6 +72,25 @@ ST_SKIPPED_BUDGET = "SKIPPED_BUDGET"
 ST_TIMEOUT = "TIMEOUT"
 ST_FAILED = "FAILED"
 ST_DEFERRED = "DEFERRED"
+
+#: Execution-prerequisite readiness reasons (NEVER directional). A readiness
+#: reason only reports that a factual input a TradePlan needs is not available
+#: yet; it can never choose LONG/SHORT/WAIT/NO_TRADE.
+WARMING_VOLATILITY_UNAVAILABLE = "VOLATILITY_UNAVAILABLE"
+WARMING_FEED_NOT_WIRED = "TICKER_FEED_NOT_WIRED"
+WARMING_FEED_NOT_REFRESHABLE = "TICKER_FEED_NOT_REFRESHABLE"
+
+#: Same-semantic live ticker warm-up. The realized_volatility contract is the
+#: standard deviation of consecutive OKX ticker-snapshot returns, so the only
+#: semantically equivalent way to make it available earlier is to drive the
+#: SAME ``feed.refresh`` path that the sizing consumer already reads. Closed
+#: candles are deliberately NOT used: a 1m bar return and a refresh-spaced
+#: ticker return are different sampling intervals, and mixing them would
+#: silently change the risk input.
+DEFAULT_TICKER_WARMUP_TARGET_SAMPLES = 3
+DEFAULT_TICKER_WARMUP_ATTEMPTS = 6
+DEFAULT_TICKER_WARMUP_SETTLE_SECONDS = 0.05
+DEFAULT_TICKER_WARMUP_MAX_MARGIN_SECONDS = 1.0
 
 FORBIDDEN_SELECTION_FIELDS = frozenset(
     {
@@ -366,6 +386,9 @@ class MarketSelectionService:
         pool_size: int = 30,
         timeout_seconds: float = 40.0,
         clock=None,
+        ticker_feed=None,
+        ticker_warmup_target_samples: int = DEFAULT_TICKER_WARMUP_TARGET_SAMPLES,
+        ticker_warmup_attempts: int = DEFAULT_TICKER_WARMUP_ATTEMPTS,
     ) -> None:
         self.board = board
         self.chief = chief
@@ -376,6 +399,10 @@ class MarketSelectionService:
         self.pool_size = int(pool_size)
         self.timeout_seconds = float(timeout_seconds)
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.ticker_feed = ticker_feed
+        self.ticker_warmup_target_samples = max(1, int(ticker_warmup_target_samples))
+        self.ticker_warmup_attempts = max(1, int(ticker_warmup_attempts))
+        self.ticker_warmup_status: dict[str, dict] = {}
         self._last_autonomous_selection_at: datetime | None = None
         self._last_selection_id_by_scan: dict[str, str] = {}
         self._records_by_scan: dict[str, MarketSelectionRecord] = {}
@@ -572,11 +599,102 @@ class MarketSelectionService:
             record.status = ST_NO_RESEARCH
         else:
             record.status = ST_SUCCESS
+            warmup_symbols: list[str] = []
             for entry in selected:
-                self.board.coverage.mark_llm_research(str(entry["symbol"]), now)
+                symbol = str(entry["symbol"])
+                warmup_symbols.append(symbol)
+                self.board.coverage.mark_llm_research(symbol, now)
                 self.board.market_sets.record_research_selected(len(selected))
+            # Same-semantic live ticker warm-up BEFORE these symbols become
+            # eligible for directional research. The consumer queue hands a
+            # selected symbol to the ChiefTrader on the very next tick, so
+            # without this the first directional decision on any newly
+            # observed symbol would reach sizing with
+            # realized_volatility=None and fail closed.
+            await self._warm_ticker_observations(warmup_symbols)
         self._last_autonomous_selection_at = now
         return await self._persist(record, now=now)
+
+    # -------------------------------------------------- ticker warm-up (§D5)
+    def _ticker_sample_count(self, symbol: str) -> int:
+        """Factual ticker observations already accumulated for ``symbol``.
+
+        Reads the EXISTING producer buffer; no second cache is created.
+        """
+        feed = self.ticker_feed
+        history = getattr(feed, "_price_history", None)
+        if not isinstance(history, dict):
+            return 0
+        return len(history.get(symbol) or ())
+
+    def ticker_warmup_readiness(self, symbol: str) -> str:
+        """Report execution-prerequisite readiness. NEVER a direction.
+
+        Returns ``READY`` when the symbolic volatility input can be produced
+        (>= 3 ticker observations => >= 2 returns, matching the producer
+        contract), otherwise ``WARMING``.
+        """
+        if self.ticker_feed is None:
+            return WARMING_FEED_NOT_WIRED
+        if self._ticker_sample_count(symbol) >= self.ticker_warmup_target_samples:
+            return "READY"
+        return "WARMING"
+
+    async def _warm_ticker_observations(self, symbols: list[str]) -> None:
+        """Drive the SAME ``feed.refresh`` path so factual ticker observations
+        reach the volatility producer's minimum sample count.
+
+        Guarantees:
+            * a symbol's refresh is never issued faster than the feed's own
+              ``min_refresh_interval`` (no provider spam),
+            * no price is synthesised, duplicated or back-dated,
+            * any failure degrades to ``WARMING`` and never blocks selection,
+            * the volatility algorithm itself is untouched.
+        """
+        feed = self.ticker_feed
+        if feed is None or not symbols:
+            return
+        refresh = getattr(feed, "refresh", None)
+        if not callable(refresh):
+            return
+        interval_seconds = getattr(
+            getattr(feed, "min_refresh_interval", None), "total_seconds", None
+        )
+        interval = (
+            max(0.0, float(interval_seconds()))
+            if callable(interval_seconds)
+            else DEFAULT_TICKER_WARMUP_MAX_MARGIN_SECONDS
+        )
+        gap = interval + DEFAULT_TICKER_WARMUP_SETTLE_SECONDS
+        for symbol in symbols:
+            try:
+                samples = self._ticker_sample_count(symbol)
+                attempts = 0
+                while (
+                    samples < self.ticker_warmup_target_samples
+                    and attempts < self.ticker_warmup_attempts
+                ):
+                    if attempts:
+                        await asyncio.sleep(gap)
+                    await refresh(symbol)
+                    attempts += 1
+                    samples = self._ticker_sample_count(symbol)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # readiness is best-effort, never fatal
+                self.ticker_warmup_status[symbol] = {
+                    "status": "WARMING",
+                    "reason": type(exc).__name__,
+                    "samples": self._ticker_sample_count(symbol),
+                }
+                continue
+            ready = samples >= self.ticker_warmup_target_samples
+            self.ticker_warmup_status[symbol] = {
+                "status": "READY" if ready else "WARMING",
+                "reason": None if ready else WARMING_VOLATILITY_UNAVAILABLE,
+                "samples": samples,
+                "attempts": attempts,
+            }
 
     # -------------------------------------------------------------- internals
     async def _explore_directory(
