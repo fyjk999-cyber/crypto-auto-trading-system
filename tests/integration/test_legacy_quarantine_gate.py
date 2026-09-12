@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -87,14 +88,19 @@ def _active_files():
 
 def test_no_active_ghost_references_to_quarantined_packages():
     offenders = []
-    needles = {pkg: f"crypto_trader.{pkg}" for pkg in LEGACY_PACKAGES}
-    needles["runtime_ai_position_bridge"] = "crypto_trader.runtime.ai_position_bridge"
+    patterns = {
+        pkg: re.compile(r"crypto_trader\." + re.escape(pkg) + r"(?:\.|\b)")
+        for pkg in LEGACY_PACKAGES
+    }
+    patterns["runtime_ai_position_bridge"] = re.compile(
+        r"crypto_trader\.runtime\.ai_position_bridge(?:\.|\b)"
+    )
     for path in _active_files():
         if path.resolve() == Path(__file__).resolve():
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        for pkg, needle in needles.items():
-            if needle in text:
+        for pkg, pattern in patterns.items():
+            if pattern.search(text):
                 offenders.append(f"{pkg}: {path.relative_to(ROOT)}")
     assert not offenders, "Active ghost references remain:\n" + "\n".join(sorted(set(offenders)))
 
