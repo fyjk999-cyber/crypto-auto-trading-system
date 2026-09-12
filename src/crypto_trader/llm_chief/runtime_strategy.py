@@ -592,16 +592,21 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             reason_codes = [
                 str(code) for code in (getattr(decision, "reason_codes", None) or [])
             ]
+            # Reference price comes from the market snapshot the decision was
+            # already made against (ChiefTraderDecision carries no price field).
+            # Frozen here so no candidate can pick a price after the fact.
             reference_price = None
-            for attr in ("mark_price", "entry_price"):
-                value = getattr(decision, attr, None)
-                if value is not None:
-                    try:
-                        if float(value) > 0:
-                            reference_price = value
-                            break
-                    except (TypeError, ValueError):
-                        continue
+            snapshot = getattr(ctx, "market_snapshot", None) or {}
+            for key in ("price", "last_price", "mark_price", "last", "close"):
+                value = snapshot.get(key) if isinstance(snapshot, dict) else None
+                if value is None:
+                    continue
+                try:
+                    if float(value) > 0:
+                        reference_price = value
+                        break
+                except (TypeError, ValueError):
+                    continue
             tap.observe(
                 ShadowObservation(
                     decision_id=str(decision.decision_id),

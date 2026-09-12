@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.shadow.candidate_store import ShadowCandidateStore
@@ -36,6 +36,26 @@ MAX_QUEUE_DEPTH = 512
 
 REASON_QUEUE_FULL = "SHADOW_SAMPLE_DROPPED_QUEUE_FULL"
 REASON_ENQUEUE_ERROR = "SHADOW_ENQUEUE_ERROR"
+
+
+def _coerce_datetime(value) -> datetime | None:
+    """Accept the decision's ISO string (its real contract) or a datetime.
+
+    ``ChiefTraderDecision.created_at`` is a STRING, so passing it through
+    verbatim would raise inside persistence and be swallowed as a store error —
+    silently losing every sample. Normalising here keeps that failure impossible.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
 
 
 @dataclass(slots=True)
@@ -135,7 +155,7 @@ class ShadowDecisionTap:
                 "market_regime": observation.market_regime,
                 "chieftrader_action": observation.action,
                 "chieftrader_reason": (observation.thesis or "")[:2000],
-                "created_at": observation.decided_at,
+                "created_at": _coerce_datetime(observation.decided_at),
             }
             try:
                 self._queue.put_nowait(payload)
