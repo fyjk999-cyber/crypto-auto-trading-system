@@ -36,6 +36,7 @@ from crypto_trader.persistence.models import (
     LedgerTransactionORM,
     OrderEventORM,
     OrderORM,
+    TradePlanORM,
 )
 
 SettlementCallback = Callable[[Fill], Awaitable[None]]
@@ -120,10 +121,14 @@ class OrderManager:
         settlement_callback: SettlementCallback | None = None,
         *,
         stale_position_action_seconds: float = DEFAULT_STALE_POSITION_ACTION_SECONDS,
+        unresolved_order_scan_limit: int = 200,
     ) -> None:
         self.session_factory = session_factory
         self.settlement_callback = settlement_callback
         self.stale_position_action_seconds = float(stale_position_action_seconds)
+        #: Hard bound on the unresolved-order scan so liveness can never degrade
+        #: into a full order-history scan.
+        self.unresolved_order_scan_limit = max(1, int(unresolved_order_scan_limit))
 
     async def create_from_intent(self, intent: OrderIntent, *, trading_mode: TradingMode) -> Order:
         now = datetime.now(UTC)
@@ -266,6 +271,86 @@ class OrderManager:
                 (row.metadata_json or {}).get("trade_plan_id") == trade_plan_id
                 for row in rows
             )
+
+    async def unresolved_order_facts(self) -> list[dict]:
+        """Factual state of EVERY unresolved order, with its purpose.
+
+        Replaces the previous ``strategy_id == "live_llm_position"`` filter,
+        which structurally excluded ``live_llm`` ENTRY orders from the liveness
+        pipeline (live evidence: one rested OPEN for 278 minutes while appearing
+        in no reconciliation record).
+
+        Bounded by construction: it reads only unresolved statuses and never
+        scans order history.
+        """
+        from crypto_trader.order.reconciliation import (
+            UNRESOLVED_ORDER_STATUSES,
+            classify_order_purpose,
+        )
+
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OrderORM)
+                        .where(OrderORM.status.in_(UNRESOLVED_ORDER_STATUSES))
+                        .order_by(OrderORM.created_at)
+                        .limit(self.unresolved_order_scan_limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            plan_states: dict[str, str] = {}
+            plan_ids = {
+                (r.metadata_json or {}).get("trade_plan_id")
+                for r in rows
+                if (r.metadata_json or {}).get("trade_plan_id")
+            }
+            if plan_ids:
+                plan_rows = (
+                    await session.execute(
+                        select(TradePlanORM.trade_plan_id, TradePlanORM.state).where(
+                            TradePlanORM.trade_plan_id.in_(tuple(plan_ids))
+                        )
+                    )
+                ).all()
+                plan_states = {str(pid): str(state) for pid, state in plan_rows}
+
+            facts: list[dict] = []
+            now = datetime.now(UTC)
+            for row in rows:
+                meta = row.metadata_json or {}
+                plan_id = meta.get("trade_plan_id")
+                purpose = classify_order_purpose(
+                    strategy_id=row.strategy_id,
+                    reduce_only=meta.get("reduce_only"),
+                    direction=meta.get("direction") or meta.get("lifecycle_action"),
+                    trade_plan_state=plan_states.get(str(plan_id)) if plan_id else None,
+                )
+                created = row.created_at
+                if created is not None and created.tzinfo is None:
+                    created = created.replace(tzinfo=UTC)
+                age_seconds = (
+                    (now - created).total_seconds() if created is not None else None
+                )
+                filled = Decimal(str(row.filled_quantity or 0))
+                facts.append(
+                    {
+                        "order_id": row.internal_order_id,
+                        "symbol": row.symbol,
+                        "status": row.status,
+                        "purpose": purpose,
+                        "trade_plan_id": plan_id,
+                        "quantity": str(row.quantity),
+                        "filled_quantity": str(filled),
+                        "remaining_quantity": str(
+                            max(Decimal("0"), Decimal(str(row.quantity or 0)) - filled)
+                        ),
+                        "age_seconds": age_seconds,
+                    }
+                )
+            return facts
 
     async def pending_position_action_facts(
         self, trade_plan_id: str
