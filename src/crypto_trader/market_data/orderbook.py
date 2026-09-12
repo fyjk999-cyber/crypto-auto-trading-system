@@ -50,6 +50,26 @@ class OrderBook(BaseModel):
     def _sorted(self, levels: dict[str, BookLevel], *, reverse: bool) -> list[BookLevel]:
         return sorted(levels.values(), key=lambda level: level.price, reverse=reverse)
 
+    def top_levels(
+        self, *, side: str, levels: int
+    ) -> list[tuple[Decimal, Decimal]]:
+        """Best-first factual ``(price, quantity)`` levels for one book side.
+
+        Best-first means highest price for ``BID`` and lowest price for ``ASK``.
+        An invalid side or a non-positive ``levels`` yields an empty list; the
+        caller decides how to fail closed.
+        """
+        if not isinstance(levels, int) or isinstance(levels, bool) or levels < 1:
+            return []
+        book_side = str(side).upper()
+        if book_side == "ASK":
+            ordered = self._sorted(self.asks, reverse=False)
+        elif book_side == "BID":
+            ordered = self._sorted(self.bids, reverse=True)
+        else:
+            return []
+        return [(level.price, level.quantity) for level in ordered[:levels]]
+
     def apply_snapshot(
         self,
         sequence: int,
@@ -113,6 +133,35 @@ class OrderBook(BaseModel):
         if bid is None or ask is None:
             return None
         return (bid.price + ask.price) / Decimal("2")
+
+    def depth_quantity(self, *, side: str, levels: int) -> Decimal | None:
+        """Aggregated factual quantity over the best ``levels`` levels.
+
+        ``side`` is the side the caller would CONSUME: ``"ASK"`` for a buy
+        (LONG entry) and ``"BID"`` for a sell (SHORT entry).
+
+        Returns ``None`` — UNKNOWN, never zero-as-a-fact — when the book is not
+        HEALTHY, when the requested side has no levels, when ``levels`` is not
+        positive, or when the factual aggregate is not positive.  Callers must
+        fail closed on ``None``: liquidity is never assumed infinite (§22).
+        """
+        if self.status != MarketDataStatus.HEALTHY:
+            return None
+        if not isinstance(levels, int) or isinstance(levels, bool) or levels < 1:
+            return None
+        book_side = str(side).upper()
+        if book_side == "ASK":
+            ordered = self._sorted(self.asks, reverse=False)
+        elif book_side == "BID":
+            ordered = self._sorted(self.bids, reverse=True)
+        else:
+            return None
+        if not ordered:
+            return None
+        total = sum((level.quantity for level in ordered[:levels]), Decimal("0"))
+        if total <= 0:
+            return None
+        return total
 
     def snapshot(self) -> dict:
         return {

@@ -29,8 +29,25 @@ from crypto_trader.market_data.opportunity.scanner import (
     CANDIDATE_SOURCE_MARKET_OBSERVER,
 )
 from crypto_trader.observability.audit import AuditService
+from crypto_trader.sizing.policy import PositionSizingPolicy
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
+
+#: Canonical factual-depth window used when a sizer cannot be introspected.
+DEFAULT_LIQUIDITY_DEPTH_LEVELS = PositionSizingPolicy().liquidity_depth_levels
+
+
+def _sizing_depth_levels(sizer) -> int:
+    """Factual book levels the Sizer wants, without trusting an arbitrary sizer.
+
+    Falls back to the canonical V2 default when a non-standard sizer object is
+    injected, so the entry path can never crash on an extension point.
+    """
+    policy = getattr(sizer, "policy", None)
+    levels = getattr(policy, "liquidity_depth_levels", None)
+    if isinstance(levels, int) and not isinstance(levels, bool) and levels > 0:
+        return levels
+    return DEFAULT_LIQUIDITY_DEPTH_LEVELS
 
 
 class LiveLLMDecisionStrategy(StrategyPlugin):
@@ -411,8 +428,49 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 after={"symbol": ctx.symbol},
             )
             return []
+        # LIQUIDITY V2 (§19-§22): the Sizer caps quantity on the FACTUAL depth
+        # of the side this order would consume — asks for a LONG, bids for a
+        # SHORT — aggregated over the best N levels. A missing/stale/empty side
+        # is UNKNOWN and becomes NO NEW RISK; liquidity is never assumed
+        # infinite. This is a quantity cap, not a leverage clamp.
+        depth_side = "ASK" if decision.action.value == "LONG" else "BID"
+        depth_levels = _sizing_depth_levels(self.sizer)
+        liquidity_depth = ctx.book.depth_quantity(
+            side=depth_side,
+            levels=depth_levels,
+        )
+        if liquidity_depth is None:
+            await self.audit.log(
+                "LIVE_LLM_SIZING_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "reason_codes": ["LIQUIDITY_UNKNOWN"],
+                    "depth_side": depth_side,
+                    "depth_levels": depth_levels,
+                    "book_status": str(getattr(ctx.book.status, "value", ctx.book.status)),
+                },
+            )
+            return []
+        # ENTRY PRICE: size at the price the order will actually use (the touch),
+        # not at the mid. Sizing on a price the order cannot get is optimistic,
+        # and it would desynchronise the Sizer's stop-loss risk from the order's
+        # own facts that the RiskEngine re-derives independently (§33).
+        long_entry = decision.action.value == "LONG"
+        touch = ctx.book.best_ask() if long_entry else ctx.book.best_bid()
+        entry_limit = (
+            touch.price
+            if touch is not None
+            else round_tick(
+                mid, ctx.instrument.tick_size, ROUND_CEILING if long_entry else ROUND_FLOOR
+            )
+        )
         sized = self.sizer.size(
             side=decision.action.value,
+            # LLM raw quantity/exposure are ADVISORY ONLY (LLM_SIZE_ADVISORY_
+            # ONLY). They are preserved for audit but hold no quantity
+            # authority: the Sizer computes the final size deterministically.
             requested_quantity=Decimal(str(decision.position_size_request)),
             requested_exposure=(
                 Decimal(str(decision.requested_exposure))
@@ -423,35 +481,44 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             account=ctx.account,
             positions=ctx.positions,
             instrument=ctx.instrument,
-            price=mid,
+            price=entry_limit,
             stop_price=stop_price,
+            conviction=Decimal(str(decision.raw_llm_confidence or 0)),
             volatility=volatility,
             liquidity=liquidity,
+            liquidity_depth_qty=liquidity_depth,
             valuation=ctx.valuation,
         )
-        if sized.normalized_quantity <= 0:
+        sizing_evidence = (
+            sized.audit.to_evidence() if sized.audit is not None else {}
+        )
+        if sized.rejected or sized.normalized_quantity <= 0:
+            # Explainable rejection, including for the economic gate: the cap
+            # math is durable even when no order is produced (§58, §62, §63).
             await self.audit.log(
                 "LIVE_LLM_SIZING_REJECTED",
                 target=decision.decision_id,
                 actor="live_llm",
                 run_id=ctx.run_id,
-                after={"reason_codes": list(sized.sizing_reason_codes)},
+                after={
+                    "reason_codes": list(sized.sizing_reason_codes),
+                    "binding_cap": sized.binding_cap,
+                    "sizing": sizing_evidence,
+                },
             )
             return []
+        # Durable, complete sizing explanation: equity, risk budget, stop
+        # distance, every cap layer, the binding cap, and the LLM's advisory
+        # numbers. No entry may ever be a "mystery position".
+        await self.audit.log(
+            "LIVE_LLM_SIZING_AUDIT",
+            target=decision.decision_id,
+            actor="live_llm",
+            run_id=ctx.run_id,
+            after=sizing_evidence,
+        )
         valuation = ctx.valuation
         try:
-            if decision.action.value == "LONG":
-                touch = ctx.book.best_ask()
-                entry_limit = (
-                    touch.price if touch else
-                    round_tick(mid, ctx.instrument.tick_size, ROUND_CEILING)
-                )
-            else:
-                touch = ctx.book.best_bid()
-                entry_limit = (
-                    touch.price if touch else
-                    round_tick(mid, ctx.instrument.tick_size, ROUND_FLOOR)
-                )
             plan, signal = await self.planner.create_entry_signal(
                 decision,
                 limit_price=entry_limit,
@@ -485,6 +552,38 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                     "available_margin": str(sized.available_margin)
                     if sized.available_margin is not None
                     else None,
+                    # --- Sizing V2: claims the RiskEngine re-verifies
+                    # independently (defense in depth, §33/§34). RiskEngine never
+                    # trusts that the Sizer already checked these.
+                    "sizing_version": "v2",
+                    "sizing_binding_cap": sized.binding_cap,
+                    "sizing_source": "DETERMINISTIC_SIZER",
+                    "llm_size_authority": "ADVISORY_ONLY",
+                    "sizing_risk_budget": (
+                        str(sized.audit.risk_budget) if sized.audit is not None else None
+                    ),
+                    "sizing_effective_risk_fraction": (
+                        str(sized.audit.effective_risk_fraction)
+                        if sized.audit is not None
+                        else None
+                    ),
+                    "sizing_liquidity_depth": (
+                        str(sized.audit.liquidity_depth)
+                        if sized.audit is not None
+                        and sized.audit.liquidity_depth is not None
+                        else None
+                    ),
+                    "sizing_liquidity_cap_qty": (
+                        str(sized.audit.liquidity_cap_qty)
+                        if sized.audit is not None
+                        else None
+                    ),
+                    "sizing_stop_price": (
+                        str(sized.audit.stop_price)
+                        if sized.audit is not None
+                        and sized.audit.stop_price is not None
+                        else None
+                    ),
                 },
             )
             if plan is not None:

@@ -1284,8 +1284,16 @@ class TradingEngine:
                 if bid_size <= 0 or ask_size <= 0:
                     raise ValueError("factual market depth is unavailable")
                 sequence = market_state.generation
-                bids = [(market_state.best_bid, bid_size)]
-                asks = [(market_state.best_ask, ask_size)]
+                # Prefer the provider's factual multi-level depth when it is
+                # available so sizing can cap on real executable depth. A
+                # provider that exposes no levels keeps EXACTLY the previous
+                # single-best-level ingestion — never an inferred wider book.
+                bids = list(getattr(market_state, "book_bids", None) or []) or [
+                    (market_state.best_bid, bid_size)
+                ]
+                asks = list(getattr(market_state, "book_asks", None) or []) or [
+                    (market_state.best_ask, ask_size)
+                ]
             else:
                 fetched = await self.adapter.get_orderbook(symbol)
                 sequence = fetched.sequence

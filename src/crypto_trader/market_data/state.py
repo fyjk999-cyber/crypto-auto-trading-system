@@ -46,6 +46,11 @@ class MarketState(BaseModel):
     best_ask: StrictDecimal = Decimal("0")
     best_bid_size: StrictDecimal = Decimal("0")
     best_ask_size: StrictDecimal = Decimal("0")
+    #: Factual multi-level depth as observed from the provider, best-first.
+    #: EMPTY means the provider exposed no levels, so consumers must fail
+    #: closed instead of inferring depth from the best-level size alone.
+    book_bids: list[tuple[StrictDecimal, StrictDecimal]] = Field(default_factory=list)
+    book_asks: list[tuple[StrictDecimal, StrictDecimal]] = Field(default_factory=list)
     spread: StrictDecimal = Decimal("0")
     depth: Decimal = Decimal("0")
     imbalance: Decimal = Decimal("0")

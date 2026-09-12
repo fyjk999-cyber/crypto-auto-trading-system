@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -25,8 +26,11 @@ def decision(action: str, *, size: float = 0.1) -> ChiefTraderDecision:
 
 async def test_live_llm_entry_creates_idempotent_trade_plan_before_signal(database):
     planner = LiveLLMTradePlanner(TradePlanService(database.session_factory))
-    first_plan, first_signal = await planner.create_entry_signal(decision("LONG"))
-    second_plan, second_signal = await planner.create_entry_signal(decision("LONG"))
+    # POSITION SIZING V2: the planner requires the deterministic Sizer's
+    # quantity; the decision's advisory position_size_request is never used.
+    sized = dict(quantity=Decimal("0.25"))
+    first_plan, first_signal = await planner.create_entry_signal(decision("LONG"), **sized)
+    second_plan, second_signal = await planner.create_entry_signal(decision("LONG"), **sized)
 
     assert first_plan is not None and first_signal is not None
     assert first_plan.state == TradePlanState.PLANNED
@@ -42,4 +46,11 @@ async def test_live_llm_no_trade_never_creates_plan_or_signal(database):
     assert plan is None
     assert signal is None
     with pytest.raises(ValueError):
-        await planner.create_entry_signal(decision("SHORT", size=0))
+        await planner.create_entry_signal(decision("SHORT"), quantity=Decimal("0"))
+
+
+async def test_planner_refuses_to_adopt_the_advisory_llm_quantity(database):
+    """The LLM's raw position_size_request must never become an order quantity."""
+    planner = LiveLLMTradePlanner(TradePlanService(database.session_factory))
+    with pytest.raises(ValueError, match="advisory position_size_request"):
+        await planner.create_entry_signal(decision("LONG", size=1234.0))

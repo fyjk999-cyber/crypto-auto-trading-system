@@ -61,3 +61,20 @@ class AuditService:
                 .all()
             )
             return [row for row in rows]
+
+    async def latest_for_target(self, target: str, *, actions: tuple[str, ...] = ()):
+        """Most recent audit event for one target, optionally filtered by action.
+
+        Read-only observability helper: it mutates nothing and holds no authority
+        over sizing, risk or execution.
+        """
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import AuditEventORM as ORM
+
+        statement = select(ORM).where(ORM.target == target)
+        if actions:
+            statement = statement.where(ORM.action.in_(actions))
+        statement = statement.order_by(ORM.id.desc()).limit(1)
+        async with self.session_factory() as session:
+            return (await session.execute(statement)).scalars().first()

@@ -372,6 +372,8 @@ class _FixedChief:
             thesis="factual LLM thesis",
             position_size_request=self.size,
             leverage_request=2.0,
+            # Neutral conviction band (1.00x); conviction drives the risk budget.
+            raw_llm_confidence=0.80,
             stop_loss=99.0 if self.action == "LONG" else 102.0,
         )
 
@@ -379,10 +381,16 @@ class _FixedChief:
 def _ctx(*, realized_volatility: Decimal | None):
     now = datetime.now(UTC)
     book = OrderBook(symbol="SOPHUSDT", exchange="OKX")
+    # Factual multi-level depth: POSITION SIZING V2 caps quantity on the side
+    # the order consumes, so a one-contract book could not support a position.
     book.apply_snapshot(
-        1, [(Decimal("100"), Decimal("1"))], [(Decimal("101"), Decimal("1"))], now=now
+        1,
+        [(Decimal("100"), Decimal("1000")), (Decimal("99.9"), Decimal("1000"))],
+        [(Decimal("101"), Decimal("1000")), (Decimal("101.1"), Decimal("1000"))],
+        now=now,
     )
     from crypto_trader.domain.models import Account, Instrument
+    from crypto_trader.valuation.domain import ValuationBatch
 
     return StrategyContext(
         symbol="SOPHUSDT",
@@ -395,6 +403,15 @@ def _ctx(*, realized_volatility: Decimal | None):
         realized_volatility=realized_volatility,
         instrument=Instrument(
             symbol="SOPHUSDT", base_asset="SOP", quote_asset="USDT", step_size="0.00001"
+        ),
+        # Sizing equity must come from a proven valuation batch, never ledger cash.
+        valuation=ValuationBatch(
+            valuation_id="val-warmup",
+            account_id="default",
+            currency="USDT",
+            quality="HEALTHY",
+            raw_mtm_equity=Decimal("10000"),
+            available_margin=Decimal("10000"),
         ),
     )
 

@@ -47,6 +47,21 @@ class Settings(BaseSettings):
     daily_review_time_utc: str = "00:05"
     max_holding_time_seconds: int = 86400
 
+    # Position Sizing V2 — capital-aware sizing.  All numeric knobs live here;
+    # none of them may widen the project hard ceilings (500% notional, 5x
+    # leverage, 1% risk per trade): the policy records and clamps any attempt,
+    # so a misconfigured deployment stays inside the safety envelope.
+    # Strings, not floats: ``Decimal`` refuses binary floats (§59).
+    base_risk_per_trade: str = "0.005"
+    max_risk_per_trade: str = "0.010"
+    max_single_notional_multiple: str = "5.0"
+    max_total_gross_exposure_multiple: str = "5.0"
+    max_symbol_exposure_multiple: str = "5.0"
+    max_leverage: str = "5.0"
+    min_effective_notional_fraction: str = "0.005"
+    liquidity_depth_levels: int = 5
+    max_liquidity_participation: str = "0.15"
+
     # Full-market opportunity discovery (evidence-only; §8-§15). The scanner
     # nominates candidates for DeepSeek review; it never trades or gates.
     opportunity_scan_enabled: bool = True

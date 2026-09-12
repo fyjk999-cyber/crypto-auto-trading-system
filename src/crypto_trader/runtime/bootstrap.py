@@ -59,11 +59,12 @@ from crypto_trader.perpetual.funding_settlement import FundingSettlementService
 from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
-from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.risk.engine import RiskConfig, RiskEngine
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
+from crypto_trader.sizing.policy import PositionSizingPolicy
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.dummy import DummyStrategy
 from crypto_trader.trade_plan.service import TradePlanService
@@ -98,7 +99,17 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     portfolio = PortfolioService(database.session_factory)
     order_manager = OrderManager(database.session_factory)
     market_data = MarketDataService()
-    risk = RiskEngine()
+    risk = RiskEngine(
+        RiskConfig(
+            max_single_notional_multiple=Decimal(settings.max_single_notional_multiple),
+            max_total_gross_exposure_multiple=Decimal(
+                settings.max_total_gross_exposure_multiple
+            ),
+            max_symbol_exposure_multiple=Decimal(settings.max_symbol_exposure_multiple),
+            max_leverage=Decimal(settings.max_leverage),
+            max_risk_per_trade=Decimal(settings.max_risk_per_trade),
+        )
+    )
     leases = LeaseManager(database.session_factory)
     reconciliation = ReconciliationService(database.session_factory)
     audit = AuditService(database.session_factory)
@@ -270,11 +281,37 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         else None
     )
     opportunity_board.selection_service = market_selection_service
-    sizer = LiveEntrySizingService(
-        risk_fraction=Decimal(alpha.risk_per_trade),
-        max_order_notional=risk.config.max_order_notional,
-        max_leverage=risk.config.max_leverage,
+    # POSITION SIZING V2: the Sizer owns final quantity. The LLM's raw quantity
+    # is advisory only. Every parameter comes from configuration; the policy
+    # clamps anything that would widen a project hard ceiling and records the
+    # clamp, so bad config can never enlarge the safety envelope (§59, §60).
+    sizing_policy = PositionSizingPolicy(
+        base_risk_per_trade=Decimal(settings.base_risk_per_trade),
+        max_risk_per_trade=Decimal(settings.max_risk_per_trade),
+        max_single_notional_multiple=Decimal(settings.max_single_notional_multiple),
+        max_total_gross_exposure_multiple=Decimal(
+            settings.max_total_gross_exposure_multiple
+        ),
+        max_symbol_exposure_multiple=Decimal(settings.max_symbol_exposure_multiple),
+        max_leverage=Decimal(settings.max_leverage),
+        min_effective_notional_fraction=Decimal(
+            settings.min_effective_notional_fraction
+        ),
+        liquidity_depth_levels=settings.liquidity_depth_levels,
+        max_liquidity_participation=Decimal(settings.max_liquidity_participation),
+        # The historical static order-notional ceiling stays as an ADDITIONAL
+        # cap; it no longer represents (and can no longer stand in for) the
+        # dynamic 5x-equity rule.
+        static_max_order_notional=risk.config.max_order_notional,
     )
+    if sizing_policy.hard_ceiling_violations:
+        await audit.log(
+            "SIZING_POLICY_HARD_CEILING_CLAMPED",
+            target="position_sizing_policy",
+            actor="bootstrap",
+            after=sizing_policy.to_evidence(),
+        )
+    sizer = LiveEntrySizingService(policy=sizing_policy)
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
         chief=chief,

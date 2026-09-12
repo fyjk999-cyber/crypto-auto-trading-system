@@ -367,7 +367,10 @@ async def test_R9_reconciliation_retry_materialises_after_readiness(database):
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None

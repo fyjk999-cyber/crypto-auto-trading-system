@@ -6,11 +6,12 @@ risk preference is intentionally out of scope.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from crypto_trader.domain.enums import ExecutionDecision
 from crypto_trader.domain.identifiers import new_id
@@ -19,6 +20,11 @@ from crypto_trader.domain.money import D, format_decimal
 from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.kill_switch import KillSwitch
 from crypto_trader.risk.leverage import clamp_leverage
+from crypto_trader.sizing.policy import (
+    HARD_MAX_LEVERAGE,
+    HARD_MAX_NOTIONAL_MULTIPLE,
+    HARD_MAX_RISK_PER_TRADE,
+)
 from crypto_trader.valuation.domain import VALUATION_QUALITY_HEALTHY
 
 
@@ -35,6 +41,56 @@ class RiskConfig(BaseModel):
     max_symbol_exposure: Decimal = Field(default=Decimal("1000000"))
     max_exchange_exposure: Decimal = Field(default=Decimal("5000000"))
     max_consecutive_failures: int = Field(default=10)
+    # --- Position Sizing V2 dynamic capital ceilings ------------------------
+    # Expressed as EQUITY MULTIPLES so the cap tracks the account instead of a
+    # static notional. A misconfigured deployment cannot widen these past the
+    # project hard ceiling: the validator clamps and records the clamp.
+    max_single_notional_multiple: Decimal = Field(default=Decimal("5"))
+    max_total_gross_exposure_multiple: Decimal = Field(default=Decimal("5"))
+    max_symbol_exposure_multiple: Decimal = Field(default=Decimal("5"))
+    max_risk_per_trade: Decimal = Field(default=Decimal("0.010"))
+    #: Names of settings that were clamped to a project hard ceiling (loud).
+    hard_ceiling_clamps: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _enforce_project_hard_ceilings(self) -> RiskConfig:
+        """Clamp toward SAFETY only — never widen a degenerate configuration.
+
+        A value above a project hard ceiling is pulled DOWN to the ceiling. A
+        non-positive value is left strictly restrictive (0 means "no capacity"),
+        never raised to the ceiling: clamping is a one-way ratchet toward safety.
+        Every adjustment is recorded in ``hard_ceiling_clamps``.
+        """
+        clamps: list[str] = []
+        for name in (
+            "max_single_notional_multiple",
+            "max_total_gross_exposure_multiple",
+            "max_symbol_exposure_multiple",
+        ):
+            value = D(getattr(self, name))
+            if value <= 0:
+                clamps.append(name)
+                setattr(self, name, Decimal("0"))
+            elif value > HARD_MAX_NOTIONAL_MULTIPLE:
+                clamps.append(name)
+                setattr(self, name, HARD_MAX_NOTIONAL_MULTIPLE)
+        leverage = D(self.max_leverage)
+        if leverage <= 0:
+            clamps.append("max_leverage")
+            self.max_leverage = Decimal("0")
+        elif leverage > HARD_MAX_LEVERAGE:
+            clamps.append("max_leverage")
+            self.max_leverage = HARD_MAX_LEVERAGE
+        risk = D(self.max_risk_per_trade)
+        if risk <= 0:
+            clamps.append("max_risk_per_trade")
+            self.max_risk_per_trade = Decimal("0")
+        elif risk > HARD_MAX_RISK_PER_TRADE:
+            clamps.append("max_risk_per_trade")
+            self.max_risk_per_trade = HARD_MAX_RISK_PER_TRADE
+        if clamps:
+            self.hard_ceiling_clamps = [*self.hard_ceiling_clamps, *clamps]
+        return self
 
 
 class RiskEngine:
@@ -384,6 +440,52 @@ class RiskEngine:
             return fail("MAX_POSITION_NOTIONAL")
         checks["max_position_notional"] = True
 
+        # ------------------------------------------------------------------
+        # POSITION SIZING V2 — INDEPENDENT HARD GATES (defense in depth).
+        #
+        # RiskEngine never relies on "the Sizer already checked this". These
+        # gates are recomputed from factual order facts and the PROVEN equity
+        # baseline, so a Sizer defect cannot reach Execution. They are
+        # hard-rejects: never scaled down, never configurable away. They sit
+        # BEFORE the pre-existing MAX_LEVERAGE ratio rule so a 5x-equity breach
+        # reports the specific V2 reason instead of the generic one.
+        # Risk-reducing lifecycle actions keep their existing exemptions.
+        # ------------------------------------------------------------------
+        if not exposure_reducing:
+            if notional > cash * self.config.max_single_notional_multiple:
+                return fail("MAX_SINGLE_NOTIONAL_EQUITY_MULTIPLE")
+            if symbol_notional > cash * self.config.max_symbol_exposure_multiple:
+                return fail("MAX_SYMBOL_EXPOSURE_EQUITY_MULTIPLE")
+            if projected_exposure > cash * self.config.max_total_gross_exposure_multiple:
+                return fail("MAX_GROSS_EXPOSURE_EQUITY_MULTIPLE")
+        checks["max_single_notional_equity_multiple"] = True
+        checks["max_symbol_exposure_equity_multiple"] = True
+        checks["max_gross_exposure_equity_multiple"] = True
+        checks["equity_baseline"] = str(cash)
+        checks["hard_max_notional_multiple"] = str(HARD_MAX_NOTIONAL_MULTIPLE)
+
+        if approved_leverage > HARD_MAX_LEVERAGE:
+            return fail("MAX_LEVERAGE_HARD_CAP")
+        checks["approved_leverage_within_hard_cap"] = True
+
+        # Re-verify the Sizer's own claims when a Sizing-V2 entry presents them.
+        # The stop-loss risk is re-derived from THIS order's quantity, price and
+        # contract spec, so a Sizer defect cannot open a large position while
+        # reporting a small loss.
+        sizing_claims = _verify_sizing_claims(
+            metadata=metadata,
+            equity_baseline=cash,
+            max_risk_per_trade=self.config.max_risk_per_trade,
+            approved_leverage=approved_leverage,
+            order_quantity=approved_quantity,
+            order_price=price,
+            contract_factor=contract_size * contract_multiplier,
+            risk_reducing=exposure_reducing or reduce_only,
+        )
+        if sizing_claims.reason is not None:
+            return fail(sizing_claims.reason)
+        checks.update(sizing_claims.checks)
+
         if (
             cash > 0
             and (projected_exposure / cash) > self.config.max_leverage
@@ -437,3 +539,141 @@ def _required_linear_contract_spec(metadata: dict, key: str) -> Decimal:
     if not value.is_finite() or value <= 0:
         raise ValueError(f"LINEAR_PERP intent has invalid {key}")
     return value
+
+
+@dataclass(frozen=True)
+class _SizingClaimCheck:
+    """Outcome of independently re-verifying a Sizer's own claims."""
+
+    reason: str | None = None
+    checks: dict = field(default_factory=dict)
+
+
+#: Claims a Sizing-V2 entry MUST present, so it cannot bypass re-verification
+#: by simply omitting them. ``sizing_stop_price`` is required because the engine
+#: re-derives the stop-loss risk from the ORDER itself rather than trusting the
+#: Sizer's own ``max_loss_estimate`` (which alone would be self-referential).
+_REQUIRED_V2_CLAIMS = (
+    "sizing_risk_budget",
+    "sizing_effective_risk_fraction",
+    "sizing_approved_leverage",
+    "sizing_binding_cap",
+    "max_loss_estimate",
+    "sizing_stop_price",
+)
+
+
+def _verify_sizing_claims(
+    *,
+    metadata: dict,
+    equity_baseline: Decimal,
+    max_risk_per_trade: Decimal,
+    approved_leverage: Decimal,
+    order_quantity: Decimal,
+    order_price: Decimal,
+    contract_factor: Decimal,
+    risk_reducing: bool = False,
+) -> _SizingClaimCheck:
+    """Independently bound what the Sizer CLAIMED it risked (§33).
+
+    Trust nothing the Sizer reports about itself:
+
+    * the risk budget and the max-loss claim are bounded by an INDEPENDENT
+      ceiling (equity x max_risk_per_trade, never a Sizer-supplied number);
+    * the stop-loss risk is RE-DERIVED from the order's own quantity, price,
+      contract spec and stop, and must fit that ceiling. This is what stops a
+      buggy or drifting Sizer from opening a large position while reporting a
+      small loss.
+
+    A Sizing-V2 entry that omits its claims is rejected rather than trusted
+    implicitly. Legacy entries (no ``sizing_version``) keep their historical
+    behaviour, and risk-REDUCING lifecycle actions are never blocked by a
+    new-exposure contract.
+    """
+    if risk_reducing:
+        return _SizingClaimCheck()
+    if str(metadata.get("sizing_version") or "") != "v2":
+        return _SizingClaimCheck()
+
+    if str(metadata.get("llm_size_authority") or "") != "ADVISORY_ONLY":
+        # The LLM must never hold quantity authority on a V2 entry.
+        return _SizingClaimCheck(reason="SIZING_AUTHORITY_CONTRACT_VIOLATION")
+
+    missing = [key for key in _REQUIRED_V2_CLAIMS if metadata.get(key) in (None, "")]
+    if missing:
+        return _SizingClaimCheck(reason="SIZING_EVIDENCE_INCOMPLETE")
+
+    def claim(key: str) -> Decimal | None:
+        try:
+            value = D(metadata[key])
+        except Exception:  # noqa: BLE001 - an unparseable claim is not a fact
+            return None
+        return value if value.is_finite() else None
+
+    risk_budget_claim = claim("sizing_risk_budget")
+    risk_fraction_claim = claim("sizing_effective_risk_fraction")
+    leverage_claim = claim("sizing_approved_leverage")
+    max_loss_claim = claim("max_loss_estimate")
+    stop_price = claim("sizing_stop_price")
+    values = (
+        risk_budget_claim,
+        risk_fraction_claim,
+        leverage_claim,
+        max_loss_claim,
+        stop_price,
+    )
+    if any(value is None for value in values):
+        return _SizingClaimCheck(reason="SIZING_EVIDENCE_INVALID")
+    if min(
+        risk_budget_claim,
+        risk_fraction_claim,
+        leverage_claim,
+        max_loss_claim,
+        stop_price,
+    ) < 0:
+        return _SizingClaimCheck(reason="SIZING_EVIDENCE_INVALID")
+
+    # The ONE independent ceiling: never a number the Sizer supplied.
+    independent_ceiling = equity_baseline * max_risk_per_trade
+    if independent_ceiling <= 0:
+        return _SizingClaimCheck(reason="SIZING_RISK_CEILING_UNAVAILABLE")
+
+    # Independent bounds on the Sizer's own declarations.
+    if risk_fraction_claim > max_risk_per_trade:
+        return _SizingClaimCheck(reason="MAX_RISK_FRACTION_EXCEEDS_CEILING")
+    if risk_budget_claim > independent_ceiling:
+        return _SizingClaimCheck(reason="SIZING_RISK_BUDGET_EXCEEDS_CEILING")
+    if max_loss_claim > independent_ceiling:
+        return _SizingClaimCheck(reason="MAX_LOSS_EXCEEDS_RISK_BUDGET")
+    # Leverage the Sizer approved is verified against the hard cap again.
+    if leverage_claim > HARD_MAX_LEVERAGE or leverage_claim > approved_leverage:
+        return _SizingClaimCheck(reason="SIZING_LEVERAGE_EXCEEDS_HARD_CAP")
+
+    # RE-DERIVE the stop-loss risk from the order's own facts. The Sizer's
+    # ``max_loss_estimate`` is only cross-checked, never trusted as the bound.
+    derived_stop_distance = abs(order_price - stop_price)
+    if derived_stop_distance <= 0:
+        return _SizingClaimCheck(reason="SIZING_STOP_DISTANCE_INVALID")
+    derived_max_loss = order_quantity * derived_stop_distance * contract_factor
+    if derived_max_loss > independent_ceiling:
+        return _SizingClaimCheck(reason="DERIVED_MAX_LOSS_EXCEEDS_RISK_CEILING")
+
+    return _SizingClaimCheck(
+        checks={
+            "sizing_version": "v2",
+            "sizing_risk_budget_verified": str(risk_budget_claim),
+            "sizing_effective_risk_fraction_verified": str(risk_fraction_claim),
+            "sizing_max_loss_claimed": str(max_loss_claim),
+            "sizing_max_loss_rederived": str(derived_max_loss),
+            "sizing_risk_ceiling": str(independent_ceiling),
+            # The re-derived loss is what binds and what the ceiling was applied
+            # to. A claim materially BELOW it is a Sizer reporting inconsistency:
+            # recorded for review rather than rejected, because the ACTUAL risk
+            # is already proven to fit the independent ceiling above.
+            "sizing_max_loss_understated": (
+                "true" if derived_max_loss > max_loss_claim else "false"
+            ),
+            "sizing_binding_cap": str(metadata.get("sizing_binding_cap") or ""),
+            "sizing_llm_authority": "ADVISORY_ONLY",
+        }
+    )
