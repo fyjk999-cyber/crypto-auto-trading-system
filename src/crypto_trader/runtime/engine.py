@@ -178,6 +178,16 @@ class TradingEngine:
         self.position_review_interval_seconds = max(
             0.5, min(30.0, float(settings.engine_tick_seconds))
         )
+        # Ceiling on position-review REPEAT RATE for an unchanged position.
+        #
+        # The safety cadence above still applies: a material change (fill, size,
+        # price move, order state) re-arms a review immediately, and PnL
+        # deterioration keeps its 5s cadence. What this floor removes is the
+        # blind "nothing changed, ask the LLM again" storm that saturated the
+        # rolling budget and starved active-position management.
+        self.position_review_min_interval_seconds = float(
+            settings.position_review_min_interval_seconds
+        )
         self._position_review_state: dict[str, dict] = {}
 
     # ------------------------------------------------------------------ state
@@ -573,6 +583,66 @@ class TradingEngine:
         self.health.set("engine_loop", True)
         return decisions
 
+    async def _position_change_signature(self, symbol: str, position) -> tuple:
+        """Factual state a position review may legitimately need to react to.
+
+        Built from observed facts only — position size / entry / leverage /
+        realised PnL, the live book, and the lifecycle state of the entry order
+        — so "materially unchanged" is a factual statement rather than a
+        heuristic guess. Order-state changes are explicit material events: an
+        entry order becoming terminal is exactly what unblocks a pending
+        REDUCE/EXIT, so it must re-arm a review immediately.
+        """
+        book = self.market_data.books.get(symbol)
+        bid = book.best_bid() if book is not None else None
+        ask = book.best_ask() if book is not None else None
+        plan_state = None
+        entry_order_status = None
+        plan = (
+            await self.trade_plans.get_active_for_symbol(symbol)
+            if self.trade_plans is not None
+            else None
+        )
+        if plan is not None:
+            plan_state = str(getattr(plan, "state", None))
+            order_id = getattr(plan, "order_id", None)
+            if order_id:
+                entry_order = await self.order_manager.get(order_id)
+                if entry_order is not None:
+                    entry_order_status = str(entry_order.status.value)
+        return (
+            str(getattr(position, "quantity", None)),
+            str(getattr(position, "avg_entry_price", None)),
+            str(getattr(position, "cost_basis", None)),
+            str(getattr(position, "leverage", None)),
+            str(getattr(position, "realized_pnl", None)),
+            str(bid.price if bid else None),
+            str(ask.price if ask else None),
+            plan_state,
+            entry_order_status,
+        )
+
+    async def _is_due_for_review(
+        self, symbol: str, position, state: dict, now_epoch: float
+    ) -> bool:
+        """Due AND worth an LLM call.
+
+        A material change re-arms the review immediately. Otherwise the review
+        is coalesced to ``position_review_min_interval_seconds`` so an unchanged
+        position cannot burn budget in a blind polling loop.
+        """
+        if state["next_due_at"] > now_epoch:
+            return False
+        signature = await self._position_change_signature(symbol, position)
+        last_signature = state.get("last_review_signature")
+        last_started = state.get("last_started_at")
+        if signature != last_signature:
+            return True
+        if last_started is None:
+            return True
+        unchanged_for = now_epoch - float(last_started)
+        return unchanged_for >= self.position_review_min_interval_seconds
+
     async def _review_positions_once(self) -> list[RiskDecision]:
         if self.position_manager is None:
             return []
@@ -587,7 +657,7 @@ class TradingEngine:
                 symbol,
                 {"next_due_at": 0.0, "failures": 0, "last_started_at": None},
             )
-            if state["next_due_at"] <= now_epoch:
+            if await self._is_due_for_review(symbol, position, state, now_epoch):
                 score = await self._position_review_priority(
                     position, state, now_wall, now_epoch
                 )
@@ -635,6 +705,11 @@ class TradingEngine:
                     position, now_wall
                 )
                 self.health.set("position_manager", True)
+                # Remember WHAT was reviewed so an unchanged position can be
+                # coalesced instead of re-asked every tick.
+                state["last_review_signature"] = (
+                    await self._position_change_signature(symbol, position)
+                )
                 return signal
 
         reviewed = await asyncio.gather(
@@ -1167,12 +1242,46 @@ class TradingEngine:
                     await self._cancel_unsettled_entry_order(entry_order)
                 return None
             if await self.order_manager.has_pending_position_action(trade_plan_id):
+                # The duplicate guard MUST stay (a resting order is genuinely
+                # pending, and a second independent REDUCE/EXIT could over-reduce
+                # or flip the position). What must not happen is the resulting
+                # management gap staying invisible: report the pending action's
+                # factual remaining quantity and age, and escalate to an explicit
+                # PARTIAL_ORDER_REVIEW_REQUIRED state once it outlives the stale
+                # window. This never cancels/amends/replaces anything — that is
+                # execution policy — and it never drops the newest intent, which
+                # remains the plan's latest position decision and is re-evaluated
+                # on every subsequent review once the order settles.
+                facts = await self.order_manager.pending_position_action_facts(
+                    trade_plan_id
+                )
                 await self.audit.log(
                     "POSITION_ACTION_ALREADY_PENDING",
                     target=client_order_id,
                     run_id=run_id,
-                    after={"trade_plan_id": trade_plan_id},
+                    after={
+                        "trade_plan_id": trade_plan_id,
+                        "pending_action": facts,
+                        "requested_action": signal.metadata.get("lifecycle_action"),
+                        "requested_decision_id": signal.metadata.get("decision_id"),
+                        "latest_intent_preserved": True,
+                    },
                 )
+                if facts is not None and facts.get("stale"):
+                    await self.audit.log(
+                        "PARTIAL_ORDER_REVIEW_REQUIRED",
+                        target=client_order_id,
+                        run_id=run_id,
+                        after={
+                            "trade_plan_id": trade_plan_id,
+                            "order_id": facts["order_id"],
+                            "status": facts["status"],
+                            "remaining_quantity": facts["remaining_quantity"],
+                            "age_seconds": facts["age_seconds"],
+                            "stale_after_seconds": facts["stale_after_seconds"],
+                            "blocked_action": signal.metadata.get("lifecycle_action"),
+                        },
+                    )
                 return None
 
         await self._refresh_execution_market(symbol)
