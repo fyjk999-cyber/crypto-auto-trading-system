@@ -22,11 +22,21 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import crypto_trader.runtime.engine as engine_module
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
+from crypto_trader.llm_chief.decision import ChiefTraderDecision
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.persistence.models import TradeEpisodeORM, TradePlanORM
+from crypto_trader.trade_plan.service import TradePlanService
+from tests.integration.test_live_llm_position_lifecycle import (
+    BTC_EXECUTION_METADATA,
+    Evidence,
+    SequencedChief,
+)
 
 
 async def _pending(database):
@@ -309,3 +319,212 @@ def test_retry_hook_is_on_an_existing_cadence():
     assert "window_seconds" in retry_src
 
 # ---------------------------------------------------------------- R1b (positive)
+
+
+# ---------------------------------------------------------------- R9 (positive)
+async def test_R9_reconciliation_retry_materialises_after_readiness(database):
+    """PROVE the runtime wiring creates the Episode — not a manual second call.
+
+    Sequence, all through production code:
+
+      1. drive a REAL closed lifecycle (entry -> HOLD -> REDUCE -> EXIT) so the
+         canonical close path builds the Episode;
+      2. reproduce the exact runtime race by making the builder's factual
+         readiness guard fail again — ``positions_projection.quantity != 0`` —
+         and removing only the Episode row, so the state is CLOSED + absent;
+      3. FIRST BUILD: the production builder returns None, episode_count == 0;
+      4. make durable facts ready again (projection qty = 0, fixture fact only);
+      5. SECOND BUILD: triggered ONLY through the engine's reconciliation retry
+         wiring, which must create the Episode;
+      6. a further retry must not create a second one.
+    """
+    from sqlalchemy import update
+
+    from crypto_trader.governance.trade_episode import TradeEpisodeStore
+    from crypto_trader.persistence.models import PositionProjectionORM
+    from tests.conftest import make_paper_engine
+
+    # ---- R9.1 ARRANGE: a real closed lifecycle ------------------------------
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = _MutableClock()
+    engine.clock = clock
+    await engine.start("run-r9-episode-retry")
+    assert await engine._strategy_context("BTCUSDT") is not None
+
+    plans = TradePlanService(database.session_factory)
+    decisions = LLMDecisionStore(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-r9",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="r9 entry thesis",
+        position_size_request=0.1,
+        leverage_request=10,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-flash",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.1")
+
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief([("HOLD", "0"), ("REDUCE", "0.04"), ("EXIT", "0")]),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    # SequencedChief yields one decision per review review; three decisions plus
+    # settlement ticks are required for the EXIT fill to reach a factual zero.
+    for _ in range(9):
+        clock.advance()
+        await engine.tick()
+        await engine.wait_for_event_queue()
+        pos = await engine.portfolio.get_position("BTCUSDT")
+        if pos is not None and pos.quantity == 0:
+            break
+
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None and position.quantity == 0
+    closed_plan = await plans.get(plan.trade_plan_id)
+    assert closed_plan is not None and str(closed_plan.state).endswith("CLOSED")
+
+    store = TradeEpisodeStore(database.session_factory)
+    # The lifecycle reaches a factual zero. Whether the close path already built
+    # the Episode depends on fixture funding coverage, so the test does not
+    # require it: it only requires the CLOSED-without-Episode state below, which
+    # is precisely the runtime condition under test.
+    built = await store.load_closed_on(
+        closed_plan.closed_at.date().isoformat(), limit=50
+    )
+    prior = [e for e in built if e.trade_plan_id == plan.trade_plan_id]
+    original_net = prior[0].net_pnl if prior else None
+    original_reason = prior[0].terminal_reason if prior else None
+
+    # ---- Recreate the runtime race: CLOSED + Episode absent + not ready -----
+    async with database.session_factory() as session:
+        await session.execute(
+            delete(TradeEpisodeORM).where(
+                TradeEpisodeORM.trade_plan_id == plan.trade_plan_id
+            )
+        )
+        # The builder's own readiness predicate: it refuses while the factual
+        # position projection is non-zero.
+        await session.execute(
+            update(PositionProjectionORM)
+            .where(PositionProjectionORM.symbol == "BTCUSDT")
+            .values(quantity=Decimal("0.1"))
+        )
+        await session.commit()
+
+    assert plan.trade_plan_id in await store.pending_closed_plan_ids()
+
+    # ---- R9.2 FIRST ATTEMPT: production builder returns None ----------------
+    first = await store.build_for_closed_plan(plan.trade_plan_id)
+    assert first is None
+    async with database.session_factory() as session:
+        assert (await session.execute(select(TradeEpisodeORM))).scalars().all() == []
+
+    # ---- R9.3 MAKE DURABLE FACTS READY (fixture facts only) -----------------
+    # (a) the builder's readiness predicate: factual position projection = 0.
+    async with database.session_factory() as session:
+        await session.execute(
+            update(PositionProjectionORM)
+            .where(PositionProjectionORM.symbol == "BTCUSDT")
+            .values(quantity=Decimal("0"))
+        )
+        await session.commit()
+    # (b) the lifecycle funding-coverage proof, recorded through the formal
+    #     service (KNOWN_ZERO = PROVEN no funding event in the holding window),
+    #     exactly as the production funding supervisor would.
+    from datetime import timedelta
+
+    from crypto_trader.perpetual.funding_coverage import FundingCoverageService
+
+    await FundingCoverageService(database.session_factory).record(
+        instrument_id="BTCUSDT",
+        window_start=closed_plan.opened_at,
+        window_end=closed_plan.closed_at + timedelta(microseconds=1),
+        coverage_status="KNOWN_ZERO",
+        pagination_complete=True,
+        boundary_proof=True,
+        source="TEST_FIXTURE",
+    )
+
+    # ---- R9.4 TRIGGER THE ACTUAL RETRY WIRING -------------------------------
+    # Deliberately NOT calling build_for_closed_plan directly: this must go
+    # through the engine path the reconciliation loop invokes.
+    created = await engine._retry_episode_materialization()
+    assert created == 1
+
+    # ---- R9.5 ASSERT -------------------------------------------------------
+    async with database.session_factory() as session:
+        rows = (await session.execute(select(TradeEpisodeORM))).scalars().all()
+    assert len(rows) == 1
+    episode = rows[0]
+    assert episode.episode_id == f"episode_{plan.trade_plan_id}"
+    assert episode.trade_plan_id == plan.trade_plan_id
+    assert episode.factual is True
+    assert episode.opened_quantity == episode.closed_quantity
+    assert episode.terminal_reason in ("EXIT", "POSITION_CLOSED")
+    if original_reason is not None:
+        assert episode.terminal_reason == original_reason
+        assert episode.net_pnl == original_net
+    # The retry re-read durable facts, so the rebuilt accounting is self-consistent.
+    assert episode.gross_pnl - episode.fees + episode.funding_pnl == episode.net_pnl
+
+    # ---- R9.6 SECOND RETRY: still exactly one Episode -----------------------
+    again = await engine._retry_episode_materialization()
+    assert again == 0
+    async with database.session_factory() as session:
+        rows2 = (await session.execute(select(TradeEpisodeORM))).scalars().all()
+    assert len(rows2) == 1
+    assert rows2[0].episode_id == episode.episode_id
+
+
+class _MutableClock:
+    """Local copy of the canonical MutableClock (advance(31) by default)."""
+
+    def __init__(self) -> None:
+        from datetime import UTC, datetime
+
+        self.value = datetime.now(UTC)
+
+    def now(self):
+        return self.value
+
+    def advance(self, seconds: int = 31) -> None:
+        from datetime import timedelta
+
+        self.value += timedelta(seconds=seconds)
+
+
+def test_R9_positive_test_uses_the_engine_wiring_not_a_manual_second_call():
+    """Guard the guard: R9 must exercise ``_retry_episode_materialization``."""
+    import ast
+    import inspect
+    import textwrap
+
+    func = test_R9_reconciliation_retry_materialises_after_readiness
+    assert "_retry_episode_materialization" in inspect.getsource(func)
+    # Strip the docstring: it names build_for_closed_plan in prose, and counting
+    # that would make the guard self-referential.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    node = tree.body[0]
+    if node.body and isinstance(node.body[0], ast.Expr):
+        node.body = node.body[1:]
+    body = ast.unparse(tree)
+    # The positive materialisation must come from the wiring call; the single
+    # direct builder invocation is the NEGATIVE first attempt.
+    assert body.count("build_for_closed_plan") == 1
+    assert body.count("_retry_episode_materialization") == 2
