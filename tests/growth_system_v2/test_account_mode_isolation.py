@@ -70,11 +70,13 @@ async def test_explicit_global_scope_requires_approval_marker(v2_db):
     await seed_card(
         v2_db,
         rule_id="card_global_approved",
+        mode="LIVE",
         share_scope="GLOBAL_EXPLICIT",
     )
     await seed_card(
         v2_db,
         rule_id="card_global_unapproved",
+        mode="LIVE",
         share_scope="GLOBAL_EXPLICIT",
     )
     async with v2_db.session_factory() as session:
@@ -123,5 +125,7 @@ async def test_scope_rejection_reasons_direct(v2_db):
     card = await AdaptiveCardStore(v2_db.session_factory).get_card("card_scope_direct")
     retriever = ExperienceCardRetriever(v2_db.session_factory)
     assert retriever._scope_rejection(card, "acct-b", "LIVE") == ["ACCOUNT_MISMATCH"]
-    assert retriever._scope_rejection(card, "acct-a", "PAPER") == ["MODE_MISMATCH"]
+    assert retriever._scope_rejection(card, "acct-a", "PAPER") == [
+        "EVIDENCE_DOMAIN_NOT_ALLOWED:LIVE"
+    ]
     assert retriever._scope_rejection(card, "acct-a", "LIVE") == []
