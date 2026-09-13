@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 
 from crypto_trader.persistence.models import (
     FillORM,
@@ -110,12 +110,25 @@ async def ledger_transaction_for_fill(session, fill_id: str):
 
 
 async def assert_prefix_settlement_history(session) -> None:
-    """Fail closed on non-prefix history (older unsettled, newer settled).
+    """Fail closed on a NON-PREFIX settlement history.
 
-    Scans per symbol in timestamp order: once a fill WITH a ledger posting has
-    been seen, any later fill WITHOUT one is fine (it is merely unfinished), but
-    a fill WITHOUT a posting appearing BEFORE one WITH a posting means the
-    history is non-prefix and unreconstructable.
+    Legal (settled first, unfinished after):
+
+        SETTLED SETTLED SETTLED PENDING PENDING
+
+    Illegal (an unfinished fill followed by a settled one):
+
+        PENDING SETTLED
+
+    The illegal shape means the newer fill was settled against a position state
+    that includes a fill whose own accounting was never proven, so its
+    quantity_before / average_entry_price / realized_pnl are unreconstructable.
+    A newer fill may be unfinished; an OLDER one may not be skipped over.
+
+    Note the direction: the first UNSETTLED fill is remembered per symbol, and a
+    later SETTLED fill for that symbol is the contradiction. An earlier version
+    tracked the first settled fill instead, which rejected the legal shape and
+    accepted the illegal one.
     """
     rows = (
         await session.execute(
@@ -124,45 +137,68 @@ async def assert_prefix_settlement_history(session) -> None:
             )
         )
     ).all()
-    settled_seen: dict[str, str] = {}
+    first_unsettled: dict[str, str] = {}
     for fill_id, symbol, _ts in rows:
-        txn = await ledger_transaction_for_fill(session, fill_id)
-        if txn is None:
-            if symbol in settled_seen:
-                raise SettlementHistoryContradiction(
-                    f"non-prefix settlement history for {symbol}: "
-                    f"{fill_id} unsettled but {settled_seen[symbol]} already settled"
-                )
-        else:
-            settled_seen.setdefault(symbol, fill_id)
+        has_ledger = await ledger_transaction_for_fill(session, fill_id) is not None
+        if not has_ledger:
+            first_unsettled.setdefault(symbol, fill_id)
+            continue
+        if symbol in first_unsettled:
+            raise SettlementHistoryContradiction(
+                f"non-prefix settlement history for {symbol}: "
+                f"{fill_id} is settled but the older {first_unsettled[symbol]} is not"
+            )
 
 
 async def pending_settlements(session, *, limit: int = DEFAULT_BATCH_SIZE):
-    """Durable fills whose settlement is not COMPLETE, oldest first.
+    """The OLDEST unfinished settlements, at most ``limit`` of them.
 
-    Historical fills with no marker are included: a missing marker is not proof
-    of completion.
+    Queries incomplete settlements directly instead of taking the first N fills
+    and filtering in Python: the earlier shape truncated the fill history first,
+    so once the oldest 200 fills were COMPLETE it returned nothing and recovery
+    stopped early while unfinished fills remained.
+
+    Two independent sources, merged chronologically:
+      * fills whose marker says they are not COMPLETE - an explicit durable
+        statement of incompleteness that no ledger state can contradict;
+      * fills with NO marker whose ledger posting is genuinely absent, because a
+        missing marker is not proof of completion.
+    A fill with no marker AND a ledger posting is treated as settled history; a
+    fill marked COMPLETE is settled even if a posting is somehow missing, because
+    the marker is the authority on settlement completeness.
     """
-    marker_rows = (
+    marked_rows = (
         await session.execute(
-            select(FillSettlementORM.fill_id).where(FillSettlementORM.state != STATE_COMPLETE)
+            select(FillORM)
+            .where(
+                FillORM.fill_id.in_(
+                    select(FillSettlementORM.fill_id).where(
+                        FillSettlementORM.state != STATE_COMPLETE
+                    )
+                )
+            )
+            .order_by(FillORM.timestamp.asc(), FillORM.fill_id.asc())
+            .limit(limit)
         )
     ).scalars().all()
-    marked = set(marker_rows)
-    fill_rows = (
+
+    unmarked_rows = (
         await session.execute(
-            select(FillORM).order_by(FillORM.timestamp, FillORM.fill_id).limit(limit)
+            select(FillORM)
+            .where(
+                ~exists().where(FillSettlementORM.fill_id == FillORM.fill_id),
+                ~exists().where(LedgerTransactionORM.fill_id == FillORM.fill_id),
+            )
+            .order_by(FillORM.timestamp.asc(), FillORM.fill_id.asc())
+            .limit(limit)
         )
     ).scalars().all()
-    out = []
-    for fill in fill_rows:
-        if fill.fill_id in marked:
-            out.append(fill)
-            continue
-        # No marker: include only when the ledger posting is genuinely absent.
-        if await ledger_transaction_for_fill(session, fill.fill_id) is None:
-            out.append(fill)
-    return out[:limit]
+
+    merged = {f.fill_id: f for f in marked_rows}
+    for f in unmarked_rows:
+        merged.setdefault(f.fill_id, f)
+    ordered = sorted(merged.values(), key=lambda f: (f.timestamp, f.fill_id))
+    return ordered[:limit]
 
 
 async def ensure_fill_settled(

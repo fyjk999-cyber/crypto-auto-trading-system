@@ -2720,15 +2720,26 @@ class TradingEngine:
         if close is None:
             return
         try:
-            await close(
+            closed = await close(
                 plan.trade_plan_id,
                 exit_decision_id=str(
                     (order.metadata_json or {}).get("decision_id") or ""
                 ),
-                entry_decision_id=plan.decision_id,
+                reason=str(
+                    (order.metadata_json or {}).get("lifecycle_action") or "POSITION_CLOSED"
+                ),
             )
         except Exception:
             logger.warning("plan close from factual position failed", exc_info=True)
+            return
+        # Materialise the episode on the same convergence pass: an interrupted
+        # close must not leave a CLOSED plan without its episode.
+        build = getattr(self.trade_episodes, "build_for_closed_plan", None)
+        if build is not None and closed is not None:
+            try:
+                await build(closed.trade_plan_id)
+            except Exception:
+                logger.warning("episode materialisation failed", exc_info=True)
 
     async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
         """Complete every unfinished settlement. Bounded per pass, complete overall."""
