@@ -36,3 +36,19 @@ def test_episode_ref_must_match_identity():
     validate_causal_evidence_refs(ev, ["episode:ep"])
     with pytest.raises(CausalEvidenceUnavailable):
         validate_causal_evidence_refs(ev, ["episode:other"])
+
+
+def test_pub_mixed_refs_are_blocked_atomically_by_validator():
+    ev = GrowthReviewEvidence(
+        episode_id="ep-pub-mixed",
+        fees_availability="AVAILABLE",
+        funding_availability="UNAVAILABLE",
+    )
+    # The valid episode ref alone passes...
+    validate_causal_evidence_refs(ev, ["episode:ep-pub-mixed"])
+    # ...but a claim containing an unavailable funding ref must be rejected as
+    # a whole; callers must not strip the bad ref and publish the rest.
+    with pytest.raises(CausalEvidenceUnavailable):
+        validate_causal_evidence_refs(
+            ev, ["episode:ep-pub-mixed", "accounting:funding"]
+        )
