@@ -457,6 +457,13 @@ class TradingEngine:
                     )
                 except Exception:  # noqa: BLE001 - observability must not kill the loop
                     pass
+            else:
+                # Recovery, not masking: the consumer has just proved it is
+                # working. Without this, one anomaly (or one failed event) would
+                # latch ``event_processing`` to False for the life of the
+                # process and pin overall health, since ``overall()`` is an AND
+                # over every flag. The anomaly itself stays durably audited.
+                self.health.set("event_processing", True)
             finally:
                 self._event_queue.task_done()
 
@@ -2286,10 +2293,18 @@ class TradingEngine:
         if event.event_type in (ExchangeEventType.MARKET_DELTA, ExchangeEventType.MARKET_SNAPSHOT):
             await self._process_market_event(event, payload)
             return
+        if event.event_type == ExchangeEventType.BALANCE_UPDATE:
+            # Balance updates are ACCOUNT-scoped, not order-scoped: a venue
+            # balance push carries no exchange order id. Handling it before the
+            # order-identity requirement below is what makes this branch
+            # reachable at all.
+            await self.portfolio.refresh(initial_balances=self._initial_balances)
+            return
         exchange_order_id = payload.get("exchange_order_id")
         if not exchange_order_id:
             return
         local = await self.order_manager.get_by_exchange(str(exchange_order_id))
+        identity_mismatch = False
         if local is None:
             # The venue emits ack/open/fill INLINE while ``submit_order`` is
             # still in flight (see ``_sync_submitted_order_state``), i.e. before
@@ -2299,15 +2314,36 @@ class TradingEngine:
             # factual fill can never be lost because of WHEN the event happened
             # to be dequeued. The ack transition below persists the exchange id,
             # after which later events resolve by either key.
+            #
+            # The binding is validated, never assumed: a row that ALREADY
+            # carries a DIFFERENT venue id is a different order, so this event
+            # must not be applied to it (that would let a misrouted or replayed
+            # event rewrite a real order's fills and venue identity).
             client_order_id = payload.get("client_order_id")
             if client_order_id:
-                local = await self.order_manager.get_by_client(str(client_order_id))
+                candidate = await self.order_manager.get_by_client(str(client_order_id))
+                if candidate is not None:
+                    bound = getattr(candidate, "exchange_order_id", None)
+                    if bound in (None, "") or str(bound) == str(exchange_order_id):
+                        local = candidate
+                    else:
+                        identity_mismatch = True
         if local is None:
-            # An unmatched exchange event is a real anomaly (unknown order, or
-            # an identity that was never persisted). It must never be invisible.
-            self.health.set("event_processing", False, "exchange event unmatched")
+            # An unmatched exchange event is a real anomaly (unknown order, an
+            # identity that was never persisted, or an identity that belongs to
+            # a different order). It must never be invisible — but it also must
+            # not be reported as a HEALTH fault: the consumer itself is working,
+            # and a single foreign/replayed event is not a component failure.
+            # Health is reserved for events that actually FAIL to process below.
+            reason = (
+                "LOCAL_ORDER_BOUND_TO_ANOTHER_VENUE_ORDER"
+                if identity_mismatch
+                else "NO_LOCAL_ORDER_FOR_EVENT"
+            )
             await self.audit.log(
-                "EXCHANGE_EVENT_UNMATCHED",
+                "EXCHANGE_EVENT_ID_MISMATCH"
+                if identity_mismatch
+                else "EXCHANGE_EVENT_UNMATCHED",
                 target=str(exchange_order_id),
                 run_id=self.run_id,
                 exchange_order_id=str(exchange_order_id),
@@ -2316,7 +2352,7 @@ class TradingEngine:
                         getattr(event.event_type, "value", event.event_type)
                     ),
                     "client_order_id": payload.get("client_order_id"),
-                    "reason": "NO_LOCAL_ORDER_FOR_EVENT",
+                    "reason": reason,
                 },
             )
             return
@@ -2347,8 +2383,6 @@ class TradingEngine:
             await self._sync_terminal_entry_plan(
                 local, TradePlanState.INVALIDATED, "ORDER_REJECTED"
             )
-        elif event.event_type == ExchangeEventType.BALANCE_UPDATE:
-            await self.portfolio.refresh(initial_balances=self._initial_balances)
 
     async def _process_market_event(self, event: ExchangeEvent, payload: dict) -> None:
         symbol = event.symbol or payload.get("symbol")

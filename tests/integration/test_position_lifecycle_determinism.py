@@ -221,6 +221,15 @@ async def test_L1_lifecycle_transition_is_deterministic_without_any_sleep(databa
         position = await engine.portfolio.get_position("BTCUSDT")
         assert current is not None and current.state == TradePlanState.ACTIVE
         assert position is not None and position.quantity == Decimal("0.1")
+        # No event was merely "tolerated": a settled entry has no anomaly at all.
+        anomalies = [
+            row
+            for row in await AuditService(database.session_factory).list_recent(limit=60)
+            if row.action
+            in {"EXCHANGE_EVENT_UNMATCHED", "EXCHANGE_EVENT_ID_MISMATCH",
+                "EXCHANGE_EVENT_FAILED"}
+        ]
+        assert anomalies == []
     finally:
         await engine.stop()
 
@@ -562,3 +571,163 @@ async def test_L12_clock_boundary_exactly_at_time_stop_is_deterministic(tmp_path
                 await engine.stop()
         finally:
             await db.close()
+
+
+# ============================================ reviewer-driven hardening (R1/R2)
+async def test_L13_an_event_bound_to_another_venue_order_is_refused(database):
+    """R1: the client_order_id fallback must never RE-BIND venue identity.
+
+    A row that already carries a different venue order id belongs to a different
+    order. Applying the event would let a misrouted or replayed event rewrite a
+    real order's fills and venue identity.
+    """
+    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    try:
+        entry = next(iter(adapter.orders.values()))
+        local = await engine.order_manager.get_by_client(entry.client_order_id)
+        assert local is not None and local.exchange_order_id is not None
+
+        await asyncio.wait_for(
+            engine._enqueue_event(
+                ExchangeEvent(
+                    event_id="evt-misrouted",
+                    event_type=ExchangeEventType.ORDER_FILLED,
+                    symbol="BTCUSDT",
+                    timestamp=datetime.now(UTC),
+                    payload={
+                        "exchange_order_id": "sim_ATTACKER_ORDER",
+                        "client_order_id": entry.client_order_id,
+                        "fill_id": "fill-wrong",
+                        "fill_price": "50",
+                        "fill_quantity": "0.1",
+                        "status": "FILLED",
+                    },
+                )
+            ),
+            timeout=5,
+        )
+        await engine.wait_for_event_queue()
+
+        after = await engine.order_manager.get_by_client(entry.client_order_id)
+        # Identity and fill accounting are untouched.
+        assert after.exchange_order_id == local.exchange_order_id
+        assert after.filled_quantity == local.filled_quantity
+
+        mismatch = [
+            row
+            for row in await AuditService(database.session_factory).list_recent(limit=60)
+            if row.action == "EXCHANGE_EVENT_ID_MISMATCH"
+        ]
+        assert len(mismatch) == 1
+        assert (
+            mismatch[0].after_json["reason"]
+            == "LOCAL_ORDER_BOUND_TO_ANOTHER_VENUE_ORDER"
+        )
+    finally:
+        await engine.stop()
+
+
+def _event_processing_ok(engine) -> bool | None:
+    component = engine.health.snapshot()["components"].get("event_processing")
+    return None if component is None else component["ok"]
+
+
+async def test_L14_event_processing_health_recovers_after_an_anomaly(database):
+    """R2: an anomaly is audited, and a genuine processing failure recovers.
+
+    Two distinct outcomes are pinned:
+      * an UNMATCHABLE event is durable evidence, not a health fault (the
+        consumer is working, and one foreign/replayed event is not a component
+        failure);
+      * an event that actually FAILS to process marks health unhealthy and the
+        next successfully processed event clears it, so a transient fault can
+        never latch engine health for the life of the process.
+    """
+    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    try:
+        audit = AuditService(database.session_factory)
+        assert _event_processing_ok(engine) is True
+
+        # (1) unmatchable event: audited, consumer still healthy.
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-unknown",
+                event_type=ExchangeEventType.ORDER_ACK,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": "sim_nope",
+                    "client_order_id": "nope",
+                    "symbol": "BTCUSDT",
+                },
+            )
+        )
+        await engine.wait_for_event_queue()
+        assert [
+            row for row in await audit.list_recent(limit=60)
+            if row.action == "EXCHANGE_EVENT_UNMATCHED"
+        ]
+        assert _event_processing_ok(engine) is True
+
+        # (2) an event that genuinely fails to process: unhealthy + audited.
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-malformed",
+                event_type=ExchangeEventType.MARKET_DELTA,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={"sequence": "not-an-integer", "bids": [], "asks": []},
+            )
+        )
+        await engine.wait_for_event_queue()
+        assert _event_processing_ok(engine) is False
+        assert engine.health.snapshot()["overall"] == "UNHEALTHY"
+        assert [
+            row for row in await audit.list_recent(limit=60)
+            if row.action == "EXCHANGE_EVENT_FAILED"
+        ]
+
+        # (3) the next good event recovers health; the evidence stays durable.
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-balance-recover",
+                event_type=ExchangeEventType.BALANCE_UPDATE,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={"balances": {"USDT": "10000"}},
+            )
+        )
+        await engine.wait_for_event_queue()
+        assert _event_processing_ok(engine) is True
+        assert [
+            row for row in await audit.list_recent(limit=60)
+            if row.action == "EXCHANGE_EVENT_FAILED"
+        ]
+    finally:
+        await engine.stop()
+
+
+async def test_L15_account_scoped_balance_updates_are_reachable(database):
+    """R5: a balance push carries no exchange order id and must still apply."""
+    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    try:
+        audit = AuditService(database.session_factory)
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-balance-2",
+                event_type=ExchangeEventType.BALANCE_UPDATE,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={"balances": {"USDT": "10000"}},
+            )
+        )
+        await engine.wait_for_event_queue()
+
+        unmatched = [
+            row
+            for row in await audit.list_recent(limit=40)
+            if row.action in {"EXCHANGE_EVENT_UNMATCHED", "EXCHANGE_EVENT_ID_MISMATCH"}
+        ]
+        assert unmatched == []
+    finally:
+        await engine.stop()

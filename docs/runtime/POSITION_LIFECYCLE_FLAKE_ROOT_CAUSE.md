@@ -47,10 +47,17 @@ class InlineEventDrainedAdapter(SimulatedExchangeAdapter):
         return result
 ```
 
-No sleeps, no timeouts, no retries: `join()` simply waits until every event the
-adapter emitted inline has been fully processed. Before the fix this test failed
-**every single time**, with exactly the flaky symptom (`plan == APPROVED`,
-venue order `FILLED`).
+`join()` waits until every event the adapter emitted inline has been fully
+processed — the reproduction depends on no sleep, no retry and no wall-clock
+threshold. The `asyncio.wait_for(..., timeout=10)` in the harness is a hang
+guard only: it is never the mechanism, and the test fails deterministically
+without the fix and passes deterministically with it (measured below). Its one
+side effect is that a stalled event loop would surface as a `TimeoutError` out
+of `submit_order` rather than as "event loop stalled" — a test-harness-only
+concern, since the gate exists only in the test.
+
+Before the fix this reproduction failed **every single time**, with exactly the
+flaky symptom (`plan == APPROVED`, venue order `FILLED`).
 
 Instrumentation of a *passing* run showed the leak is normally present but
 mostly benign:
@@ -125,43 +132,68 @@ called `task_done()` in `finally`. The queue therefore always drained, so
 success even when the fill had been lost. A dropped *matching* failure was
 equally invisible: the handler simply returned.
 
-## 4. Production impact
+## 4. Impact
 
-**This was a real runtime defect, not a test-only artefact.**
+**Classification of impact: PAPER-runtime defect today; latent live-adapter
+defect tomorrow.** The reviewer of the first revision of this document was right
+to reject an earlier, stronger claim, and the corrected scope is:
 
-In production the same window exists whenever the venue's event stream beats the
-REST response plus the local commit — normal for a marketable order, since the
-exchange can fill it before the local row records the venue order id. The
-consequences were:
+* **Reachable today (PAPER).** `SimulatedExchangeAdapter` emits `ORDER_ACK`,
+  `ORDER_OPENED` and `ORDER_FILLED` inline from inside `submit_order`, and those
+  payloads carry `exchange_order_id`, so they reach the affected code path. A
+  dropped fill in PAPER corrupts the paper ledger/position projection, wedges the
+  trade plan at `APPROVED`, and blocks every later REDUCE/EXIT through the
+  entry-order terminality guard. This is exactly the flake that was observed.
+* **A real runtime race, not a test artefact.** The defect lives in the engine's
+  event/identity contract, and it is exercised by production code paths — not
+  only by tests.
+* **NOT a live-money defect in this revision.** No live adapter wired in this
+  repository emits routable normalized order events:
+  `exchange/okx.py::subscribe_order_updates` registers a handler but nothing in
+  the OKX adapter ever emits an `ExchangeEvent`; `exchange/binance.py::
+  dispatch_raw_event` emits `{"raw": ...}` payloads (no `exchange_order_id`) and
+  has no caller; the only `ExchangeEvent` constructors in `src/` are
+  `exchange/base.py` and `simulator/exchange.py`. So the "silent divergence from
+  a real venue" scenario is a **precondition, not a present fact**: it becomes
+  live the moment a live adapter is wired to emit normalized order events.
+  Closing it now is precisely why the fix belongs in the engine contract rather
+  than in the simulator.
 
-* a **factual fill missing from the local ledger and position projection**
-  (silent divergence from the venue),
-* a trade plan stuck at `APPROVED`,
-* **position management wedged**: every subsequent REDUCE/EXIT blocked by the
-  entry-order terminality guard,
-* `ReconciliationService` detects such a divergence (`POSITION_MISMATCH`) but
-  only *reports* it; it does not repair it.
-
-Risk classification: high. Money-relevant state could be lost with no error, no
-alert and no audit record.
+Severity if the precondition is met: high. Money-relevant state could be lost
+with no error, no alert and no audit record.
 
 ## 5. Fix
 
 `src/crypto_trader/runtime/engine.py`:
 
-1. **Durable-identity fallback.** `process_exchange_event` resolves the local
-   order by `exchange_order_id`, then falls back to the event payload's
-   `client_order_id`, which **is** written before submission (and is uniquely
-   constrained). The ack transition then persists the venue id, so all later
-   events resolve by either key. Event delivery no longer depends on when the
-   event happened to be dequeued — the race is removed, not narrowed.
-2. **No silent loss.** An event that resolves to no local order now sets engine
-   health and writes an `EXCHANGE_EVENT_UNMATCHED` audit record instead of
-   returning invisibly.
-3. **No invisible failures.** `_event_loop` records an `EXCHANGE_EVENT_FAILED`
-   audit event (event type, ids, error type) in addition to flipping health, so
-   a failed fill/ack/cancel can never again be lost without a durable trace.
-4. **Dead code removed.** `_apply_exchange_order_fill` was deleted; it implied a
+1. **Durable-identity fallback, with validated binding.**
+   `process_exchange_event` resolves the local order by `exchange_order_id`, then
+   falls back to the event payload's `client_order_id`, which **is** written
+   before submission (and is uniquely constrained). The ack transition then
+   persists the venue id, so all later events resolve by either key. Event
+   delivery no longer depends on when the event happened to be dequeued — the
+   race is removed, not narrowed.
+   The binding is **validated, never assumed**: a local row that already carries
+   a *different* venue order id belongs to a different order, so the event is
+   refused and audited as `EXCHANGE_EVENT_ID_MISMATCH` rather than applied.
+   Without that guard the fallback would have traded "drop the event" for
+   "misapply it" — a misrouted or replayed event could rewrite a real order's
+   fills and venue identity.
+2. **No silent loss.** An event that resolves to no local order writes an
+   `EXCHANGE_EVENT_UNMATCHED` (or `EXCHANGE_EVENT_ID_MISMATCH`) audit record
+   instead of returning invisibly. This is deliberately **not** a health fault:
+   the consumer is working, and one foreign/replayed event is not a component
+   failure.
+3. **No invisible failures, and no latched health.** `_event_loop` records an
+   `EXCHANGE_EVENT_FAILED` audit event (event type, ids, error type) in addition
+   to flipping health, and the next successfully processed event clears
+   `event_processing` again. Before this, a single failed event would have pinned
+   engine health for the life of the process, because `HealthRegistry.overall()`
+   is an AND over every component.
+4. **Account-scoped events are reachable.** `BALANCE_UPDATE` is now handled
+   before the order-identity requirement. It carries no exchange order id, so as
+   written the branch was unreachable.
+5. **Dead code removed.** `_apply_exchange_order_fill` was deleted; it implied a
    catch-up that never ran.
 
 Explicitly **not** done: no timeout was increased, no assertion relaxed, no
@@ -188,9 +220,16 @@ untouched.
 | L10 | repeated runs produce an identical final state |
 | L11 | a prior lifecycle on the same database does not change the next one |
 | L12 | the clock boundary exactly at TIME_STOP is deterministic |
+| L13 | an event bound to another venue order is refused, not applied |
+| L14 | an anomaly is audited; a real processing failure marks health unhealthy and the next good event recovers it |
+| L15 | account-scoped balance updates (no order id) are reachable |
 
 L1 is the direct root-cause regression: it failed 100 % of the time before the
-fix and passes 100 % after.
+fix (20/20 on the unfixed base) and passes 100 % after (100/100). L1 also asserts
+that a settled entry leaves **zero** `EXCHANGE_EVENT_UNMATCHED` /
+`EXCHANGE_EVENT_ID_MISMATCH` / `EXCHANGE_EVENT_FAILED` records, so a silently
+tolerated event cannot pass. L13–L15 close the defects found when the first
+revision of this fix was independently reviewed.
 
 ## 7. Stress result
 
@@ -219,5 +258,10 @@ order-varied runs x20, full suite x5). Instrumented runs after the fix show
    silence. If audit volume ever becomes a problem, the right fix is bounded
    aggregation (`health` already carries the current state), not removing the
    record.
-4. **Auto scale-in remains disabled.** `OpenAction.ADD` is still refused
+4. **A live adapter still has to be wired.** No live adapter in this revision
+   emits routable normalized order events, so the engine fix is a precondition
+   for going live rather than a fix to a running live path. That wiring must
+   demonstrate the identity contract (durable `client_order_id` on every order
+   event) when it happens.
+5. **Auto scale-in remains disabled.** `OpenAction.ADD` is still refused
    (`LIVE_LLM_POSITION_ADD_REFUSED`); nothing in this change enables it.
