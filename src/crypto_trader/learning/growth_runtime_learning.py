@@ -12,7 +12,7 @@ insufficient evidence, no reusable knowledge is published.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -41,8 +41,10 @@ from crypto_trader.learning.growth_review import (
     StructuredReviewService,
 )
 from crypto_trader.learning.growth_review_evidence import (
+    CausalEvidenceUnavailable,
     GrowthReviewEvidence,
     GrowthReviewEvidenceLoader,
+    validate_causal_evidence_refs,
 )
 from crypto_trader.learning.growth_v2_contracts import (
     SHARE_SCOPE_ACCOUNT_MODE,
@@ -261,6 +263,56 @@ def _future_rule_scope(item) -> dict:
     return scope
 
 
+
+def _prepare_publication_attempt(
+    attempt: ReviewAttempt,
+    *,
+    evidence: GrowthReviewEvidence,
+) -> tuple[ReviewAttempt | None, list[str]]:
+    """Return a publication-safe deep copy and explicit blocked reasons."""
+    if attempt.review is None:
+        return None, []
+    review = attempt.review
+    safe_lessons = []
+    blocked: list[str] = []
+    for lesson in review.testable_lessons:
+        try:
+            validate_causal_evidence_refs(evidence, list(lesson.evidence_refs))
+            if lesson.contrary_refs:
+                validate_causal_evidence_refs(evidence, list(lesson.contrary_refs))
+        except CausalEvidenceUnavailable as exc:
+            blocked.append(
+                f"CAUSAL_EVIDENCE_BLOCKED:{review.episode_id}:{exc}"
+            )
+            continue
+        safe_lessons.append(lesson.model_copy(deep=True))
+    for item in review.future_rules:
+        try:
+            validate_causal_evidence_refs(evidence, list(item.evidence_refs))
+        except CausalEvidenceUnavailable as exc:
+            blocked.append(
+                f"CAUSAL_EVIDENCE_BLOCKED:{review.episode_id}:{exc}"
+            )
+            continue
+        safe_lessons.append(
+            TestableLesson(
+                statement=item.statement,
+                testable_prediction=item.statement,
+                scope=_future_rule_scope(item),
+                evidence_refs=list(item.evidence_refs),
+                contrary_refs=[],
+                uncertainty="FUTURE_RULE",
+                confidence=item.confidence,
+            )
+        )
+    if not safe_lessons:
+        return None, blocked
+    publication_review = review.model_copy(deep=True)
+    publication_review.testable_lessons = safe_lessons
+    return replace(attempt, review=publication_review), blocked
+
+
+
 class GrowthRuntimeLearningService:
     """One canonical runtime learning authority (Daily Review path only)."""
 
@@ -316,6 +368,7 @@ class GrowthRuntimeLearningService:
             return report
 
         attempts: list[ReviewAttempt] = []
+        evidence_by_episode: dict[str, GrowthReviewEvidence] = {}
         bindings: dict[str, EpisodeBinding] = {}
         succeeded: list[ReviewAttempt] = []
         for episode in episodes:
@@ -339,6 +392,7 @@ class GrowthRuntimeLearningService:
                     mode=self.mode,
                     currency=self.currency,
                 )
+                evidence_by_episode[episode.episode_id] = evidence
             except Exception as exc:
                 report.errors.append(type(exc).__name__)
                 continue
@@ -363,22 +417,7 @@ class GrowthRuntimeLearningService:
             succeeded.append(attempt)
             review = attempt.review
             report.structured_reviews_created += 1
-            if any(lesson.evidence_refs for lesson in review.testable_lessons):
-                report.reviews_with_causal_lessons += 1
-            if review.future_rules:
-                report.reviews_with_future_rules += 1
-                review.testable_lessons.extend(
-                    TestableLesson(
-                        statement=item.statement,
-                        testable_prediction=item.statement,
-                        scope=_future_rule_scope(item),
-                        evidence_refs=list(item.evidence_refs),
-                        contrary_refs=list(item.counter_conditions or []),
-                        uncertainty="FUTURE_RULE",
-                        confidence=item.confidence,
-                    )
-                    for item in review.future_rules
-                )
+            report.reviews_with_future_rules += 1 if review.future_rules else 0
             await self._persist_audit_learning(attempt)
 
         if not succeeded:
@@ -391,12 +430,31 @@ class GrowthRuntimeLearningService:
             )
             return report
 
+        publishable_attempts: list[ReviewAttempt] = []
+        for attempt in succeeded:
+            if attempt.review is None:
+                continue
+            evidence = evidence_by_episode.get(attempt.review.episode_id)
+            if evidence is None:
+                report.errors.append("CAUSAL_EVIDENCE_MISSING")
+                continue
+            safe_attempt, blocked = _prepare_publication_attempt(
+                attempt, evidence=evidence
+            )
+            report.errors.extend(blocked)
+            if safe_attempt is not None:
+                publishable_attempts.append(safe_attempt)
+
+        if not publishable_attempts:
+            report.status = "REVIEW_ONLY"
+            return report
+
         # Epistemic time: knowledge becomes known when the review/publish runs,
         # never backdated to the historical episode close time.
         known_at = now or datetime.now(UTC)
         try:
             published = await self.publisher.publish_attempts(
-                succeeded,
+                publishable_attempts,
                 bindings=bindings,
                 known_at=known_at,
                 claim_context=(review_date, claim_token, owner),
@@ -409,7 +467,11 @@ class GrowthRuntimeLearningService:
         report.patterns_created = int(published.get("published_count", 0))
 
         cards, retrievable, patterns = await self._materialize_cards(
-            episode_ids={attempt.review.episode_id for attempt in succeeded if attempt.review},
+            episode_ids={
+                attempt.review.episode_id
+                for attempt in publishable_attempts
+                if attempt.review
+            },
             known_at=known_at,
             fence=fence,
         )
