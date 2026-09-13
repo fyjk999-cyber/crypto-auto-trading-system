@@ -132,7 +132,6 @@ def test_market_endpoints_honor_requested_canonical_symbol(database):
 
 async def test_real_market_adapter_does_not_silent_fallback():
     class FailingOKX:
-<<<<<<< Updated upstream
         def __getattr__(self, name):
             if name == "disconnect":
 
@@ -145,19 +144,6 @@ async def test_real_market_adapter_does_not_silent_fallback():
                 raise OKXDiagnosticError("NETWORK_ERROR", "OKX unavailable")
 
             return unavailable
-=======
-        async def get_orderbook(self, symbol):
-            raise OKXDiagnosticError("NETWORK_ERROR", "OKX unavailable")
-
-        async def get_mark_price(self, symbol):
-            raise OKXDiagnosticError("NETWORK_ERROR", "OKX unavailable")
-
-        async def get_open_interest(self, symbol):
-            raise OKXDiagnosticError("NETWORK_ERROR", "OKX unavailable")
-
-        async def disconnect(self):
-            return None
->>>>>>> Stashed changes
 
     adapter = PaperRealMarketAdapter(
         initial_balances={"USDT": Decimal("100000")},

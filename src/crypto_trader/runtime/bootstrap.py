@@ -7,7 +7,6 @@ Test/API/CLI must not each assemble a different core. They should call
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -16,15 +15,11 @@ from crypto_trader.alpha.ensemble import MultiStrategyAlpha
 from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
-from crypto_trader.domain.enums import OrderSide
-from crypto_trader.domain.identifiers import new_id
-from crypto_trader.domain.models import SignalIntent
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
-<<<<<<< Updated upstream
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
 from crypto_trader.llm.tools.factor_runtime import register_factor_runtime_tools
@@ -52,12 +47,6 @@ from crypto_trader.market_data.opportunity.service import (
 )
 from crypto_trader.market_data.opportunity.state_store import ScannerStateStore
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
-=======
-from crypto_trader.llm_chief.engine import ChiefTraderEngine
-from crypto_trader.llm_chief.provider import DeepSeekProvider
-from crypto_trader.llm_chief.strategy import LiveLLMStrategy
-from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
->>>>>>> Stashed changes
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -71,19 +60,14 @@ from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
-from crypto_trader.runtime.ai_position_bridge import AIPositionRuntimeBridge
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
-from crypto_trader.runtime.supervisor import TradingRuntimeSupervisor
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.dummy import DummyStrategy
 from crypto_trader.trade_plan.service import TradePlanService
-<<<<<<< Updated upstream
 from crypto_trader.valuation.service import ValuationService
-=======
->>>>>>> Stashed changes
 
 
 @dataclass
@@ -101,12 +85,7 @@ class RuntimeBundle:
     adapter: SimulatedExchangeAdapter
     alpha: MultiStrategyAlpha
     engine: TradingEngine
-<<<<<<< Updated upstream
     position_manager: LiveLLMPositionManager | None
-=======
-    ai_position_bridge: AIPositionRuntimeBridge
-    supervisor: TradingRuntimeSupervisor
->>>>>>> Stashed changes
     app_state: AppState
 
 
@@ -148,7 +127,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         max_position_notional="5000",
         max_leverage="3",
     )
-<<<<<<< Updated upstream
     if isinstance(adapter, PaperRealMarketAdapter):
         # Quant remains evidence-only. Seed it with bounded, factual, closed
         # OKX candles so a process restart does not erase indicator context.
@@ -327,17 +305,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         if settings.auto_start_runtime
         else None
     )
-=======
-    strategies = [alpha] if settings.auto_start_runtime else [DummyStrategy()]
-    if settings.auto_start_runtime:
-        strategies.append(
-            LiveLLMStrategy(
-                chief=ChiefTraderEngine(provider=DeepSeekProvider()),
-                planner=LiveLLMTradePlanner(TradePlanService(database.session_factory)),
-                audit=audit,
-            )
-        )
->>>>>>> Stashed changes
 
     engine = TradingEngine(
         evidence_router=evidence_router,
@@ -378,56 +345,6 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         market_selection_interval_seconds=settings.market_selection_loop_interval_seconds,
     )
 
-    # The bridge is deliberately a single bootstrap-owned instance.  Its
-    # callback only creates SignalIntent objects and always delegates order
-    # handling to TradingEngine.process_signal().
-    ai_position_bridge = AIPositionRuntimeBridge()
-
-    async def evaluate_active_positions() -> None:
-        positions = await portfolio.get_positions()
-        for symbol, position in positions.items():
-            if position.quantity == 0:
-                continue
-            book = market_data.books.get(symbol)
-            price = book.mid_price() if book is not None else position.avg_entry_price
-            current_price = price or Decimal("0")
-            age_seconds = (
-                (datetime.now(UTC) - position.updated_at).total_seconds()
-                if position.updated_at is not None
-                else 0.0
-            )
-            evaluation = ai_position_bridge.evaluate(
-                symbol=symbol,
-                active_position={
-                    "quantity": float(abs(position.quantity)),
-                    "side": "LONG" if position.quantity > 0 else "SHORT",
-                    "entry_price": float(position.avg_entry_price or 0),
-                    "current_price": float(current_price),
-                    "realized_pnl": float(position.realized_pnl),
-                    "age_seconds": age_seconds,
-                    "thesis_status": "THESIS_INTACT",
-                },
-            )
-            if not evaluation.executable or evaluation.action not in {"ADD", "REDUCE", "EXIT"}:
-                continue
-            signal = SignalIntent(
-                signal_id=new_id("ai_position"),
-                strategy_id="ai_position_runtime",
-                symbol=symbol,
-                side=OrderSide(evaluation.side),
-                quantity=Decimal(str(evaluation.quantity)),
-                reason=evaluation.reason,
-                metadata={"action": evaluation.action, "reduce_only": evaluation.reduce_only},
-            )
-            await engine.process_signal(signal)
-
-    supervisor = TradingRuntimeSupervisor(
-        lease_manager=leases,
-        lease_key="crypto_ai_position_runtime",
-        ai_position_callback=evaluate_active_positions,
-        ai_position_interval_seconds=settings.engine_tick_seconds,
-    )
-
     app_state = AppState(
         settings=settings,
         database=database,
@@ -440,16 +357,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         leases=leases,
         reconciliation=reconciliation,
         engine=engine,
-<<<<<<< Updated upstream
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
         opportunity_board=opportunity_board,
         model_control=model_control,
         market_selection_service=market_selection_service,
         llm_budget=llm_budget,
         market_directory=market_directory,
-=======
-        supervisor=supervisor,
->>>>>>> Stashed changes
     )
     return RuntimeBundle(
         settings=settings,
@@ -465,12 +378,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         adapter=adapter,
         alpha=alpha,
         engine=engine,
-<<<<<<< Updated upstream
         position_manager=position_manager,
-=======
-        ai_position_bridge=ai_position_bridge,
-        supervisor=supervisor,
->>>>>>> Stashed changes
         app_state=app_state,
     )
 
