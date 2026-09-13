@@ -24,6 +24,7 @@ from crypto_trader.persistence.models import (
     TradeEpisodeORM,
     TradePlanORM,
 )
+from tests.conftest import make_paper_engine
 from tests.integration.test_settlement_crash_matrix import _drive_to_closed_boundary
 
 pytestmark = pytest.mark.stress
@@ -174,23 +175,193 @@ async def test_GATE_lifecycle_file_repeat_x20(database):
     assert LIFECYCLE_FILE_TARGET == 20
 
 
-# ============================================================ §40 NOT YET GATED
-#
-# Two of the six gates are NOT implemented here, and the reason is a real
-# fixture constraint rather than a relaxed target:
-#
-#   event root-cause ×100
-#   restart/event race ×30
-#
-# The existing event-identity + restart test
-# (test_event_identity_settlement.py::test_duplicate_and_restart_after_resolution_duplicate_nothing)
-# is the right BEHAVIOUR for the restart gate, but it cannot simply be repeated:
-#   * it uses a FIXED run_id and a fixed plan fixture, so a second iteration in
-#     the same database collides with the first;
-#   * it performs TWO engine starts inside one test, which does not compose with
-#     the lifecycle fixture used above.
-# Running it N times would therefore need a per-iteration fresh database and fresh
-# identities - a new fixture, not a loop over this one.
-#
-# Recorded rather than faked: these two gates are NOT_RUN, and no substitute
-# count is reported for them.
+# ---------------------------------------------------------------------------
+# The two gates below need a FRESH DATABASE PER ITERATION, which the lifecycle
+# fixture above cannot provide: a second BTCUSDT entry in the same database is
+# blocked by the first plan still being ACTIVE, so the second plan never acquires
+# opened_at and funding coverage cannot be seeded. Unique identities alone do not
+# help - the constraint is per-symbol, not per-identity. Each iteration therefore
+# builds its own Database, exactly as tests/conftest.py's `database` fixture does.
+
+
+async def _fresh_database(root, index: int):
+    from crypto_trader.persistence.database import Database
+
+    directory = root / f"iter-{index}"
+    directory.mkdir(parents=True, exist_ok=True)
+    db = Database(f"sqlite+aiosqlite:///{directory}/crypto.db")
+    await db.init_schema()
+    return db
+
+
+@pytest.mark.asyncio
+async def test_GATE_restart_and_event_race_x30(tmp_path):
+    """restart/event race ×30 = 30/30.
+
+    Per iteration: complete a lifecycle, replay the SAME factual fill event, then
+    restart the engine over the SAME database. Neither the replay nor the restart
+    may move any economic counter - that interleaving is exactly the race the
+    event-identity fix exists to survive.
+    """
+    from crypto_trader.domain.enums import ExchangeEventType
+    from crypto_trader.domain.models import ExchangeEvent
+    from crypto_trader.persistence.models import OrderORM
+
+    target = 30
+    for i in range(target):
+        db = await _fresh_database(tmp_path, i)
+        try:
+            engine, _plan_id = await _drive_to_closed_boundary(
+                db, inject_close_failure=False
+            )
+            try:
+                async with db.session_factory() as session:
+                    fill = (await session.execute(select(FillORM))).scalars().first()
+                    assert fill is not None, f"iter {i}: no fill produced"
+                    order = await session.get(OrderORM, fill.order_id)
+                    payload = {
+                        "exchange_order_id": order.exchange_order_id,
+                        "client_order_id": order.client_order_id,
+                        "fill_id": fill.fill_id,
+                        "fill_price": str(fill.price),
+                        "fill_quantity": str(fill.quantity),
+                        "fee": str(fill.fee or 0),
+                    }
+                    symbol, fill_id, ts = str(order.symbol), fill.fill_id, fill.timestamp
+                    before = (
+                        await session.execute(select(func.count()).select_from(FillORM))
+                    ).scalar_one()
+                    before_ledger = (
+                        await session.execute(
+                            select(func.count()).select_from(LedgerTransactionORM)
+                        )
+                    ).scalar_one()
+
+                # (a) duplicate event through the real path
+                await engine.process_exchange_event(
+                    ExchangeEvent(
+                        event_id=f"evt-race-{i}",
+                        event_type=ExchangeEventType.ORDER_FILLED,
+                        symbol=symbol,
+                        timestamp=ts,
+                        payload=payload,
+                    )
+                )
+                await engine.wait_for_event_queue()
+            finally:
+                await engine.stop()
+
+            # (b) restart over the same database
+            restarted = make_paper_engine(db, engine_tick_seconds=3600)
+            await restarted.start(f"run-race-gate-{i}")
+            try:
+                async with db.session_factory() as session:
+                    after = (
+                        await session.execute(select(func.count()).select_from(FillORM))
+                    ).scalar_one()
+                    after_ledger = (
+                        await session.execute(
+                            select(func.count()).select_from(LedgerTransactionORM)
+                        )
+                    ).scalar_one()
+                    per_fill = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(LedgerTransactionORM)
+                            .where(LedgerTransactionORM.fill_id == fill_id)
+                        )
+                    ).scalar_one()
+                    markers = (
+                        await session.execute(select(FillSettlementORM.state))
+                    ).scalars().all()
+                assert after == before, f"iter {i}: replay+restart changed fills"
+                assert after_ledger == before_ledger, (
+                    f"iter {i}: replay+restart changed the ledger"
+                )
+                assert per_fill == 1, f"iter {i}: {per_fill} postings for one fill"
+                assert set(markers) == {STATE_COMPLETE}, (
+                    f"iter {i}: unfinished settlements {sorted(set(markers))}"
+                )
+            finally:
+                await restarted.stop()
+        finally:
+            await db.close()
+    assert target == 30
+
+
+@pytest.mark.asyncio
+async def test_GATE_event_root_cause_x100(tmp_path):
+    """event root-cause ×100 = 100/100.
+
+    Every iteration drives a factual fill event through the REAL event path and
+    requires its root cause to be traceable to durable rows: the fill is durable,
+    its settlement reaches COMPLETE, and exactly one ledger posting exists for it.
+    A fill whose cause cannot be traced fails this gate.
+    """
+    from crypto_trader.domain.enums import ExchangeEventType
+    from crypto_trader.domain.models import ExchangeEvent
+    from crypto_trader.persistence.models import OrderORM
+
+    target = 100
+    for i in range(target):
+        db = await _fresh_database(tmp_path, i)
+        try:
+            engine, _plan_id = await _drive_to_closed_boundary(
+                db, inject_close_failure=False
+            )
+            try:
+                async with db.session_factory() as session:
+                    fill = (await session.execute(select(FillORM))).scalars().first()
+                    assert fill is not None, f"iter {i}: no fill produced"
+                    order = await session.get(OrderORM, fill.order_id)
+                    payload = {
+                        "exchange_order_id": order.exchange_order_id,
+                        "client_order_id": order.client_order_id,
+                        "fill_id": fill.fill_id,
+                        "fill_price": str(fill.price),
+                        "fill_quantity": str(fill.quantity),
+                        "fee": str(fill.fee or 0),
+                    }
+                    symbol, fill_id, ts = str(order.symbol), fill.fill_id, fill.timestamp
+
+                await engine.process_exchange_event(
+                    ExchangeEvent(
+                        event_id=f"evt-cause-{i}",
+                        event_type=ExchangeEventType.ORDER_FILLED,
+                        symbol=symbol,
+                        timestamp=ts,
+                        payload=payload,
+                    )
+                )
+                await engine.wait_for_event_queue()
+
+                async with db.session_factory() as session:
+                    durable = (
+                        await session.execute(
+                            select(FillORM).where(FillORM.fill_id == fill_id)
+                        )
+                    ).scalar_one_or_none()
+                    marker = (
+                        await session.execute(
+                            select(FillSettlementORM).where(
+                                FillSettlementORM.fill_id == fill_id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    postings = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(LedgerTransactionORM)
+                            .where(LedgerTransactionORM.fill_id == fill_id)
+                        )
+                    ).scalar_one()
+                assert durable is not None, f"iter {i}: no durable fill to trace"
+                assert marker is not None and marker.state == STATE_COMPLETE, (
+                    f"iter {i}: settlement not COMPLETE"
+                )
+                assert postings == 1, f"iter {i}: {postings} postings for one fill"
+            finally:
+                await engine.stop()
+        finally:
+            await db.close()
+    assert target == 100

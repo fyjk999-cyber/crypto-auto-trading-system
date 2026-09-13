@@ -37,6 +37,10 @@ dev = [
 packages = ["src/crypto_trader"]
 
 [tool.pytest.ini_options]
+# The §40 stress gates are repeated-run gates; they are selected explicitly
+# with `-m stress`. Excluding them from the default run keeps the ordinary
+# suite fast without hiding them.
+addopts = "-m 'not stress'"
 asyncio_mode = "auto"
 pythonpath = ["src", "."]
 testpaths = ["tests"]
