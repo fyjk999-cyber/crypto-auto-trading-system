@@ -1,17 +1,18 @@
 """Mission A: F6 causal evidence availability contract."""
 from __future__ import annotations
+
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
+from crypto_trader.governance.trade_episode import FactualTradeEpisode
 from crypto_trader.learning.growth_review_evidence import (
     CausalEvidenceUnavailable,
     GrowthReviewEvidence,
     validate_causal_evidence_refs,
 )
 from crypto_trader.learning.growth_runtime_learning import _episode_review_input
-from crypto_trader.governance.trade_episode import FactualTradeEpisode
 
 
 def _evidence(**kw):
