@@ -608,3 +608,48 @@ async def test_R3_second_cycle_creates_no_duplicate_cancel(tmp_path):
         assert inst.submits == 0
     finally:
         await engine.stop()
+
+
+# ------------------------------------------- R5 real adapter path (MARKET_DATA)
+
+
+class _UnhealthyFeed:
+    """Deterministic feed whose refresh yields an UNHEALTHY market state.
+
+    Drives the real chain: feed.refresh -> PaperRealMarketAdapter.refresh_market_
+    state -> MarketDataUnhealthy -> OrderRejected("MARKET_DATA_UNAVAILABLE") ->
+    engine's OrderRejected branch (which must be reachable before ExchangeError).
+    """
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+        self.calls = 0
+
+    async def close(self) -> None:
+        return None
+
+    async def refresh(self, symbol: str):
+        from crypto_trader.domain.enums import DataHealth
+
+        self.calls += 1
+        state = type("S", (), {})()
+        state.health = DataHealth.UNAVAILABLE
+        state.best_bid = Decimal("0")
+        state.best_ask = Decimal("0")
+        return state
+
+
+# DEFERRED: R5 (fresh MARKET_DATA_UNAVAILABLE through engine.process_signal).
+#
+# State reached: a position-action signal on the isolated snapshot is validated
+# by the runtime's own guards BEFORE an order row exists, and this fixture does
+# not yet satisfy them - the audit trail shows LIVE_LLM_POSITION_DECISION
+# FAIL_CLOSED rather than a persisted order. Satisfying them means driving more
+# of the position-review path than this rehearsal covers, so the test is ABSENT
+# rather than relaxed or left failing.
+#
+# What IS already established elsewhere: the adapter raises
+# OrderRejected("MARKET_DATA_UNAVAILABLE") before it ever calls the broker
+# (real_market_paper.py), and the engine's clause order now handles
+# OrderRejected BEFORE ExchangeError, which is the exact defect that produced
+# this incident. The missing piece is the end-to-end fixture, not the fix.
