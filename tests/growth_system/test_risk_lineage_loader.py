@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from crypto_trader.learning.growth_review_evidence import GrowthReviewEvidenceLoader
+from crypto_trader.learning.growth_review_evidence import (
+    GrowthReviewEvidence,
+    GrowthReviewEvidenceLoader,
+)
 
 
 class _Scalars:
@@ -156,3 +159,36 @@ async def test_weighted_price_complete_lineage():
     )
     assert ev.execution_availability == "AVAILABLE"
     assert str(ev.weighted_entry_price) == "175"
+
+
+async def test_exit_01_factual_terminal_available():
+    ep = _episode([])
+    ep.terminal_reason = "STOP_LOSS"
+    ep.exit_decision_id = None
+    factory = _Factory([[], []])
+    ev = await GrowthReviewEvidenceLoader(factory).load(ep)
+    assert ev.exit_availability == "AVAILABLE"
+    assert ev.exit_reason == "STOP_LOSS"
+    assert ev.exit_decision_id is None
+
+
+async def test_exit_02_empty_terminal_unavailable():
+    ep = _episode([])
+    ep.terminal_reason = ""
+    factory = _Factory([[], []])
+    ev = await GrowthReviewEvidenceLoader(factory).load(ep)
+    assert ev.exit_availability == "UNAVAILABLE"
+    assert ev.exit_reason == "UNKNOWN"
+    assert "EXIT" in ev.missing_evidence
+
+
+def test_exit_03_invariant():
+    ev = GrowthReviewEvidence(
+        episode_id="ep", exit_availability="AVAILABLE", exit_reason="UNKNOWN"
+    )
+    try:
+        ev.validate_availability()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("AVAILABLE exit with UNKNOWN reason must fail")

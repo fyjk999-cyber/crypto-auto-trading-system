@@ -127,6 +127,11 @@ class GrowthReviewEvidence:
             raise ValueError(
                 "CONTRADICTORY_AVAILABILITY:execution_availability"
             )
+        if (
+            self.exit_availability == EvidenceAvailability.AVAILABLE
+            and str(self.exit_reason or "").strip() in {"", MISSING}
+        ):
+            raise ValueError("CONTRADICTORY_AVAILABILITY:exit_availability")
         for availability_field, value_field in (
             ("factor_snapshot_availability", "factor_snapshot"),
             ("sizing_availability", "sizing_final_quantity"),
@@ -173,7 +178,7 @@ class GrowthReviewEvidenceLoader:
             order_ids=_episode_ids(episode, "order_ids", "order_ids_json"),
             fill_ids=_episode_ids(episode, "fill_ids", "fill_ids_json"),
             exit_decision_id=episode.exit_decision_id,
-            exit_reason=episode.terminal_reason or MISSING,
+            exit_reason=MISSING,
             holding_seconds=episode.holding_time_seconds,
             gross_pnl=episode.gross_pnl,
             fees=episode.fees,
@@ -182,6 +187,15 @@ class GrowthReviewEvidenceLoader:
             known_at=(now or datetime.now(UTC)).isoformat(),
             reviewed_at=(now or datetime.now(UTC)).isoformat(),
         )
+        terminal_reason = str(getattr(episode, "terminal_reason", None) or "").strip()
+        if terminal_reason:
+            evidence.exit_availability = EvidenceAvailability.AVAILABLE
+            evidence.exit_reason = terminal_reason
+        else:
+            evidence.exit_availability = EvidenceAvailability.UNAVAILABLE
+            evidence.exit_reason = MISSING
+            if "EXIT" not in evidence.missing_evidence:
+                evidence.missing_evidence.append("EXIT")
         async with self.session_factory() as session:
             if episode.entry_decision_id:
                 decision = await session.get(
@@ -298,6 +312,7 @@ class GrowthReviewEvidenceLoader:
         ):
             if getattr(evidence, name) is MISSING:
                 evidence.missing_evidence.append(name.upper())
+        evidence.validate_availability()
         return evidence
 
 
