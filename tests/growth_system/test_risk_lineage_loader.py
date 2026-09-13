@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
+
 from crypto_trader.learning.growth_review_evidence import GrowthReviewEvidenceLoader
 
 
@@ -78,8 +80,79 @@ async def test_risk_02_partial_resolution_fails_closed():
 
 
 async def test_risk_03_empty_lineage_unavailable():
-    factory = _Factory([[], [], []])
+    factory = _Factory([[], []])
     ev = await GrowthReviewEvidenceLoader(factory).load(_episode([]))
     assert ev.risk_availability == "UNAVAILABLE"
     assert ev.risk_decision_ids == []
     assert ev.risk_decision_id is None
+
+
+def _exec_episode(order_ids, fill_ids):
+    ep = _episode([])
+    ep.order_ids, ep.fill_ids = order_ids, fill_ids
+    return ep
+
+
+def _order(oid): return SimpleNamespace(internal_order_id=oid)
+def _fill(fid, price="100", quantity="1"):
+    return SimpleNamespace(fill_id=fid, price=price, quantity=quantity)
+
+
+async def test_exec_01_order_preserved_when_db_reversed():
+    factory = _Factory([[_order("order-1"), _order("order-2")],
+                        [_fill("fill-1"), _fill("fill-2")]])
+    ev = await GrowthReviewEvidenceLoader(factory).load(
+        _exec_episode(["order-2", "order-1"], ["fill-2", "fill-1"])
+    )
+    assert ev.execution_availability == "AVAILABLE"
+    assert ev.order_ids == ["order-2", "order-1"]
+    assert ev.fill_ids == ["fill-2", "fill-1"]
+
+
+async def test_exec_02_partial_order_fail_closed():
+    factory = _Factory([[_order("order-1")], [_fill("fill-1")]])
+    ev = await GrowthReviewEvidenceLoader(factory).load(
+        _exec_episode(["order-1", "order-2"], ["fill-1"])
+    )
+    assert ev.execution_availability == "UNAVAILABLE"
+    assert "ORDERS_FILLS" in ev.missing_evidence
+    assert ev.weighted_entry_price == "UNKNOWN"
+
+
+async def test_exec_03_partial_fill_fail_closed():
+    factory = _Factory([[_order("order-1")], [_fill("fill-1")]])
+    ev = await GrowthReviewEvidenceLoader(factory).load(
+        _exec_episode(["order-1"], ["fill-1", "fill-2"])
+    )
+    assert ev.execution_availability == "UNAVAILABLE"
+
+
+@pytest.mark.parametrize("order_ids,fill_ids", [([], ["f1"]), (["o1"], [])])
+async def test_exec_04_empty_lineage(order_ids, fill_ids):
+    factory = _Factory([[], []])
+    ev = await GrowthReviewEvidenceLoader(factory).load(
+        _exec_episode(order_ids, fill_ids)
+    )
+    assert ev.execution_availability == "UNAVAILABLE"
+
+
+@pytest.mark.parametrize(
+    "order_ids,fill_ids",
+    [(["o1", "o1"], ["f1"]), (["o1"], ["f1", "f1"])],
+)
+async def test_exec_05_duplicate_expected_ids_fail_closed(order_ids, fill_ids):
+    factory = _Factory([[_order("o1")], [_fill("f1")]])
+    ev = await GrowthReviewEvidenceLoader(factory).load(
+        _exec_episode(order_ids, fill_ids)
+    )
+    assert ev.execution_availability == "UNAVAILABLE"
+
+
+async def test_weighted_price_complete_lineage():
+    factory = _Factory([[_order("o1"), _order("o2")],
+                        [_fill("f1", "100", "1"), _fill("f2", "200", "3")]])
+    ev = await GrowthReviewEvidenceLoader(factory).load(
+        _exec_episode(["o1", "o2"], ["f1", "f2"])
+    )
+    assert ev.execution_availability == "AVAILABLE"
+    assert str(ev.weighted_entry_price) == "175"

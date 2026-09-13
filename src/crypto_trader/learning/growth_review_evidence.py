@@ -255,6 +255,8 @@ class GrowthReviewEvidenceLoader:
                 bool(expected_order_ids)
                 and bool(expected_fill_ids)
                 and not duplicate
+                and len(expected_order_ids) == len(set(expected_order_ids))
+                and len(expected_fill_ids) == len(set(expected_fill_ids))
                 and all(oid in orders_by_id for oid in expected_order_ids)
                 and all(fid in fills_by_id for fid in expected_fill_ids)
             )
