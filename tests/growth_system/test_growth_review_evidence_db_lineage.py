@@ -4,13 +4,15 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from crypto_trader.learning.growth_review_evidence import GrowthReviewEvidenceLoader
 from crypto_trader.persistence.models import (
     FillORM,
+    LedgerTransactionORM,
     LLMDecisionORM,
     OrderORM,
+    PositionProjectionORM,
     RiskDecisionORM,
     TradeEpisodeORM,
 )
@@ -383,6 +385,16 @@ async def test_f6_20_public_growth_runtime_preserves_db_truth_without_trading_si
             _order("order-f6-runtime-2", 200, 3),
             _fill("fill-f6-runtime-1", "order-f6-runtime-1", 100, 1),
             _fill("fill-f6-runtime-2", "order-f6-runtime-2", 200, 3),
+            _decision("decision-f6-distractor", "OPEN_SHORT",
+                      "F6_RUNTIME_DISTRACTOR_THESIS",
+                      datetime(2026, 9, 9, 11, tzinfo=UTC)),
+            RiskDecisionORM(
+                risk_decision_id="risk-f6-distractor", client_order_id="c-d",
+                symbol="BTCUSDT", side="BUY", decision="REJECTED",
+                reason="F6_RUNTIME_DISTRACTOR_RISK",
+                timestamp=datetime(2026, 9, 9, 11, tzinfo=UTC)),
+            _order("order-f6-distractor", 999, 9),
+            _fill("fill-f6-distractor", "order-f6-distractor", 999, 9),
         ])
         await session.commit()
     episodes = await TradeEpisodeStore(database.session_factory).load_all_closed_on("2026-09-09")
@@ -432,12 +444,30 @@ async def test_f6_20_public_growth_runtime_preserves_db_truth_without_trading_si
         raise AssertionError("PUBLISHER_REACHED")
     monkeypatch.setattr(service.publisher, "publish_attempts", publisher_trap)
 
+    async def table_count(model):
+        async with database.session_factory() as session:
+            return await session.scalar(select(func.count()).select_from(model))
+
+    before_counts = {
+        "orders": await table_count(OrderORM),
+        "fills": await table_count(FillORM),
+        "positions": await table_count(PositionProjectionORM),
+        "ledger": await table_count(LedgerTransactionORM),
+    }
+
     async def fence():
         return True
 
     await service.run([runtime_episode], review_date="2026-09-10",
                       claim_token="f6-20-token", owner="growth-f6-test",
                       fence=fence, now=review_now)
+    after_counts = {
+        "orders": await table_count(OrderORM),
+        "fills": await table_count(FillORM),
+        "positions": await table_count(PositionProjectionORM),
+        "ledger": await table_count(LedgerTransactionORM),
+    }
+    assert after_counts == before_counts
     evidence = captured["evidence"]
     payload = captured["payload"]
     assert len(provider.calls) == 1 and not publisher_calls
@@ -453,6 +483,20 @@ async def test_f6_20_public_growth_runtime_preserves_db_truth_without_trading_si
     assert evidence.fees == Decimal("1.25") and evidence.exit_reason == "TAKE_PROFIT"
     assert evidence.known_at == review_now.isoformat()
     assert all(v == 0 for v in counters.values())
+    assert evidence.decision_id == "decision-f6-runtime"
+    assert evidence.decision_id != "decision-f6-distractor"
+    assert "risk-f6-distractor" not in evidence.risk_decision_ids
+    assert "order-f6-distractor" not in evidence.order_ids
+    assert "fill-f6-distractor" not in evidence.fill_ids
+    assert evidence.weighted_entry_price == Decimal("175")
+    assert evidence.factor_snapshot_availability == "UNAVAILABLE"
+    assert evidence.sizing_availability == "UNAVAILABLE"
+    assert evidence.position_lifecycle_availability == "UNAVAILABLE"
+    assert evidence.mfe_mae_availability == "UNAVAILABLE"
+    assert evidence.slippage_availability == "UNAVAILABLE"
+    for key in ("decision:decision-f6-distractor", "risk:risk-f6-distractor",
+                "order:order-f6-distractor", "fill:fill-f6-distractor"):
+        assert key not in captured["allowed_refs"]
     expected_refs = {
         "episode:ep-f6-runtime", "decision:decision-f6-runtime",
         "risk:risk-f6-runtime-2", "risk:risk-f6-runtime-1",
