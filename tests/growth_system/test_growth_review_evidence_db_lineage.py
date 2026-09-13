@@ -218,6 +218,9 @@ async def test_execution_db_lineage_full_target(database):
         ["order-target-2", "order-target-1"],
         ["fill-target-2", "fill-target-1"],
     )
+    ep.risk_decision_ids_json = [
+        "risk-execution-target-2", "risk-execution-target-1"
+    ]
     decision = _decision("dec-ep-db-execution-target", "OPEN_LONG", "T",
                          datetime(2026, 9, 9, 10, tzinfo=UTC))
     async with database.session_factory() as session:
@@ -226,6 +229,24 @@ async def test_execution_db_lineage_full_target(database):
             _order("order-target-1", 100, 1),
             _order("order-target-2", 200, 3),
             _order("order-distractor", 999, 9),
+            RiskDecisionORM(
+                risk_decision_id="risk-execution-target-1",
+                client_order_id="c1", symbol="BTCUSDT", side="BUY",
+                decision="APPROVED", reason="SECOND_EXECUTION_RISK",
+                timestamp=datetime(2026, 9, 9, 10, tzinfo=UTC),
+            ),
+            RiskDecisionORM(
+                risk_decision_id="risk-execution-target-2",
+                client_order_id="c2", symbol="BTCUSDT", side="BUY",
+                decision="APPROVED", reason="PRIMARY_EXECUTION_RISK",
+                timestamp=datetime(2026, 9, 9, 10, tzinfo=UTC),
+            ),
+            RiskDecisionORM(
+                risk_decision_id="risk-execution-distractor",
+                client_order_id="c3", symbol="BTCUSDT", side="BUY",
+                decision="REJECTED", reason="DISTRACTOR",
+                timestamp=datetime(2026, 9, 9, 11, tzinfo=UTC),
+            ),
             _fill("fill-target-1", "order-target-1", 100, 1),
             _fill("fill-target-2", "order-target-2", 200, 3),
             _fill("fill-distractor", "order-distractor", 999, 9),
@@ -238,6 +259,14 @@ async def test_execution_db_lineage_full_target(database):
     ev = await GrowthReviewEvidenceLoader(database.session_factory).load(
         reloaded, account_id="default", mode="PAPER", now=review_now,
     )
+    assert ev.decision_availability == "AVAILABLE"
+    assert ev.risk_availability == "AVAILABLE"
+    assert ev.risk_decision_ids == [
+        "risk-execution-target-2", "risk-execution-target-1"
+    ]
+    assert ev.risk_decision_id == "risk-execution-target-2"
+    assert ev.risk_reason_codes == ["PRIMARY_EXECUTION_RISK"]
+    assert "risk-execution-distractor" not in ev.risk_decision_ids
     assert ev.execution_availability == "AVAILABLE"
     assert ev.order_ids == ["order-target-2", "order-target-1"]
     assert ev.fill_ids == ["fill-target-2", "fill-target-1"]
@@ -248,6 +277,11 @@ async def test_execution_db_lineage_full_target(database):
     assert ev.exit_reason == "TAKE_PROFIT"
     assert ev.fees == Decimal("1.25") and ev.net_pnl == Decimal("38.35")
     assert ev.known_at == review_now.isoformat()
+    assert ev.factor_snapshot_availability == "UNAVAILABLE"
+    assert ev.sizing_availability == "UNAVAILABLE"
+    assert ev.position_lifecycle_availability == "UNAVAILABLE"
+    assert ev.mfe_mae_availability == "UNAVAILABLE"
+    assert ev.slippage_availability == "UNAVAILABLE"
     ev.validate_availability()
 
 
@@ -267,6 +301,37 @@ async def test_execution_db_partial_and_duplicates_fail_closed(database):
         await session.commit()
     loader = GrowthReviewEvidenceLoader(database.session_factory)
     for eid in ("ep-db-order-partial", "ep-db-order-dup"):
+        async with database.session_factory() as session:
+            row = (await session.execute(select(TradeEpisodeORM).where(
+                TradeEpisodeORM.episode_id == eid))).scalar_one()
+        ev = await loader.load(row, account_id="default", mode="PAPER")
+        assert ev.execution_availability == "UNAVAILABLE"
+        assert ev.weighted_entry_price == "UNKNOWN"
+        assert "ORDERS_FILLS" in ev.missing_evidence
+        ev.validate_availability()
+
+
+
+async def test_execution_db_partial_and_duplicate_fill_fail_closed(database):
+    partial = _exec_episode(
+        "ep-db-fill-partial", ["order-fill-partial"],
+        ["fill-present-2", "fill-missing"],
+    )
+    duplicate = _exec_episode(
+        "ep-db-fill-duplicate", ["order-fill-duplicate"],
+        ["fill-dup-db", "fill-dup-db"],
+    )
+    async with database.session_factory() as session:
+        session.add_all([
+            partial, duplicate,
+            _order("order-fill-partial", 100, 1),
+            _fill("fill-present-2", "order-fill-partial", 100, 1),
+            _order("order-fill-duplicate", 100, 1),
+            _fill("fill-dup-db", "order-fill-duplicate", 100, 1),
+        ])
+        await session.commit()
+    loader = GrowthReviewEvidenceLoader(database.session_factory)
+    for eid in ("ep-db-fill-partial", "ep-db-fill-duplicate"):
         async with database.session_factory() as session:
             row = (await session.execute(select(TradeEpisodeORM).where(
                 TradeEpisodeORM.episode_id == eid))).scalar_one()
