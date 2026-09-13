@@ -166,6 +166,11 @@ async def test_runtime_source_sha_identity_and_run_metadata(database, monkeypatc
     assert snapshot["source_sha"] == "c1-exact-checkout-sha"
     assert snapshot["started_at"]
     assert snapshot["single_writer"] is True
+    assert snapshot["llm_provider"] == {
+        "name": "none", "model": "none", "healthy": False,
+    }
+    assert "market_data" in snapshot
+    assert snapshot["adapter"] == "SimulatedExchangeAdapter"
 
     async with database.session_factory() as session:
         row = await session.get(EngineRunORM, run_id)

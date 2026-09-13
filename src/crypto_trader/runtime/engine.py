@@ -1918,9 +1918,30 @@ class TradingEngine:
     def kill_switch_snapshot(self) -> dict:
         return self.risk_engine.kill_switch.snapshot()
 
+    def _llm_provider_snapshot(self) -> dict:
+        """Read-only health/identity of the configured Chief provider."""
+        for strategy in self.strategies:
+            chief = getattr(strategy, "chief", None)
+            provider = getattr(chief, "provider", None)
+            if provider is None:
+                continue
+            try:
+                healthy = bool(provider.healthy())
+            except Exception:
+                healthy = False
+            return {
+                "name": getattr(provider, "name", "unknown"),
+                "model": getattr(provider, "model", "unknown"),
+                "healthy": healthy,
+            }
+        return {"name": "none", "model": "none", "healthy": False}
+
     def runtime_snapshot(self) -> dict:
         lease = self.lease
         return {
+            "llm_provider": self._llm_provider_snapshot(),
+            "market_data": self.market_data.health(),
+            "adapter": type(self.adapter).__name__,
             "run_id": self.run_id,
             "source_sha": self.source_sha,
             "started_at": (
