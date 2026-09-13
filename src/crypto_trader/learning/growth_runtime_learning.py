@@ -354,25 +354,30 @@ class GrowthRuntimeLearningService:
         bindings: dict[str, EpisodeBinding] = {}
         succeeded: list[ReviewAttempt] = []
         for episode in episodes:
-            evidence = await self.evidence_loader.load(
-                episode,
-                account_id=self.account_id,
-                mode=self.mode,
-                now=now,
-            )
-            payload = _episode_review_input(
-                episode,
-                account_id=self.account_id,
-                mode=self.mode,
-                currency=self.currency,
-                review_evidence=evidence,
-            )
-            bindings[episode.episode_id] = _binding(
-                episode,
-                account_id=self.account_id,
-                mode=self.mode,
-                currency=self.currency,
-            )
+            try:
+                evidence = await self.evidence_loader.load(
+                    episode,
+                    account_id=self.account_id,
+                    mode=self.mode,
+                    now=now,
+                )
+                payload = _episode_review_input(
+                    episode,
+                    account_id=self.account_id,
+                    mode=self.mode,
+                    currency=self.currency,
+                    review_evidence=evidence,
+                )
+                binding = _binding(
+                    episode,
+                    account_id=self.account_id,
+                    mode=self.mode,
+                    currency=self.currency,
+                )
+            except Exception as exc:
+                report.errors.append(type(exc).__name__)
+                continue
+            bindings[episode.episode_id] = binding
             try:
                 attempt = await self.review_service.review(
                     payload,
