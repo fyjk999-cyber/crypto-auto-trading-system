@@ -279,3 +279,193 @@ async def test_C4_after_projection_before_ACTIVE_recovers(database):
 # diagnostic prints remain in production code.
 
 
+
+
+# ============================================================ C5 / C6
+# ROOT CAUSE of the previously-blocked C5/C6 (now resolved, recorded because the
+# earlier "builder never called" note was WRONG): the trade-episode builder
+# returns None unless FUNDING COVERAGE for the plan's window is complete - it
+# refuses to close a lifecycle whose funding cannot be accounted for. The fixture
+# never seeded coverage, so every build returned None and a closed lifecycle ended
+# up with zero episodes. Seeding KNOWN_ZERO coverage for the window (which is
+# literally true here: no funding events occurred) makes the episode build.
+# The earlier diagnosis was invalid because its diagnostic script failed to
+# import and produced no output, which was misread as "no output from the probe".
+
+
+async def _drive_to_closed_boundary(database, *, inject_close_failure: bool):
+    """ENTRY -> ACTIVE -> EXIT, stopping exactly at the close boundary.
+
+    With inject_close_failure=True the plan-close call raises, so the exit fill
+    is durable and the position is zero while the plan is NOT closed - the C5
+    boundary produced by a REAL failure rather than by editing rows.
+    """
+    from decimal import Decimal as _D
+
+    from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+    from tests.integration.test_live_llm_position_lifecycle import (
+        BTC_EXECUTION_METADATA,
+        Evidence,
+        MutableClock,
+        SequencedChief,
+        _seed_known_zero_funding_coverage,
+    )
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-c56")
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-c56",
+        symbol=SYMBOL,
+        action="LONG",
+        market_regime="TREND",
+        thesis="entry",
+        position_size_request=0.1,
+        leverage_request=10,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="c56-v1")
+    from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner as _P
+
+    plan, signal = await _P(plans).create_entry_signal(
+        entry,
+        quantity=_D("0.1"),
+        limit_price=_D("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
+    )
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    # Funding coverage is REQUIRED before a lifecycle can close into an episode.
+    active = await plans.get(plan.trade_plan_id)
+    await _seed_known_zero_funding_coverage(database, active)
+
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief([("EXIT", "0")]),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=0,
+    )
+    if inject_close_failure:
+        async def failing_close(*args, **kwargs):
+            raise RuntimeError("TEST_CRASH_BEFORE_CLOSED")
+
+        engine.trade_plans.close_from_factual_position = failing_close
+    clock.advance()
+    try:
+        await engine.tick()
+    except Exception:
+        pass
+    await engine.wait_for_event_queue()
+    return engine, plan.trade_plan_id
+
+
+@pytest.mark.asyncio
+async def test_C5_exit_zero_before_CLOSED_recovers(database):
+    """C5: exit fill factual, position zero, plan NOT closed -> restart closes it."""
+    engine, plan_id = await _drive_to_closed_boundary(
+        database, inject_close_failure=True
+    )
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan_id)
+            )
+        ).scalar_one()
+        position = (
+            await session.execute(
+                select(PositionProjectionORM).where(PositionProjectionORM.symbol == SYMBOL)
+            )
+        ).scalar_one_or_none()
+    assert position is None or Decimal(str(position.quantity)) == 0, (
+        "the exit must have flattened the position for this boundary"
+    )
+    assert row.state != "CLOSED", "precondition: the plan must not be closed yet"
+    await engine.stop()
+
+    restarted = _engine(database)
+    await restarted.start("run-c5b")
+    try:
+        async with database.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan_id)
+                )
+            ).scalar_one()
+        assert row.state == "CLOSED", (
+            f"restart did not close the plan at the zero boundary, got {row.state}"
+        )
+    finally:
+        await restarted.stop()
+
+
+@pytest.mark.asyncio
+async def test_C6_CLOSED_before_episode_recovers_and_is_idempotent(database):
+    """C6: plan CLOSED, episode absent -> restart materialises exactly one."""
+    from crypto_trader.persistence.models import TradeEpisodeORM
+
+    engine, plan_id = await _drive_to_closed_boundary(
+        database, inject_close_failure=False
+    )
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan_id)
+            )
+        ).scalar_one()
+        episodes = (
+            await session.execute(
+                select(TradeEpisodeORM).where(TradeEpisodeORM.trade_plan_id == plan_id)
+            )
+        ).scalars().all()
+    assert row.state == "CLOSED", "precondition: the lifecycle must close normally"
+    assert len(list(episodes)) == 1, "precondition: a normal close materialises one"
+
+    # Boundary: the process died between CLOSED and episode materialisation.
+    async with database.session_factory() as session:
+        for episode in (
+            await session.execute(
+                select(TradeEpisodeORM).where(TradeEpisodeORM.trade_plan_id == plan_id)
+            )
+        ).scalars().all():
+            await session.delete(episode)
+        await session.commit()
+    await engine.stop()
+
+    first = _engine(database)
+    await first.start("run-c6b")
+    try:
+        async with database.session_factory() as session:
+            episodes = (
+                await session.execute(
+                    select(TradeEpisodeORM).where(TradeEpisodeORM.trade_plan_id == plan_id)
+                )
+            ).scalars().all()
+        assert len(list(episodes)) == 1, (
+            f"restart produced {len(list(episodes))} episodes; exactly one required"
+        )
+        first_id = episodes[0].episode_id
+    finally:
+        await first.stop()
+
+    second = _engine(database)
+    await second.start("run-c6c")
+    try:
+        async with database.session_factory() as session:
+            episodes = (
+                await session.execute(
+                    select(TradeEpisodeORM).where(TradeEpisodeORM.trade_plan_id == plan_id)
+                )
+            ).scalars().all()
+        assert len(list(episodes)) == 1, "the second restart duplicated the episode"
+        assert episodes[0].episode_id == first_id, "the episode identity changed"
+    finally:
+        await second.stop()
