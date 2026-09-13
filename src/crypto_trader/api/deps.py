@@ -160,6 +160,7 @@ class AppState:
     market_selection_service: Any | None = None
     market_directory: Any | None = None
     llm_budget: Any | None = None
+    tool_chief: Any | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
     llm_runtime: LLMRuntimeStatus = field(default_factory=LLMRuntimeStatus)
 

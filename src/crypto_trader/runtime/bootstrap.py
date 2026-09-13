@@ -38,6 +38,10 @@ from crypto_trader.llm_chief.budget import BudgetConfig, GlobalLLMBudget
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.growth_budget import (
+    GrowthBudgetPolicy,
+    load_growth_maturity_facts,
+)
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
@@ -230,12 +234,22 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     llm_provider = DeepSeekProvider()
     # Single logical global model-budget authority (8): created
-    # before the engine so every model call site shares it.
+    # before the engine so every model call site shares it.  The factual
+    # Growth maturity policy can only lower the configured ceiling; it can
+    # never raise it above the operator-configured maximum.
+    growth_policy = GrowthBudgetPolicy()
+    growth_facts = await load_growth_maturity_facts(database.session_factory)
+    growth_recommendation = growth_policy.recommend(growth_facts)
+    effective_budget = min(
+        settings.llm_budget_max_calls_per_window,
+        growth_recommendation.max_calls_per_window,
+    )
     llm_budget = GlobalLLMBudget(
         BudgetConfig(
             window_seconds=settings.llm_budget_window_seconds,
-            max_calls_per_window=settings.llm_budget_max_calls_per_window,
-        )
+            max_calls_per_window=effective_budget,
+        ),
+        growth_stage=growth_recommendation.stage,
     )
     chief = ChiefTraderEngine(provider=llm_provider, budget=llm_budget)
     tools = build_canonical_tool_registry(evidence_router)
@@ -389,6 +403,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         market_selection_service=market_selection_service,
         llm_budget=llm_budget,
         market_directory=market_directory,
+        tool_chief=tool_chief,
     )
     return RuntimeBundle(
         settings=settings,

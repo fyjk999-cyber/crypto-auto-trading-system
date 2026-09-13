@@ -67,7 +67,7 @@ DEFAULT_RESERVED_FRACTION_FOR_HIGHER: dict[str, float] = {
 @dataclass(frozen=True, slots=True)
 class BudgetConfig:
     window_seconds: float = 3600.0
-    max_calls_per_window: int = 120
+    max_calls_per_window: int = 240
     reserved_fraction_for_higher: dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_RESERVED_FRACTION_FOR_HIGHER)
     )
@@ -127,12 +127,75 @@ class BudgetTicket:
         self.complete(status=status, detail=detail)
 
 
+@dataclass(slots=True)
+class BudgetFallbackStats:
+    """Observability counters for optional-research budget fallback.
+
+    P3 exhaustion is not a decision failure: the Chief must still make the
+    P1/P2 call with the canonical baseline factual context.  These counters
+    distinguish that healthy degradation from true P1/P2 exhaustion.
+    """
+
+    p3_optional_fallback_count: int = 0
+    p1_decisions_after_p3_skip: int = 0
+    p2_decisions_after_p3_skip: int = 0
+    last_research_budget_state: str | None = None
+    last_research_fallback: str | None = None
+    last_final_decision_priority: str | None = None
+    last_final_decision_attempted: bool = False
+
+    def snapshot(self) -> dict:
+        return {
+            "p3_optional_fallback_count": self.p3_optional_fallback_count,
+            "p1_decisions_after_p3_skip": self.p1_decisions_after_p3_skip,
+            "p2_decisions_after_p3_skip": self.p2_decisions_after_p3_skip,
+            "last_research_budget_state": self.last_research_budget_state,
+            "last_research_fallback": self.last_research_fallback,
+            "last_final_decision_priority": self.last_final_decision_priority,
+            "last_final_decision_attempted": self.last_final_decision_attempted,
+        }
+
+
+def classify_budget_pressure(snapshot: dict) -> dict[str, list[str] | str]:
+    """Classify budget pressure without conflating P3 with core decisions.
+
+    Watchdogs must never report ``GLOBAL_LLM_BUDGET_EXHAUSTED`` merely because
+    the optional P3 research ceiling is exhausted.  Global exhaustion is a
+    separate, stricter condition.
+    """
+
+    codes: list[str] = []
+    if snapshot.get("global_budget_exhausted"):
+        codes.append("D4_GLOBAL_LLM_BUDGET_EXHAUSTED")
+    exhausted = snapshot.get("exhausted_by_priority") or {}
+    if exhausted.get(P2_FINAL_ENTRY_DECISION):
+        codes.append("D4_P2_FINAL_DECISION_BUDGET_EXHAUSTED")
+    if exhausted.get(P1_POSITION_LIFECYCLE):
+        codes.append("D4_P1_POSITION_BUDGET_EXHAUSTED")
+    if exhausted.get(P3_SELECTED_SYMBOL_RESEARCH):
+        codes.append("D4_P3_RESEARCH_BUDGET_EXHAUSTED")
+    if not codes:
+        verdict = "HEALTHY_BUDGET"
+    elif all(code == "D4_P3_RESEARCH_BUDGET_EXHAUSTED" for code in codes):
+        verdict = "OPTIONAL_RESEARCH_BUDGET_PRESSURE"
+    else:
+        verdict = "CORE_DECISION_BUDGET_PRESSURE"
+    return {"verdict": verdict, "codes": codes}
+
+
 class GlobalLLMBudget:
     """Rolling-window call budget with priority reservations."""
 
-    def __init__(self, config: BudgetConfig | None = None, *, clock=None) -> None:
+    def __init__(
+        self,
+        config: BudgetConfig | None = None,
+        *,
+        clock=None,
+        growth_stage: str | None = None,
+    ) -> None:
         self.config = config or BudgetConfig()
         self._clock = clock or time.monotonic
+        self.growth_stage = growth_stage or "EXPLORATION"
         self._lock = threading.RLock()
         self._granted: deque[float] = deque()
         self._events: deque[dict] = deque(maxlen=500)
@@ -153,7 +216,31 @@ class GlobalLLMBudget:
             self._prune(now)
             in_window = len(self._granted)
             ceiling = self.config.ceiling_for(priority)
-            if in_window >= ceiling:
+            # Two independent guards:
+            #   1. the global rolling-window maximum;
+            #   2. the priority's reserved ceiling.
+            #
+            # P0/P1 safety and position management are exempt from guard 1:
+            # lower-priority research must never consume the last window slot
+            # and block an exit/reduction.  They remain bounded by their own
+            # ceiling (guard 2).  P2+ honor the global maximum so a genuinely
+            # exhausted window fails closed for new entries.
+            safety_critical = priority in (
+                P0_POSITION_SAFETY,
+                P1_POSITION_LIFECYCLE,
+            )
+            already_granted = self.granted_by_priority.get(priority, 0)
+            if safety_critical:
+                # Safety/position management is bounded by its own ceiling,
+                # not by total window usage.  Lower-priority research can
+                # therefore never consume the last slot needed for an exit.
+                blocked = already_granted >= ceiling
+            else:
+                blocked = (
+                    in_window >= self.config.max_calls_per_window
+                    or in_window >= ceiling
+                )
+            if blocked:
                 self.skipped_by_priority[priority] = (
                     self.skipped_by_priority.get(priority, 0) + 1
                 )
@@ -244,14 +331,42 @@ class GlobalLLMBudget:
             self._prune(now)
             recent = list(self._events)[-25:]
             used = len(self._granted)
+            ceilings = {
+                priority: self.config.ceiling_for(priority)
+                for priority in PRIORITY_ORDER
+            }
+            # Reflect the actual admission rule above.  P0/P1 are capped by
+            # their own priority count; P2+ are additionally capped by the
+            # global rolling-window maximum.
+            exhausted_by_priority = {
+                priority: (
+                    self.granted_by_priority.get(priority, 0) >= ceilings[priority]
+                    if priority
+                    in (P0_POSITION_SAFETY, P1_POSITION_LIFECYCLE)
+                    else (
+                        used >= self.config.max_calls_per_window
+                        or used >= ceilings[priority]
+                    )
+                )
+                for priority in PRIORITY_ORDER
+            }
             return {
                 "window_seconds": self.config.window_seconds,
                 "max_calls_per_window": self.config.max_calls_per_window,
+                "effective_stage": self.growth_stage,
+                "effective_max_calls": self.config.max_calls_per_window,
                 "calls_in_window": used,
                 "remaining": max(0, self.config.max_calls_per_window - used),
-                "ceilings": {
-                    priority: self.config.ceiling_for(priority) for priority in PRIORITY_ORDER
-                },
+                "global_budget_exhausted": used >= self.config.max_calls_per_window,
+                "optional_research_budget_exhausted": exhausted_by_priority[
+                    P3_SELECTED_SYMBOL_RESEARCH
+                ],
+                "core_decision_budget_exhausted": any(
+                    exhausted_by_priority[p]
+                    for p in (P1_POSITION_LIFECYCLE, P2_FINAL_ENTRY_DECISION)
+                ),
+                "exhausted_by_priority": exhausted_by_priority,
+                "ceilings": ceilings,
                 "reserved_fraction_for_higher": dict(
                     self.config.reserved_fraction_for_higher
                 ),

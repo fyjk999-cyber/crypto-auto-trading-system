@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
     # Global LLM budget (P0 safety .. P5 background research).
     llm_budget_window_seconds: float = 3600.0
-    llm_budget_max_calls_per_window: int = 120
+    llm_budget_max_calls_per_window: int = 240
 
     # Runtime
     run_lease_ttl_seconds: int = 10

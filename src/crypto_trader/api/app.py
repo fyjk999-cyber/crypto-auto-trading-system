@@ -265,7 +265,11 @@ def create_app(state: AppState) -> FastAPI:
         budget = getattr(state, "llm_budget", None)
         if budget is None:
             return {"enabled": False}
-        return {"enabled": True, **budget.snapshot()}
+        payload = {"enabled": True, **budget.snapshot()}
+        tool_chief = getattr(state, "tool_chief", None)
+        if tool_chief is not None:
+            payload.update(tool_chief.budget_observability())
+        return payload
 
     @app.get("/market-intelligence/symbol/{symbol}")
     async def market_intelligence_symbol(symbol: str):
