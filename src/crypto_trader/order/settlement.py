@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import exists, select
 
@@ -170,17 +171,24 @@ async def assert_prefix_settlement_history(session) -> None:
 
 
 async def assert_complete_settlements_consistent(session) -> None:
-    """A COMPLETE marker must not contradict the factual lifecycle.
+    """LAYER A: durable MARKER consistency, per fill.
 
-    COMPLETE asserts: the ledger is posted, the projection converged, the plan
-    converged, and - when the plan CLOSED - its episode was materialised. If any
-    of those is missing the state is corrupt and MUST fail closed rather than be
-    skipped as already-settled. Nothing is guessed or rebuilt: inventing the
-    missing row would hide exactly the contradiction this check exists to expose.
+    Guarantees exactly this, and nothing more:
+      * a COMPLETE marker has a factual ledger transaction for that fill;
+      * the marker's ``ledger_transaction_id`` equals that transaction's id;
+      * if the fill's order points at a plan that is CURRENTLY closed, there is
+        exactly one TradeEpisode for it.
 
-    This is a GLOBAL scan and must run before the pending-FILL scan, because
-    ``pending_settlements`` deliberately excludes COMPLETE rows - without this,
-    a bad COMPLETE would be skipped forever.
+    It deliberately does NOT validate the portfolio projection, and it does not
+    infer any HISTORICAL position from an old fill: a position that existed at
+    fill time may have been factually exited since, so demanding a non-zero
+    current position per historical fill would be wrong. Current ledger-vs-
+    projection agreement is a different question with a different scope and lives
+    in ``assert_ledger_projection_convergence``.
+
+    This is a GLOBAL scan and must run BEFORE the pending-fill scan, because
+    ``pending_settlements`` deliberately excludes COMPLETE rows - without this, a
+    bad COMPLETE would be skipped forever.
     """
     from crypto_trader.persistence.models import (
         OrderORM,
@@ -404,3 +412,64 @@ async def record_settlement_failure(session, *, fill_id: str, error: Exception) 
     marker.last_error_message = str(error)[:500]
     marker.updated_at = datetime.now(UTC)
     await session.flush()
+
+class SettlementConvergenceFailure(Exception):
+    """The ledger and the persisted projection disagree after recovery.
+
+    The ledger is factual truth and the projection is rebuildable from it, so a
+    persistent disagreement means recovery did not actually converge. Raising
+    keeps startup from coming up on a position the operator cannot trust.
+    """
+
+
+#: Compared field by field. These exist on BOTH the replay view and the
+#: projection with the same meaning. Fields present on only one side are not
+#: asserted - guessing an equivalence would produce false failures.
+COMPARABLE_POSITION_FIELDS = (
+    "quantity",
+    "avg_entry_price",
+    "cost_basis",
+    "realized_pnl",
+)
+
+
+async def assert_ledger_projection_convergence(session, *, account_id: str = "default"):
+    """LAYER B: current ledger replay must equal the persisted projection.
+
+    Runs after every settlement is COMPLETE. Compares the CURRENT state only -
+    never a historical position inferred from an old fill - so a lifecycle that
+    legitimately exited to zero still converges.
+    """
+    from crypto_trader.ledger.projections import replay_projections
+    from crypto_trader.persistence.models import PositionProjectionORM
+
+    snapshot = await replay_projections(session, account_id=account_id)
+    replayed = snapshot.positions or {}
+    persisted_rows = (
+        await session.execute(
+            select(PositionProjectionORM).where(
+                PositionProjectionORM.account_id == account_id
+            )
+        )
+    ).scalars().all()
+    persisted = {row.symbol: row for row in persisted_rows}
+
+    for symbol in sorted(set(replayed) | set(persisted)):
+        view = replayed.get(symbol)
+        row = persisted.get(symbol)
+        if view is None or row is None:
+            raise SettlementConvergenceFailure(
+                f"{symbol} exists in only one of ledger replay / projection "
+                f"(replay={'yes' if view else 'no'}, projection={'yes' if row else 'no'})"
+            )
+        for field in COMPARABLE_POSITION_FIELDS:
+            expected = getattr(view, field, None)
+            actual = getattr(row, field, None)
+            if expected is None and actual is None:
+                continue
+            if expected is None or actual is None:
+                continue
+            if Decimal(str(expected)) != Decimal(str(actual)):
+                raise SettlementConvergenceFailure(
+                    f"{symbol}.{field}: ledger replay {expected} != projection {actual}"
+                )

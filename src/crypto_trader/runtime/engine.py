@@ -2923,6 +2923,7 @@ class TradingEngine:
         """Complete unfinished settlements. Bounded per pass, complete overall."""
         from crypto_trader.order.settlement import (
             assert_complete_settlements_consistent,
+            assert_ledger_projection_convergence,
             assert_prefix_settlement_history,
             pending_settlements,
         )
@@ -2961,6 +2962,14 @@ class TradingEngine:
                     f"{len(fill_ids)} pending settlement(s) made no progress: "
                     f"{fill_ids[:5]}"
                 )
+        # LAYER B: every settlement is COMPLETE, so current ledger truth and the
+        # persisted projection must now agree. Runs only after the pending scan is
+        # exhausted, because comparing them mid-recovery would report a
+        # disagreement that recovery is still in the middle of fixing.
+        async with self.database.session_factory() as session:
+            await assert_complete_settlements_consistent(session)
+            await assert_ledger_projection_convergence(session)
+
         if completed:
             await self.audit.log(
                 "FILL_SETTLEMENT_RECOVERED",

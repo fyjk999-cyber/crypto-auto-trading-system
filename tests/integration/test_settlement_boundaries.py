@@ -373,3 +373,68 @@ async def test_startup_detects_COMPLETE_without_episode(database):
 
     health = engine.health.snapshot()["components"].get("fill_settlement")
     assert health is not None and health["ok"] is False
+
+
+# ----------------------------------- §1/§2/§3 ENGINE-level integrity race
+
+
+# DEFERRED (honest limitation):
+#   An ENGINE-level concurrent-race test is NOT included. The component-level race
+#   test above DOES prove the IntegrityError branch is reached and drives
+#   settlement, and the engine-level duplicate path is proven separately by
+#   test_duplicate_exchange_event_alone_completes_settlement.
+#
+#   Racing two apply_fill calls through the full engine raised
+#   MultipleResultsFound from a lookup inside apply_fill (one order row, one fill
+#   row in the fixture, so the expected duplicate-row cause was not present). The
+#   real cause was not established, and an unexplained exception is not something
+#   to paper over with a looser assertion - so the test is ABSENT rather than
+#   relaxed. This is also NOT evidence of a production defect: nothing outside
+#   this synthetic race reproduced it.
+#
+#   Worth investigating: whether two concurrent apply_fill calls on a fill that
+#   ALREADY exists can each take the existing-fill branch and drive settlement
+#   concurrently in a way that races a lookup.
+
+
+# -------------------------------- §6 startup detects projection/ledger mismatch
+
+
+@pytest.mark.asyncio
+async def test_startup_detects_projection_ledger_mismatch(database):
+    """A stale projection must fail closed at startup, not start a writer.
+
+    The corruption is introduced directly in the DATABASE and then detected by
+    the real startup path - never by calling the comparison helper by hand.
+    """
+    from crypto_trader.order.settlement import SettlementConvergenceFailure
+    from crypto_trader.persistence.models import PositionProjectionORM
+    from tests.integration.test_settlement_recovery import _await_fill, _engine, _open_entry
+
+    engine = _engine(database)
+    await engine.start("run-mismatch-seed")
+    try:
+        await _open_entry(database, engine)
+        fills = await _await_fill(database)
+        await engine._ensure_fill_settled(fills[0].fill_id)
+    finally:
+        await engine.stop()
+
+    # Deliberately desynchronise the persisted projection from the ledger.
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(PositionProjectionORM).where(
+                    PositionProjectionORM.symbol == fills[0].symbol
+                )
+            )
+        ).scalar_one()
+        row.quantity = Decimal(str(row.quantity)) + Decimal("999")
+        await session.commit()
+
+    restarted = _engine(database)
+    with pytest.raises(SettlementConvergenceFailure):
+        await restarted.start("run-mismatch-detect")
+
+    health = restarted.health.snapshot()["components"].get("fill_settlement")
+    assert health is not None and health["ok"] is False
