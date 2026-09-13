@@ -345,7 +345,7 @@ async def test_runtime_future_rule_applicability_does_not_merge(growth_db):
         {"regime": "PANIC", "direction": "LONG"},
     ]
     payloads = []
-    for episode, application in zip(episodes, applications):
+    for episode, application in zip(episodes, applications, strict=True):
         rule = _learning_item(episode.episode_id, "Same statement.")
         rule["applicability"] = application
         payload = _payload(
