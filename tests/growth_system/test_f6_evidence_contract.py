@@ -102,3 +102,28 @@ def test_risk_04_invariant():
         pass
     else:
         raise AssertionError("primary risk mismatch must fail")
+
+
+@pytest.mark.parametrize(
+    "order_ids,fill_ids",
+    [([], ["f1"]), (["o1"], []), ([], [])],
+)
+def test_execution_invariant_blocks_incomplete_lineage(order_ids, fill_ids):
+    ev = GrowthReviewEvidence(
+        episode_id="ep",
+        execution_availability="AVAILABLE",
+        order_ids=order_ids,
+        fill_ids=fill_ids,
+    )
+    with pytest.raises(ValueError):
+        ev.validate_availability()
+
+
+def test_execution_invariant_positive_control():
+    ev = GrowthReviewEvidence(
+        episode_id="ep",
+        execution_availability="AVAILABLE",
+        order_ids=["o1"],
+        fill_ids=["f1"],
+    )
+    ev.validate_availability()

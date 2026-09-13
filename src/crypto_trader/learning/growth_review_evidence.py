@@ -112,14 +112,6 @@ class GrowthReviewEvidence:
                     f"CONTRADICTORY_AVAILABILITY:{availability_field}"
                 )
             if (
-                availability_field == "execution_availability"
-                and available
-                and (not self.order_ids or not self.fill_ids)
-            ):
-                raise ValueError(
-                    "CONTRADICTORY_AVAILABILITY:execution_availability"
-                )
-            if (
                 availability_field == "risk_availability"
                 and available
                 and (
@@ -128,6 +120,13 @@ class GrowthReviewEvidence:
                 )
             ):
                 raise ValueError("CONTRADICTORY_AVAILABILITY:risk_decision_ids")
+        if (
+            self.execution_availability == EvidenceAvailability.AVAILABLE
+            and (not self.order_ids or not self.fill_ids)
+        ):
+            raise ValueError(
+                "CONTRADICTORY_AVAILABILITY:execution_availability"
+            )
         for availability_field, value_field in (
             ("factor_snapshot_availability", "factor_snapshot"),
             ("sizing_availability", "sizing_final_quantity"),
