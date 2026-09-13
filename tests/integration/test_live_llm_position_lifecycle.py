@@ -96,6 +96,65 @@ async def _seed_known_zero_funding_coverage(database, plan, symbol="BTCUSDT") ->
     )
 
 
+
+
+def _engine_ref():
+    """The engine object in the CURRENT test frame, or None if not in scope.
+
+    Different tests in this file name their engine differently (engine, first,
+    recovered). A missing reference must not raise NameError, so this inspects
+    the caller frame instead of assuming a name.
+    """
+    import sys as _sys
+
+    frame = _sys._getframe(1)
+    while frame is not None:
+        local = frame.f_locals
+        for candidate in ("engine", "recovered", "first"):
+            obj = local.get(candidate)
+            if obj is not None and hasattr(obj, "wait_for_event_queue"):
+                return obj
+        frame = frame.f_back
+    return None
+
+
+async def _plan_is_active(plans, trade_plan_id) -> bool:
+    record = await plans.get(trade_plan_id)
+    return record is not None and record.state == TradePlanState.ACTIVE
+
+
+async def _await_plan_promotion(plans, trade_plan_id, *, engine=None, settle_seconds=5.0):
+    """Bounded wait for a plan to reach ACTIVE.
+
+    ``engine.wait_for_event_queue()`` is ``asyncio.Queue.join()``: it drains only
+    what was ALREADY queued when it was called. A fill event enqueued by the
+    adapter immediately afterwards is not covered, so asserting straight after it
+    can observe the PRE-fill state (plan APPROVED instead of ACTIVE). That is why
+    these lifecycle tests failed ~10% of runs while passing on a lucky ordering.
+
+    This waits for the OBSERVABLE condition instead of a fixed delay, keeps the
+    real assertion intact (it does not weaken what is checked), and fails loudly
+    with the last observed state instead of silently passing.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    deadline = _time.monotonic() + settle_seconds
+    record = None
+    while True:
+        record = await plans.get(trade_plan_id)
+        if record is not None and record.state == TradePlanState.ACTIVE:
+            return
+        if _time.monotonic() >= deadline:
+            raise AssertionError(
+                f"plan {trade_plan_id} did not reach ACTIVE within {settle_seconds}s "
+                f"(last state={getattr(record, 'state', None)})"
+            )
+        if engine is not None:
+            await engine.wait_for_event_queue()
+        await _asyncio.sleep(0)
+
+
 async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(database):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     clock = MutableClock()
@@ -156,7 +215,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     hold_decisions = await engine.tick()
     assert hold_decisions == []
     assert len(engine.adapter.orders) == before_orders
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
 
     clock.advance()
     reduction_decisions = await engine.tick()
@@ -165,7 +224,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     reduced = await engine.portfolio.get_position("BTCUSDT")
     assert reduced is not None and reduced.quantity == Decimal("0.06")
     assert reduced.leverage == Decimal("5")
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
     reduction_order = list(engine.adapter.orders.values())[-1]
     persisted_reduction = await engine.order_manager.get_by_client(
         reduction_order.client_order_id
@@ -331,12 +390,12 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     await engine.wait_for_event_queue()
     reduced = await engine.portfolio.get_position("BTCUSDT")
     assert reduced is not None and reduced.quantity == Decimal("-0.06")
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
 
     clock.advance()
     exit_decisions = await engine.tick()
     assert exit_decisions[0].checks["original_direction"] == "SHORT"
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
     await engine.wait_for_event_queue()
     closed = await engine.portfolio.get_position("BTCUSDT")
     final_plan = await plans.get(plan.trade_plan_id)
@@ -464,7 +523,7 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
     position = await engine.portfolio.get_position("BTCUSDT")
     assert entry_order.status == OrderStatus.PARTIALLY_FILLED
     assert position is not None and position.quantity == Decimal("0.04")
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
 
     engine.position_manager = LiveLLMPositionManager(
         chief=SequencedChief([("EXIT", "0"), ("EXIT", "0")]),
@@ -479,7 +538,7 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
 
     assert result == []
     assert len(engine.adapter.orders) == 1
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
     assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.04")
     assert (await engine.order_manager.get(entry_order.internal_order_id)).status == (
         OrderStatus.CANCELLED
@@ -540,7 +599,7 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     order_count = len(engine.adapter.orders)
     await engine.tick()
     assert len(engine.adapter.orders) == order_count
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
 
     clock.advance(61)
     await engine.tick()
@@ -730,7 +789,7 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     assert recovered.runtime_snapshot()["health"]["components"][
         "paper_restart_recovery"
     ]["ok"] is True
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
     await recovered.stop()
 
 
@@ -779,5 +838,5 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     assert order.quantity == Decimal("1")
     assert order.metadata["trade_plan_id"] == plan.trade_plan_id
     assert order.metadata["decision_id"] == entry.decision_id
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
     await engine.stop()
