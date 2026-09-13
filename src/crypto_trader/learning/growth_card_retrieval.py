@@ -22,8 +22,10 @@ from crypto_trader.intelligence.knowledge.decay import KnowledgeDecayEngine
 from crypto_trader.learning.growth_card_view import card_from_snapshot, row_to_card
 from crypto_trader.learning.growth_contracts import canonical_json, sha256_text
 from crypto_trader.learning.growth_domains import (
+    DOMAIN_WEIGHT_CAPS,
     domain_for_mode,
     domain_weight_cap,
+    effective_evidence_weight,
 )
 from crypto_trader.learning.growth_models import GrowthCardDecisionTraceORM, GrowthCardVersionORM
 from crypto_trader.learning.growth_v2_contracts import (
@@ -50,6 +52,7 @@ from crypto_trader.vector_memory.schemas import MemoryVector
 from crypto_trader.vector_memory.vector_store import MemoryVectorStore
 
 HARD_FILTER_VERSION = "card-hard-filter-v1"
+SELECTED_EVIDENCE_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,10 @@ class CardRankingPolicy:
             "contradiction_penalty": self.contradiction_penalty,
             "decay_penalty": self.decay_penalty,
             "weights": dict(self.weights),
+            # These external canonical rules also alter selection/weight and
+            # therefore belong to the effective policy identity.
+            "hard_filter_version": HARD_FILTER_VERSION,
+            "domain_weight_caps": dict(sorted(DOMAIN_WEIGHT_CAPS.items())),
         }
 
     def fingerprint(self) -> str:
@@ -235,6 +242,10 @@ class ExperienceCardRetriever:
         as_of = _aware(as_of) or context.as_of
         policy = self.policy
         limit = max(1, min(top_k or policy.top_k, policy.top_k, 5))
+        decision_domain = domain_for_mode(mode)
+        allowed_domains = tuple(
+            dict.fromkeys(policy.allowed_evidence_domains or (decision_domain,))
+        )
         async with self.session_factory() as session:
             rows = (
                 await session.execute(
@@ -243,7 +254,7 @@ class ExperienceCardRetriever:
                         or_(
                             and_(
                                 AICompressedExperienceORM.account_id == account_id,
-                                AICompressedExperienceORM.mode == mode,
+                                AICompressedExperienceORM.mode.in_(allowed_domains),
                                 AICompressedExperienceORM.share_scope
                                 != SHARE_SCOPE_GLOBAL_EXPLICIT,
                             ),
@@ -394,21 +405,20 @@ class ExperienceCardRetriever:
         share_scope = (card.share_scope or "UNKNOWN").upper()
         scope = card.scope or {}
         if share_scope == SHARE_SCOPE_GLOBAL_EXPLICIT:
-            if str(scope.get("sharing") or "").upper() == SHARE_SCOPE_GLOBAL_EXPLICIT and scope.get(
-                "approved_by"
+            if not (
+                str(scope.get("sharing") or "").upper()
+                == SHARE_SCOPE_GLOBAL_EXPLICIT
+                and scope.get("approved_by")
             ):
-                return []
-            return ["GLOBAL_SCOPE_NOT_APPROVED"]
-        if share_scope != SHARE_SCOPE_ACCOUNT_MODE:
+                return ["GLOBAL_SCOPE_NOT_APPROVED"]
+        elif share_scope != SHARE_SCOPE_ACCOUNT_MODE:
             return [f"SHARE_SCOPE_UNKNOWN:{share_scope}"]
-        if not card.account_id or card.account_id.upper() == "UNKNOWN":
+        elif not card.account_id or card.account_id.upper() == "UNKNOWN":
             return ["ACCOUNT_UNKNOWN"]
+        elif card.account_id != account_id:
+            return ["ACCOUNT_MISMATCH"]
         if not card.mode or card.mode.upper() == "UNKNOWN":
             return ["MODE_UNKNOWN"]
-        if card.account_id != account_id:
-            return ["ACCOUNT_MISMATCH"]
-        if card.mode != mode:
-            return ["MODE_MISMATCH"]
 
         own_domain = domain_for_mode(mode)
         allowed_domains = self.policy.allowed_evidence_domains or (own_domain,)
@@ -600,6 +610,13 @@ class CardDecisionTraceStore:
             f"card:{item.rule_id}:v{item.version}" for item in result.selected
         ]
 
+        policy_fingerprint = str(
+            result.metrics.get("policy_fingerprint") or result.policy_version
+        )
+        selected_evidence = [
+            selected_evidence_snapshot(item, policy_fingerprint=policy_fingerprint)
+            for item in result.selected
+        ]
         trace_payload = {
             "decision_id": decision_id,
             "account_id": account_id,
@@ -609,25 +626,7 @@ class CardDecisionTraceStore:
                 item.rule_id: domain_for_mode(item.card.mode if item.card else mode)
                 for item in result.selected
             },
-            "selected_evidence_domain_provenance": [
-                {
-                    "evidence_ref": f"card:{item.rule_id}:v{item.version}",
-                    "card_id": item.rule_id,
-                    "card_version": item.version,
-                    "evidence_domain": domain_for_mode(
-                        item.card.mode if item.card else mode
-                    ),
-                    "internal_confidence": float(
-                        item.card.confidence or 0
-                    )
-                    if item.card is not None
-                    else 0.0,
-                    "domain_weight": domain_weight_cap(
-                        domain_for_mode(item.card.mode if item.card else mode)
-                    ),
-                }
-                for item in result.selected
-            ],
+            "selected_evidence_domain_provenance": selected_evidence,
             "as_of": result.as_of.isoformat(),
             "symbol": result.context.symbol,
             "selected": selected_refs,
@@ -641,9 +640,6 @@ class CardDecisionTraceStore:
             f"cardtrace_{sha256_text(canonical_json(trace_payload))[:40]}"
         )
         trace_id = trace_id_override or computed_trace_id
-        policy_fingerprint = str(
-            result.metrics.get("policy_fingerprint") or result.policy_version
-        )
         scores = {f"card:{item.rule_id}": item.score for item in result.selected}
         async with self.session_factory() as session:
             existing = await session.get(GrowthCardDecisionTraceORM, trace_id)
@@ -656,6 +652,7 @@ class CardDecisionTraceStore:
                     and existing.context_signature_json == result.context.to_json()
                     and existing.selected_card_refs_json == selected_refs
                     and existing.card_versions_json == versions
+                    and existing.selected_evidence_json == selected_evidence
                     and (existing.applicability_json or {}).get(
                         "_policy_fingerprint"
                     )
@@ -716,7 +713,7 @@ class CardDecisionTraceStore:
                     result.metrics.get("context_tokens_estimate", 0)
                 ),
                 selected_evidence_json=list(
-                    trace_payload.get("selected_evidence_domain_provenance", [])
+                    selected_evidence
                 ),
             )
             session.add(row)
@@ -786,13 +783,9 @@ def register_experience_card_tool(
         budget = int(getattr(retriever.policy, "token_budget", 1200))
 
         def _card_payload(items) -> list[dict]:
-            from crypto_trader.learning.growth_domains import (
-                domain_weight_cap,
-                effective_evidence_weight,
-            )
-
             return [
                 {
+                    "evidence_ref": f"card:{item.rule_id}:v{item.version}",
                     "rule_id": item.rule_id,
                     "version": item.version,
                     "status": item.status,
@@ -812,6 +805,12 @@ def register_experience_card_tool(
                         else 0.0,
                         domain_for_mode(item.card.mode if item.card else mode),
                     ),
+                    "internal_confidence": (
+                        float(item.card.confidence or 0)
+                        if item.card is not None
+                        else 0.0
+                    ),
+                    "ranking_score": item.score,
                     "score": item.score,
                     "why": item.why,
                     "guidance": item.card.guidance if item.card else {},
@@ -997,26 +996,37 @@ def register_experience_card_tool(
 def render_experience_domains(cards: list[dict]) -> str:
     """Group final selected cards by evidence domain for Chief presentation."""
     groups: dict[str, list[dict]] = {"PAPER": [], "LIVE": [], "BACKTEST": []}
-    for card in cards or []:
+    for card in sorted(
+        cards or [],
+        key=lambda item: (
+            -float(item.get("ranking_score", item.get("score", 0.0))),
+            str(item.get("rule_id", "")),
+            int(item.get("version", 0)),
+        ),
+    ):
         domain = str(card.get("source_evidence_domain") or "PAPER").upper()
         groups.setdefault(domain, []).append(card)
     lines: list[str] = []
     runtime = [d for d in ("LIVE", "PAPER") if groups.get(d)]
     if runtime:
-        lines.append("RUNTIME EXPERIENCE")
+        lines.extend(["CURRENT_RUNTIME_EXPERIENCE", "RUNTIME EXPERIENCE"])
         for domain in runtime:
             lines.extend(["", f"{domain} EXPERIENCE", "-" * (len(domain) + 11)])
             for card in groups[domain]:
                 lines.append(
-                    f"- {card.get('rule_id')} v{card.get('version')} "
-                    f"(internal_conf={card.get('confidence', 'UNKNOWN')}, "
+                    f"- {card.get('evidence_ref')} "
+                    f"(version={card.get('version')}, domain={domain}, "
+                    f"runtime_validated={card.get('runtime_validated')}, "
+                    f"internal_conf={card.get('internal_confidence', 'UNKNOWN')}, "
                     f"domain_weight={card.get('domain_weight')}, "
-                    f"effective_weight={card.get('effective_weight')})"
+                    f"effective_weight={card.get('effective_weight')}, "
+                    f"ranking_score={card.get('ranking_score', card.get('score'))})"
                 )
     if groups.get("BACKTEST"):
         lines.extend(
             [
                 "",
+                "HISTORICAL_BACKTEST_EVIDENCE",
                 "HISTORICAL BACKTEST RESEARCH",
                 "============================",
                 "BACKTEST_ONLY",
@@ -1025,8 +1035,35 @@ def render_experience_domains(cards: list[dict]) -> str:
         )
         for card in groups["BACKTEST"]:
             lines.append(
-                f"- {card.get('rule_id')} v{card.get('version')} "
-                f"(domain_weight={card.get('domain_weight')}, "
-                f"effective_weight={card.get('effective_weight')})"
+                f"- {card.get('evidence_ref')} "
+                f"(version={card.get('version')}, domain=BACKTEST, "
+                f"runtime_validated={card.get('runtime_validated')}, "
+                f"internal_conf={card.get('internal_confidence', 'UNKNOWN')}, "
+                f"domain_weight={card.get('domain_weight')}, "
+                f"effective_weight={card.get('effective_weight')}, "
+                f"ranking_score={card.get('ranking_score', card.get('score'))})"
             )
     return "\n".join(lines)
+
+
+def selected_evidence_snapshot(
+    item: RetrievedCard,
+    *,
+    policy_fingerprint: str,
+) -> dict[str, Any]:
+    """Immutable decision-time identity and weight for one selected card."""
+    domain = domain_for_mode(item.card.mode if item.card else None)
+    confidence = float(item.card.confidence or 0) if item.card is not None else 0.0
+    return {
+        "schema_version": SELECTED_EVIDENCE_SCHEMA_VERSION,
+        "evidence_ref": f"card:{item.rule_id}:v{item.version}",
+        "card_id": item.rule_id,
+        "card_version": item.version,
+        "evidence_domain": domain,
+        "runtime_validated": domain in {"PAPER", "LIVE"},
+        "internal_confidence": confidence,
+        "domain_weight": domain_weight_cap(domain),
+        "effective_weight": effective_evidence_weight(confidence, domain),
+        "ranking_score": item.score,
+        "policy_fingerprint": policy_fingerprint,
+    }
