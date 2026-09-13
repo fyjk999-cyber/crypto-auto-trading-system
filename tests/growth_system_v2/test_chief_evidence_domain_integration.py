@@ -40,3 +40,17 @@ def test_backtest_default_is_own_domain_and_account_isolated():
     assert _reject(other, account_id="acct-a", mode="PAPER") == [
         "ACCOUNT_MISMATCH"
     ]
+
+
+def test_canonical_domain_weight_caps_are_enforced():
+    from crypto_trader.learning.growth_domains import (
+        domain_weight_cap,
+        effective_evidence_weight,
+    )
+
+    assert domain_weight_cap("BACKTEST") == 0.40
+    assert domain_weight_cap("PAPER") == 0.75
+    assert domain_weight_cap("LIVE") == 1.00
+    assert effective_evidence_weight(1.0, "BACKTEST") <= 0.40
+    assert effective_evidence_weight(1.0, "PAPER") <= 0.75
+    assert effective_evidence_weight(1.0, "LIVE") <= 1.00
