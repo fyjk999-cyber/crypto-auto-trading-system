@@ -367,7 +367,9 @@ class StructuredReviewService:
         prompt_version: str = PROMPT_VERSION,
         schema_version: str = SCHEMA_VERSION,
         timeout_seconds: float = 60.0,
-        max_tokens: int = 2000,
+        # DeepSeek reasoning tokens otherwise consume the completion budget and
+        # truncate the structured-review JSON mid-object.
+        max_tokens: int = 6000,
         retries: int = 0,
     ) -> None:
         self.provider = provider
@@ -518,6 +520,7 @@ class StructuredReviewService:
                 timeout_seconds=self.timeout_seconds,
                 retries=self.retries,
                 max_tokens=self.max_tokens,
+                thinking=False,
                 operation="growth_structured_review",
             )
         except Exception as exc:

@@ -194,6 +194,8 @@ async def test_valid_review_persists_full_provider_and_fingerprint_provenance(gr
     assert attempt.status == STATUS_SUCCEEDED
     assert attempt.review is not None
     assert provider.calls[0]["operation"] == "growth_structured_review"
+    assert provider.calls[0]["thinking"] is False
+    assert provider.calls[0]["max_tokens"] >= 6000
     prompt = provider.calls[0]["prompt"]
     assert "<untrusted_episode_data>" in prompt
     assert "episode:episode_1" in prompt
