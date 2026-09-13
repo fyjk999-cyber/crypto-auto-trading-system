@@ -309,3 +309,86 @@ async def test_cp2b_runtime_mixed_preserves_raw_and_filters_publisher(
     assert report.structured_reviews_created == 1
     assert report.reviews_with_causal_lessons == 1
     assert any("CAUSAL_EVIDENCE_BLOCKED" in e and "accounting:fees" in e for e in report.errors)
+
+
+async def test_cp3a_zero_safe_stops_before_publisher_and_cards(
+    growth_db, monkeypatch
+):
+    from sqlalchemy import select
+
+    import crypto_trader.learning.growth_runtime_learning as runtime_module
+    from crypto_trader.learning.growth_knowledge import proposition_identity
+    from crypto_trader.learning.growth_models import (
+        GrowthLessonORM,
+        GrowthPatternORM,
+        GrowthReviewAttemptORM,
+    )
+    from crypto_trader.learning.growth_runtime_learning import (
+        GrowthRuntimeLearningService,
+    )
+    from tests.growth_system.test_review_schema_and_refs import FakeProvider
+    from tests.growth_system.test_runtime_learning_closure import (
+        _episode,
+        _payload,
+        _seed_episode,
+        _true,
+    )
+
+    episode = _episode("ep-pub06b")
+    await _seed_episode(growth_db, episode)
+    scope = {"scope": "SYMBOL_REGIME", "symbols": ["BTCUSDT"], "regimes": ["TRENDING"]}
+    lesson = {
+        "statement": "PUB06B_BLOCKED", "testable_prediction": "p",
+        "scope": scope, "evidence_refs": ["episode:ep-pub06b"],
+        "contrary_refs": [], "uncertainty": "candidate", "confidence": "LOW",
+    }
+    service = GrowthRuntimeLearningService(
+        growth_db.session_factory,
+        provider=FakeProvider([_payload("ep-pub06b", lessons=[lesson])]),
+        min_pattern_samples=3,
+    )
+    real_validator = runtime_module.validate_causal_evidence_refs
+
+    def validator_spy(evidence, refs):
+        refs = list(refs)
+        real_validator(evidence, refs)
+        if evidence.episode_id == "ep-pub06b" and "episode:ep-pub06b" in refs:
+            raise CausalEvidenceUnavailable("EVIDENCE_UNAVAILABLE:episode:ep-pub06b")
+
+    monkeypatch.setattr(runtime_module, "validate_causal_evidence_refs", validator_spy)
+    publisher_calls = 0
+    card_calls = 0
+
+    async def publisher_trap(*args, **kwargs):
+        nonlocal publisher_calls
+        publisher_calls += 1
+        pytest.fail("publisher must not be called")
+
+    async def cards_trap(*args, **kwargs):
+        nonlocal card_calls
+        card_calls += 1
+        pytest.fail("cards must not be materialized")
+
+    monkeypatch.setattr(service.publisher, "publish_attempts", publisher_trap)
+    monkeypatch.setattr(service, "_materialize_cards", cards_trap)
+    report = await service.run(
+        [episode], review_date="2026-09-09", claim_token="token-r4",
+        owner="worker", fence=_true,
+    )
+    async with growth_db.session_factory() as session:
+        attempt = (await session.execute(select(GrowthReviewAttemptORM).where(
+            GrowthReviewAttemptORM.episode_id == "ep-pub06b"))).scalar_one()
+        lessons = (await session.execute(select(GrowthLessonORM).where(
+            GrowthLessonORM.statement == "PUB06B_BLOCKED"))).scalars().all()
+        patterns = (await session.execute(select(GrowthPatternORM))).scalars().all()
+    assert attempt.status == "SUCCEEDED"
+    assert "PUB06B_BLOCKED" in str(attempt.result_json)
+    assert publisher_calls == 0 and card_calls == 0
+    assert lessons == []
+    blocked_key = proposition_identity("PUB06B_BLOCKED", scope)
+    assert all((r.scope_json or {}).get("proposition_key") != blocked_key for r in patterns)
+    assert report.structured_reviews_created == 1
+    assert report.reviews_with_causal_lessons == 0
+    assert report.lessons_created == 0 and report.patterns_created == 0
+    assert report.cards_created == 0 and report.status == "REVIEW_ONLY"
+    assert any("CAUSAL_EVIDENCE_BLOCKED" in e for e in report.errors)
