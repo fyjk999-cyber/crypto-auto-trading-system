@@ -198,6 +198,12 @@ class LedgerTransactionORM(Base):
     __tablename__ = "ledger_transactions"
     __table_args__ = (
         UniqueConstraint("transaction_id", name="uq_ledger_transactions_transaction_id"),
+        # ONE ledger transaction per fill / per event. The service-level check
+        # runs in its own session and therefore cannot stop two concurrent
+        # writers; without this index a racing settlement duplicates the
+        # economic effect. Nullable columns keep "no identity" rows unaffected.
+        Index("uq_ledger_transactions_fill_id", "fill_id", unique=True),
+        Index("uq_ledger_transactions_event_id", "event_id", unique=True),
     )
 
     transaction_id: Mapped[str] = mapped_column(String(64), primary_key=True)

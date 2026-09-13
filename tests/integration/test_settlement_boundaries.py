@@ -28,7 +28,9 @@ from crypto_trader.domain.models import Fill, OrderIntent
 from crypto_trader.order.manager import OrderManager
 from crypto_trader.order.settlement import (
     STATE_COMPLETE,
+    STATE_PENDING,
     SettlementStateContradiction,
+    ensure_fill_settlement_row,
 )
 from crypto_trader.persistence.models import (
     FillORM,
@@ -378,23 +380,106 @@ async def test_startup_detects_COMPLETE_without_episode(database):
 # ----------------------------------- §1/§2/§3 ENGINE-level integrity race
 
 
-# DEFERRED (honest limitation):
-#   An ENGINE-level concurrent-race test is NOT included. The component-level race
-#   test above DOES prove the IntegrityError branch is reached and drives
-#   settlement, and the engine-level duplicate path is proven separately by
-#   test_duplicate_exchange_event_alone_completes_settlement.
-#
-#   Racing two apply_fill calls through the full engine raised
-#   MultipleResultsFound from a lookup inside apply_fill (one order row, one fill
-#   row in the fixture, so the expected duplicate-row cause was not present). The
-#   real cause was not established, and an unexplained exception is not something
-#   to paper over with a looser assertion - so the test is ABSENT rather than
-#   relaxed. This is also NOT evidence of a production defect: nothing outside
-#   this synthetic race reproduced it.
-#
-#   Worth investigating: whether two concurrent apply_fill calls on a fill that
-#   ALREADY exists can each take the existing-fill branch and drive settlement
-#   concurrently in a way that races a lookup.
+@pytest.mark.asyncio
+async def test_engine_level_race_converges_to_EXACTLY_one_ledger(database):
+    """The full engine must converge a concurrent duplicate settlement.
+
+    DIAGNOSIS THAT PRODUCED THIS TEST (the previous "deferred" note was wrong to
+    leave the cause unexplained):
+
+    Two concurrent settlement passes on ONE fill each created their own ledger
+    transaction, because ``LedgerService.record`` checked for an existing fill_id
+    in a SEPARATE session - so both writers observed "absent" and both inserted.
+    The duplicate was real: ``ledger_transaction_for_fill`` then raised
+    MultipleResultsFound because two rows carried the same fill_id.
+
+    Two fixes, both required:
+      * a UNIQUE index on ledger_transactions.fill_id (and event_id), because an
+        application-level check cannot survive concurrency; the service now
+        catches the constraint failure and returns the existing transaction;
+      * the re-read after losing that race is keyed on fill_id ALONE. Each
+        settlement attempt builds its own event_id and persists it, so searching
+        by (fill_id AND event_id) could never match the winner's row - the AND was
+        unsatisfiable across attempts.
+    """
+    from tests.integration.test_settlement_recovery import _await_fill, _engine, _open_entry
+
+    engine = _engine(database)
+    await engine.start("run-race-engine")
+    try:
+        await _open_entry(database, engine)
+        fills = await _await_fill(database)
+        factual = fills[0]
+        fill_id = factual.fill_id
+
+        # Interrupt the settlement, then race two full settlement passes.
+        async with database.session_factory() as session:
+            marker = await ensure_fill_settlement_row(session, factual)
+            marker.state = STATE_PENDING
+            marker.completed_at = None
+            await session.delete(
+                (
+                    await session.execute(
+                        select(LedgerTransactionORM).where(
+                            LedgerTransactionORM.fill_id == fill_id
+                        )
+                    )
+                ).scalar_one()
+            )
+            await session.commit()
+
+        domain_fill = await engine.order_manager.get_fill(fill_id)
+        results = await asyncio.gather(
+            engine.order_manager.apply_fill(domain_fill),
+            engine.order_manager.apply_fill(domain_fill),
+            return_exceptions=True,
+        )
+        errors = [r for r in results if isinstance(r, Exception)]
+        assert not errors, f"a concurrent apply_fill raised: {errors}"
+
+        async with database.session_factory() as session:
+            fill_rows = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalars().all()
+            ledger_rows = (
+                await session.execute(
+                    select(LedgerTransactionORM).where(
+                        LedgerTransactionORM.fill_id == fill_id
+                    )
+                )
+            ).scalars().all()
+            marker = (
+                await session.execute(
+                    select(FillSettlementORM).where(FillSettlementORM.fill_id == fill_id)
+                )
+            ).scalar_one()
+
+        # §2 required final state
+        assert len(list(fill_rows)) == 1, "the race duplicated the fill row"
+        assert len(list(ledger_rows)) == 1, (
+            f"the race produced {len(list(ledger_rows))} ledger transactions for one "
+            "fill - the economic effect was duplicated"
+        )
+        assert marker.state == STATE_COMPLETE, (
+            f"the race must converge to COMPLETE, got {marker.state}"
+        )
+
+        order = await engine.order_manager.get(factual.order_id)
+        assert Decimal(str(order.filled_quantity)) == Decimal(str(factual.quantity)), (
+            "the race applied the fill quantity more than once"
+        )
+        position = await engine.portfolio.get_position(factual.symbol)
+        assert position is not None and Decimal(str(position.quantity)) == Decimal(
+            str(factual.quantity)
+        )
+
+        # §3 economic dedup, measured rather than inferred from the constraint
+        async with database.session_factory() as session:
+            all_ledger = (await session.execute(select(LedgerTransactionORM))).scalars().all()
+        assert len([r for r in all_ledger if r.fill_id == fill_id]) == 1
+        assert len(all_ledger) >= 1
+    finally:
+        await engine.stop()
 
 
 # -------------------------------- §6 startup detects projection/ledger mismatch
