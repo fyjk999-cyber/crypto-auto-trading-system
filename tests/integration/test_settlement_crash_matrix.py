@@ -8,6 +8,7 @@ and where it is used the injected boundary is named explicitly.
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 
 import pytest
@@ -27,6 +28,7 @@ from crypto_trader.persistence.models import (
     FillORM,
     FillSettlementORM,
     LedgerTransactionORM,
+    OrderORM,
     PositionProjectionORM,
     TradePlanORM,
 )
@@ -469,3 +471,176 @@ async def test_C6_CLOSED_before_episode_recovers_and_is_idempotent(database):
         assert episodes[0].episode_id == first_id, "the episode identity changed"
     finally:
         await second.stop()
+
+
+# ============================================================ C1
+# The crash is injected INSIDE apply_fill's own transaction, at the ONLY signal
+# that identifies that boundary: apply_fill stages the fill via
+# ``session.add_all([event, fill_row])`` immediately before its own commit (the
+# earlier commits in that method never call add_all).
+#
+# The fixture must roll the ORDER back together with the fill. A real C1 crash
+# happens before the commit, so FillORM, the order's filled_quantity increment and
+# its status transition all roll back TOGETHER - "fill gone but order still
+# FILLED" cannot occur. Constructing that impossible state is what made an earlier
+# attempt fail: apply_fill refused the replayed fill with
+# InvalidStateTransition("fill quantity 0.1 exceeds remaining 0.0") and never
+# reached the injection point at all.
+
+
+@pytest.mark.asyncio
+async def test_C1_failure_before_fill_commit_leaves_nothing_then_recovers(database):
+    """C1: the fill transaction never commits => nothing durable, then recovers.
+
+    Asserted in BOTH directions, because "nothing was left behind" alone would
+    also pass if the fill simply never happened.
+    """
+    from crypto_trader.domain.enums import ExchangeEventType
+    from crypto_trader.domain.models import ExchangeEvent
+    from tests.integration.test_settlement_recovery import (
+        _await_fill,
+        _engine,
+        _open_entry,
+    )
+
+    engine = _engine(database)
+    await engine.start("run-c1")
+    try:
+        await _open_entry(database, engine)
+        factual = (await _await_fill(database))[0]
+
+        # Pre-fill state: the fill, its marker and the ledger posting are absent
+        # AND the order is rolled back, exactly as a pre-commit failure leaves it.
+        async with database.session_factory() as session:
+            order_row = await session.get(OrderORM, factual.order_id)
+            venue_id = str(order_row.exchange_order_id)
+            client_order_id = str(order_row.client_order_id)
+            symbol = str(order_row.symbol)
+            order_row.filled_quantity = Decimal("0")
+            order_row.status = "OPEN"
+            await session.delete(factual)
+            for marker in (await session.execute(select(FillSettlementORM))).scalars().all():
+                await session.delete(marker)
+            for txn in (await session.execute(select(LedgerTransactionORM))).scalars().all():
+                await session.delete(txn)
+            await session.commit()
+
+        def _event(event_id: str) -> ExchangeEvent:
+            return ExchangeEvent(
+                event_id=event_id,
+                event_type=ExchangeEventType.ORDER_FILLED,
+                symbol=symbol,
+                timestamp=factual.timestamp,
+                payload={
+                    "exchange_order_id": venue_id,
+                    "client_order_id": client_order_id,
+                    "fill_id": factual.fill_id,
+                    "fill_price": str(factual.price),
+                    "fill_quantity": str(factual.quantity),
+                    "fee": str(factual.fee or 0),
+                },
+            )
+
+        # ---------------------------------------------------- inject the crash
+        # The factory must be the ORDER MANAGER's: apply_fill opens its session
+        # through its own session_factory, so wrapping database.session_factory
+        # would intercept nothing and the crash would never be injected.
+        counters = {"staged_then_failed": 0}
+        original_factory = engine.order_manager.session_factory
+
+        def failing_factory():
+            session = original_factory()
+            state = {"staged": False}
+            real_add_all = session.add_all
+
+            class _Guarded:
+                def __getattr__(self, name):
+                    return getattr(session, name)
+
+                def add_all(self, instances):
+                    state["staged"] = True
+                    return real_add_all(instances)
+
+                async def commit(self):
+                    if state["staged"]:
+                        counters["staged_then_failed"] += 1
+                        await session.rollback()
+                        raise RuntimeError("TEST_CRASH_BEFORE_FILL_COMMIT")
+                    return await session.commit()
+
+                async def __aenter__(self):
+                    await session.__aenter__()
+                    return self
+
+                async def __aexit__(self, *exc):
+                    return await session.__aexit__(*exc)
+
+            return _Guarded()
+
+        import crypto_trader.order.manager as _mgr
+
+        real_integrity = _mgr.IntegrityError
+
+        class _NotIntegrityError(Exception):
+            """So the injected crash is not mistaken for the race branch."""
+
+        engine.order_manager.session_factory = failing_factory
+        _mgr.IntegrityError = _NotIntegrityError
+        try:
+            # Called DIRECTLY, not through the event queue: the queue has its own
+            # failure handling, so going through it would hide whether the crash
+            # actually reached apply_fill's commit.
+            with pytest.raises(RuntimeError, match="TEST_CRASH_BEFORE_FILL_COMMIT"):
+                await asyncio.wait_for(
+                    engine.process_exchange_event(_event("evt-c1-crash")), timeout=10
+                )
+        finally:
+            engine.order_manager.session_factory = original_factory
+            _mgr.IntegrityError = real_integrity
+
+        assert counters["staged_then_failed"] >= 1, (
+            "the crash injection never reached apply_fill's commit - the test would "
+            "otherwise prove nothing about C1"
+        )
+
+        async with database.session_factory() as session:
+            left_fills = (await session.execute(select(FillORM))).scalars().all()
+            left_markers = (await session.execute(select(FillSettlementORM))).scalars().all()
+            left_ledger = (await session.execute(select(LedgerTransactionORM))).scalars().all()
+        assert list(left_fills) == [], "a crashed fill transaction left a durable fill"
+        assert list(left_markers) == [], "a crashed fill transaction left a marker"
+        assert list(left_ledger) == [], "a crashed fill transaction left a ledger posting"
+
+        # ------------------- the SAME factual event, replayed, fully recovers
+        await engine.process_exchange_event(_event("evt-c1-retry"))
+        await engine.wait_for_event_queue()
+
+        async with database.session_factory() as session:
+            recovered = (
+                await session.execute(
+                    select(FillORM).where(FillORM.fill_id == factual.fill_id)
+                )
+            ).scalar_one_or_none()
+            assert recovered is not None, "the retried event produced no fill"
+            marker = (
+                await session.execute(
+                    select(FillSettlementORM).where(
+                        FillSettlementORM.fill_id == factual.fill_id
+                    )
+                )
+            ).scalar_one_or_none()
+            assert marker is not None and marker.state == STATE_COMPLETE, (
+                f"recovery did not complete the settlement, marker={marker}"
+            )
+            ledger_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(LedgerTransactionORM)
+                    .where(LedgerTransactionORM.fill_id == factual.fill_id)
+                )
+            ).scalar_one()
+            order_after = await session.get(OrderORM, factual.order_id)
+        assert ledger_count == 1, f"expected exactly one posting, got {ledger_count}"
+        assert Decimal(str(order_after.filled_quantity)) == Decimal(str(factual.quantity))
+    finally:
+        await engine.stop()
