@@ -131,6 +131,7 @@ class EpisodeBinding:
     direction: str | None = None
     evidence_domain: str | None = None
     backtest_provenance: dict[str, Any] | None = None
+    backtest_evidence_identity: str | None = None
 
 
 @dataclass
@@ -552,6 +553,10 @@ class GrowthKnowledgePublisher:
                 or self._default_scope(binding)
             )
             scope["evidence_domain"] = evidence_domain
+            if binding.backtest_evidence_identity:
+                scope["backtest_evidence_identity"] = (
+                    binding.backtest_evidence_identity
+                )
             scope["proposition_key"] = proposition_identity(statement, scope)
             proposition_key = scope["proposition_key"]
             content_hash = sha256_text(
@@ -1321,7 +1326,11 @@ class GrowthKnowledgePublisher:
             ]
             by_episode: dict[str, dict[str, list[str]]] = {}
             for row in proposition_lessons:
-                episode = row.episode_id or row.source_id
+                episode = (
+                    (row.scope_json or {}).get("backtest_evidence_identity")
+                    or row.episode_id
+                    or row.source_id
+                )
                 bucket = by_episode.setdefault(episode, {"support": [], "contrary": []})
                 refs = list(row.support_refs_json or [])
                 contrary = list(row.contrary_refs_json or [])

@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import dataclasses
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
+from crypto_trader.learning.growth_backtest import (
+    BacktestEpisodeAdapter,
+    BacktestTrade,
+)
 from crypto_trader.learning.growth_card_retrieval import (
+    CardDecisionTraceStore,
     CardRankingPolicy,
     ExperienceCardRetriever,
 )
@@ -23,7 +30,13 @@ from crypto_trader.learning.growth_knowledge import (
 from crypto_trader.learning.growth_models import (
     create_growth_schema,
 )
-from crypto_trader.learning.growth_v2_contracts import AdaptiveExperienceCard
+from crypto_trader.learning.growth_v2_contracts import (
+    AdaptiveExperienceCard,
+    CardRetrievalResult,
+    ContextSignature,
+    RetrievedCard,
+    TriggerSignature,
+)
 from tests.growth_system.test_round2_publication_semantics import (
     KNOWN_AT,
     REGIME,
@@ -38,6 +51,7 @@ PROVENANCE = {
     "backtest_run_id": "bt-run-1",
     "strategy_version": "v1",
     "strategy_hash": "sha256:strategy",
+    "dataset_id": "dataset-1",
     "dataset_hash": "sha256:dataset",
     "date_range": "2024-01-01:2025-01-01",
     "symbol": SYMBOL,
@@ -255,3 +269,198 @@ def test_bt06_bt07_card_identity_and_retrieval_domain_policy():
         mode="PAPER",
     )
     assert retriever._scope_rejection(paper_card, "default", "PAPER") == []
+
+
+async def test_bt03_bt04_domain_metrics_stay_separate(growth_db, publisher):
+    for i in range(3):
+        await publisher.publish_review(
+            attempt=_domain_attempt(f"bt_metrics_{i}", mode="BACKTEST", statement=STATEMENT_A),
+            binding=_domain_binding(
+                mode="BACKTEST",
+                domain=EVIDENCE_DOMAIN_BACKTEST,
+                provenance=PROVENANCE,
+            ),
+            known_at=KNOWN_AT,
+        )
+    for i in range(2):
+        await publisher.publish_review(
+            attempt=_domain_attempt(f"paper_metrics_{i}", mode="PAPER", statement=STATEMENT_A),
+            binding=_domain_binding(mode="PAPER", domain="PAPER"),
+            known_at=KNOWN_AT,
+        )
+    bt = (
+        await publisher.store.current_patterns_for_scope(
+            account_id="default", mode="BACKTEST", symbol=SYMBOL, regime=REGIME
+        )
+    )[0]
+    paper = (
+        await publisher.store.current_patterns_for_scope(
+            account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME
+        )
+    )[0]
+    assert bt.sample_count == 3 and bt.status == "VALIDATED"
+    assert paper.sample_count == 2 and paper.status == "CANDIDATE"
+    assert bt.support_count == 3 and paper.support_count == 2
+
+
+def test_bt08_default_policy_excludes_backtest_but_explicit_research_allows_it():
+    retriever = ExperienceCardRetriever(None, policy=CardRankingPolicy())
+    backtest_card = AdaptiveExperienceCard(
+        rule_id="card_bt_research",
+        title="bt",
+        content="x",
+        account_id="default",
+        mode="BACKTEST",
+    )
+    # Default PAPER policy: own domain only.
+    assert retriever._scope_rejection(backtest_card, "default", "BACKTEST") == []
+    paper_retriever = ExperienceCardRetriever(
+        None, policy=CardRankingPolicy(allowed_evidence_domains=("PAPER",))
+    )
+    assert paper_retriever._scope_rejection(backtest_card, "default", "BACKTEST") == [
+        "EVIDENCE_DOMAIN_NOT_ALLOWED:BACKTEST"
+    ]
+    research_policy = ExperienceCardRetriever(
+        None,
+        policy=CardRankingPolicy(
+            allowed_evidence_domains=("PAPER", "BACKTEST")
+        ),
+    )
+    assert research_policy._scope_rejection(backtest_card, "default", "BACKTEST") == []
+
+
+async def test_bt13_domain_divergence_keeps_state_separate(growth_db, publisher):
+    for i in range(3):
+        await publisher.publish_review(
+            attempt=_domain_attempt(f"bt_div_{i}", mode="BACKTEST", statement=STATEMENT_A),
+            binding=_domain_binding(
+                mode="BACKTEST", domain=EVIDENCE_DOMAIN_BACKTEST, provenance=PROVENANCE
+            ),
+            known_at=KNOWN_AT,
+        )
+    await publisher.publish_review(
+        attempt=_domain_attempt("paper_div_0", mode="PAPER", statement=STATEMENT_A),
+        binding=_domain_binding(mode="PAPER", domain="PAPER"),
+        known_at=KNOWN_AT,
+    )
+    bt = (
+        await publisher.store.current_patterns_for_scope(
+            account_id="default", mode="BACKTEST", symbol=SYMBOL, regime=REGIME
+        )
+    )[0]
+    paper = (
+        await publisher.store.current_patterns_for_scope(
+            account_id="default", mode="PAPER", symbol=SYMBOL, regime=REGIME
+        )
+    )[0]
+    assert bt.pattern_id != paper.pattern_id
+    assert bt.status == "VALIDATED" and paper.status == "CANDIDATE"
+
+
+async def test_bt15_duplicate_backtest_identity_counts_once(growth_db, publisher):
+    identity = "bt_identity_duplicate"
+    for i in range(2):
+        binding = dataclasses.replace(
+            _binding(),
+            mode="BACKTEST",
+            evidence_domain=EVIDENCE_DOMAIN_BACKTEST,
+            backtest_provenance=PROVENANCE,
+            backtest_evidence_identity=identity,
+        )
+        await publisher.publish_review(
+            attempt=_domain_attempt(
+                f"bt_dup_{i}", mode="BACKTEST", statement=STATEMENT_A
+            ),
+            binding=binding,
+            known_at=KNOWN_AT,
+        )
+    patterns = await publisher.store.current_patterns_for_scope(
+        account_id="default", mode="BACKTEST", symbol=SYMBOL, regime=REGIME
+    )
+    assert patterns
+    assert patterns[0].sample_count == 1
+    assert patterns[0].independent_sample_count == 1
+
+
+async def test_bt09_trace_first_class_domain_provenance(growth_db):
+    now = datetime(2026, 9, 13, 12, tzinfo=UTC)
+    trigger = TriggerSignature.from_factor_states([], as_of=now)
+    context = ContextSignature.from_market_state({}, as_of=now, symbol=SYMBOL)
+    card = AdaptiveExperienceCard(
+        rule_id="card_trace_domain",
+        title="paper",
+        content="x",
+        account_id="default",
+        mode="PAPER",
+        confidence=0.5,
+    )
+    result = CardRetrievalResult(
+        as_of=now,
+        trigger=trigger,
+        context=context,
+        selected=[
+            RetrievedCard(
+                rule_id=card.rule_id,
+                version=1,
+                status="ACTIVE",
+                score=0.5,
+                components={},
+                why=["TEST"],
+                card=card,
+            )
+        ],
+        metrics={"policy_fingerprint": "policy-test"},
+    )
+    store = CardDecisionTraceStore(growth_db.session_factory)
+    trace = await store.record(
+        result,
+        decision_id=None,
+        evidence_package_id=None,
+        account_id="default",
+        mode="PAPER",
+    )
+    async with growth_db.session_factory() as session:
+        from crypto_trader.learning.growth_models import GrowthCardDecisionTraceORM
+
+        row = await session.get(GrowthCardDecisionTraceORM, trace.trace_id)
+    provenance = row.applicability_json["_domain_provenance"]
+    assert provenance[0]["evidence_ref"] == "card:card_trace_domain:v1"
+    assert provenance[0]["evidence_domain"] == "PAPER"
+    assert provenance[0]["domain_weight"] == 0.75
+    assert row.applicability_json["_decision_evidence_domain"] == "PAPER"
+
+
+def test_bt14_backtest_adapter_produces_isolated_canonical_episode():
+    trade = BacktestTrade(
+        episode_id="bt-trade-1",
+        symbol=SYMBOL,
+        direction="LONG",
+        entry_price=Decimal("100"),
+        exit_price=Decimal("101"),
+        quantity=Decimal("1"),
+        leverage=Decimal("1"),
+        fees=Decimal("0"),
+        funding_pnl=Decimal("0"),
+        gross_pnl=Decimal("1"),
+        net_pnl=Decimal("1"),
+        holding_time_seconds=60.0,
+        entry_market_regime="TREND_UP",
+        terminal_reason="EXIT",
+        opened_at=KNOWN_AT,
+        closed_at=KNOWN_AT,
+        provenance=PROVENANCE,
+    )
+    adapter = BacktestEpisodeAdapter()
+    episode = adapter.to_factual_episode(trade)
+    binding = adapter.to_binding(trade, canonical_regime="TRENDING")
+    assert episode.episode_id == "bt-trade-1"
+    assert binding.mode == "BACKTEST"
+    assert binding.evidence_domain == "BACKTEST"
+    assert adapter.evidence_identity(trade) == adapter.evidence_identity(trade)
+    bad = dataclasses.replace(trade, provenance={})
+    try:
+        adapter.to_factual_episode(bad)
+    except BacktestProvenanceError:
+        pass
+    else:
+        raise AssertionError("missing provenance must block BACKTEST publication")

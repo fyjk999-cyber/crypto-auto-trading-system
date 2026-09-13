@@ -21,6 +21,7 @@ BACKTEST_PROVENANCE_FIELDS = (
     "backtest_run_id",
     "strategy_version",
     "strategy_hash",
+    "dataset_id",
     "dataset_hash",
     "date_range",
     "symbol",
@@ -73,3 +74,35 @@ def validate_backtest_provenance(provenance: dict[str, Any] | None) -> None:
             "BACKTEST_KNOWLEDGE_PUBLISH_BLOCKED_MISSING:"
             + ",".join(missing)
         )
+
+
+DOMAIN_WEIGHT_CAPS = {
+    EVIDENCE_DOMAIN_BACKTEST: 0.40,
+    EVIDENCE_DOMAIN_PAPER: 0.75,
+    EVIDENCE_DOMAIN_LIVE: 1.00,
+}
+
+
+def domain_weight_cap(domain: str | None) -> float:
+    return DOMAIN_WEIGHT_CAPS.get(
+        str(domain or EVIDENCE_DOMAIN_PAPER).upper(), 0.0
+    )
+
+
+def effective_evidence_weight(
+    internal_confidence: float,
+    domain: str | None,
+    *,
+    applicability: float = 1.0,
+    recency: float = 1.0,
+    regime_match: float = 1.0,
+) -> float:
+    cap = domain_weight_cap(domain)
+    value = (
+        max(0.0, min(1.0, float(internal_confidence)))
+        * cap
+        * max(0.0, min(1.0, applicability))
+        * max(0.0, min(1.0, recency))
+        * max(0.0, min(1.0, regime_match))
+    )
+    return round(min(value, cap), 6)

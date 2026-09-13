@@ -21,6 +21,10 @@ from sqlalchemy import and_, or_, select
 from crypto_trader.intelligence.knowledge.decay import KnowledgeDecayEngine
 from crypto_trader.learning.growth_card_view import card_from_snapshot, row_to_card
 from crypto_trader.learning.growth_contracts import canonical_json, sha256_text
+from crypto_trader.learning.growth_domains import (
+    domain_for_mode,
+    domain_weight_cap,
+)
 from crypto_trader.learning.growth_models import GrowthCardDecisionTraceORM, GrowthCardVersionORM
 from crypto_trader.learning.growth_v2_contracts import (
     SHARE_SCOPE_ACCOUNT_MODE,
@@ -405,7 +409,6 @@ class ExperienceCardRetriever:
             return ["ACCOUNT_MISMATCH"]
         if card.mode != mode:
             return ["MODE_MISMATCH"]
-        from crypto_trader.learning.growth_domains import domain_for_mode
 
         own_domain = domain_for_mode(mode)
         allowed_domains = self.policy.allowed_evidence_domains or (own_domain,)
@@ -596,7 +599,6 @@ class CardDecisionTraceStore:
         selected_refs = [
             f"card:{item.rule_id}:v{item.version}" for item in result.selected
         ]
-        from crypto_trader.learning.growth_domains import domain_for_mode
 
         trace_payload = {
             "decision_id": decision_id,
@@ -607,6 +609,25 @@ class CardDecisionTraceStore:
                 item.rule_id: domain_for_mode(item.card.mode if item.card else mode)
                 for item in result.selected
             },
+            "selected_evidence_domain_provenance": [
+                {
+                    "evidence_ref": f"card:{item.rule_id}:v{item.version}",
+                    "card_id": item.rule_id,
+                    "card_version": item.version,
+                    "evidence_domain": domain_for_mode(
+                        item.card.mode if item.card else mode
+                    ),
+                    "internal_confidence": float(
+                        item.card.confidence or 0
+                    )
+                    if item.card is not None
+                    else 0.0,
+                    "domain_weight": domain_weight_cap(
+                        domain_for_mode(item.card.mode if item.card else mode)
+                    ),
+                }
+                for item in result.selected
+            ],
             "as_of": result.as_of.isoformat(),
             "symbol": result.context.symbol,
             "selected": selected_refs,
@@ -680,6 +701,12 @@ class CardDecisionTraceStore:
                 | {
                     "_policy_fingerprint": policy_fingerprint,
                     "_policy_version": result.policy_version,
+                    "_domain_provenance": trace_payload.get(
+                        "selected_evidence_domain_provenance", []
+                    ),
+                    "_decision_evidence_domain": trace_payload.get(
+                        "decision_evidence_domain"
+                    ),
                 },
                 candidate_count=int(result.metrics.get("loaded_card_count", 0)),
                 filtered_count=int(result.metrics.get("filtered_card_count", 0)),
@@ -756,7 +783,10 @@ def register_experience_card_tool(
         budget = int(getattr(retriever.policy, "token_budget", 1200))
 
         def _card_payload(items) -> list[dict]:
-            from crypto_trader.learning.growth_domains import domain_for_mode
+            from crypto_trader.learning.growth_domains import (
+                domain_weight_cap,
+                effective_evidence_weight,
+            )
 
             return [
                 {
@@ -770,6 +800,15 @@ def register_experience_card_tool(
                         item.card.mode if item.card else mode
                     )
                     in {"PAPER", "LIVE"},
+                    "domain_weight": domain_weight_cap(
+                        domain_for_mode(item.card.mode if item.card else mode)
+                    ),
+                    "effective_weight": effective_evidence_weight(
+                        float(item.card.confidence or 0)
+                        if item.card is not None
+                        else 0.0,
+                        domain_for_mode(item.card.mode if item.card else mode),
+                    ),
                     "score": item.score,
                     "why": item.why,
                     "guidance": item.card.guidance if item.card else {},
