@@ -92,6 +92,30 @@ async def _counts(database):
         }
 
 
+
+
+async def _await_fill(database, *, deadline_seconds: float = 5.0):
+    """Wait for the durable fill to exist, then return it.
+
+    ``engine.wait_for_event_queue()`` is ``asyncio.Queue.join()``: it drains only
+    what was ALREADY queued, so a fill event the adapter enqueues immediately
+    afterwards is not covered. Under full-suite load that made this test read a
+    fill that had not been committed yet. Waiting on the observable condition
+    instead of a fixed delay keeps the same assertion without the race.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    deadline = _time.monotonic() + deadline_seconds
+    while True:
+        async with database.session_factory() as session:
+            rows = (await session.execute(select(FillORM))).scalars().all()
+        if rows:
+            return rows
+        if _time.monotonic() >= deadline:
+            raise AssertionError(f"no durable fill appeared within {deadline_seconds}s")
+        await _asyncio.sleep(0.01)
+
 @pytest.mark.asyncio
 async def test_fill_commit_then_settlement_failure_is_recoverable(database):
     """§31: FillORM commits, settlement fails before the ledger."""
@@ -380,8 +404,9 @@ async def test_ledger_commit_then_promotion_failure_recovers(database):
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
 
+    fills = await _await_fill(database)
+    fill_id = fills[0].fill_id
     async with database.session_factory() as session:
-        fill_id = (await session.execute(select(FillORM))).scalars().one().fill_id
         ledger_count = (
             await session.execute(
                 select(func.count()).select_from(LedgerTransactionORM).where(
@@ -513,9 +538,10 @@ async def test_close_commit_then_episode_failure_recovers(database):
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
 
+    fills = await _await_fill(database)
+    fill = fills[0]
+    settle_fill_id = fill.fill_id
     async with database.session_factory() as session:
-        fill = (await session.execute(select(FillORM))).scalars().one()
-        settle_fill_id = fill.fill_id
         total_ledger_before = (
             await session.execute(select(func.count()).select_from(LedgerTransactionORM))
         ).scalar_one()
