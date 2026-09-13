@@ -441,7 +441,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     assert exit_decisions[0].checks["original_direction"] == "SHORT"
     await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
     await engine.wait_for_event_queue()
-    closed = await engine.portfolio.get_position("BTCUSDT")
+    closed = await _await_position_quantity(engine, "BTCUSDT", Decimal("0"))
     final_plan = await plans.get(plan.trade_plan_id)
     assert closed is not None and closed.quantity == 0
     assert final_plan is not None and final_plan.state == TradePlanState.CLOSED
