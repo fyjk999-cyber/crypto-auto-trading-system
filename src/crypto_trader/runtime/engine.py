@@ -2134,18 +2134,15 @@ class TradingEngine:
             )
             await RecoveryService(self.order_manager, self.adapter, self.audit).recover(run_id)
             return risk_decision
-        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
-            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
-            await self.audit.log(
-                "SUBMIT_TRANSIENT_FAILURE",
-                target=client_order_id,
-                run_id=run_id,
-                client_order_id=client_order_id,
-                order_id=order.internal_order_id,
-                after={"error": type(exc).__name__},
-            )
-            return risk_decision
         except OrderRejected as exc:
+            # MUST precede the ExchangeError branch below: OrderRejected
+            # subclasses ExchangeError, so the broad handler swallowed it and a
+            # deterministic PRE-BROKER refusal was recorded as UNKNOWN instead
+            # of REJECTED. The adapter raises this BEFORE it ever calls the
+            # broker (no factual book / symbol mismatch), so the order cannot
+            # exist at the exchange and UNKNOWN is simply the wrong fact -
+            # leaving it UNKNOWN also blocked the plan's pending-position-action
+            # guard forever.
             await self.order_manager.reject(
                 order.internal_order_id, str(exc), event_id=new_id("evt")
             )
@@ -2158,7 +2155,22 @@ class TradingEngine:
                 run_id=run_id,
                 client_order_id=client_order_id,
                 order_id=order.internal_order_id,
-                after={"reason": str(exc)},
+                after={"reason": str(exc), "broker_reached": False},
+            )
+            return risk_decision
+
+        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
+            # Genuinely ambiguous: the broker MAY have accepted the order before
+            # the failure, so this stays fail-closed as UNKNOWN and is settled by
+            # a real broker query - never by assumption.
+            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
+            await self.audit.log(
+                "SUBMIT_TRANSIENT_FAILURE",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=order.internal_order_id,
+                after={"error": type(exc).__name__},
             )
             return risk_decision
 
@@ -2553,6 +2565,10 @@ class TradingEngine:
         # and a stale ENTRY can never be expired. Recovery copies durable facts
         # only - it never submits, never invents a fill and never changes
         # identity.
+        # F6.2: repair historical UNKNOWN orders that provably never reached the
+        # broker, BEFORE F6 restores broker-backed ones. Only proven pre-broker
+        # refusals are terminalised; every other UNKNOWN stays UNKNOWN.
+        await self._repair_pre_broker_rejections()
         recovered, report = await self._recover_unresolved_orders()
         await restore(
             balances={currency: balance.total for currency, balance in account.balances.items()},
@@ -2572,6 +2588,60 @@ class TradingEngine:
             # held. Fail closed: no new execution writer starts on a state we
             # cannot vouch for. No blind resubmit, no assumed cancel.
             self.reconciliation_halted = True
+
+    async def _repair_pre_broker_rejections(self) -> None:
+        """Terminalise UNKNOWN orders with PROVEN pre-broker failure lineage.
+
+        Runs after adapter connect (so fill/event reads are durable) and before
+        F6 order restore, so a repaired order is not also restored as if it were
+        live. It never creates a broker fact and never replays an old decision.
+        """
+        from crypto_trader.order.pre_broker_rejection import (
+            repair_pre_broker_rejections,
+        )
+
+        try:
+            facts = await self.order_manager.unresolved_order_facts()
+        except Exception:
+            logger.warning("pre-broker repair: query failed", exc_info=True)
+            return
+        orders = []
+        for record in facts:
+            if str(record.get("status")) != "UNKNOWN":
+                continue
+            order = await self.order_manager.get(record["order_id"])
+            if order is not None:
+                orders.append(order)
+        if not orders:
+            return
+
+        async def _fill_count(order_id: str) -> int:
+            return await self.order_manager.count_fills_for_order(order_id)
+
+        async def _terminalize(order, terminal_reason: str) -> None:
+            await self.order_manager.reject(
+                order.internal_order_id,
+                terminal_reason,
+                event_id=new_id("evt"),
+            )
+
+        report = await repair_pre_broker_rejections(
+            order_manager=self.order_manager,
+            unresolved_orders=orders,
+            fill_counter=_fill_count,
+            event_loader=self.order_manager.list_events,
+            terminalize=_terminalize,
+        )
+        if report.outcomes:
+            await self.audit.log(
+                "PRE_BROKER_REJECTION_REPAIR",
+                target=f"orders={len(report.outcomes)}",
+                run_id=self.run_id,
+                after={
+                    "counts": report.counts(),
+                    "outcomes": [o.as_dict() for o in report.outcomes],
+                },
+            )
 
     async def _recover_unresolved_orders(self):
         """Load durable unresolved orders and classify their recoverability."""

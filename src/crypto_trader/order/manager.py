@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.enums import (
@@ -728,6 +728,19 @@ class OrderManager:
         if self.settlement_callback is not None:
             await self.settlement_callback(fill)
         return order, fill, True
+
+    async def count_fills_for_order(self, order_id: str) -> int:
+        """Read-only: durable fill count for one order.
+
+        Used by the pre-broker repair classifier: a fill row proves the broker
+        was reached, so it must block a REJECTED repair whatever the id column
+        happens to say.
+        """
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(func.count()).select_from(FillORM).where(FillORM.order_id == order_id)
+            )
+            return int(result.scalar_one() or 0)
 
     async def get_fill(self, fill_id: str) -> Fill | None:
         async with self.session_factory() as session:
