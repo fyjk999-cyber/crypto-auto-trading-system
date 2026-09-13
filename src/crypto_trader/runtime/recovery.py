@@ -6,13 +6,23 @@ querying the exchange, not by creating new orders.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderEventType, OrderStatus
+
+logger = logging.getLogger(__name__)
+
 from crypto_trader.domain.errors import OrderNotFound
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill
+from crypto_trader.order.recovery_classification import (
+    DISPOSITION_MISSING,
+    DISPOSITION_REJECT,
+    DISPOSITION_UNKNOWN,
+    classify_recovery_lookup_outcome,
+)
 
 
 def event_type_for_exchange_status(status: OrderStatus) -> OrderEventType:
@@ -34,30 +44,158 @@ class RecoveryService:
         self.order_manager = order_manager
         self.adapter = adapter
         self.audit = audit
+        #: Orders recovery could not safely resolve. Reported, never silently
+        #: terminalised.
+        self.health_unresolved: list[str] = []
+
+
+    async def _durable_fill_count(self, local) -> int:
+        """Factual fill rows for this order. Execution evidence outranks lookup."""
+        try:
+            count = getattr(self.order_manager, "count_fills_for_order", None)
+            if count is not None:
+                return int(await count(local.internal_order_id))
+        except Exception:
+            # Unreadable is not zero: treat as unknown evidence and refuse to
+            # terminalise by returning a non-zero sentinel.
+            return 1
+        return 0
+
+    async def _failure_reason(self, local) -> str | None:
+        """Last recorded failure reason, read from durable order events."""
+        reason = getattr(local, "rejection_reason", None)
+        if reason:
+            return str(reason)
+        events = getattr(self.order_manager, "list_events", None)
+        if events is None:
+            return None
+        try:
+            for event in reversed(await events(local.internal_order_id)):
+                payload = getattr(event, "payload", None) or {}
+                value = payload.get("reason")
+                if value:
+                    return str(value)
+        except Exception:
+            return None
+        return None
+
+    async def _pre_broker_lineage_proven(self, local) -> bool:
+        """True only when durable lineage proves the broker was never reached.
+
+        Requires an ORDER_UNKNOWN/REJECTED style event carrying a proven
+        pre-broker reason AND the absence of any broker identity. Anything
+        unreadable returns False, which is the safe direction: no terminalise.
+        """
+        if local.exchange_order_id:
+            return False
+        events = getattr(self.order_manager, "list_events", None)
+        if events is None:
+            return False
+        try:
+            for event in reversed(await events(local.internal_order_id)):
+                payload = getattr(event, "payload", None) or {}
+                raw = payload.get("reason")
+                if not raw:
+                    continue
+                from crypto_trader.order.recovery_classification import (
+                    PROVEN_PRE_BROKER_REASONS,
+                )
+
+                return str(raw).strip().upper() in PROVEN_PRE_BROKER_REASONS
+        except Exception:
+            return False
+        return False
+
+    async def _safe_audit(self, action: str, **fields) -> None:
+        """Audit is optional here; a missing audit must never mask a decision."""
+        log = getattr(self.audit, "log", None)
+        if log is None:
+            return
+        try:
+            await log(action, **fields)
+        except Exception:
+            logger.warning("recovery audit failed", exc_info=True)
 
     async def recover(self, run_id: str | None = None) -> list[str]:
         actions: list[str] = []
         for local in await self.order_manager.list_open():
             lookup_key = local.exchange_order_id or local.client_order_id
             if not lookup_key:
-                await self.order_manager.reject(
-                    local.internal_order_id,
-                    "no exchange/client order id during recovery; no blind resubmit",
-                    event_id=new_id("evt"),
+                # ORDER NOT FOUND != ORDER NEVER EXISTED. Without any identifier we
+                # cannot prove the order never reached the venue, so we must not
+                # assert a terminal REJECTED. Stay unresolved; never resubmit.
+                await self._safe_audit(
+                    "RECOVERY_ORDER_UNIDENTIFIABLE",
+                    target=local.client_order_id or local.internal_order_id,
+                    run_id=run_id,
+                    order_id=local.internal_order_id,
+                    client_order_id=local.client_order_id,
+                    after={
+                        "disposition": DISPOSITION_UNKNOWN,
+                        "reason_codes": ["NO_ORDER_IDENTIFIERS"],
+                    },
                 )
-                actions.append(f"{local.client_order_id}: REJECTED (missing order id)")
+                actions.append(f"{local.client_order_id}: UNKNOWN (no identifiers)")
                 continue
             try:
                 exchange_order = await self.adapter.get_order(local.symbol, lookup_key)
             except OrderNotFound:
-                # The order never reached the exchange or was fully purged.
-                # We must not resubmit; record terminal state and continue.
-                await self.order_manager.reject(
-                    local.internal_order_id,
-                    "order not found on exchange during recovery; no blind resubmit",
-                    event_id=new_id("evt"),
+                # CLASSIFY before acting. "Not found" is NOT evidence that the
+                # order never existed: a lookup can miss a real order through a
+                # cancellation race, a venue purge or a partial response, and a
+                # false terminal REJECTED is what leaves a position unmanageable.
+                # Only a POSITIVE pre-broker proof may terminalise.
+                durable_fills = await self._durable_fill_count(local)
+                verdict = classify_recovery_lookup_outcome(
+                    lookup_ok=True,
+                    exchange_order_id=local.exchange_order_id,
+                    filled_quantity=local.filled_quantity,
+                    durable_fill_count=durable_fills,
+                    failure_reason=await self._failure_reason(local),
+                    pre_broker_lineage_proven=await self._pre_broker_lineage_proven(local),
+                    has_client_order_id=bool(local.client_order_id),
                 )
-                actions.append(f"{local.client_order_id}: REJECTED (not on exchange)")
+                if verdict.disposition == DISPOSITION_REJECT:
+                    await self.order_manager.reject(
+                        local.internal_order_id,
+                        "proven pre-broker refusal; no blind resubmit",
+                        event_id=new_id("evt"),
+                    )
+                    actions.append(
+                        f"{local.client_order_id}: REJECTED (proven pre-broker)"
+                    )
+                elif verdict.disposition == DISPOSITION_MISSING:
+                    self.health_unresolved.append(local.internal_order_id)
+                    await self._safe_audit(
+                        "RECOVERY_ORDER_MISSING",
+                        target=local.client_order_id,
+                        run_id=run_id,
+                        order_id=local.internal_order_id,
+                        client_order_id=local.client_order_id,
+                        exchange_order_id=local.exchange_order_id,
+                        after={
+                            "disposition": DISPOSITION_MISSING,
+                            "reason_codes": list(verdict.reason_codes),
+                        },
+                    )
+                    actions.append(
+                        f"{local.client_order_id}: MISSING (reconciliation required)"
+                    )
+                else:
+                    self.health_unresolved.append(local.internal_order_id)
+                    await self._safe_audit(
+                        "RECOVERY_ORDER_LEFT_UNRESOLVED",
+                        target=local.client_order_id,
+                        run_id=run_id,
+                        order_id=local.internal_order_id,
+                        client_order_id=local.client_order_id,
+                        after={
+                            "classification": verdict.classification,
+                            "disposition": DISPOSITION_UNKNOWN,
+                            "reason_codes": list(verdict.reason_codes),
+                        },
+                    )
+                    actions.append(f"{local.client_order_id}: UNKNOWN (unproven)")
                 continue
 
             status = exchange_order.status
