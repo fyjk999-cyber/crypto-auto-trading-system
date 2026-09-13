@@ -850,3 +850,76 @@ async def test_exit_supersedes_stale_partial_reduce_order(database):
     assert position is not None and position.quantity == 0
     assert final_plan is not None and final_plan.state == TradePlanState.CLOSED
     await engine.stop()
+
+
+async def test_reduce_supersedes_stale_partial_reduce_order(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-reduce-supersede")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-reduce-supersede",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="factual reduce-supersede thesis",
+        position_size_request=0.1,
+        leverage_request=2,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry,
+        limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    book = engine.adapter.books["BTCUSDT"]
+    book.apply_snapshot(
+        engine.adapter.sequence["BTCUSDT"] + 1,
+        [(Decimal("99.95"), Decimal("0.02"))],
+        [(Decimal("100.05"), Decimal("1"))],
+    )
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief(
+            [("REDUCE", "0.05"), ("REDUCE", "0.05"), ("REDUCE", "0.05")]
+        ),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    await engine.tick()
+    await engine.wait_for_event_queue()
+    partial_order = list(engine.adapter.orders.values())[-1]
+    assert partial_order.status == OrderStatus.PARTIALLY_FILLED
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.08")
+    order_count = len(engine.adapter.orders)
+
+    clock.advance(seconds=61)
+    assert await engine.tick() == []
+    await engine.wait_for_event_queue()
+    superseded = list(engine.adapter.orders.values())[-1]
+    assert superseded.internal_order_id == partial_order.internal_order_id
+    assert superseded.status in {
+        OrderStatus.CANCELLED,
+        OrderStatus.CANCEL_PENDING,
+    }
+    assert len(engine.adapter.orders) == order_count
+
+    engine.adapter.seed_book("BTCUSDT")
+    clock.advance(seconds=61)
+    await engine.tick()
+    await engine.wait_for_event_queue()
+    assert len(engine.adapter.orders) == order_count + 1
+    await engine.stop()

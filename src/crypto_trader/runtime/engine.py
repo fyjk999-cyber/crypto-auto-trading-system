@@ -85,6 +85,12 @@ from crypto_trader.valuation.service import ValuationService
 
 logger = logging.getLogger("crypto_trader.engine")
 
+# A partially filled market/limit position action can rest indefinitely when
+# the simulated book cannot fill the remainder.  A subsequent REDUCE decision
+# must be able to supersede such a stale child order instead of being
+# suppressed forever by the plan-level pending-action guard.
+STALE_POSITION_ACTION_SECONDS = 60.0
+
 
 class TradingEngine:
     def __init__(
@@ -1061,6 +1067,24 @@ class TradingEngine:
             )
             raise
 
+    def _is_stale_position_action(self, pending_order) -> bool:
+        """Return True when a non-terminal REDUCE has rested too long."""
+        if pending_order.status not in {
+            OrderStatus.SUBMITTED,
+            OrderStatus.ACKNOWLEDGED,
+            OrderStatus.OPEN,
+            OrderStatus.PARTIALLY_FILLED,
+            OrderStatus.UNKNOWN,
+        }:
+            return False
+        now = self.clock.now()
+        updated = pending_order.updated_at
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        return (now - updated).total_seconds() >= STALE_POSITION_ACTION_SECONDS
+
     async def _cancel_pending_position_action(self, pending_order) -> None:
         """Cancel a non-terminal partial REDUCE before a full EXIT can submit.
 
@@ -1258,6 +1282,22 @@ class TradingEngine:
                         run_id=run_id,
                         order_id=pending_action.internal_order_id,
                         after={"trade_plan_id": trade_plan_id},
+                    )
+                    await self._cancel_pending_position_action(pending_action)
+                    return None
+                if (
+                    lifecycle_action == "REDUCE"
+                    and self._is_stale_position_action(pending_action)
+                ):
+                    await self.audit.log(
+                        "POSITION_ACTION_REDUCE_SUPERSEDES_STALE",
+                        target=client_order_id,
+                        run_id=run_id,
+                        order_id=pending_action.internal_order_id,
+                        after={
+                            "trade_plan_id": trade_plan_id,
+                            "status": pending_action.status.value,
+                        },
                     )
                     await self._cancel_pending_position_action(pending_action)
                     return None
