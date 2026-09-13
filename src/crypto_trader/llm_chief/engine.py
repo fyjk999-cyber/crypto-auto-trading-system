@@ -93,9 +93,19 @@ class ChiefTraderEngine:
             f"Opportunity: {ctx.opportunity_context}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
+        # Tool selection is part of the same life-cycle as the final Chief
+        # decision.  It must never consume/block the reserved P1 budget for an
+        # open position: if P3 market/research calls have saturated their
+        # ceiling, an open position must still be able to select evidence and
+        # reach the P1 final decision rather than fail closed indefinitely.
+        selection_priority = (
+            P1_POSITION_LIFECYCLE
+            if ctx.position_state != PositionState.FLAT
+            else P3_SELECTED_SYMBOL_RESEARCH
+        )
         ticket = (
             self.budget.try_acquire(
-                P3_SELECTED_SYMBOL_RESEARCH, operation="tool_selection"
+                selection_priority, operation="tool_selection"
             )
             if self.budget is not None
             else None

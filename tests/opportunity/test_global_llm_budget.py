@@ -174,3 +174,38 @@ def test_tool_selection_success_is_recorded_in_the_budget():
     assert error is None
     assert selected == ["trend"]
     assert budget.snapshot()["granted_by_priority"][P3_SELECTED_SYMBOL_RESEARCH] == 1
+
+
+def test_open_position_tool_selection_uses_reserved_lifecycle_budget():
+    """P3 saturation must not starve an open position's tool selection.
+
+    Tool selection for an open position is part of P1 position lifecycle, so
+    it must remain available even when the lower-priority P3 research ceiling
+    is exhausted.
+    """
+
+    budget = GlobalLLMBudget(
+        BudgetConfig(
+            window_seconds=60,
+            max_calls_per_window=3,
+            reserved_fraction_for_higher={P3_SELECTED_SYMBOL_RESEARCH: 0.5},
+        )
+    )
+    # P3 ceiling = floor(3 * 0.5) = 1; saturate it.
+    assert budget.try_acquire(
+        P3_SELECTED_SYMBOL_RESEARCH, operation="tool_selection"
+    ).granted
+    assert not budget.try_acquire(
+        P3_SELECTED_SYMBOL_RESEARCH, operation="tool_selection"
+    ).granted
+
+    engine = ChiefTraderEngine(
+        provider=StubProvider(payload={"tools": ["trend"]}), budget=budget
+    )
+    selected, error = asyncio.run(
+        engine.select_tools(_ctx(PositionState.OPEN), ["trend"])
+    )
+    assert error is None
+    assert selected == ["trend"]
+    granted = budget.snapshot()["granted_by_priority"]
+    assert granted.get(P1_POSITION_LIFECYCLE, 0) == 1
