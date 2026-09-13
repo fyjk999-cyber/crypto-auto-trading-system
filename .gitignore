@@ -39,3 +39,5 @@ node_modules/
 
 # runtime learning closure evidence
 .ops-growth-closure/
+# evidence-domain audit logs
+.ops-domain/

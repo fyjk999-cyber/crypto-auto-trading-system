@@ -58,6 +58,8 @@ class CardRankingPolicy:
     include_stale: bool = False
     include_candidate: bool = False
     allow_general_fallback: bool = True
+    # Empty means: allow only the decision's own evidence domain.
+    allowed_evidence_domains: tuple[str, ...] = ()
     require_symbol_match: bool = False
     stale_penalty: float = 0.25
     watch_penalty: float = 0.10
@@ -84,6 +86,7 @@ class CardRankingPolicy:
             "include_stale": self.include_stale,
             "include_candidate": self.include_candidate,
             "allow_general_fallback": self.allow_general_fallback,
+            "allowed_evidence_domains": list(self.allowed_evidence_domains),
             "require_symbol_match": self.require_symbol_match,
             "stale_penalty": self.stale_penalty,
             "watch_penalty": self.watch_penalty,
@@ -383,7 +386,7 @@ class ExperienceCardRetriever:
     def _scope_rejection(
         self, card: AdaptiveExperienceCard, account_id: str, mode: str
     ) -> list[str]:
-        """Fail-closed account/mode scope; missing values are never GLOBAL."""
+        """Fail-closed account/mode/evidence-domain scope."""
         share_scope = (card.share_scope or "UNKNOWN").upper()
         scope = card.scope or {}
         if share_scope == SHARE_SCOPE_GLOBAL_EXPLICIT:
@@ -402,6 +405,13 @@ class ExperienceCardRetriever:
             return ["ACCOUNT_MISMATCH"]
         if card.mode != mode:
             return ["MODE_MISMATCH"]
+        from crypto_trader.learning.growth_domains import domain_for_mode
+
+        own_domain = domain_for_mode(mode)
+        allowed_domains = self.policy.allowed_evidence_domains or (own_domain,)
+        card_domain = domain_for_mode(card.mode)
+        if card_domain not in allowed_domains:
+            return [f"EVIDENCE_DOMAIN_NOT_ALLOWED:{card_domain}"]
         return []
 
     def _decay(
@@ -586,10 +596,17 @@ class CardDecisionTraceStore:
         selected_refs = [
             f"card:{item.rule_id}:v{item.version}" for item in result.selected
         ]
+        from crypto_trader.learning.growth_domains import domain_for_mode
+
         trace_payload = {
             "decision_id": decision_id,
             "account_id": account_id,
             "mode": mode,
+            "decision_evidence_domain": domain_for_mode(mode),
+            "selected_evidence_domains": {
+                item.rule_id: domain_for_mode(item.card.mode if item.card else mode)
+                for item in result.selected
+            },
             "as_of": result.as_of.isoformat(),
             "symbol": result.context.symbol,
             "selected": selected_refs,
@@ -739,11 +756,20 @@ def register_experience_card_tool(
         budget = int(getattr(retriever.policy, "token_budget", 1200))
 
         def _card_payload(items) -> list[dict]:
+            from crypto_trader.learning.growth_domains import domain_for_mode
+
             return [
                 {
                     "rule_id": item.rule_id,
                     "version": item.version,
                     "status": item.status,
+                    "source_evidence_domain": domain_for_mode(
+                        item.card.mode if item.card else mode
+                    ),
+                    "runtime_validated": domain_for_mode(
+                        item.card.mode if item.card else mode
+                    )
+                    in {"PAPER", "LIVE"},
                     "score": item.score,
                     "why": item.why,
                     "guidance": item.card.guidance if item.card else {},

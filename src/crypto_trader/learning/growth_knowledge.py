@@ -37,6 +37,13 @@ from crypto_trader.learning.growth_contracts import (
     canonical_json,
     sha256_text,
 )
+from crypto_trader.learning.growth_domains import (
+    EVIDENCE_DOMAIN_BACKTEST,
+    EVIDENCE_DOMAIN_PAPER,
+    domain_for_mode,
+    validate_backtest_provenance,
+    validate_domain_mode,
+)
 from crypto_trader.learning.growth_models import (
     GrowthCompressionORM,
     GrowthEpisodeBindingORM,
@@ -122,6 +129,8 @@ class EpisodeBinding:
     proof_kind: str = "FACTUAL_EPISODE"
     regime: str | None = None
     direction: str | None = None
+    evidence_domain: str | None = None
+    backtest_provenance: dict[str, Any] | None = None
 
 
 @dataclass
@@ -171,9 +180,23 @@ def pattern_logical_id(
     regime: str,
     direction: str,
     proposition_key: str = "legacy",
+    evidence_domain: str = EVIDENCE_DOMAIN_PAPER,
 ) -> str:
+    """Pattern identity is hard-namespaced by evidence domain.
+
+    A BACKTEST proposition can never share a logical pattern with PAPER/LIVE,
+    even when account/mode/symbol/regime/direction/proposition match.
+    """
     raw = "|".join(
-        (account_id, mode, symbol, regime, direction, proposition_key or "legacy")
+        (
+            account_id,
+            mode,
+            evidence_domain or domain_for_mode(mode),
+            symbol,
+            regime,
+            direction,
+            proposition_key or "legacy",
+        )
     )
     return f"pattern_{sha256(raw.encode('utf-8')).hexdigest()[:40]}"
 
@@ -508,6 +531,11 @@ class GrowthKnowledgePublisher:
         if attempt.account_id and attempt.account_id != binding.account_id:
             raise ValueError("attempt account does not match binding account")
         known_at = known_at or utcnow()
+        evidence_domain = validate_domain_mode(
+            binding.mode, binding.evidence_domain
+        )
+        if evidence_domain == EVIDENCE_DOMAIN_BACKTEST:
+            validate_backtest_provenance(binding.backtest_provenance)
         stage_token = stage_token or self._stage_token
         if staged and not stage_token:
             stage_token = f"stage_{uuid4().hex}"
@@ -523,6 +551,7 @@ class GrowthKnowledgePublisher:
                 or review.applicability_scope
                 or self._default_scope(binding)
             )
+            scope["evidence_domain"] = evidence_domain
             scope["proposition_key"] = proposition_identity(statement, scope)
             proposition_key = scope["proposition_key"]
             content_hash = sha256_text(
@@ -590,6 +619,7 @@ class GrowthKnowledgePublisher:
             known_at=known_at,
             staged=staged,
             stage_token=stage_token,
+            evidence_domain=evidence_domain,
         )
         if patterns:
             pattern, pattern_created = patterns[0]
@@ -1237,6 +1267,7 @@ class GrowthKnowledgePublisher:
         known_at: datetime,
         staged: bool = False,
         stage_token: str | None = None,
+        evidence_domain: str = EVIDENCE_DOMAIN_PAPER,
     ) -> list[tuple[GrowthPatternORM, bool]]:
         """Rebuild one pattern per proposition identity in this scope.
 
@@ -1341,6 +1372,7 @@ class GrowthKnowledgePublisher:
                 regime,
                 direction,
                 proposition_key,
+                evidence_domain,
             )
             success_refs = sorted(support_episodes)
             contrary_refs = sorted(contrary_episodes)
@@ -1349,9 +1381,11 @@ class GrowthKnowledgePublisher:
                     {
                         "pattern_id": pattern_id,
                         "proposition_key": proposition_key,
+                        "evidence_domain": evidence_domain,
                         "scope": {
                             "account_id": binding.account_id,
                             "mode": binding.mode,
+                            "evidence_domain": evidence_domain,
                             "symbol": binding.instrument_id,
                             "regime": regime,
                             "direction": direction,
@@ -1369,6 +1403,7 @@ class GrowthKnowledgePublisher:
                 "profitability_used": False,
                 "min_pattern_samples": self.min_pattern_samples,
                 "proposition_key": proposition_key,
+                "evidence_domain": evidence_domain,
             }
             if staged:
                 features.update(
@@ -1387,8 +1422,8 @@ class GrowthKnowledgePublisher:
                     "regime": regime,
                     "direction": direction,
                     "pattern_key": (
-                        f"{binding.account_id}:{binding.mode}:{binding.instrument_id}:"
-                        f"{regime}:{direction}:{proposition_key}"
+                        f"{binding.account_id}:{binding.mode}:{evidence_domain}:"
+                        f"{binding.instrument_id}:{regime}:{direction}:{proposition_key}"
                     ),
                     "features_json": features,
                     "scope_json": {
@@ -1396,6 +1431,7 @@ class GrowthKnowledgePublisher:
                             binding.instrument_id, regime, direction
                         ),
                         "proposition_key": proposition_key,
+                        "evidence_domain": evidence_domain,
                     },
                     "sample_count": sample_count,
                     "independent_sample_count": independent,

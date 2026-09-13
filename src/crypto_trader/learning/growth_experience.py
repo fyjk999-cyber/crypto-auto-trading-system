@@ -66,12 +66,14 @@ def card_rule_id(
     trigger: TriggerSignature | None,
     context: ContextSignature | None,
     guidance: dict[str, Any],
+    namespace: str | None = None,
 ) -> str:
     payload = {
         "experience_type": experience_type,
         "trigger": trigger.to_json() if trigger else None,
         "context": context.to_json() if context else None,
         "guidance": guidance,
+        "namespace": namespace,
     }
     return f"card_{sha256_text(canonical_json(payload))[:40]}"
 
@@ -185,7 +187,16 @@ class AdaptiveCardStore:
         trigger = TriggerSignature.from_json(proposal.proposed_trigger)
         context = ContextSignature.from_json(proposal.proposed_context)
         guidance = dict(proposal.proposed_guidance or {})
+        from crypto_trader.learning.growth_domains import domain_for_mode
+
+        evidence_domain = domain_for_mode(proposal.mode)
+        guidance = dict(guidance)
+        guidance["evidence_domain"] = evidence_domain
         rule_id = proposal.card_rule_id or card_rule_id(
+            namespace=(
+                f"{proposal.account_id or 'default'}:{proposal.mode or 'PAPER'}:"
+                f"{evidence_domain}"
+            ),
             experience_type="ADAPTIVE_CARD",
             trigger=trigger,
             context=context,
