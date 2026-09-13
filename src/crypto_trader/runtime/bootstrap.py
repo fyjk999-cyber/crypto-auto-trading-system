@@ -101,6 +101,13 @@ class RuntimeBundle:
 async def build_system(settings: Settings) -> RuntimeBundle:
     database = Database(settings.database_url)
     await database.init_schema()
+    # Growth evidence stores (tool selections, lessons, patterns, cards) are
+    # created idempotently for every canonical runtime.  Without this, a fresh
+    # PAPER database can start the engine but the Chief tool path fails closed
+    # with OperationalError instead of running the accepted Growth loop.
+    from crypto_trader.learning.growth_models import create_growth_schema
+
+    await create_growth_schema(database.engine)
     await _verify_migrations(database)
 
     ledger = LedgerService(database.session_factory)

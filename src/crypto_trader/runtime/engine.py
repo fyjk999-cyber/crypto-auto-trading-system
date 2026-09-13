@@ -555,7 +555,9 @@ class TradingEngine:
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.health.set(
-                    f"strategy:{strategy.name}", False, type(exc).__name__
+                    f"strategy:{strategy.name}",
+                    False,
+                    f"{type(exc).__name__}: {exc}"[:300],
                 )
                 continue
             self.consecutive_failures = 0

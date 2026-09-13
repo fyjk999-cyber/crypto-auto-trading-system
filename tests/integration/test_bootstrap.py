@@ -27,6 +27,12 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     )
     bundle = await build_system(settings)
     assert bundle.engine is not None
+    async with database.engine.connect() as conn:
+        result = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='growth_tool_selections'"
+        )
+        assert result.scalar() == "growth_tool_selections"
     # Quant is evidence-only; the accepted canonical entry authority is Live LLM.
     assert [strategy.name for strategy in bundle.engine.strategies] == ["live_llm"]
     assert bundle.position_manager is not None
