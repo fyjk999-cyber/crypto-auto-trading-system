@@ -98,24 +98,73 @@ async def _seed_known_zero_funding_coverage(database, plan, symbol="BTCUSDT") ->
 
 
 
-def _engine_ref():
-    """The engine object in the CURRENT test frame, or None if not in scope.
+async def _await_plan_promotion(plans, trade_plan_id, *, engine=None, settle_seconds=5.0):
+    """Bounded wait for a plan to reach ACTIVE.
 
-    Different tests in this file name their engine differently (engine, first,
-    recovered). A missing reference must not raise NameError, so this inspects
-    the caller frame instead of assuming a name.
+    ``engine.wait_for_event_queue()`` is ``asyncio.Queue.join()``: it drains only
+    what was ALREADY queued. A fill event enqueued by the adapter immediately
+    afterwards is not covered, so asserting straight after it can observe the
+    PRE-fill state (plan APPROVED). Waiting on the observable condition keeps the
+    same assertion without racing a projection that has not run yet.
     """
-    import sys as _sys
+    import asyncio as _asyncio
+    import time as _time
 
-    frame = _sys._getframe(1)
-    while frame is not None:
-        local = frame.f_locals
-        for candidate in ("engine", "recovered", "first"):
-            obj = local.get(candidate)
-            if obj is not None and hasattr(obj, "wait_for_event_queue"):
-                return obj
-        frame = frame.f_back
-    return None
+    deadline = _time.monotonic() + settle_seconds
+    record = None
+    while True:
+        record = await plans.get(trade_plan_id)
+        if record is not None and record.state == TradePlanState.ACTIVE:
+            return record
+        if _time.monotonic() >= deadline:
+            raise AssertionError(
+                f"plan {trade_plan_id} did not reach ACTIVE within {settle_seconds}s "
+                f"(last state={getattr(record, 'state', None)})"
+            )
+        if engine is not None:
+            await engine.wait_for_event_queue()
+        # Always yield: without this the loop can never observe a promotion that
+        # the event loop has not been given a chance to process.
+        await _asyncio.sleep(0.01)
+
+
+async def _plan_after_promotion(plans, trade_plan_id, *, engine=None):
+    """:func:`_await_plan_promotion`, returning the promoted plan record."""
+    return await _await_plan_promotion(plans, trade_plan_id, engine=engine)
+
+
+async def _await_position_quantity(engine, symbol, expected_quantity, *, deadline_seconds=5.0):
+    """Bounded wait for the projection to reach an EXACT quantity.
+
+    ``wait_for_event_queue()`` is ``asyncio.Queue.join()`` and drains only what
+    was ALREADY queued, so a fill event the adapter enqueues immediately
+    afterwards is not covered and the position may not reflect it yet. A generic
+    "non-zero" wait is not enough for REDUCE / EXIT, which move to a specific
+    quantity (or to zero), so this waits for the exact expected value.
+
+    Waiting on the observable condition, not a fixed delay. The caller's
+    assertion is unchanged.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    expected = Decimal(str(expected_quantity))
+    deadline = _time.monotonic() + deadline_seconds
+    position = None
+    while True:
+        position = await engine.portfolio.get_position(symbol)
+        actual = None if position is None else Decimal(str(position.quantity))
+        if position is not None and actual == expected:
+            return position
+        if _time.monotonic() >= deadline:
+            health = engine.health.snapshot().get("components", {})
+            raise AssertionError(
+                f"position {symbol} did not reach {expected} within "
+                f"{deadline_seconds}s (actual={actual}, "
+                f"event_processing={health.get('event_processing')})"
+            )
+        await engine.wait_for_event_queue()
+        await _asyncio.sleep(0.01)
 
 
 async def _await_position(engine, symbol, *, deadline_seconds=5.0):
@@ -150,38 +199,6 @@ async def _plan_is_active(plans, trade_plan_id) -> bool:
     return record is not None and record.state == TradePlanState.ACTIVE
 
 
-async def _await_plan_promotion(plans, trade_plan_id, *, engine=None, settle_seconds=5.0):
-    """Bounded wait for a plan to reach ACTIVE.
-
-    ``engine.wait_for_event_queue()`` is ``asyncio.Queue.join()``: it drains only
-    what was ALREADY queued when it was called. A fill event enqueued by the
-    adapter immediately afterwards is not covered, so asserting straight after it
-    can observe the PRE-fill state (plan APPROVED instead of ACTIVE). That is why
-    these lifecycle tests failed ~10% of runs while passing on a lucky ordering.
-
-    This waits for the OBSERVABLE condition instead of a fixed delay, keeps the
-    real assertion intact (it does not weaken what is checked), and fails loudly
-    with the last observed state instead of silently passing.
-    """
-    import asyncio as _asyncio
-    import time as _time
-
-    deadline = _time.monotonic() + settle_seconds
-    record = None
-    while True:
-        record = await plans.get(trade_plan_id)
-        if record is not None and record.state == TradePlanState.ACTIVE:
-            return
-        if _time.monotonic() >= deadline:
-            raise AssertionError(
-                f"plan {trade_plan_id} did not reach ACTIVE within {settle_seconds}s "
-                f"(last state={getattr(record, 'state', None)})"
-            )
-        if engine is not None:
-            await engine.wait_for_event_queue()
-        await _asyncio.sleep(0)
-
-
 async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(database):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     clock = MutableClock()
@@ -213,8 +230,8 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
 
-    active = await plans.get(plan.trade_plan_id)
-    position = await engine.portfolio.get_position("BTCUSDT")
+    active = await _plan_after_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
+    position = await _await_position_quantity(engine, "BTCUSDT", Decimal("0.1"))
     assert active is not None and active.state == TradePlanState.ACTIVE
     assert active.risk_decision_id is not None
     entry_risk_decision_id = active.risk_decision_id
@@ -242,16 +259,16 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     hold_decisions = await engine.tick()
     assert hold_decisions == []
     assert len(engine.adapter.orders) == before_orders
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
 
     clock.advance()
     reduction_decisions = await engine.tick()
     assert reduction_decisions[0].checks["original_direction"] == "LONG"
     await engine.wait_for_event_queue()
-    reduced = await engine.portfolio.get_position("BTCUSDT")
+    reduced = await _await_position_quantity(engine, "BTCUSDT", Decimal("0.06"))
     assert reduced is not None and reduced.quantity == Decimal("0.06")
     assert reduced.leverage == Decimal("5")
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
     reduction_order = list(engine.adapter.orders.values())[-1]
     persisted_reduction = await engine.order_manager.get_by_client(
         reduction_order.client_order_id
@@ -270,7 +287,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     assert submitted.state == TradePlanState.ACTIVE
     assert submitted.exit_decision_id is None
     await engine.wait_for_event_queue()
-    closed_position = await engine.portfolio.get_position("BTCUSDT")
+    closed_position = await _await_position_quantity(engine, "BTCUSDT", Decimal("0"))
     closed_plan = await plans.get(plan.trade_plan_id)
     assert closed_position is not None and closed_position.quantity == 0
     assert closed_plan is not None and closed_plan.state == TradePlanState.CLOSED
@@ -395,7 +412,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
-    opened = await _await_position(engine, "BTCUSDT")
+    opened = await _await_position_quantity(engine, "BTCUSDT", Decimal("-0.1"))
     assert opened is not None and opened.quantity == Decimal("-0.1")
     assert opened.instrument_type == "LINEAR_PERP"
     assert opened.leverage == Decimal("2")
@@ -415,14 +432,14 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     reduction_decisions = await engine.tick()
     assert reduction_decisions[0].checks["original_direction"] == "SHORT"
     await engine.wait_for_event_queue()
-    reduced = await engine.portfolio.get_position("BTCUSDT")
+    reduced = await _await_position_quantity(engine, "BTCUSDT", Decimal("-0.06"))
     assert reduced is not None and reduced.quantity == Decimal("-0.06")
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
 
     clock.advance()
     exit_decisions = await engine.tick()
     assert exit_decisions[0].checks["original_direction"] == "SHORT"
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
     await engine.wait_for_event_queue()
     closed = await engine.portfolio.get_position("BTCUSDT")
     final_plan = await plans.get(plan.trade_plan_id)
@@ -550,7 +567,7 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
     position = await engine.portfolio.get_position("BTCUSDT")
     assert entry_order.status == OrderStatus.PARTIALLY_FILLED
     assert position is not None and position.quantity == Decimal("0.04")
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
 
     engine.position_manager = LiveLLMPositionManager(
         chief=SequencedChief([("EXIT", "0"), ("EXIT", "0")]),
@@ -565,7 +582,7 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
 
     assert result == []
     assert len(engine.adapter.orders) == 1
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
     assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.04")
     assert (await engine.order_manager.get(entry_order.internal_order_id)).status == (
         OrderStatus.CANCELLED
@@ -626,7 +643,7 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     order_count = len(engine.adapter.orders)
     await engine.tick()
     assert len(engine.adapter.orders) == order_count
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
 
     clock.advance(61)
     await engine.tick()
@@ -816,7 +833,7 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     assert recovered.runtime_snapshot()["health"]["components"][
         "paper_restart_recovery"
     ]["ok"] is True
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
     await recovered.stop()
 
 
@@ -865,5 +882,5 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     assert order.quantity == Decimal("1")
     assert order.metadata["trade_plan_id"] == plan.trade_plan_id
     assert order.metadata["decision_id"] == entry.decision_id
-    await _await_plan_promotion(plans, plan.trade_plan_id, engine=_engine_ref())
+    await _await_plan_promotion(plans, plan.trade_plan_id, engine=locals().get("engine"))
     await engine.stop()
