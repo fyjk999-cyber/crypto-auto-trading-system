@@ -2770,10 +2770,13 @@ def _canonical_symbol(adapter, value: str) -> str:
     "" is the explicit "no canonical answer" value, which keeps a degenerate or
     failing normalizer from being mistaken for agreement.
     """
-    normalize = getattr(adapter, "normalize_symbol", None)
-    if not callable(normalize):
-        return ""
     try:
+        # ``getattr`` is inside the guard too: a normalizer served by a
+        # descriptor that raises must not escape and turn a refused event into a
+        # failed one.
+        normalize = getattr(adapter, "normalize_symbol", None)
+        if not callable(normalize):
+            return ""
         result = normalize(value)
         if result is None:
             return ""

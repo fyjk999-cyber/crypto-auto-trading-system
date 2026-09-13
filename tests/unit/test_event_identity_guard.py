@@ -138,3 +138,21 @@ def test_a_raising_or_non_string_normalizer_result_is_not_fatal() -> None:
     assert _same_symbol(_UnrenderableResult(), "btcusdt", LOCAL) is True
     assert _same_symbol(_NonStringResult(), "ETHUSDT", LOCAL) is False
     assert _same_symbol(_NonStringResult(), "btcusdt", LOCAL) is True
+
+
+class _DescriptorRaises:
+    """A normalizer served by a descriptor that raises on attribute access."""
+
+    @property
+    def normalize_symbol(self):  # pragma: no cover - the raise is the point
+        raise RuntimeError("descriptor boom")
+
+
+def test_a_raising_descriptor_is_not_fatal() -> None:
+    """Attribute access is part of the contract, not outside it.
+
+    Reading the attribute is inside the guard, so a hostile descriptor degrades
+    to "no canonical answer" instead of dropping the event and flipping health.
+    """
+    assert _same_symbol(_DescriptorRaises(), "ETHUSDT", LOCAL) is False
+    assert _same_symbol(_DescriptorRaises(), "btcusdt", LOCAL) is True

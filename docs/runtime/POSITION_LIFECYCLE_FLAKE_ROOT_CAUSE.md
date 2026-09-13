@@ -198,13 +198,19 @@ with no error, no alert and no audit record.
    case-insensitive comparison whenever that normalizer cannot answer (missing,
    raising, empty, or returning a constant - detected by probing it with an
    impossible sentinel, so a degenerate normalizer cannot silently disable the
-   guard). Two probes are used because one is not enough: the sentinel rules out
-   a constant answer, and a second real-looking symbol (`ZZZUSDT`) rules out a
-   normalizer that collapses part of the symbol (e.g. one that maps every `USDT`
-   instrument to the same value, which would otherwise accept a foreign base
-   asset). The guard is as canonical as the configured adapter *when that
-   adapter discriminates*; a non-discriminating adapter is ignored in favour of
-   the case-insensitive fallback, which refuses what it cannot confirm. Measured
+   guard). Two probes are used because one is not enough: the sentinel rejects a
+   constant answer, and a second real-looking symbol (`ZZZUSDT`) rejects a
+   normalizer that collapses part of the symbol (measured: the `[-4:]`, `[3:]`,
+   `[-1:]`, `[-2:]` and fixed-slice families are all rejected by the second probe,
+   because a uniform truncation drags the probe along with it).
+
+   **The probes are a heuristic, not a proof of injectivity.** A non-uniform
+   mapping in our OWN adapter — a hand-written alias table that merges two base
+   assets while leaving `ZZZUSDT` distinct (e.g. `{ETHUSDT: BTCUSDT}`), or a
+   one-character prefix collapse — is still trusted and would accept a foreign
+   symbol. That is not reachable through adversarial input; the adapter is our own
+   code, and all four shipped adapters discriminate. It is why the accept/refuse
+   matrix below must be re-measured (not assumed) for any new adapter. Measured
    accept/refuse matrix for a local `BTCUSDT`:
 
    | payload | OKX | Simulator / Paper-Real-Market | Binance | Bybit |
@@ -288,10 +294,10 @@ reproducible with the command in parentheses.
 |---|---|---|
 | root-cause test on the UNFIXED base | 20/20 and 10/10 **fail** | create a worktree at the base SHA (the test file does not exist there, so copy it in first), then `pytest "tests/integration/test_position_lifecycle_determinism.py::test_L1_lifecycle_transition_is_deterministic_without_any_sleep"`. Assert the resolved `crypto_trader.runtime.engine.__file__` is the base tree before trusting the result: `pyproject.toml` sets `pythonpath = ["src", "."]`, which can silently point pytest at the wrong tree |
 | root-cause test on the fixed revision | 100/100 **pass** | same test, 100 iterations |
-| determinism suite (L1-L19, 20 tests) | 30/30 clean | full file, 30 iterations |
+| determinism suite (L1-L19, 20 tests) | 30/30 and 15/15 clean | full file, repeated iterations |
 | lifecycle file | 30/30 and 50/50 clean | `pytest tests/integration/test_live_llm_position_lifecycle.py` |
 | order-varied context | 15/15 clean | lifecycle file adjacent to `test_order_reconciliation.py`, both orders |
-| full suite | 1554 passed x3 including the external OKX file; 1547 passed / 1550 collected when it is deselected | `pytest -q` (the live-OKX file may fail on the network and is classified separately) |
+| full suite | 1557 collected and passed, x3, with the external OKX file included | `pytest -q` (the live-OKX file may fail on the network and is classified separately) |
 
 Instrumentation of a passing run BEFORE the fix showed 23
 `EVENT_DROPPED_LOCAL_ORDER_NOT_VISIBLE` records, all `ORDER_ACK`, plus the fatal
