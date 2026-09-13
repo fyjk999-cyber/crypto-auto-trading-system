@@ -57,6 +57,7 @@ class GrowthReviewEvidence:
     approved_leverage: Any = MISSING
     stop_at_entry: Any = MISSING
     risk_decision_id: str | None = None
+    risk_decision_ids: list[str] = field(default_factory=list)
     risk_result: Any = MISSING
     risk_reason_codes: list[Any] = field(default_factory=list)
     order_ids: list[str] = field(default_factory=list)
@@ -109,6 +110,15 @@ class GrowthReviewEvidence:
                 raise ValueError(
                     f"CONTRADICTORY_AVAILABILITY:{availability_field}"
                 )
+            if (
+                availability_field == "risk_availability"
+                and available
+                and (
+                    not self.risk_decision_ids
+                    or self.risk_decision_id != self.risk_decision_ids[0]
+                )
+            ):
+                raise ValueError("CONTRADICTORY_AVAILABILITY:risk_decision_ids")
         for availability_field, value_field in (
             ("factor_snapshot_availability", "factor_snapshot"),
             ("sizing_availability", "sizing_final_quantity"),
@@ -188,17 +198,25 @@ class GrowthReviewEvidenceLoader:
                     )
                 )
             ).scalars().all() if risk_ids else []
-            risk = next(
-                (row for rid in risk_ids for row in risks if row.risk_decision_id == rid),
-                None,
+            risk_by_id = {row.risk_decision_id: row for row in risks}
+            duplicate = len(risk_by_id) != len(risks)
+            complete = (
+                bool(risk_ids)
+                and not duplicate
+                and all(risk_id in risk_by_id for risk_id in risk_ids)
             )
-            if risk is not None:
+            if complete:
+                ordered = [risk_by_id[risk_id] for risk_id in risk_ids]
+                primary = ordered[0]
                 evidence.risk_availability = EvidenceAvailability.AVAILABLE
-                evidence.risk_decision_id = _value(risk, "risk_decision_id")
-                evidence.risk_result = _value(risk, "decision")
-                risk_reason = _value(risk, "reason")
+                evidence.risk_decision_ids = list(risk_ids)
+                evidence.risk_decision_id = risk_ids[0]
+                evidence.risk_result = _value(primary, "decision")
+                risk_reason = _value(primary, "reason")
                 evidence.risk_reason_codes = [risk_reason] if risk_reason else []
             else:
+                evidence.risk_decision_ids = []
+                evidence.risk_decision_id = None
                 evidence.missing_evidence.append("RISK")
             orders = (
                 await session.execute(

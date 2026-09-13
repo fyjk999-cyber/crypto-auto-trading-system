@@ -79,3 +79,26 @@ def test_f6_envelope_reaches_review_input_with_availability():
     assert payload.review_evidence["availability"]["factor_snapshot"] == "UNAVAILABLE"
     assert payload.review_evidence["availability"]["slippage"] == "UNAVAILABLE"
     assert payload.review_evidence["availability"]["fees"] == "AVAILABLE"
+
+
+def test_risk_04_invariant():
+    ev = GrowthReviewEvidence(
+        episode_id="ep", risk_availability="AVAILABLE",
+        risk_decision_ids=[], risk_decision_id=None,
+    )
+    try:
+        ev.validate_availability()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("available risk without id list must fail")
+    ev2 = GrowthReviewEvidence(
+        episode_id="ep", risk_availability="AVAILABLE",
+        risk_decision_ids=["risk-1"], risk_decision_id="risk-2",
+    )
+    try:
+        ev2.validate_availability()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("primary risk mismatch must fail")
