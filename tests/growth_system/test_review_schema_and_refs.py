@@ -90,6 +90,22 @@ def _input(**overrides) -> EpisodeReviewInput:
         entry_market_regime="TREND",
         terminal_reason="EXIT",
         thesis="Breakout continuation with rising volume.",
+        review_evidence={
+            "episode_id": "episode_1",
+            "decision_id": "decision_entry",
+            "decision_availability": "AVAILABLE",
+            "risk_decision_id": "risk_1",
+            "risk_decision_ids": ["risk_1"],
+            "risk_availability": "AVAILABLE",
+            "order_ids": ["order_1"],
+            "fill_ids": ["fill_1", "fill_2"],
+            "execution_availability": "AVAILABLE",
+            "exit_reason": "EXIT",
+            "exit_availability": "AVAILABLE",
+            "fees_availability": "AVAILABLE",
+            "funding_availability": "AVAILABLE",
+            "missing_evidence": [],
+        },
         selected_tools=[
             ToolEvidenceInput(
                 tool_name="market_regime",
@@ -203,6 +219,41 @@ async def test_reference_outside_allowed_set_fails_closed(growth_db):
     )
     assert attempt.status == STATUS_FAILED
     assert attempt.error_type == "REF_NOT_ALLOWED"
+    rows = await _rows(growth_db)
+    assert len(rows) == 1
+    assert rows[0].status == STATUS_FAILED
+    assert rows[0].result_json is None
+
+
+async def test_known_but_unavailable_ref_fails_at_review_service(growth_db):
+    provider = FakeProvider([
+        _valid_payload(observation_facts=[
+            {
+                "statement": "Hidden risk approval supported the outcome.",
+                "evidence_refs": ["episode:episode_1", "risk:risk-hidden"],
+            }
+        ])
+    ])
+    service = StructuredReviewService(provider, growth_db.session_factory)
+    review_input = _input(review_evidence={
+        "episode_id": "episode_1",
+        "risk_decision_id": None,
+        "risk_decision_ids": ["risk-hidden"],
+        "risk_availability": "UNAVAILABLE",
+        "decision_availability": "UNAVAILABLE",
+        "execution_availability": "UNAVAILABLE",
+        "exit_availability": "UNAVAILABLE",
+        "fees_availability": "UNAVAILABLE",
+        "funding_availability": "UNAVAILABLE",
+    })
+    allowed_refs = review_input.derived_refs()
+    assert "risk:risk-hidden" not in allowed_refs
+    attempt = await service.review(
+        review_input, review_date=REVIEW_DATE, allowed_refs=allowed_refs
+    )
+    assert attempt.status == STATUS_FAILED
+    assert attempt.error_type == "REF_NOT_ALLOWED"
+    assert attempt.review is None
     rows = await _rows(growth_db)
     assert len(rows) == 1
     assert rows[0].status == STATUS_FAILED
