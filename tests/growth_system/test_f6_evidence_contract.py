@@ -75,10 +75,25 @@ def test_f6_envelope_reaches_review_input_with_availability():
         terminal_reason="EXIT", opened_at=datetime(2026, 1, 1, tzinfo=UTC),
         closed_at=datetime(2026, 1, 1, 1, tzinfo=UTC),
     )
-    payload = _episode_review_input(episode, account_id="default", mode="PAPER", currency="USDT")
-    assert payload.review_evidence["availability"]["factor_snapshot"] == "UNAVAILABLE"
-    assert payload.review_evidence["availability"]["slippage"] == "UNAVAILABLE"
-    assert payload.review_evidence["availability"]["fees"] == "AVAILABLE"
+    evidence = GrowthReviewEvidence(
+        episode_id="ep_f6",
+        factor_snapshot_availability="UNAVAILABLE",
+        slippage_availability="UNAVAILABLE",
+        fees_availability="AVAILABLE",
+        missing_evidence=["FACTOR_SNAPSHOT", "SLIPPAGE"],
+    )
+    payload = _episode_review_input(
+        episode,
+        account_id="default",
+        mode="PAPER",
+        currency="USDT",
+        review_evidence=evidence,
+    )
+    assert payload.review_evidence == evidence.as_payload()
+    assert payload.review_evidence["factor_snapshot_availability"] == "UNAVAILABLE"
+    assert payload.review_evidence["slippage_availability"] == "UNAVAILABLE"
+    assert payload.review_evidence["fees_availability"] == "AVAILABLE"
+    assert payload.missing_evidence == ["FACTOR_SNAPSHOT", "SLIPPAGE"]
 
 
 def test_risk_04_invariant():

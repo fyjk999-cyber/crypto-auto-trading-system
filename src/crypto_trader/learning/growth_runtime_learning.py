@@ -41,6 +41,7 @@ from crypto_trader.learning.growth_review import (
     StructuredReviewService,
 )
 from crypto_trader.learning.growth_review_evidence import (
+    GrowthReviewEvidence,
     GrowthReviewEvidenceLoader,
 )
 from crypto_trader.learning.growth_v2_contracts import (
@@ -173,7 +174,7 @@ def _episode_review_input(
     account_id: str,
     mode: str,
     currency: str,
-    review_evidence=None,
+    review_evidence: GrowthReviewEvidence,
 ) -> EpisodeReviewInput:
     canonical_regime, regime_context = normalize_regime(episode.entry_market_regime)
     market_changes = [
@@ -217,44 +218,8 @@ def _episode_review_input(
         risk_adjustments=[],
         position_actions=[],
         market_changes=market_changes,
-        missing_evidence=[
-            "FACTOR_SNAPSHOT",
-            "SIZING_AUDIT",
-            "SLIPPAGE",
-            "MFE_MAE",
-        ],
-        review_evidence=(review_evidence.as_payload() if review_evidence is not None else {
-            "episode_id": episode.episode_id,
-            "decision_id": episode.entry_decision_id,
-            "exit_decision_id": episode.exit_decision_id,
-            "exit_reason": episode.terminal_reason,
-            "order_ids": list(episode.order_ids or []),
-            "fill_ids": list(episode.fill_ids or []),
-            "holding_seconds": episode.holding_time_seconds,
-            "gross_pnl": str(episode.gross_pnl),
-            "fees": str(episode.fees),
-            "funding": str(episode.funding_pnl),
-            "net_pnl": str(episode.net_pnl),
-            "factor_snapshot": None,
-            "sizing": None,
-            "risk": None,
-            "slippage": None,
-            "mfe": None,
-            "mae": None,
-            "availability": {
-                "decision": "AVAILABLE",
-                "factor_snapshot": "UNAVAILABLE",
-                "sizing": "UNAVAILABLE",
-                "risk": "UNAVAILABLE",
-                "execution": "UNAVAILABLE",
-                "position_lifecycle": "UNAVAILABLE",
-                "exit": "AVAILABLE",
-                "mfe_mae": "UNAVAILABLE",
-                "slippage": "UNAVAILABLE",
-                "fees": "AVAILABLE",
-                "funding": "AVAILABLE",
-            },
-        }),
+        missing_evidence=list(review_evidence.missing_evidence),
+        review_evidence=review_evidence.as_payload(),
     )
 
 

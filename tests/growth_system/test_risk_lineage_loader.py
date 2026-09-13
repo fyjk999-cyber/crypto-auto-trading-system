@@ -295,3 +295,63 @@ async def test_validate_02_invalid_envelope_blocked(monkeypatch):
 
 async def _true():
     return True
+
+
+def test_input_01_review_evidence_required():
+    from crypto_trader.learning.growth_runtime_learning import _episode_review_input
+    ep = _runtime_episode("ep")
+    try:
+        _episode_review_input(ep, account_id="default", mode="PAPER", currency="USDT")
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("review_evidence must be required")
+
+
+def test_input_02_and_03_exact_canonical_payload():
+    from crypto_trader.learning.growth_runtime_learning import _episode_review_input
+    ev = GrowthReviewEvidence(
+        episode_id="ep-spy", risk_decision_id="risk-spy",
+        risk_decision_ids=["risk-spy"], risk_result="APPROVED_SPY",
+        risk_availability="AVAILABLE", exit_reason="SPY_EXIT",
+        exit_availability="AVAILABLE", missing_evidence=["CUSTOM_ONLY"],
+    )
+    payload = _episode_review_input(
+        _runtime_episode("ep-spy"), account_id="default", mode="PAPER",
+        currency="USDT", review_evidence=ev,
+    )
+    assert payload.review_evidence == ev.as_payload()
+    assert payload.missing_evidence == ["CUSTOM_ONLY"]
+
+
+class _PayloadSpyReview:
+    def __init__(self): self.payloads = []
+    async def review(self, payload, **kwargs):
+        self.payloads.append(payload)
+        return SimpleNamespace(status="FAILED", review=None, error_type="FAKE")
+
+
+async def test_runtime_payload_spy_and_review_failure_isolation():
+    from crypto_trader.learning.growth_runtime_learning import GrowthRuntimeLearningService
+
+    def behaviour(ep):
+        if ep.episode_id == "ep-review-bad":
+            return _valid_evidence(ep.episode_id)
+        return _valid_evidence(ep.episode_id)
+
+    service = GrowthRuntimeLearningService(None, provider=SimpleNamespace())
+    service.evidence_loader = _RuntimeLoader(behaviour)
+    review = _PayloadSpyReview()
+    async def fail_then_ok(payload, **kwargs):
+        review.payloads.append(payload)
+        if payload.episode_id == "ep-review-bad":
+            raise RuntimeError("REVIEW_BAD")
+        return SimpleNamespace(status="FAILED", review=None, error_type="FAKE")
+    review.review = fail_then_ok
+    service.review_service = review
+    await service.run(
+        [_runtime_episode("ep-review-bad"), _runtime_episode("ep-review-good")],
+        review_date="2026-09-13", claim_token="t", owner="o", fence=_true,
+    )
+    assert [p.episode_id for p in review.payloads] == ["ep-review-bad", "ep-review-good"]
+    assert review.payloads[1].review_evidence == _valid_evidence("ep-review-good").as_payload()
