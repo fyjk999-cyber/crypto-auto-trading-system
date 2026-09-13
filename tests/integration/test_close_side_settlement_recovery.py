@@ -68,6 +68,32 @@ async def _open_lifecycle(database, engine, *, decisions_id="close-entry"):
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
+    # wait_for_event_queue() is a queue join and does not cover a fill event the
+    # adapter enqueues immediately afterwards, so the plan can still be APPROVED
+    # with opened_at unset when this returns. Wait for the observable promotion
+    # (bounded) rather than asserting immediately.
+    import asyncio as _asyncio
+    import time as _time
+
+    deadline = _time.monotonic() + 5.0
+    while True:
+        async with database.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(
+                        TradePlanORM.trade_plan_id == plan.trade_plan_id
+                    )
+                )
+            ).scalar_one()
+        if row.state == "ACTIVE" and row.opened_at is not None:
+            break
+        if _time.monotonic() >= deadline:
+            raise AssertionError(
+                f"plan {plan.trade_plan_id} did not become ACTIVE with opened_at "
+                f"within 5.0s (state={row.state}, opened_at={row.opened_at})"
+            )
+        await engine.wait_for_event_queue()
+        await _asyncio.sleep(0.01)
     return plan
 
 
