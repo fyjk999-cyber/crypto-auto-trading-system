@@ -169,31 +169,28 @@ class GrowthReviewEvidenceLoader:
                     evidence.decision_availability = EvidenceAvailability.AVAILABLE
                     evidence.decision_action = _value(decision, "action")
                     evidence.decision_thesis = _value(decision, "thesis")
-                    evidence.decision_conviction = _value(
-                        decision, "raw_llm_confidence"
-                    )
+                    evidence.decision_conviction = MISSING
             else:
                 evidence.missing_evidence.append("DECISION")
             risk = (
                 await session.execute(
                     select(RiskDecisionORM)
-                    .where(RiskDecisionORM.decision_id == episode.entry_decision_id)
+                    .where(RiskDecisionORM.risk_decision_id == episode.entry_decision_id)
                     .limit(1)
                 )
             ).scalar_one_or_none() if episode.entry_decision_id else None
             if risk is not None:
                 evidence.risk_availability = EvidenceAvailability.AVAILABLE
-                evidence.risk_decision_id = _value(risk, "decision_id")
-                evidence.risk_result = _value(risk, "approved")
-                evidence.risk_reason_codes = list(
-                    _value(risk, "reason_codes") or []
-                )
+                evidence.risk_decision_id = _value(risk, "risk_decision_id")
+                evidence.risk_result = _value(risk, "decision")
+                risk_reason = _value(risk, "reason")
+                evidence.risk_reason_codes = [risk_reason] if risk_reason else []
             else:
                 evidence.missing_evidence.append("RISK")
             orders = (
                 await session.execute(
                     select(OrderORM).where(
-                        OrderORM.order_id.in_(tuple(evidence.order_ids or ["none"]))
+                        OrderORM.internal_order_id.in_(tuple(evidence.order_ids or ["none"]))
                     )
                 )
             ).scalars().all() if evidence.order_ids else []
