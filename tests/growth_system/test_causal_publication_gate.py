@@ -128,3 +128,71 @@ def test_pub03_mixed_copy_keeps_two_safe_lessons_without_mutating_raw():
     assert raw.review.model_dump(mode="json") == before
     assert safe.attempt_id == raw.attempt_id and safe.input_hash == raw.input_hash
     assert any("EVIDENCE_UNAVAILABLE:accounting:funding" in item for item in blocked)
+
+
+@pytest.fixture
+async def growth_db(database):
+    from crypto_trader.learning.growth_models import create_growth_schema
+    await create_growth_schema(database.engine)
+    return database
+
+
+async def test_cp2a_valid_claim_reaches_reusable_knowledge(growth_db):
+    from sqlalchemy import select
+
+    from crypto_trader.learning.growth_knowledge import proposition_identity
+    from crypto_trader.learning.growth_models import (
+        GrowthLessonORM,
+        GrowthPatternORM,
+        GrowthReviewAttemptORM,
+    )
+    from crypto_trader.learning.growth_runtime_learning import (
+        GrowthRuntimeLearningService,
+    )
+    from tests.growth_system.test_review_schema_and_refs import FakeProvider
+    from tests.growth_system.test_runtime_learning_closure import (
+        _episode,
+        _payload,
+        _seed_episode,
+        _true,
+    )
+
+    episode = _episode("ep-pub01")
+    await _seed_episode(growth_db, episode)
+    scope = {
+        "scope": "SYMBOL_REGIME", "symbols": ["BTCUSDT"],
+        "regimes": ["TRENDING"],
+    }
+    lesson = {
+        "statement": "PUB01_VALID_LESSON",
+        "testable_prediction": "PUB01 prediction",
+        "scope": scope,
+        "evidence_refs": ["episode:ep-pub01"],
+        "contrary_refs": [],
+        "uncertainty": "candidate",
+        "confidence": "LOW",
+    }
+    service = GrowthRuntimeLearningService(
+        growth_db.session_factory,
+        provider=FakeProvider([_payload("ep-pub01", lessons=[lesson])]),
+        min_pattern_samples=3,
+    )
+    report = await service.run(
+        [episode], review_date="2026-09-09", claim_token="token-r4",
+        owner="worker", fence=_true,
+    )
+    async with growth_db.session_factory() as session:
+        attempt = (await session.execute(select(GrowthReviewAttemptORM).where(
+            GrowthReviewAttemptORM.episode_id == "ep-pub01"))).scalar_one()
+        lessons = (await session.execute(select(GrowthLessonORM).where(
+            GrowthLessonORM.statement == "PUB01_VALID_LESSON"))).scalars().all()
+        patterns = (await session.execute(select(GrowthPatternORM))).scalars().all()
+    assert attempt.status == "SUCCEEDED"
+    assert "PUB01_VALID_LESSON" in str(attempt.result_json)
+    assert len(lessons) == 1
+    assert lessons[0].support_refs_json == ["episode:ep-pub01"]
+    assert lessons[0].contrary_refs_json == []
+    key = proposition_identity("PUB01_VALID_LESSON", scope)
+    assert any((row.scope_json or {}).get("proposition_key") == key for row in patterns)
+    assert report.structured_reviews_created == 1
+    assert report.reviews_with_causal_lessons == 1
