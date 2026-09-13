@@ -234,3 +234,66 @@ async def test_second_engine_instance_is_rejected_without_duplicate_writer(datab
     assert active == ["first-writer"]
     assert denied.state == "STOPPED"
     await first.stop()
+
+
+async def test_engine_prefers_refresh_market_state_for_paper_execution(database):
+    from decimal import Decimal
+
+    from crypto_trader.market_data.state import DataHealth, MarketState
+
+    engine = make_paper_engine(database)
+
+    class FakeAdapter:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        async def refresh_market_state(self, symbol):
+            self.calls.append("refresh")
+            return MarketState(
+                symbol=symbol,
+                health=DataHealth.HEALTHY,
+                best_bid=Decimal("100"),
+                best_ask=Decimal("101"),
+                best_bid_size=Decimal("2"),
+                best_ask_size=Decimal("2"),
+            )
+
+        async def get_market_state(self, symbol):
+            self.calls.append("get")
+            return MarketState(symbol=symbol)
+
+    fake = FakeAdapter()
+    engine.adapter = fake
+    state = await engine._adapter_market_state("BTCUSDT")
+    assert fake.calls == ["refresh"]
+    assert state is not None and state.best_bid == Decimal("100")
+
+
+async def test_paper_real_market_refresh_populates_execution_book():
+    from decimal import Decimal
+
+    from crypto_trader.market_data.state import DataHealth, MarketState
+    from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
+
+    class FakeFeed:
+        async def refresh(self, symbol):
+            return MarketState(
+                symbol=symbol,
+                provider="OKX_PUBLIC",
+                data_source="REAL",
+                health=DataHealth.HEALTHY,
+                best_bid=Decimal("100"),
+                best_ask=Decimal("101"),
+                best_bid_size=Decimal("2"),
+                best_ask_size=Decimal("3"),
+            )
+
+    adapter = PaperRealMarketAdapter(
+        initial_balances={"USDT": Decimal("10000")},
+        feed=FakeFeed(),
+    )
+    state = await adapter.refresh_market_state("BTCUSDT")
+    assert state.health.value == "HEALTHY"
+    book = adapter.books["BTCUSDT"]
+    assert book.best_bid().price == Decimal("100")
+    assert book.best_ask().price == Decimal("101")

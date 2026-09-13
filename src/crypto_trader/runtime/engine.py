@@ -814,6 +814,20 @@ class TradingEngine:
         )
         return await self.valuations.persist(candidate, fallback_equity=account.equity)
 
+    async def _adapter_market_state(self, symbol: str):
+        """Fetch factual market state and keep adapter paper books aligned.
+
+        ``PaperRealMarketAdapter.refresh_market_state`` is the canonical method
+        because it also materializes the same-symbol simulated book required by
+        PAPER order submission.  Plain ``get_market_state`` remains supported
+        for adapters without the stricter entry point.
+        """
+        for method_name in ("refresh_market_state", "get_market_state"):
+            method = getattr(self.adapter, method_name, None)
+            if callable(method):
+                return await method(symbol)
+        return None
+
     async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
         symbol = symbol or (
             getattr(self.strategies[0], "symbol", "BTCUSDT")
@@ -822,10 +836,9 @@ class TradingEngine:
         )
         book = self.market_data.books.get(symbol)
         market_state = None
-        get_market_state = getattr(self.adapter, "get_market_state", None)
         try:
-            if get_market_state is not None:
-                market_state = await get_market_state(symbol)
+            market_state = await self._adapter_market_state(symbol)
+            if market_state is not None:
                 if (
                     market_state.health.value != "HEALTHY"
                     or market_state.best_bid <= 0
@@ -909,10 +922,9 @@ class TradingEngine:
         stale. Re-fetching from the factual adapter prevents AUTHORITY_HOLD
         caused by MARKET_DATA_STALE when current data is actually available.
         """
-        get_market_state = getattr(self.adapter, "get_market_state", None)
         try:
-            if get_market_state is not None:
-                market_state = await get_market_state(symbol)
+            market_state = await self._adapter_market_state(symbol)
+            if market_state is not None:
                 if (
                     market_state.health.value != "HEALTHY"
                     or market_state.best_bid <= 0
