@@ -587,3 +587,17 @@ async def test_close_commit_then_episode_failure_recovers(database):
         )
     finally:
         await restarted.stop()
+
+
+# R5_REHEARSAL_DEFERRED (honest limitation, NOT a production finding):
+#   The submit-time MARKET_DATA_UNAVAILABLE rehearsal could not be completed. The
+#   fixture reached PaperRealMarketAdapter with a healthy controllable feed, but
+#   the ENTRY signal did not produce a persisted order at all, so the position was
+#   never established and the REDUCE path was never reached. Diagnosing that
+#   requires driving more of the signal-validation path than this pass covered.
+#
+#   The test was removed rather than committed failing or weakened. What IS
+#   already established: PaperRealMarketAdapter raises
+#   OrderRejected("MARKET_DATA_UNAVAILABLE") before it calls the broker, and the
+#   engine now catches OrderRejected BEFORE ExchangeError - the clause order that
+#   caused the incident. R5_REPEAT_MARKET_FAILURE remains NOT_RUN.
