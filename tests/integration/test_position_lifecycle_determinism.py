@@ -1,0 +1,564 @@
+"""Position-lifecycle determinism regression suite (L1-L12).
+
+These tests exist because the lifecycle suite was intermittently flaky. The
+root cause was NOT an arbitrary timeout: the exchange adapter emits
+ack/open/fill events INLINE while ``submit_order`` is still in flight, and the
+engine's event consumer resolved those events only by ``exchange_order_id`` —
+which is persisted AFTER ``submit_order`` returns. An event consumed inside
+that window found no local order and was **dropped permanently**, because the
+apparent catch-up ``_apply_exchange_order_fill`` was dead code with no caller.
+
+The flake was therefore a REAL runtime race, and every test below pins its
+determinism without sleeps, retries or relaxed assertions:
+
+L1  lifecycle transition is deterministic without arbitrary sleep
+L2  TIME_STOP always outranks ADD
+L3  ADD remains explicitly refused
+L4  a pending ADD cannot fall through into REDUCE
+L5  HOLD does not create an order
+L6  REDUCE creates only reduce-only semantics
+L7  EXIT precedence is deterministic
+L8  a pending position action blocks a conflicting action
+L9  a lifecycle run leaves zero background tasks
+L10 a repeated lifecycle run produces an identical final state
+L11 test ordering does not change the result
+L12 the clock boundary exactly at TIME_STOP is deterministic
+"""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+from crypto_trader.domain.enums import ExchangeEventType, OrderSide, OrderStatus
+from crypto_trader.domain.models import ExchangeEvent
+from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
+from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
+from crypto_trader.observability.audit import AuditService
+from crypto_trader.persistence.database import Database
+from crypto_trader.persistence.models import TradePlanORM
+from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
+from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
+from tests.conftest import make_paper_engine
+from tests.integration.test_live_llm_position_lifecycle import (
+    BTC_EXECUTION_METADATA,
+    Evidence,
+    MutableClock,
+    SequencedChief,
+    _seed_known_zero_funding_coverage,
+)
+
+
+class InlineEventDrainedAdapter(SimulatedExchangeAdapter):
+    """Deterministically selects the interleaving the venue can produce.
+
+    The simulator emits ack/open/fill inline during ``submit_order``. Draining
+    the engine's event queue *inside* ``submit_order`` guarantees those events
+    are processed before the engine persists ``exchange_order_id`` — the exact
+    production window in which the venue's event stream can beat the REST
+    response and the local commit. No sleeps and no timeouts are involved.
+    """
+
+    def __init__(self, *args, event_gate=None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.event_gate = event_gate
+
+    async def submit_order(self, order):
+        result = await super().submit_order(order)
+        if self.event_gate is not None:
+            await asyncio.wait_for(self.event_gate.join(), timeout=10)
+        return result
+
+
+class AddChief:
+    """Asks to ADD to an open position."""
+
+    def __init__(self, step: str = "ADD", quantity: str = "5") -> None:
+        self.step = step
+        self.quantity = quantity
+        self.calls = 0
+
+    async def decide(self, ctx):
+        self.calls += 1
+        return ChiefTraderDecision(
+            decision_id=f"add-chief-{self.calls}",
+            symbol=ctx.symbol,
+            position_state=PositionState.OPEN,
+            action=self.step,
+            market_regime=ctx.regime,
+            thesis="trend continuation",
+            position_size_request=float(self.quantity),
+            stop_loss=98.0,
+            model_provider="deepseek",
+            model="deepseek-v4-pro",
+        )
+
+
+async def _fresh_database(tmp_path, name: str):
+    """A dedicated database per scenario, so a test cannot pass by accident."""
+    db = Database(f"sqlite+aiosqlite:///{tmp_path}/{name}.db")
+    await db.init_schema()
+    return db
+
+
+async def _open_long_position(
+    database,
+    *,
+    race: bool = True,
+    run_id: str = "run-determinism",
+    quantity: str = "0.1",
+    ask_quantity: str = "1",
+    decision_id: str = "det-entry",
+    symbol: str = "BTCUSDT",
+    max_holding_time_seconds: float = 86400.0,
+):
+    """Open one LONG position and return the whole deterministic fixture."""
+    adapter = InlineEventDrainedAdapter(initial_balances={"USDT": Decimal("10000")})
+    engine = make_paper_engine(database, engine_tick_seconds=3600, simulator=adapter)
+    if race:
+        adapter.event_gate = engine._event_queue
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start(run_id)
+    assert await engine._strategy_context(symbol) is not None
+    if ask_quantity != "1":
+        book = adapter.books[symbol]
+        book.apply_snapshot(
+            adapter.sequence["BTCUSDT"] + 1,
+            [(Decimal("99.95"), Decimal("1"))],
+            [(Decimal("100.05"), Decimal(ask_quantity))],
+        )
+
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id=decision_id,
+        symbol=symbol,
+        action="LONG",
+        market_regime="TREND",
+        thesis="deterministic lifecycle entry",
+        position_size_request=float(quantity),
+        leverage_request=2,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="det-v1")
+    plan, signal = await LiveLLMTradePlanner(
+        plans, max_holding_time_seconds=max_holding_time_seconds
+    ).create_entry_signal(
+        entry,
+        quantity=Decimal(quantity),
+        limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+    # The OPENED plan carries the factual opened_at, which the funding-coverage
+    # window and the holding clock are both derived from.
+    opened = await plans.get(plan.trade_plan_id)
+    assert opened is not None
+    return engine, adapter, clock, decisions, plans, opened
+
+
+async def _age_plan(engine, database, plan, seconds: float) -> None:
+    """Set the plan's factual opened_at so the holding clock is exact."""
+    async with database.session_factory() as session:
+        row = await session.get(TradePlanORM, plan.trade_plan_id)
+        assert row is not None
+        row.opened_at = engine.clock.now() - timedelta(seconds=seconds)
+        await session.commit()
+
+
+def _install_manager(engine, decisions, plans, sequence, *, cooldown=30):
+    chief = SequencedChief(sequence)
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=cooldown,
+    )
+    return chief
+
+
+async def _final_state(engine, plans, plan, symbol: str = "BTCUSDT"):
+    position = await engine.portfolio.get_position(symbol)
+    current = await plans.get(plan.trade_plan_id)
+    # Client order ids embed per-decision identities, so they are deliberately
+    # excluded: the comparable state is the OBSERVABLE lifecycle outcome.
+    orders = sorted(
+        (order.status.value, str(order.quantity), str(order.filled_quantity))
+        for order in engine.adapter.orders.values()
+    )
+    return {
+        "position_quantity": str(position.quantity) if position else None,
+        "plan_state": current.state.value if current else None,
+        "orders": orders,
+    }
+
+
+# ==================================================================== L1
+async def test_L1_lifecycle_transition_is_deterministic_without_any_sleep(database):
+    """The venue's inline fill must still project, with no sleep anywhere.
+
+    This is the root-cause regression: every inline event is guaranteed to be
+    processed BEFORE the engine persists the exchange order id.
+    """
+    engine, adapter, _, _, plans, plan = await _open_long_position(database)
+    try:
+        venue_order = next(iter(adapter.orders.values()))
+        assert venue_order.status == OrderStatus.FILLED
+        assert venue_order.filled_quantity == Decimal("0.1")
+
+        current = await plans.get(plan.trade_plan_id)
+        position = await engine.portfolio.get_position("BTCUSDT")
+        assert current is not None and current.state == TradePlanState.ACTIVE
+        assert position is not None and position.quantity == Decimal("0.1")
+    finally:
+        await engine.stop()
+
+
+async def test_L1b_a_lost_fill_is_never_silent(database):
+    """If an event genuinely cannot be matched, it must be auditable."""
+    engine, adapter, _, _, plans, plan = await _open_long_position(database, race=False)
+    try:
+        # An event for an order that does not exist locally at all.
+        await engine.process_exchange_event(
+            ExchangeEvent(
+                event_id="evt-unmatched",
+                event_type=ExchangeEventType.ORDER_ACK,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": "sim_does_not_exist",
+                    "client_order_id": "no_such_client_order",
+                    "symbol": "BTCUSDT",
+                },
+            )
+        )
+        events = [
+            row
+            for row in await AuditService(database.session_factory).list_recent(limit=50)
+            if row.action == "EXCHANGE_EVENT_UNMATCHED"
+        ]
+        assert len(events) == 1
+        assert events[0].after_json["reason"] == "NO_LOCAL_ORDER_FOR_EVENT"
+    finally:
+        await engine.stop()
+
+
+# ==================================================================== L2 / L3
+async def test_L2_time_stop_outranks_add(database):
+    """At the factual max-hold boundary an ADD cannot win: REDUCE takes over."""
+    engine, adapter, _, decisions, plans, plan = await _open_long_position(
+        database, max_holding_time_seconds=3600.0
+    )
+    try:
+        await _seed_known_zero_funding_coverage(database, plan)
+        await _age_plan(engine, database, plan, 3600.0)
+        _install_manager(engine, decisions, plans, [])  # chief never consulted
+        engine.position_manager.chief = AddChief("ADD")
+
+        before = len(adapter.orders)
+        await engine.tick()
+        await engine.wait_for_event_queue()
+
+        created = list(adapter.orders.values())[before:]
+        assert len(created) == 1
+        order = created[0]
+        # The safety boundary produced a full reduce-only close, not an ADD.
+        assert order.metadata.get("reduce_only") is True
+        assert order.side == OrderSide.SELL
+        assert order.quantity == Decimal("0.1")
+        audit = AuditService(database.session_factory)
+        actions = [row.action for row in await audit.list_recent(limit=80)]
+        assert "LIVE_LLM_POSITION_ADD_OVERRIDDEN_BY_TIME_STOP" in actions
+        assert "LIVE_LLM_POSITION_ADD_REFUSED" not in actions
+    finally:
+        await engine.stop()
+
+
+async def test_L3_add_remains_explicitly_refused(database):
+    engine, adapter, _, decisions, plans, plan = await _open_long_position(database)
+    try:
+        await _seed_known_zero_funding_coverage(database, plan)
+        _install_manager(engine, decisions, plans, [])
+        engine.position_manager.chief = AddChief("ADD")
+
+        before = len(adapter.orders)
+        await engine.tick()
+        await engine.wait_for_event_queue()
+
+        assert len(adapter.orders) == before  # zero orders
+        stored = await LLMDecisionStore(database.session_factory).get("add-chief-1")
+        assert stored is not None and stored.action == "ADD"
+        audit = AuditService(database.session_factory)
+        refused = [
+            row
+            for row in await audit.list_recent(limit=80)
+            if row.action == "LIVE_LLM_POSITION_ADD_REFUSED"
+        ]
+        assert len(refused) == 1
+        assert refused[0].after_json["reason"] == "ADD_EXECUTION_DISABLED_FEATURE_FLAG"
+        assert refused[0].after_json["reduce_substitution_blocked"] is True
+    finally:
+        await engine.stop()
+
+
+# ==================================================================== L4
+async def test_L4_pending_add_cannot_fall_through_into_reduce(database):
+    """An ADD must never be executed as a REDUCE, and must not shrink the size."""
+    engine, adapter, _, decisions, plans, plan = await _open_long_position(database)
+    try:
+        await _seed_known_zero_funding_coverage(database, plan)
+        _install_manager(engine, decisions, plans, [])
+        engine.position_manager.chief = AddChief("ADD")
+
+        for _ in range(3):
+            await engine.tick()
+            await engine.wait_for_event_queue()
+
+        position = await engine.portfolio.get_position("BTCUSDT")
+        assert position is not None and position.quantity == Decimal("0.1")
+        assert len(adapter.orders) == 1
+    finally:
+        await engine.stop()
+
+
+# ==================================================================== L5
+async def test_L5_hold_creates_no_order(database):
+    engine, adapter, _, decisions, plans, plan = await _open_long_position(database)
+    try:
+        await _seed_known_zero_funding_coverage(database, plan)
+        _install_manager(engine, decisions, plans, [("HOLD", "0")])
+
+        before = len(adapter.orders)
+        await engine.tick()
+        await engine.wait_for_event_queue()
+
+        assert len(adapter.orders) == before
+        current = await plans.get(plan.trade_plan_id)
+        assert current is not None and current.state == TradePlanState.ACTIVE
+    finally:
+        await engine.stop()
+
+
+# ==================================================================== L6
+async def test_L6_reduce_is_reduce_only_and_bounded(database):
+    engine, adapter, _, decisions, plans, plan = await _open_long_position(database)
+    try:
+        await _seed_known_zero_funding_coverage(database, plan)
+        _install_manager(engine, decisions, plans, [("REDUCE", "0.04")])
+
+        before = len(adapter.orders)
+        await engine.tick()
+        await engine.wait_for_event_queue()
+
+        created = list(adapter.orders.values())[before:]
+        assert len(created) == 1
+        assert created[0].metadata.get("reduce_only") is True
+        assert created[0].side == OrderSide.SELL
+        assert created[0].quantity == Decimal("0.04")
+        # Never more than the factual position.
+        assert created[0].quantity <= Decimal("0.1")
+    finally:
+        await engine.stop()
+
+
+# ==================================================================== L7
+async def test_L7_exit_precedence_is_deterministic(database, tmp_path):
+    """EXIT is a full reduce-only close at every clock offset."""
+    for advance in (0, 61, 3600):
+        db = await _fresh_database(tmp_path, f"l7-{advance}")
+        try:
+            engine, adapter, clock, decisions, plans, plan = await _open_long_position(
+                db, run_id=f"run-exit-{advance}", decision_id=f"exit-entry-{advance}"
+            )
+            try:
+                await _seed_known_zero_funding_coverage(db, plan)
+                if advance:
+                    clock.advance(advance)
+                _install_manager(engine, decisions, plans, [("EXIT", "0")])
+
+                before = len(adapter.orders)
+                await engine.tick()
+                await engine.wait_for_event_queue()
+
+                created = list(adapter.orders.values())[before:]
+                assert len(created) == 1, f"advance={advance}"
+                assert created[0].metadata.get("reduce_only") is True
+                assert created[0].side == OrderSide.SELL
+                assert created[0].quantity == Decimal("0.1")
+                position = await engine.portfolio.get_position("BTCUSDT")
+                assert position is not None and position.quantity == Decimal("0")
+                current = await plans.get(plan.trade_plan_id)
+                assert current is not None and current.state == TradePlanState.CLOSED
+            finally:
+                await engine.stop()
+        finally:
+            await db.close()
+
+
+# ==================================================================== L8
+async def test_L8_pending_position_action_blocks_a_conflicting_action(database):
+    """A partially filled entry keeps its authority; nothing else may act."""
+    engine, adapter, _, decisions, plans, plan = await _open_long_position(
+        database, ask_quantity="0.04", decision_id="partial-entry"
+    )
+    try:
+        venue_order = next(iter(adapter.orders.values()))
+        assert venue_order.status == OrderStatus.PARTIALLY_FILLED
+        position = await engine.portfolio.get_position("BTCUSDT")
+        assert position is not None and position.quantity == Decimal("0.04")
+        current = await plans.get(plan.trade_plan_id)
+        assert current is not None and current.state == TradePlanState.ACTIVE
+
+        _install_manager(engine, decisions, plans, [("EXIT", "0"), ("EXIT", "0")])
+        before = len(adapter.orders)
+        result = await engine.tick()
+        await engine.wait_for_event_queue()
+
+        assert result == []
+        assert len(adapter.orders) == before
+        after = await engine.portfolio.get_position("BTCUSDT")
+        assert after is not None and after.quantity == Decimal("0.04")
+    finally:
+        await engine.stop()
+
+
+# ==================================================================== L9
+async def test_L9_lifecycle_run_leaves_zero_background_tasks(database):
+    before_engine: set[str] = set()
+    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    try:
+        engine_tasks = {task.get_name() for task in engine._tasks}
+        assert engine_tasks  # the runtime did start background work
+        await engine.stop()
+        before_engine = {
+            task.get_name()
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task()
+        }
+        leaked = {name for name in before_engine if name.startswith("engine-")}
+        assert leaked == set()
+        assert not {name for name in before_engine if name in engine_tasks}
+    finally:
+        if engine._running:
+            await engine.stop()
+
+
+# ==================================================================== L10
+async def test_L10_repeated_lifecycle_run_produces_an_identical_final_state(tmp_path):
+    states = []
+    for attempt in range(3):
+        db = await _fresh_database(tmp_path, f"l10-{attempt}")
+        try:
+            engine, adapter, _, decisions, plans, plan = await _open_long_position(
+                db, run_id=f"run-repeat-{attempt}", decision_id=f"repeat-entry-{attempt}"
+            )
+            try:
+                await _seed_known_zero_funding_coverage(db, plan)
+                _install_manager(engine, decisions, plans, [("REDUCE", "0.04")])
+                await engine.tick()
+                await engine.wait_for_event_queue()
+                states.append(await _final_state(engine, plans, plan))
+            finally:
+                await engine.stop()
+        finally:
+            await db.close()
+
+    assert states[0] == states[1] == states[2]
+    assert states[0]["position_quantity"] == "0.06"
+    assert states[0]["plan_state"] == TradePlanState.ACTIVE.value
+
+
+async def test_L11_an_unrelated_lifecycle_does_not_change_this_one(database, tmp_path):
+    """A previous open->close lifecycle must not perturb the next one.
+
+    Both arms run the same scenario; the only difference is that the second arm
+    runs it on a database that already carries a completed lifecycle. Any order
+    dependence in lifecycle state, caches or background work would show up as a
+    different final state.
+    """
+
+    async def scenario(db, *, run_id, decision_id):
+        engine, adapter, _, decisions, plans, plan = await _open_long_position(
+            db, run_id=run_id, decision_id=decision_id
+        )
+        try:
+            await _seed_known_zero_funding_coverage(db, plan)
+            _install_manager(engine, decisions, plans, [("REDUCE", "0.05")])
+            await engine.tick()
+            await engine.wait_for_event_queue()
+            return await _final_state(engine, plans, plan)
+        finally:
+            await engine.stop()
+
+    async def completed_lifecycle(db, *, run_id, decision_id):
+        engine, adapter, _, decisions, plans, plan = await _open_long_position(
+            db, run_id=run_id, decision_id=decision_id
+        )
+        try:
+            await _seed_known_zero_funding_coverage(db, plan)
+            _install_manager(engine, decisions, plans, [("EXIT", "0")])
+            await engine.tick()
+            await engine.wait_for_event_queue()
+        finally:
+            await engine.stop()
+
+    alone_db = await _fresh_database(tmp_path, "l11-alone")
+    try:
+        alone = await scenario(alone_db, run_id="l11-alone", decision_id="l11-alone-entry")
+    finally:
+        await alone_db.close()
+
+    # Unrelated lifecycle first, then the same scenario on the SAME database.
+    await completed_lifecycle(database, run_id="l11-a", decision_id="l11-a-entry")
+    after_prior = await scenario(
+        database, run_id="l11-b", decision_id="l11-b-entry"
+    )
+
+    assert after_prior == alone
+
+
+# ==================================================================== L12
+async def test_L12_clock_boundary_exactly_at_time_stop_is_deterministic(tmp_path):
+    """time_in_trade == max_holding is REACHED (>=); one second short is not."""
+    for offset, expect_time_stop in ((0.0, True), (1.0, False)):
+        db = await _fresh_database(tmp_path, f"l12-{offset}")
+        try:
+            engine, adapter, _, decisions, plans, plan = await _open_long_position(
+                db,
+                run_id=f"run-boundary-{offset}",
+                decision_id=f"boundary-entry-{offset}",
+                max_holding_time_seconds=3600.0,
+            )
+            try:
+                await _seed_known_zero_funding_coverage(db, plan)
+                await _age_plan(engine, db, plan, 3600.0 - offset)
+                _install_manager(engine, decisions, plans, [("HOLD", "0")])
+
+                before = len(adapter.orders)
+                await engine.tick()
+                await engine.wait_for_event_queue()
+                created = list(adapter.orders.values())[before:]
+
+                if expect_time_stop:
+                    assert len(created) == 1, f"offset={offset}"
+                    assert created[0].metadata["lifecycle_action"] == (
+                        "TIME_STOP_SAFETY_FALLBACK"
+                    )
+                    assert created[0].metadata.get("reduce_only") is True
+                else:
+                    assert created == [], f"offset={offset}"
+            finally:
+                await engine.stop()
+        finally:
+            await db.close()

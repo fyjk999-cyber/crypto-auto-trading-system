@@ -433,8 +433,30 @@ class TradingEngine:
             event = await self._event_queue.get()
             try:
                 await self.process_exchange_event(event)
-            except Exception:
+            except Exception as exc:
                 self.health.set("event_processing", False, "unhandled event error")
+                # A failed event used to be invisible: the queue still drained,
+                # so ``wait_for_event_queue`` reported success while the fill,
+                # ack or cancel had actually been lost. Record it durably so a
+                # lost exchange fact is never silent again.
+                try:
+                    payload = event.payload or {}
+                    await self.audit.log(
+                        "EXCHANGE_EVENT_FAILED",
+                        target=str(getattr(event, "event_id", "") or ""),
+                        run_id=self.run_id,
+                        exchange_order_id=payload.get("exchange_order_id"),
+                        after={
+                            "event_type": str(
+                                getattr(event.event_type, "value", event.event_type)
+                            ),
+                            "client_order_id": payload.get("client_order_id"),
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                    )
+                except Exception:  # noqa: BLE001 - observability must not kill the loop
+                    pass
             finally:
                 self._event_queue.task_done()
 
@@ -2240,24 +2262,6 @@ class TradingEngine:
                 },
             )
 
-    async def _apply_exchange_order_fill(self, local: object, exchange_order: object) -> None:
-        if exchange_order.filled_quantity <= local.filled_quantity:
-            return
-        fill = Fill(
-            fill_id=f"submit_{exchange_order.exchange_order_id}_filled",
-            trade_id=new_id("trade"),
-            order_id=local.internal_order_id,
-            client_order_id=local.client_order_id,
-            exchange_order_id=exchange_order.exchange_order_id,
-            symbol=local.symbol,
-            side=local.side,
-            price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
-            quantity=exchange_order.filled_quantity - local.filled_quantity,
-            fee=Decimal("0"),
-            timestamp=datetime.now(UTC),
-        )
-        await self.order_manager.apply_fill(fill)
-
     async def _persist_risk(self, decision: RiskDecision) -> None:
         async with self.database.session_factory() as session:
             session.add(
@@ -2287,7 +2291,34 @@ class TradingEngine:
             return
         local = await self.order_manager.get_by_exchange(str(exchange_order_id))
         if local is None:
-            # ack may arrive before submit() returns; order was persisted before submit
+            # The venue emits ack/open/fill INLINE while ``submit_order`` is
+            # still in flight (see ``_sync_submitted_order_state``), i.e. before
+            # the engine has persisted ``exchange_order_id``. Resolving on the
+            # durable ``client_order_id`` - which IS written before submission -
+            # removes the dependency on that scheduling window entirely, so a
+            # factual fill can never be lost because of WHEN the event happened
+            # to be dequeued. The ack transition below persists the exchange id,
+            # after which later events resolve by either key.
+            client_order_id = payload.get("client_order_id")
+            if client_order_id:
+                local = await self.order_manager.get_by_client(str(client_order_id))
+        if local is None:
+            # An unmatched exchange event is a real anomaly (unknown order, or
+            # an identity that was never persisted). It must never be invisible.
+            self.health.set("event_processing", False, "exchange event unmatched")
+            await self.audit.log(
+                "EXCHANGE_EVENT_UNMATCHED",
+                target=str(exchange_order_id),
+                run_id=self.run_id,
+                exchange_order_id=str(exchange_order_id),
+                after={
+                    "event_type": str(
+                        getattr(event.event_type, "value", event.event_type)
+                    ),
+                    "client_order_id": payload.get("client_order_id"),
+                    "reason": "NO_LOCAL_ORDER_FOR_EVENT",
+                },
+            )
             return
         event_id = event.event_id
         if event.event_type == ExchangeEventType.ORDER_ACK:
