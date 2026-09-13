@@ -998,3 +998,138 @@ async def test_L19_a_symbol_naming_variant_is_not_refused(database):
         assert engine.exchange_event_identity_anomalies == 0
     finally:
         await engine.stop()
+
+
+# ==================================== §31 F6 restart recovery x lifecycle race
+async def test_L20_restart_restore_then_live_events_are_never_dropped(database):
+    """F6 restart recovery and the event-identity fix must not break each other.
+
+    Two mechanisms meet at the restart boundary: F6 restores durable unresolved
+    orders into the process-local PAPER broker, and the event path must never
+    drop a venue event because a local identity was not visible. Both are
+    exercised on ONE database across a real engine restart.
+
+    Scope note: the venue fills applied in phase 3 are delivered as EVENTS (the
+    venue executed them). They are deliberately not mirrored into the
+    process-local simulator's own matcher, so this test asserts EVENT DELIVERY
+    and identity resolution - not broker accounting. Driving a further local
+    REDUCE afterwards would be rejected by the simulator's reduce-only guard,
+    which is correct behaviour for a broker whose own book never saw that fill.
+    """
+    # ---- phase 1: a partially filled entry leaves an UNRESOLVED resting order
+    engine_a, adapter_a, _, _, _, plan = await _open_long_position(
+        database, ask_quantity="0.04", decision_id="restart-entry"
+    )
+    try:
+        entry = next(iter(adapter_a.orders.values()))
+        durable = await engine_a.order_manager.get_by_client(entry.client_order_id)
+        assert durable is not None
+        assert durable.status == OrderStatus.PARTIALLY_FILLED
+        assert durable.quantity - durable.filled_quantity == Decimal("0.06")
+        assert durable.exchange_order_id is not None
+        venue_id = durable.exchange_order_id
+        order_id = durable.internal_order_id
+        client_order_id = durable.client_order_id
+    finally:
+        await engine_a.stop()
+
+    # ---- phase 2: a NEW engine on the SAME database restores the order
+    adapter_b = InlineEventDrainedAdapter(initial_balances={"USDT": Decimal("10000")})
+    engine_b = make_paper_engine(database, engine_tick_seconds=3600, simulator=adapter_b)
+    adapter_b.event_gate = engine_b._event_queue
+    clock_b = MutableClock()
+    engine_b.clock = clock_b
+    await engine_b.start("run-restart-lifecycle")
+    try:
+        # F6 restored it into the process-local broker (identity + remaining qty).
+        # The simulator keys its order book by venue id.
+        restored = adapter_b.orders.get(venue_id)
+        assert restored is not None, "F6 did not restore the unresolved order"
+        assert restored.exchange_order_id == venue_id
+        assert restored.quantity - restored.filled_quantity == Decimal("0.06")
+
+        # The restored order is resolvable by BOTH identities - the contract the
+        # event path depends on after a restart.
+        assert (await engine_b.order_manager.get_by_exchange(venue_id)) is not None
+        assert (await engine_b.order_manager.get_by_client(client_order_id)) is not None
+
+        # ---- phase 3: the venue's post-restart event stream must all land
+        for event_type, payload in (
+            (ExchangeEventType.ORDER_ACK, {"status": "ACK", "filled_quantity": "0.04"}),
+            (ExchangeEventType.ORDER_OPENED, {"status": "OPEN", "filled_quantity": "0.04"}),
+            (
+                ExchangeEventType.ORDER_FILLED,
+                {
+                    "status": "FILLED",
+                    "fill_id": "fill-after-restart",
+                    "fill_price": "100.05",
+                    "fill_quantity": "0.06",
+                    "filled_quantity": "0.1",
+                },
+            ),
+        ):
+            await engine_b._enqueue_event(
+                ExchangeEvent(
+                    event_id=f"evt-restart-{event_type.value}",
+                    event_type=event_type,
+                    symbol="BTCUSDT",
+                    timestamp=datetime.now(UTC),
+                    payload={
+                        "exchange_order_id": venue_id,
+                        "client_order_id": client_order_id,
+                        "symbol": "BTCUSDT",
+                        **payload,
+                    },
+                )
+            )
+            await engine_b.wait_for_event_queue()
+            settled = await engine_b.order_manager.get(order_id)
+            assert settled is not None
+
+        # No event was dropped: the factual remaining fill is applied through
+        # the whole post-restart stream.
+        settled = await engine_b.order_manager.get(order_id)
+        assert settled.filled_quantity == Decimal("0.1")
+        assert settled.status == OrderStatus.FILLED
+        position = await engine_b.portfolio.get_position("BTCUSDT")
+        assert position is not None and position.quantity == Decimal("0.1")
+
+        # ---- no event was merely tolerated anywhere across the restart
+        anomalies = [
+            row
+            for row in await AuditService(database.session_factory).list_recent(limit=80)
+            if row.action
+            in {
+                "EXCHANGE_EVENT_UNMATCHED",
+                "EXCHANGE_EVENT_ID_MISMATCH",
+                "EXCHANGE_EVENT_FAILED",
+            }
+        ]
+        assert anomalies == [], [row.action for row in anomalies]
+        assert engine_b.exchange_event_identity_anomalies == 0
+
+        # A duplicate of an already-applied fill must not double count.
+        await engine_b._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-restart-duplicate",
+                event_type=ExchangeEventType.ORDER_FILLED,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": venue_id,
+                    "client_order_id": client_order_id,
+                    "symbol": "BTCUSDT",
+                    "fill_id": "fill-after-restart",
+                    "fill_price": "100.05",
+                    "fill_quantity": "0.06",
+                    "status": "FILLED",
+                },
+            )
+        )
+        await engine_b.wait_for_event_queue()
+        after_replay = await engine_b.order_manager.get(order_id)
+        assert after_replay.filled_quantity == Decimal("0.1")
+        assert engine_b.exchange_event_identity_anomalies == 0
+        _ = plan
+    finally:
+        await engine_b.stop()
