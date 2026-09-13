@@ -12,12 +12,12 @@ from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderEventType, OrderStatus
 
-logger = logging.getLogger(__name__)
-
 from crypto_trader.domain.errors import OrderNotFound
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill
 from crypto_trader.order.recovery_classification import (
+
+logger = logging.getLogger(__name__)
     DISPOSITION_MISSING,
     DISPOSITION_REJECT,
     DISPOSITION_UNKNOWN,
