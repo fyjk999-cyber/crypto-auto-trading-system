@@ -42,6 +42,16 @@ DISPOSITION_PRESERVE_FILL = "PRESERVE_FACTUAL_FILL"
 #: order carrying one cannot have reached the venue. Proven in source: see
 #: PaperRealMarketAdapter.submit_order, which raises these before
 #: super().submit_order() is ever reached.
+#: The ONLY durable event types that record a refusal to submit. An unrelated
+#: event type carrying a matching reason string must not authorise a terminal
+#: state, so lineage proof is gated on these.
+BROKER_UNREACHED_EVENT_TYPES = frozenset(
+    {
+        "ORDER_UNKNOWN",
+        "ORDER_REJECTED",
+    }
+)
+
 PROVEN_PRE_BROKER_REASONS = frozenset(
     {
         "MARKET_DATA_UNAVAILABLE",

@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.enums import (
@@ -630,6 +630,24 @@ class OrderManager:
         return await self.transition(
             order_id, OrderEventType.ORDER_UNKNOWN, payload={"reason": reason}
         )
+
+    async def count_fills_for_order(self, order_id: str) -> int:
+        """Durable factual fill rows for an order.
+
+        Recovery needs this to decide whether "venue says not found" may be read
+        as "this order never did anything". A factual fill outranks that answer,
+        so the count must be READ, never assumed.
+        """
+        async with self.session_factory() as session:
+            return int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(FillORM)
+                        .where(FillORM.order_id == order_id)
+                    )
+                ).scalar_one()
+            )
 
     async def apply_fill(self, fill: Fill) -> tuple[Order, Fill, bool]:
         """Apply a normalized fill exactly once. Returns (order, fill, newly_applied)."""

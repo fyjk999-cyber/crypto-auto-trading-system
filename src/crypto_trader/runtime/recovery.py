@@ -11,7 +11,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderEventType, OrderStatus
-from crypto_trader.domain.errors import OrderNotFound
+from crypto_trader.domain.errors import (
+    ExchangeError,
+    OrderNotFound,
+    RateLimited,
+    TemporaryNetworkError,
+)
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill
 from crypto_trader.order.recovery_classification import (
@@ -79,27 +84,53 @@ class RecoveryService:
         return None
 
     async def _pre_broker_lineage_proven(self, local) -> bool:
-        """True only when durable lineage proves the broker was never reached.
+        """True only when durable lineage PROVES the broker was never reached.
 
-        Requires an ORDER_UNKNOWN/REJECTED style event carrying a proven
-        pre-broker reason AND the absence of any broker identity. Anything
-        unreadable returns False, which is the safe direction: no terminalise.
+        A reason string appearing anywhere is NOT proof. Accepting one would let
+        an unrelated event (a CANCEL_PENDING carrying the same reason text)
+        authorise a terminal REJECTED - the same class of mistake as reading a
+        NULL broker id as proof.
+
+        Positive proof requires ALL of:
+          * no broker identity on the order;
+          * a durable event of type ORDER_UNKNOWN or ORDER_REJECTED - the only
+            types that record a refusal to submit;
+          * EITHER payload.broker_reached is explicitly False,
+            OR the event's reason is one whose source path is statically proven
+            to run before ``super().submit_order()`` is ever reached.
+
+        Anything unreadable returns False, which is the safe direction.
         """
         if local.exchange_order_id:
             return False
         events = getattr(self.order_manager, "list_events", None)
         if events is None:
             return False
+
+        from crypto_trader.order.recovery_classification import (
+            BROKER_UNREACHED_EVENT_TYPES,
+            PROVEN_PRE_BROKER_REASONS,
+        )
+
         try:
             for event in reversed(await events(local.internal_order_id)):
+                event_type = str(
+                    getattr(
+                        getattr(event, "event_type", None), "value", None
+                    )
+                    or getattr(event, "event_type", None)
+                    or ""
+                ).upper()
+                if event_type not in BROKER_UNREACHED_EVENT_TYPES:
+                    # An unrelated event type can never authorise terminalisation,
+                    # even if it happens to carry a matching reason string.
+                    return False
                 payload = getattr(event, "payload", None) or {}
+                if payload.get("broker_reached") is False:
+                    return True
                 raw = payload.get("reason")
                 if not raw:
-                    continue
-                from crypto_trader.order.recovery_classification import (
-                    PROVEN_PRE_BROKER_REASONS,
-                )
-
+                    return False
                 return str(raw).strip().upper() in PROVEN_PRE_BROKER_REASONS
         except Exception:
             return False
@@ -195,6 +226,44 @@ class RecoveryService:
                         },
                     )
                     actions.append(f"{local.client_order_id}: UNKNOWN (unproven)")
+                continue
+            except (
+                TemporaryNetworkError,
+                RateLimited,
+                ExchangeError,
+                TimeoutError,
+            ) as exc:
+                # Lookup/read failure is NOT evidence about existence. Classify
+                # with lookup_ok=False so it can only ever resolve to UNKNOWN,
+                # record it, and never resubmit. Placed AFTER OrderNotFound so
+                # that specific, meaningful signal is never swallowed here.
+                verdict = classify_recovery_lookup_outcome(
+                    lookup_ok=False,
+                    exchange_order_id=local.exchange_order_id,
+                    filled_quantity=local.filled_quantity,
+                    durable_fill_count=await self._durable_fill_count(local),
+                    failure_reason=None,
+                    pre_broker_lineage_proven=False,
+                    has_client_order_id=bool(local.client_order_id),
+                )
+                self.health_unresolved.append(local.internal_order_id)
+                await self._safe_audit(
+                    "RECOVERY_LOOKUP_UNREADABLE",
+                    target=local.client_order_id or local.internal_order_id,
+                    run_id=run_id,
+                    order_id=local.internal_order_id,
+                    client_order_id=local.client_order_id,
+                    exchange_order_id=local.exchange_order_id,
+                    after={
+                        "classification": verdict.classification,
+                        "disposition": DISPOSITION_UNKNOWN,
+                        "reason_codes": list(verdict.reason_codes),
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                actions.append(
+                    f"{local.client_order_id}: UNKNOWN (lookup unreadable)"
+                )
                 continue
 
             status = exchange_order.status
