@@ -46,6 +46,8 @@ class MarketSelectionStore:
             output_tokens=record.output_tokens,
             latency_ms=record.latency_ms,
             snapshot_age_seconds=record.snapshot_age_seconds,
+            exploration_rounds=record.exploration_rounds,
+            directory_query_json=dict(record.directory_query),
         )
         async with self.session_factory() as session:
             session.add(orm)
@@ -135,6 +137,8 @@ class MarketSelectionStore:
             output_tokens=row.output_tokens,
             latency_ms=row.latency_ms,
             snapshot_age_seconds=row.snapshot_age_seconds,
+            exploration_rounds=int(getattr(row, "exploration_rounds", 0) or 0),
+            directory_query=dict(getattr(row, "directory_query_json", None) or {}),
         )
 
     def is_successful_pair(self, scan_id: str) -> bool:

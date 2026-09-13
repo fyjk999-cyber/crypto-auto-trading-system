@@ -38,7 +38,10 @@ class MutableClock(Clock):
     def now(self) -> datetime:
         return self.value
 
-    def advance(self, seconds: int = 31) -> None:
+    # Default step matches the per-position LLM review eligibility window
+    # (Settings.position_review_min_interval_seconds = 60): a review is only
+    # eligible once that window has elapsed for that position.
+    def advance(self, seconds: int = 61) -> None:
         self.value += timedelta(seconds=seconds)
 
 
@@ -116,7 +119,10 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -299,7 +305,10 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("99"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("99"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -372,7 +381,10 @@ async def test_partial_exit_fill_stays_active_until_factual_remaining_position_c
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -449,7 +461,10 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -517,7 +532,10 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(
         plans, max_holding_time_seconds=60
-    ).create_entry_signal(entry, limit_price=Decimal("101"),
+    ).create_entry_signal(
+        entry,
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -575,7 +593,10 @@ async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database)
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -630,7 +651,10 @@ async def test_expired_entry_is_terminal_before_order_creation(database):
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -663,7 +687,10 @@ async def test_cancelled_unfilled_entry_cancels_approved_trade_plan(database):
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("99.5"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("99.5"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -699,7 +726,10 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     )
     await decisions.save(entry, run_id=first.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal("101"),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -758,7 +788,10 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
-        entry, limit_price=Decimal(limit_price),
+        entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
+        limit_price=Decimal(limit_price),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
     assert plan is not None and signal is not None
@@ -803,6 +836,8 @@ async def test_exit_supersedes_stale_partial_reduce_order(database):
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
         entry,
+        # Seeded lifecycle entry: Sizing V2 requires an explicit quantity.
+        quantity=Decimal(str(entry.position_size_request)),
         limit_price=Decimal("101"),
         execution_metadata=BTC_EXECUTION_METADATA,
     )
@@ -832,6 +867,11 @@ async def test_exit_supersedes_stale_partial_reduce_order(database):
     assert partial_order.status == OrderStatus.PARTIALLY_FILLED
     assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.06")
 
+    # Force the merged canonical stale-order liveness policy to classify this
+    # resting partial reduce as stale.  The engine must reconcile first and
+    # then cancel-only; it must never submit the newest EXIT mechanically while
+    # a genuinely resting child order still exists.
+    engine.order_manager.stale_position_action_seconds = 0
     clock.advance()
     assert await engine.tick() == []
     await engine.wait_for_event_queue()

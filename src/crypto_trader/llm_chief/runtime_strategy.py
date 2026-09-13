@@ -31,8 +31,25 @@ from crypto_trader.market_data.opportunity.scanner import (
     CANDIDATE_SOURCE_MARKET_OBSERVER,
 )
 from crypto_trader.observability.audit import AuditService
+from crypto_trader.sizing.policy import PositionSizingPolicy
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
+
+#: Canonical factual-depth window used when a sizer cannot be introspected.
+DEFAULT_LIQUIDITY_DEPTH_LEVELS = PositionSizingPolicy().liquidity_depth_levels
+
+
+def _sizing_depth_levels(sizer) -> int:
+    """Factual book levels the Sizer wants, without trusting an arbitrary sizer.
+
+    Falls back to the canonical V2 default when a non-standard sizer object is
+    injected, so the entry path can never crash on an extension point.
+    """
+    policy = getattr(sizer, "policy", None)
+    levels = getattr(policy, "liquidity_depth_levels", None)
+    if isinstance(levels, int) and not isinstance(levels, bool) and levels > 0:
+        return levels
+    return DEFAULT_LIQUIDITY_DEPTH_LEVELS
 
 
 class LiveLLMDecisionStrategy(StrategyPlugin):
@@ -61,6 +78,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         attempt_clock: Callable[[], datetime] | None = None,
         opportunity_board: OpportunityBoard | None = None,
         evidence_router: PerSymbolEvidenceRouter | None = None,
+        shadow_tap: Any | None = None,
         selection_service=None,
         card_trace_store: CardDecisionTraceStore | None = None,
         card_account_id: str = "default",
@@ -83,6 +101,10 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # cooldown replaces the single-symbol clock (same semantics).
         self.opportunity_board = opportunity_board
         self.evidence_router = evidence_router
+        # Shadow sidecar tap. Invoked ONLY after the decision above is
+        # durably committed; observe() never awaits, so the realtime path
+        # cannot be delayed by shadow work.
+        self.shadow_tap = shadow_tap
         # ChiefTrader ACTIVE market selection (research-attention only). The
         # selected symbols form the research queue; the SAME ChiefTrader still
         # owns the final directional decision.
@@ -91,6 +113,10 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self.card_trace_store = card_trace_store
         self.card_account_id = card_account_id
         self.card_mode = card_mode
+        # (selection_id, symbol) pairs already handed to the review loop, so a
+        # selected symbol is consumed at most once per selection round and the
+        # retry cooldown cannot resurrect it inside the same round.
+        self._consumed_selection_symbols: set[tuple[str, str]] = set()
         self._last_attempt_by_symbol: dict[str, datetime] = {}
         self._skip_until: dict[str, datetime] = {}
         # This is an attempt cooldown, not an entry cooldown.  Every provider
@@ -98,12 +124,21 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         self._last_decision_attempt: datetime | None = None
 
     def desired_symbol(self) -> str | None:
-        """Next symbol for DeepSeek review (MASTER DIRECTIVE §10/§24/§39).
+        """Next symbol for autonomous NEW research (canonical production path).
 
-        Priority: due factor candidates (priority-ranked), then rotation
-        symbols outside the candidate pool (no factor-induced blind spots).
-        Pure scheduling — never admissibility. Returns None when no board is
-        wired (legacy single-symbol behavior preserved).
+        Authority:
+            When ChiefTrader MarketSelection is active (``selection_service`` is
+            wired) it is the ONLY authority over which new symbols receive
+            autonomous research attention. ``NO_RESEARCH``, a selection failure
+            (LLM unavailable / timeout / failed), a stale or expired selection,
+            an exhausted selection queue and budget deferral ALL mean
+            "no new autonomous symbol research" for this round. There is no
+            programmatic substitute selection in that mode.
+
+            The legacy OpportunityBoard agenda (factor candidates then fairness
+            rotation) is used ONLY when ``selection_service is None`` — i.e.
+            MarketSelection is explicitly disabled — which preserves legacy and
+            test wiring.
         """
         if self.opportunity_board is None:
             return None
@@ -114,9 +149,12 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             for s, last in self._last_attempt_by_symbol.items()
             if now - last < self.retry_cooldown
         }
-        queued = self._selected_research_queue(exclude=exclude, now=now)
-        if queued is not None:
-            return queued
+
+        # New architecture: ChiefTrader MarketSelection owns research attention.
+        if self.selection_service is not None:
+            return self._selected_research_queue(exclude=exclude, now=now)
+
+        # Legacy compatibility only (MarketSelection disabled).
         return self.opportunity_board.next_agenda_symbol(exclude=exclude)
 
     # ------------------------------------------------------- research queue
@@ -136,6 +174,12 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         return record
 
     def _selected_research_queue(self, *, exclude: set[str], now) -> str | None:
+        """Consume ONLY the symbols of the current valid ChiefTrader selection.
+
+        Returns ``None`` — never a programmatic substitute — whenever no usable
+        selection exists, the selection explicitly requested no research, the
+        selection failed/expired, or every selected symbol has been consumed.
+        """
         record = self.current_selection()
         if record is None or record.selection_id in self._researched_selection_ids:
             return None
@@ -145,12 +189,30 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             self._researched_selection_ids.add(record.selection_id)
             return None
         for symbol in record.selected_symbol_names:
-            if symbol in exclude:
+            key = (record.selection_id, symbol)
+            if key in self._consumed_selection_symbols:
                 continue
+            if symbol in exclude:
+                # cooldown / position backoff still applies; the symbol is not
+                # consumed but is also not returned this call
+                continue
+            self._consumed_selection_symbols.add(key)
+            self._trim_consumption_state()
             return symbol
-        # every selected symbol has been reviewed for this selection round
+        # every selected symbol has been consumed for this selection round
         self._researched_selection_ids.add(record.selection_id)
         return None
+
+    def _trim_consumption_state(self) -> None:
+        """Bound the consumption bookkeeping (last 50 selection rounds)."""
+        if len(self._researched_selection_ids) > 50:
+            self._researched_selection_ids = set(
+                list(self._researched_selection_ids)[-50:]
+            )
+        if len(self._consumed_selection_symbols) > 500:
+            self._consumed_selection_symbols = set(
+                list(self._consumed_selection_symbols)[-500:]
+            )
 
     def selection_lineage(self, symbol: str) -> dict:
         """Scan/selection lineage for one research target (§13)."""
@@ -286,6 +348,10 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             opportunity_lineage=lineage,
             evidence_package=(package.model_dump(mode="json") if package else None),
         )
+        # Shadow sidecar observation, strictly AFTER the durable commit above.
+        # Deliberately placed last and wrapped: it cannot alter the decision, and
+        # a shadow fault is swallowed so it can never reach the trading loop.
+        self._observe_for_shadow(ctx=ctx, decision=decision)
         if self.opportunity_board is not None:
             self.opportunity_board.record_decision(
                 symbol=ctx.symbol,
@@ -378,8 +444,49 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 after={"symbol": ctx.symbol},
             )
             return []
+        # LIQUIDITY V2 (§19-§22): the Sizer caps quantity on the FACTUAL depth
+        # of the side this order would consume — asks for a LONG, bids for a
+        # SHORT — aggregated over the best N levels. A missing/stale/empty side
+        # is UNKNOWN and becomes NO NEW RISK; liquidity is never assumed
+        # infinite. This is a quantity cap, not a leverage clamp.
+        depth_side = "ASK" if decision.action.value == "LONG" else "BID"
+        depth_levels = _sizing_depth_levels(self.sizer)
+        liquidity_depth = ctx.book.depth_quantity(
+            side=depth_side,
+            levels=depth_levels,
+        )
+        if liquidity_depth is None:
+            await self.audit.log(
+                "LIVE_LLM_SIZING_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "reason_codes": ["LIQUIDITY_UNKNOWN"],
+                    "depth_side": depth_side,
+                    "depth_levels": depth_levels,
+                    "book_status": str(getattr(ctx.book.status, "value", ctx.book.status)),
+                },
+            )
+            return []
+        # ENTRY PRICE: size at the price the order will actually use (the touch),
+        # not at the mid. Sizing on a price the order cannot get is optimistic,
+        # and it would desynchronise the Sizer's stop-loss risk from the order's
+        # own facts that the RiskEngine re-derives independently (§33).
+        long_entry = decision.action.value == "LONG"
+        touch = ctx.book.best_ask() if long_entry else ctx.book.best_bid()
+        entry_limit = (
+            touch.price
+            if touch is not None
+            else round_tick(
+                mid, ctx.instrument.tick_size, ROUND_CEILING if long_entry else ROUND_FLOOR
+            )
+        )
         sized = self.sizer.size(
             side=decision.action.value,
+            # LLM raw quantity/exposure are ADVISORY ONLY (LLM_SIZE_ADVISORY_
+            # ONLY). They are preserved for audit but hold no quantity
+            # authority: the Sizer computes the final size deterministically.
             requested_quantity=Decimal(str(decision.position_size_request)),
             requested_exposure=(
                 Decimal(str(decision.requested_exposure))
@@ -390,35 +497,44 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             account=ctx.account,
             positions=ctx.positions,
             instrument=ctx.instrument,
-            price=mid,
+            price=entry_limit,
             stop_price=stop_price,
+            conviction=Decimal(str(decision.raw_llm_confidence or 0)),
             volatility=volatility,
             liquidity=liquidity,
+            liquidity_depth_qty=liquidity_depth,
             valuation=ctx.valuation,
         )
-        if sized.normalized_quantity <= 0:
+        sizing_evidence = (
+            sized.audit.to_evidence() if sized.audit is not None else {}
+        )
+        if sized.rejected or sized.normalized_quantity <= 0:
+            # Explainable rejection, including for the economic gate: the cap
+            # math is durable even when no order is produced (§58, §62, §63).
             await self.audit.log(
                 "LIVE_LLM_SIZING_REJECTED",
                 target=decision.decision_id,
                 actor="live_llm",
                 run_id=ctx.run_id,
-                after={"reason_codes": list(sized.sizing_reason_codes)},
+                after={
+                    "reason_codes": list(sized.sizing_reason_codes),
+                    "binding_cap": sized.binding_cap,
+                    "sizing": sizing_evidence,
+                },
             )
             return []
+        # Durable, complete sizing explanation: equity, risk budget, stop
+        # distance, every cap layer, the binding cap, and the LLM's advisory
+        # numbers. No entry may ever be a "mystery position".
+        await self.audit.log(
+            "LIVE_LLM_SIZING_AUDIT",
+            target=decision.decision_id,
+            actor="live_llm",
+            run_id=ctx.run_id,
+            after=sizing_evidence,
+        )
         valuation = ctx.valuation
         try:
-            if decision.action.value == "LONG":
-                touch = ctx.book.best_ask()
-                entry_limit = (
-                    touch.price if touch else
-                    round_tick(mid, ctx.instrument.tick_size, ROUND_CEILING)
-                )
-            else:
-                touch = ctx.book.best_bid()
-                entry_limit = (
-                    touch.price if touch else
-                    round_tick(mid, ctx.instrument.tick_size, ROUND_FLOOR)
-                )
             plan, signal = await self.planner.create_entry_signal(
                 decision,
                 limit_price=entry_limit,
@@ -452,6 +568,38 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                     "available_margin": str(sized.available_margin)
                     if sized.available_margin is not None
                     else None,
+                    # --- Sizing V2: claims the RiskEngine re-verifies
+                    # independently (defense in depth, §33/§34). RiskEngine never
+                    # trusts that the Sizer already checked these.
+                    "sizing_version": "v2",
+                    "sizing_binding_cap": sized.binding_cap,
+                    "sizing_source": "DETERMINISTIC_SIZER",
+                    "llm_size_authority": "ADVISORY_ONLY",
+                    "sizing_risk_budget": (
+                        str(sized.audit.risk_budget) if sized.audit is not None else None
+                    ),
+                    "sizing_effective_risk_fraction": (
+                        str(sized.audit.effective_risk_fraction)
+                        if sized.audit is not None
+                        else None
+                    ),
+                    "sizing_liquidity_depth": (
+                        str(sized.audit.liquidity_depth)
+                        if sized.audit is not None
+                        and sized.audit.liquidity_depth is not None
+                        else None
+                    ),
+                    "sizing_liquidity_cap_qty": (
+                        str(sized.audit.liquidity_cap_qty)
+                        if sized.audit is not None
+                        else None
+                    ),
+                    "sizing_stop_price": (
+                        str(sized.audit.stop_price)
+                        if sized.audit is not None
+                        and sized.audit.stop_price is not None
+                        else None
+                    ),
                 },
             )
             if plan is not None:
@@ -571,3 +719,57 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                 else None
             ),
         }
+
+
+    def _observe_for_shadow(self, *, ctx, decision) -> None:
+        """Best-effort, non-blocking hand-off to the isolated shadow sidecar.
+
+        Contract: the decision is ALREADY committed when this runs. It performs
+        no LLM call, reads no market provider, mutates nothing on the real path
+        and never raises — ``ShadowDecisionTap.observe`` is synchronous and only
+        attempts a bounded ``put_nowait``.
+        """
+        tap = getattr(self, "shadow_tap", None)
+        if tap is None:
+            return
+        try:
+            from crypto_trader.shadow.tap import ShadowObservation
+
+            reason_codes = [
+                str(code) for code in (getattr(decision, "reason_codes", None) or [])
+            ]
+            # Reference price comes from the market snapshot the decision was
+            # already made against (ChiefTraderDecision carries no price field).
+            # Frozen here so no candidate can pick a price after the fact.
+            reference_price = None
+            snapshot = getattr(ctx, "market_snapshot", None) or {}
+            for key in ("price", "last_price", "mark_price", "last", "close"):
+                value = snapshot.get(key) if isinstance(snapshot, dict) else None
+                if value is None:
+                    continue
+                try:
+                    if float(value) > 0:
+                        reference_price = value
+                        break
+                except (TypeError, ValueError):
+                    continue
+            tap.observe(
+                ShadowObservation(
+                    decision_id=str(decision.decision_id),
+                    symbol=str(ctx.symbol),
+                    action=str(getattr(decision.action, "value", decision.action)),
+                    reason_codes=reason_codes,
+                    thesis=getattr(decision, "thesis", None),
+                    market_data_quality=str(getattr(ctx, "data_quality", None) or "") or None,
+                    reference_price=reference_price,
+                    market_regime=str(getattr(ctx, "regime", None) or "") or None,
+                    strategy_id=str(getattr(self, "name", "live_llm")),
+                    strategy_version=str(getattr(self, "version", "unknown")),
+                    market_snapshot_id=getattr(ctx, "snapshot_id", None),
+                    factor_snapshot_id=getattr(ctx, "factor_snapshot_id", None),
+                    decided_at=getattr(decision, "created_at", None),
+                )
+            )
+        except Exception:
+            # Fail open toward real trading: shadow never propagates.
+            return

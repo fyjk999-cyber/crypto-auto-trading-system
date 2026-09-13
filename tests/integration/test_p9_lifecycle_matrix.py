@@ -75,6 +75,8 @@ async def test_full_lifecycle_is_symmetric_and_creates_one_episode(
     await decisions.save(entry, run_id=engine.run_id, prompt_version="p9-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
         entry,
+        # Seeded lifecycle entry: the test supplies the size directly.
+        quantity=Decimal(str(entry.position_size_request)),
         limit_price=Decimal(str(limit_price)),
         execution_metadata=BTC_EXECUTION_METADATA,
     )

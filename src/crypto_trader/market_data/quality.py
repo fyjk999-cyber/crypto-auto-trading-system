@@ -16,6 +16,11 @@ Design notes:
     * ``Fact`` is deliberately small; not every internal object must adopt it.
     * ``ESTIMATED`` is NOT ``VALID``: derived approximations (e.g. estimated
       quote turnover) keep their own quality state and unit label.
+    * ``UNSUPPORTED`` means the provider/instrument/field combination cannot
+      supply the fact at all; ``NOT_SAMPLED`` means the fact IS supported but
+      was not collected in the current bounded cycle. The two must never be
+      conflated: a rotating coverage gap is not provider incapability and not a
+      runtime failure.
     * Numeric and timestamp integrity helpers return facts, they never raise
       on bad provider input (a provider cannot crash the scanner).
 """
@@ -35,6 +40,10 @@ FUTURE_TIMESTAMP = "FUTURE_TIMESTAMP"
 NON_FINITE = "NON_FINITE"
 REQUEST_FAILED = "REQUEST_FAILED"
 UNSUPPORTED = "UNSUPPORTED"
+# Supported by the provider, but intentionally not collected in THIS cycle
+# (bounded / rotating coverage). Must never be read as "this market has no such
+# fact" — that is what UNSUPPORTED means.
+NOT_SAMPLED = "NOT_SAMPLED"
 ESTIMATED = "ESTIMATED"
 PARTIAL = "PARTIAL"
 MALFORMED = "MALFORMED"
@@ -47,10 +56,16 @@ ALL_QUALITY_STATES = (
     NON_FINITE,
     REQUEST_FAILED,
     UNSUPPORTED,
+    NOT_SAMPLED,
     ESTIMATED,
     PARTIAL,
     MALFORMED,
 )
+
+#: states describing a provider/instrument/field limitation (capability)
+LIMITATION_QUALITY_STATES = frozenset({UNSUPPORTED, MALFORMED})
+#: states describing bounded collection, not provider incapability
+COVERAGE_QUALITY_STATES = frozenset({NOT_SAMPLED, MISSING})
 
 # facts with these states may be used for computation/observation
 USABLE_QUALITY_STATES = frozenset({VALID, ESTIMATED, PARTIAL})

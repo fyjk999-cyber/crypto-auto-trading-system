@@ -26,7 +26,7 @@ elif [ ! -d .venv ]; then
 else
   PYTHON_BIN=.venv/bin/python
 fi
-if [ "$PYTHON_BIN" != "$PAPER_RUNTIME_PYTHON" ]; then
+if [ "$PYTHON_BIN" != "${PAPER_RUNTIME_PYTHON:-}" ]; then
   "$PYTHON_BIN" -m pip install -e '.[dev]' -q
 fi
 mkdir -p data

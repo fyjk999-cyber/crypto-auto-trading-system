@@ -13,6 +13,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     TypeDecorator,
     UniqueConstraint,
 )
@@ -121,6 +122,40 @@ class OrderEventORM(Base):
     order: Mapped[OrderORM] = relationship(back_populates="events")
 
 
+class FillSettlementORM(Base):
+    """Durable settlement state for a factual fill.
+
+    ``FillORM persisted`` is NOT the same as ``fill fully settled``: the ledger
+    posting, the portfolio projection and the TradePlan convergence all happen
+    downstream, and any of them can be interrupted. Without a durable marker the
+    system cannot tell a completed fill from a half-completed one, and a replayed
+    fill event used to short-circuit ("fill already exists") and leave the gap
+    permanent.
+
+    Exactly one row per factual ``fill_id``.
+    """
+
+    __tablename__ = "fill_settlements"
+    __table_args__ = (
+        UniqueConstraint("fill_id", name="uq_fill_settlements_fill_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fill_id: Mapped[str] = mapped_column(
+        ForeignKey("fills.fill_id"), nullable=False, index=True
+    )
+    order_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error_type: Mapped[str | None] = mapped_column(String(64))
+    last_error_message: Mapped[str | None] = mapped_column(Text)
+    ledger_transaction_id: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class FillORM(Base):
     __tablename__ = "fills"
     __table_args__ = (
@@ -163,6 +198,12 @@ class LedgerTransactionORM(Base):
     __tablename__ = "ledger_transactions"
     __table_args__ = (
         UniqueConstraint("transaction_id", name="uq_ledger_transactions_transaction_id"),
+        # ONE ledger transaction per fill / per event. The service-level check
+        # runs in its own session and therefore cannot stop two concurrent
+        # writers; without this index a racing settlement duplicates the
+        # economic effect. Nullable columns keep "no identity" rows unaffected.
+        Index("uq_ledger_transactions_fill_id", "fill_id", unique=True),
+        Index("uq_ledger_transactions_event_id", "event_id", unique=True),
     )
 
     transaction_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1230,4 +1271,7 @@ class MarketSelectionORM(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     snapshot_age_seconds: Mapped[float | None] = mapped_column(Float)
+    # ChiefTrader directory exploration lineage (research attention only).
+    exploration_rounds: Mapped[int | None] = mapped_column(Integer)
+    directory_query_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

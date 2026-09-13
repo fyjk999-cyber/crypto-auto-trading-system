@@ -18,7 +18,18 @@ Fact(
 ```
 
 Quality states: `VALID`, `MISSING`, `STALE`, `FUTURE_TIMESTAMP`, `NON_FINITE`,
-`REQUEST_FAILED`, `UNSUPPORTED`, `ESTIMATED`, `PARTIAL`, `MALFORMED`.
+`REQUEST_FAILED`, `UNSUPPORTED`, `NOT_SAMPLED`, `ESTIMATED`, `PARTIAL`, `MALFORMED`.
+
+`UNSUPPORTED` and `NOT_SAMPLED` are deliberately different:
+
+| State | Meaning |
+|---|---|
+| `UNSUPPORTED` | the provider/instrument/field combination fundamentally cannot supply the fact (capability limitation) |
+| `NOT_SAMPLED` | the fact IS supported but was not collected in this bounded cycle (coverage decision) |
+
+A rotating coverage gap must never be reported as provider incapability or as a
+runtime failure, and DeepSeek must never read "not collected this cycle" as
+"this market has no such fact".
 
 Only `VALID`, `ESTIMATED` and `PARTIAL` are usable for computation. No other state may
 enter ranking, factor strength, liquidity comparison, OI change, turnover calculation or
@@ -103,6 +114,58 @@ depth_semantics = "best bid/ask size only; full depth is an explicit tool reques
 Full-depth imbalance is **not** claimed. If the factors ever require depth, it must come
 from an explicit read-only tool call.
 
+## 6a. Missing vs zero at the provider boundary
+
+The OKX client passes provider fields through unchanged — a missing field is
+`None`, never a defaulted string:
+
+```python
+raw = data["data"][0]
+return {
+    "open_interest": raw.get("oi"),        # None when absent
+    "open_interest_ccy": raw.get("oiCcy"),
+    "open_interest_usd": raw.get("oiUsd"),
+    "source_timestamp": raw.get("ts"),
+}
+```
+
+Downstream classification then decides:
+
+| Provider value | Result |
+|---|---|
+| `"0"` | `VALID` zero (a real factual zero) |
+| field absent | `MISSING` (or `NOT_SAMPLED` when simply not collected) |
+| `"abc"` / negative | `MALFORMED` |
+| `"NaN"` / `"Infinity"` | `NON_FINITE` |
+
+A missing provider value can never become a `VALID` zero.
+
+OI provenance strings name the real endpoint: `OKX /api/v5/public/open-interest`
+(plural `open-interests` appears only in documentation of the invalid-path test).
+
+## 6b. Open interest contract (live-verified)
+
+`GET /api/v5/public/open-interest?instType=SWAP` (no `instId`) is the broad form
+and returns one row per instrument. Live verification at correction time:
+
+```
+HTTP 200 · code 0 · 478 rows · 463 of them -USDT-SWAP (the whole discovery universe)
+fields: instId, instType, oi (contracts), oiCcy (base ccy), oiUsd (notional), ts
+```
+
+Notable contract details, all observed directly:
+
+| Request | Result |
+|---|---|
+| `/api/v5/public/open-interest?instType=SWAP` | works (broad) |
+| `/api/v5/public/open-interest?instType=SWAP&instId=<real>` | works (single) |
+| `/api/v5/public/open-interest?instType=SWAP&instId=ANY` | code 51001 — `ANY` is NOT valid for OI (it IS valid for funding) |
+| `/api/v5/public/open-interests?instType=SWAP` (plural path) | HTTP 404 |
+
+So the primary source is ONE broad request; per-instrument calls remain only as a
+bounded fallback for instruments absent from a successful broad response, and
+`oi_sample_max_symbols` now bounds that fallback (not a 120-symbol rotation).
+
 ## 7. OI factual time series
 
 `OiTimeSeries` stores timestamped samples (`symbol`, `open_interest`, `observed_at`,
@@ -112,9 +175,29 @@ expensive candle analysis.
 Windows are data-driven (`5m`, `15m`, `1h`; default `15m`) with explicit tolerance
 (`15m ± 180s`). Change is measured against the sample closest to `T - window`:
 
-* fewer than 2 samples, stale latest sample, or no baseline within tolerance
-  → `OI_CHANGE_UNAVAILABLE` (`quality = UNSUPPORTED`);
-* irregular "last N calls" are never compared as if elapsed time were equal.
+* samples keep the **provider observation timestamp** (`oi_observed_at` from the
+  OKX payload), never the scan start time; identical provider timestamps
+  deduplicate so a re-published instant cannot fake an acceleration;
+* a provider OI of exactly `0` is a VALID factual sample and is stored; a zero
+  baseline yields `MISSING` (`ZERO_BASELINE`) rather than dividing by zero;
+* a negative or non-finite value never enters the series.
+
+Window-change quality maps evidence limitations to evidence states, reserving
+`UNSUPPORTED` for genuine capability absence:
+
+| Situation | Quality | Reason marker |
+|---|---|---|
+| unimplemented window (e.g. `7h`) | `UNSUPPORTED` | `unknown OI window` |
+| fewer than 2 timestamped samples | `MISSING` | `INSUFFICIENT_HISTORY` |
+| no sample before the latest | `MISSING` | `NO_COMPARABLE_BASELINE` |
+| nearest baseline outside tolerance | `MISSING` | `NO_BASELINE_IN_WINDOW` |
+| baseline OI is zero | `MISSING` | `ZERO_BASELINE` |
+| latest sample older than the window | `STALE` | `STALE` |
+| non-finite sample value | `NON_FINITE` | `NON_FINITE` |
+
+Comparison always selects the factual sample closest to `T - window` within the
+configured tolerance; scan iteration numbers, array positions and request counts
+are never used as time.
 
 ## 8. Estimated turnover semantics
 

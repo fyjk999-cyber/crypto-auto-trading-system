@@ -1,4 +1,11 @@
-"""Conservative quantity sizing from explicit risk inputs, not a fixed default."""
+"""Standalone risk-normalised quantity utility.
+
+NOT the final-quantity authority. Since POSITION SIZING V2 the authority is
+:class:`crypto_trader.sizing.service.LiveEntrySizingService`, which combines
+this risk formula with the capital, margin, portfolio, symbol and factual
+liquidity caps. This helper is kept as a bounded, independently tested
+building block — reusing it as "the sizer" would bypass those caps.
+"""
 
 from __future__ import annotations
 

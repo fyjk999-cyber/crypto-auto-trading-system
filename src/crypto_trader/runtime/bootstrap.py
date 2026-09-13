@@ -42,6 +42,7 @@ from crypto_trader.llm_chief.growth_budget import (
     GrowthBudgetPolicy,
     load_growth_maturity_facts,
 )
+from crypto_trader.llm_chief.model_control import LLMModelControl
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.provider import DeepSeekProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
@@ -72,11 +73,13 @@ from crypto_trader.perpetual.funding_settlement import FundingSettlementService
 from crypto_trader.persistence.database import Database
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
-from crypto_trader.risk.engine import RiskEngine
+from crypto_trader.risk.engine import RiskConfig, RiskEngine
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
+from crypto_trader.scale_in.policy import ScaleInPolicy
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
+from crypto_trader.sizing.policy import PositionSizingPolicy
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.dummy import DummyStrategy
 from crypto_trader.trade_plan.service import TradePlanService
@@ -118,7 +121,17 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     portfolio = PortfolioService(database.session_factory)
     order_manager = OrderManager(database.session_factory)
     market_data = MarketDataService()
-    risk = RiskEngine()
+    risk = RiskEngine(
+        RiskConfig(
+            max_single_notional_multiple=Decimal(settings.max_single_notional_multiple),
+            max_total_gross_exposure_multiple=Decimal(
+                settings.max_total_gross_exposure_multiple
+            ),
+            max_symbol_exposure_multiple=Decimal(settings.max_symbol_exposure_multiple),
+            max_leverage=Decimal(settings.max_leverage),
+            max_risk_per_trade=Decimal(settings.max_risk_per_trade),
+        )
+    )
     leases = LeaseManager(database.session_factory)
     reconciliation = ReconciliationService(database.session_factory)
     audit = AuditService(database.session_factory)
@@ -233,6 +246,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         learned_tools_enabled=False,
     )
     llm_provider = DeepSeekProvider()
+    # Operator model selection (frontend-switchable, persisted, audited).
+    # A stored override wins over LLM_MODEL so the UI choice survives restarts.
+    model_control = LLMModelControl(
+        database.session_factory, provider=llm_provider, audit=audit
+    )
+    await model_control.apply_persisted()
     # Single logical global model-budget authority (8): created
     # before the engine so every model call site shares it.  The factual
     # Growth maturity policy can only lower the configured ceiling; it can
@@ -250,6 +269,18 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             max_calls_per_window=effective_budget,
         ),
         growth_stage=growth_recommendation.stage,
+    )
+    # Resource-readiness inputs for the position-management capacity gate.
+    # Authority-neutral: these only let the runtime report how many concurrent
+    # positions the management budget can actually cover.
+    adapter.llm_budget = llm_budget
+    adapter.position_review_min_interval_seconds = float(
+        settings.position_review_min_interval_seconds
+    )
+    # The official runtime enforces the capacity gate; ad-hoc/test engines keep
+    # the historical admission behaviour unless they opt in.
+    settings = settings.model_copy(
+        update={"enforce_position_management_capacity": True}
     )
     chief = ChiefTraderEngine(provider=llm_provider, budget=llm_budget)
     tools = build_canonical_tool_registry(evidence_router)
@@ -293,15 +324,66 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             cooldown_seconds=settings.market_selection_min_interval_seconds,
             pool_size=settings.market_selection_pool_size,
             timeout_seconds=settings.market_selection_timeout_seconds,
+            # Same-semantic live ticker warm-up source: the adapter's own OKX
+            # public feed (the producer of realized_volatility). Injected, not
+            # reconstructed, so no second market subsystem is created.
+            ticker_feed=getattr(adapter, "feed", None),
         )
         if settings.market_selection_enabled
         else None
     )
     opportunity_board.selection_service = market_selection_service
-    sizer = LiveEntrySizingService(
-        risk_fraction=Decimal(alpha.risk_per_trade),
-        max_order_notional=risk.config.max_order_notional,
-        max_leverage=risk.config.max_leverage,
+    # POSITION SIZING V2: the Sizer owns final quantity. The LLM's raw quantity
+    # is advisory only. Every parameter comes from configuration; the policy
+    # clamps anything that would widen a project hard ceiling and records the
+    # clamp, so bad config can never enlarge the safety envelope (§59, §60).
+    sizing_policy = PositionSizingPolicy(
+        base_risk_per_trade=Decimal(settings.base_risk_per_trade),
+        max_risk_per_trade=Decimal(settings.max_risk_per_trade),
+        max_single_notional_multiple=Decimal(settings.max_single_notional_multiple),
+        max_total_gross_exposure_multiple=Decimal(
+            settings.max_total_gross_exposure_multiple
+        ),
+        max_symbol_exposure_multiple=Decimal(settings.max_symbol_exposure_multiple),
+        max_leverage=Decimal(settings.max_leverage),
+        min_effective_notional_fraction=Decimal(
+            settings.min_effective_notional_fraction
+        ),
+        liquidity_depth_levels=settings.liquidity_depth_levels,
+        max_liquidity_participation=Decimal(settings.max_liquidity_participation),
+        # The historical static order-notional ceiling stays as an ADDITIONAL
+        # cap; it no longer represents (and can no longer stand in for) the
+        # dynamic 5x-equity rule.
+        static_max_order_notional=risk.config.max_order_notional,
+    )
+    if sizing_policy.hard_ceiling_violations:
+        await audit.log(
+            "SIZING_POLICY_HARD_CEILING_CLAMPED",
+            target="position_sizing_policy",
+            actor="bootstrap",
+            after=sizing_policy.to_evidence(),
+        )
+    sizer = LiveEntrySizingService(policy=sizing_policy)
+    # POSITION SIZING V2 PATCH — the scale-in policy is built and audited but
+    # deliberately NOT wired into any execution path: ADD execution stays
+    # disabled regardless of the flag, because the runtime reads the flag only
+    # to record it. No strategy, engine or order path consumes it in this build.
+    scale_in_policy = ScaleInPolicy(
+        enabled=settings.enable_llm_automatic_scale_in,
+        max_scale_in_count=settings.max_scale_in_count,
+        min_scale_in_interval_seconds=settings.scale_in_min_interval_seconds,
+        scale_in_order_ttl_seconds=settings.scale_in_order_ttl_seconds,
+    )
+    await audit.log(
+        "POSITION_SIZING_V2_SCALE_IN_POLICY",
+        target="scale_in_policy",
+        actor="bootstrap",
+        after={
+            **scale_in_policy.to_evidence(),
+            "auto_scale_in_execution_enabled": False,
+            "auto_scale_in_architecture_ready": True,
+            "execution_path_wired": False,
+        },
     )
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
@@ -400,6 +482,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
         opportunity_board=opportunity_board,
+        model_control=model_control,
         market_selection_service=market_selection_service,
         llm_budget=llm_budget,
         market_directory=market_directory,

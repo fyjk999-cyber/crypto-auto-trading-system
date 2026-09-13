@@ -27,6 +27,7 @@ from crypto_trader.governance.memory_persistence import MemoryPersistence
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.intelligence.feedback.interface import ResearchFeedbackInterface
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+from crypto_trader.llm_chief.model_control import ModelSwitchUnavailable, UnknownModelError
 from crypto_trader.okx_vault.client import BrokerClient
 from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
@@ -320,7 +321,44 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/llm/health")
     async def llm_health():
-        return state.llm_runtime.snapshot()
+        payload = state.llm_runtime.snapshot()
+        provider = state.llm_runtime.provider_instance
+        # Report the LIVE provider model (it can be switched at runtime from
+        # the UI), not the process-start environment value.
+        if provider is not None and getattr(provider, "model", None):
+            payload["model"] = provider.model
+        if state.model_control is not None:
+            control = await state.model_control.state()
+            payload["model_source"] = control["source"]
+            payload["available_models"] = control["available"]
+        return payload
+
+    @app.get("/llm/models")
+    async def llm_models():
+        """Selectable LLM models + the operator's current selection."""
+        if state.model_control is None:
+            return {"model": None, "available": [], "switch_supported": False}
+        return await state.model_control.state()
+
+    @app.post("/llm/model", dependencies=[Depends(require_role_dependency(Role.ADMIN))])
+    async def llm_model_switch(body: dict):
+        """Switch the ChiefTrader LLM model (persisted + audited).
+
+        Operational only: it never changes decision authority, Risk limits or
+        Execution behaviour — the live LLM remains the sole new-direction
+        authority regardless of which allowed model is selected.
+        """
+        if state.model_control is None:
+            raise HTTPException(status_code=409, detail="MODEL_CONTROL_UNAVAILABLE")
+        requested = str(body.get("model") or "").strip()
+        if not requested:
+            raise HTTPException(status_code=400, detail="MODEL_REQUIRED")
+        try:
+            return await state.model_control.switch(requested, actor="frontend_operator")
+        except UnknownModelError:
+            raise HTTPException(status_code=400, detail="UNSUPPORTED_MODEL") from None
+        except ModelSwitchUnavailable:
+            raise HTTPException(status_code=409, detail="LLM_PROVIDER_UNAVAILABLE") from None
 
     @app.get("/llm/decisions")
     async def llm_decisions(limit: int = 100):
@@ -781,6 +819,51 @@ def create_app(state: AppState) -> FastAPI:
             ],
             "count": len(rows),
             "quant_direct_trade_authority": 0,
+        }
+
+    @app.get("/sizing/{decision_id}")
+    async def sizing_audit(decision_id: str):
+        """POSITION SIZING V2 explanation for one entry decision (§61-§63).
+
+        Read-only: it replays the durable sizing audit so any entry can be
+        explained (equity, risk %, risk budget, every cap layer, binding cap).
+        It never recomputes or influences a size.
+        """
+        event = await __import__(
+            "crypto_trader.observability.audit", fromlist=["AuditService"]
+        ).AuditService(state.database.session_factory).latest_for_target(
+            decision_id,
+            actions=("LIVE_LLM_SIZING_AUDIT", "LIVE_LLM_SIZING_REJECTED"),
+        )
+        if event is None:
+            raise HTTPException(status_code=404, detail="no sizing record for decision")
+        evidence = dict(event.after_json or {})
+        sizing = evidence.get("sizing") if "sizing" in evidence else evidence
+        sizing = sizing or {}
+        return {
+            "decision_id": decision_id,
+            "recorded_at": event.timestamp.isoformat() if event.timestamp else None,
+            "decision": event.action,
+            "sizing_equity": sizing.get("equity"),
+            "risk_pct": sizing.get("effective_risk_fraction"),
+            "risk_budget": sizing.get("risk_budget"),
+            "entry_price": sizing.get("entry_price"),
+            "stop_price": sizing.get("stop_price"),
+            "stop_distance": sizing.get("stop_distance"),
+            "target_notional": sizing.get("risk_qty"),
+            "final_notional": sizing.get("final_notional"),
+            "final_qty": sizing.get("final_qty"),
+            "position_notional_pct": sizing.get("notional_pct_of_equity"),
+            "requested_leverage": sizing.get("requested_leverage"),
+            "approved_leverage": sizing.get("approved_leverage"),
+            "expected_stop_loss": sizing.get("max_loss_estimate"),
+            "binding_cap": sizing.get("binding_cap"),
+            "binding_caps": sizing.get("binding_caps") or [],
+            "min_effective_notional": sizing.get("min_effective_notional"),
+            "sizing_reason_codes": sizing.get("sizing_reason_codes") or [],
+            "llm_size_authority": "ADVISORY_ONLY",
+            "sizer_final_quantity_authority": True,
+            "evidence": evidence,
         }
 
     @app.get("/strategies")

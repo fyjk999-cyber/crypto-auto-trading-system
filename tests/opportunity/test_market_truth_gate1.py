@@ -139,9 +139,12 @@ def test_irregular_oi_sampling_does_not_fake_fixed_window_change():
     series.record(OiSample("BTCUSDT", 130.0, now - timedelta(seconds=20)))
     series.record(OiSample("BTCUSDT", 160.0, now - timedelta(seconds=10)))
     fact = series.window_change("BTCUSDT", now=now, window="15m")
-    assert fact.quality == "UNSUPPORTED"
+    # temporary evidence limitation (no comparable baseline in the window) is
+    # MISSING, NOT provider incapability
+    assert fact.quality == MISSING
     assert fact.value is None
     assert "OI_CHANGE_UNAVAILABLE" in (fact.reason or "")
+    assert "NO_BASELINE_IN_WINDOW" in (fact.reason or "")
 
     # a proper T-15m baseline yields a factual change
     series.record(OiSample("BTCUSDT", 100.0, now - timedelta(seconds=900)))
@@ -155,7 +158,11 @@ def test_oi_windows_are_data_driven_and_bounded():
     labels = [w.label for w in DEFAULT_OI_WINDOWS]
     assert labels == ["5m", "15m", "1h"]
     series = OiTimeSeries()
-    assert series.window_change("X", now=datetime.now(UTC)).quality == "UNSUPPORTED"
+    # insufficient history is a temporary evidence limitation -> MISSING
+    fact = series.window_change("X", now=datetime.now(UTC))
+    assert fact.quality == MISSING
+    assert "INSUFFICIENT_HISTORY" in (fact.reason or "")
+    # an unimplemented window remains a genuine capability limitation
     assert series.window_change("X", now=datetime.now(UTC), window="9h").quality == "UNSUPPORTED"
 
 

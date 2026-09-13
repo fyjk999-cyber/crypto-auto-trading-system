@@ -477,6 +477,31 @@ class TradeEpisodeStore:
             await session.commit()
         return True
 
+    async def pending_closed_plan_ids(self, *, limit: int = 200) -> list[str]:
+        """Closed plans that still have no Episode.
+
+        Same predicate as ``materialize_pending_closed``; exposed separately so a
+        caller can apply its own bounded retry budget without duplicating the
+        query.
+        """
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(TradePlanORM.trade_plan_id)
+                    .outerjoin(
+                        TradeEpisodeORM,
+                        TradeEpisodeORM.trade_plan_id == TradePlanORM.trade_plan_id,
+                    )
+                    .where(
+                        TradePlanORM.state == "CLOSED",
+                        TradeEpisodeORM.episode_id.is_(None),
+                    )
+                    .order_by(TradePlanORM.closed_at, TradePlanORM.trade_plan_id)
+                    .limit(max(1, limit))
+                )
+            ).scalars().all()
+        return [str(r) for r in rows]
+
     async def materialize_pending_closed(self, *, limit: int = 200) -> int:
         """Retry factual episodes whose lifecycle funding was incomplete."""
         async with self.session_factory() as session:

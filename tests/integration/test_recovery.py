@@ -101,5 +101,12 @@ async def test_recovery_rejects_order_missing_from_exchange(database):
 
     actions = await RecoveryService(mgr, MissingAdapter()).recover("run_missing")
     restored = await mgr.get(local.internal_order_id)
-    assert restored.status == OrderStatus.REJECTED
-    assert any("not on exchange" in a for a in actions)
+    # P0-2: this order HAS a broker id, so "venue says not found" is a
+    # reconciliation problem, NOT evidence that it never existed. Terminalising
+    # it as REJECTED would assert a fact we do not have - which is how a false
+    # terminal state leaves a position unmanageable.
+    assert restored.status != OrderStatus.REJECTED, (
+        "an order with a broker id must not be rejected merely because the "
+        "venue could not find it"
+    )
+    assert any("MISSING" in a for a in actions), actions

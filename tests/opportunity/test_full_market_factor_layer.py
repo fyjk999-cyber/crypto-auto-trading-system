@@ -48,6 +48,7 @@ from crypto_trader.market_data.opportunity.scanner import (
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.sizing.service import LiveEntrySizingService
 from crypto_trader.strategy.base import StrategyContext
+from crypto_trader.valuation.domain import ValuationBatch
 
 # --------------------------------------------------------------------- helpers
 
@@ -107,6 +108,8 @@ class FakeChief:
             thesis="factual LLM thesis" if directional else "",
             position_size_request=0.01 if directional else 0.0,
             leverage_request=2.0 if directional else 0.0,
+            # Neutral conviction band (1.00x); conviction drives the risk budget.
+            raw_llm_confidence=0.80 if directional else 0.0,
             stop_loss=(101.0 if self.action == "SHORT" else 99.0)
             if directional
             else None,  # SHORT stop above mid
@@ -143,8 +146,13 @@ class FakePlanner:
 def make_ctx(symbol: str = "BTCUSDT") -> StrategyContext:
     now = datetime.now(UTC)
     book = OrderBook(symbol=symbol, exchange="OKX")
+    # Factual multi-level depth: POSITION SIZING V2 caps quantity on the side
+    # the order consumes, so a one-contract book could not support a position.
     book.apply_snapshot(
-        1, [(Decimal("100"), Decimal("1"))], [(Decimal("101"), Decimal("1"))], now=now
+        1,
+        [(Decimal("100"), Decimal("1000")), (Decimal("99.9"), Decimal("1000"))],
+        [(Decimal("101"), Decimal("1000")), (Decimal("101.1"), Decimal("1000"))],
+        now=now,
     )
     return StrategyContext(
         symbol=symbol,
@@ -157,6 +165,15 @@ def make_ctx(symbol: str = "BTCUSDT") -> StrategyContext:
         realized_volatility=Decimal("0.01"),
         instrument=Instrument(
             symbol=symbol, base_asset=symbol[:-4], quote_asset="USDT", step_size="0.00001"
+        ),
+        # Sizing equity must come from a proven valuation batch, never ledger cash.
+        valuation=ValuationBatch(
+            valuation_id="val-factor-layer",
+            account_id="default",
+            currency="USDT",
+            quality="HEALTHY",
+            raw_mtm_equity=Decimal("10000"),
+            available_margin=Decimal("10000"),
         ),
     )
 

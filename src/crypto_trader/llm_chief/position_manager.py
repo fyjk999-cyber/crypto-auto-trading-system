@@ -183,10 +183,60 @@ class LiveLLMPositionManager:
                 "symbol": position.symbol,
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_authority": "LIVE_LLM_ONLY",
+                # Why this decision happened must be readable from the AUDIT
+                # ALONE. A FAIL_CLOSED whose cause (NO_API_KEY, budget
+                # exhaustion, provider failure, invalid model output) is only
+                # discoverable by joining llm_decisions makes an unmanaged
+                # position impossible to explain at the point an operator
+                # actually looks - which is exactly how this went undiagnosed.
+                "reason_codes": list(decision.reason_codes or []),
+                "model_provider": decision.model_provider,
+                "model": decision.model,
             },
         )
         if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
             return None
+
+        # POSITION SIZING V2  ADD is a RISK-INCREASING action
+        # and must never be handled by the reduction path below. It is refused
+        # here, explicitly and before any quantity logic, because ADD execution
+        # is not enabled in this build (default-off feature flag). Silently
+        # treating an ADD as a REDUCE would invert its intent and reduce a
+        # position the LLM asked to grow.
+        #9 risk priority is preserved: when the factual maximum holding
+        # period has already been reached, REDUCE outranks ADD, so an ADD at
+        # that boundary falls through to the existing TIME_STOP safety
+        # fallback instead of being honoured.
+        if decision.action == OpenAction.ADD and not time_stop:
+            await self.audit.log(
+                "LIVE_LLM_POSITION_ADD_REFUSED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "reason": "ADD_EXECUTION_DISABLED_FEATURE_FLAG",
+                    "symbol": position.symbol,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "action": decision.action.value,
+                    "risk_increasing": True,
+                    "auto_scale_in_enabled": False,
+                    "reduce_substitution_blocked": True,
+                },
+            )
+            return None
+        if decision.action == OpenAction.ADD and time_stop:
+            await self.audit.log(
+                "LIVE_LLM_POSITION_ADD_OVERRIDDEN_BY_TIME_STOP",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "reason": "REDUCE_OUTRANKS_ADD_AT_MAX_HOLD",
+                    "symbol": position.symbol,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "max_holding_time_seconds": plan.max_holding_time_seconds,
+                },
+            )
 
         if decision.action == OpenAction.EXIT or time_stop:
             quantity = abs(position.quantity)

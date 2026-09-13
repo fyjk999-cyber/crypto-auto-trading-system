@@ -58,6 +58,10 @@ class MarketObservationSnapshot:
     data_quality_summary: dict = field(default_factory=dict)
     scanner_version: str = SCANNER_VERSION
     error: str | None = None
+    # Feature coverage is tracked SEPARATELY from execution status: a scan that
+    # executed its designed bounded plan is COMPLETE even when a rotating
+    # feature covers less than the whole universe (§6).
+    feature_coverage: dict = field(default_factory=dict)
     # Compact per-symbol broad facts for the whole observable set. Kept out of
     # as_dict() to bound API payloads; used by the research pool builder and the
     # read-only Market Directory. Contents are never mutated after publication.
@@ -96,6 +100,7 @@ class MarketObservationSnapshot:
             "active_symbols": list(self.active_symbols),
             "rotation_symbols": list(self.rotation_symbols),
             "data_quality_summary": dict(self.data_quality_summary),
+            "feature_coverage": dict(self.feature_coverage),
             "scanner_version": self.scanner_version,
             "error": self.error,
             "observable_rows_count": len(self.observable_rows),
@@ -121,6 +126,7 @@ class MarketObservationSnapshot:
             },
             "factor_candidate_count": len(self.factor_candidates),
             "data_quality_summary": dict(self.data_quality_summary),
+            "feature_coverage": dict(self.feature_coverage),
             "scanner_version": self.scanner_version,
         }
 
@@ -181,15 +187,59 @@ def aggregate_quality(*states: str) -> str:
 def build_data_quality_summary(
     *, funding: dict, oi: dict, candles: dict, total_symbols: int
 ) -> dict[str, Any]:
-    """Bounded factual data-quality roll-up for a scan."""
+    """Bounded factual data-quality roll-up for a scan.
+
+    Quality states answer "how good is this fact", coverage ratios answer "how
+    much of the universe did we intend to collect this cycle". They are kept
+    separate so a bounded collection gap can never be read as provider
+    incapability.
+    """
     return {
         "funding": _counts(funding, total_symbols),
         "open_interest": _counts(oi, total_symbols),
         "candles": _counts(candles, total_symbols),
         "note": (
             "provider failure states are reported as facts; missing funding is "
-            "never rendered as zero funding"
+            "never rendered as zero funding; NOT_SAMPLED means supported but not "
+            "collected this cycle (not provider incapability)"
         ),
+    }
+
+
+def build_feature_coverage(
+    *,
+    discovered_count: int,
+    ticker_quality: dict[str, str],
+    funding_quality: dict[str, str],
+    oi_quality: dict[str, str],
+    analysis_attempted: int,
+    analysis_success: int,
+    analysis_ready: int,
+) -> dict:
+    """Explicit, never-conflated coverage counters (§6 of the correction)."""
+
+    def ratio(numerator: int, denominator: int) -> float:
+        return round(numerator / denominator, 6) if denominator else 0.0
+
+    def usable(states: dict[str, str]) -> int:
+        from crypto_trader.market_data.quality import is_usable
+
+        return sum(1 for state in states.values() if is_usable(state))
+
+    tickers = usable(ticker_quality)
+    funding = usable(funding_quality)
+    oi = usable(oi_quality)
+    return {
+        "ticker_coverage_count": tickers,
+        "ticker_coverage_ratio": ratio(tickers, discovered_count),
+        "funding_coverage_count": funding,
+        "funding_coverage_ratio": ratio(funding, discovered_count),
+        "oi_coverage_count": oi,
+        "oi_coverage_ratio": ratio(oi, discovered_count),
+        "analysis_attempted_count": int(analysis_attempted),
+        "analysis_success_count": int(analysis_success),
+        "analysis_ready_count": int(analysis_ready),
+        "universe_count": int(discovered_count),
     }
 
 

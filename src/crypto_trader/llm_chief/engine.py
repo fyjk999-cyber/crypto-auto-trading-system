@@ -12,7 +12,7 @@ from crypto_trader.llm.tools.registry import MAX_SELECTED_TOOLS
 from crypto_trader.llm_chief.budget import (
     P1_POSITION_LIFECYCLE,
     P2_FINAL_ENTRY_DECISION,
-    P3_SELECTED_SYMBOL_RESEARCH,
+    BudgetDenial,
 )
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import (
@@ -72,6 +72,24 @@ class ChiefTraderEngine:
         # starve position safety / lifecycle / final entry decisions.
         self.budget = budget
 
+    @staticmethod
+    def purpose_priority(ctx: ChiefTraderContext) -> str:
+        """Single source of truth for a workflow's budget purpose.
+
+        A position-lifecycle review runs through SEVERAL model calls (tool
+        selection, research, the final decision). Classifying the sub-calls as
+        P3_SELECTED_SYMBOL_RESEARCH let ordinary research traffic exhaust the
+        pool BEFORE the review reached the ChiefTrader, so an OPEN position
+        could be starved at an upstream gate even though its protected reserve
+        had capacity. Every call belonging to a position review therefore
+        inherits the position-management purpose.
+        """
+        return (
+            P1_POSITION_LIFECYCLE
+            if ctx.position_state != PositionState.FLAT
+            else P2_FINAL_ENTRY_DECISION
+        )
+
     async def select_tools(
         self,
         ctx: ChiefTraderContext,
@@ -93,15 +111,20 @@ class ChiefTraderEngine:
             f"Opportunity: {ctx.opportunity_context}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
+        # Purpose inheritance (not a second budget system): a tool-selection
+        # call made on behalf of a position review is position management, so it
+        # must draw on the protected position capacity instead of competing with
+        # ordinary research traffic.
         ticket = (
             self.budget.try_acquire(
-                P3_SELECTED_SYMBOL_RESEARCH, operation="tool_selection"
+                self.purpose_priority(ctx), operation="tool_selection"
             )
             if self.budget is not None
             else None
         )
         if ticket is not None and not ticket.granted:
-            return None, "SKIPPED_BUDGET"
+            # Structured denial: the orchestrator must be able to tell WHY.
+            return None, BudgetDenial.from_ticket(ticket).as_reason_code()
         try:
             response = await self.provider.complete_json(
                 prompt=prompt,
@@ -208,13 +231,20 @@ class ChiefTraderEngine:
             )
         return MarketSelectionResult(ok=True, status=ST_SUCCESS, output=parsed, **result_kwargs)
 
+    def note_review_suppressed(self, *, reason: str, operation: str) -> None:
+        """Report a call deliberately NOT made (redundant), not a budget miss.
+
+        Routed through the single global budget authority so the runtime can
+        publish ``coalesced_calls`` / ``duplicate_calls_avoided`` and a
+        supervisor can tell suppression apart from exhaustion.
+        """
+        if self.budget is None:
+            return
+        self.budget.note_suppressed(reason=reason, operation=operation)
+
     async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
-        priority = (
-            P1_POSITION_LIFECYCLE
-            if ctx.position_state != PositionState.FLAT
-            else P2_FINAL_ENTRY_DECISION
-        )
+        priority = self.purpose_priority(ctx)
         ticket = (
             self.budget.try_acquire(priority, operation="trading_decision")
             if self.budget is not None
@@ -222,8 +252,13 @@ class ChiefTraderEngine:
         )
         if ticket is not None and not ticket.granted:
             # Budget exhaustion is an explicit skip: never a crash, and never a
-            # silent WAIT that could be mistaken for analysis.
-            return self.fail_closed(ctx, "SKIPPED_BUDGET")
+            # silent WAIT that could be mistaken for analysis. The reason
+            # distinguishes a spent ENTRY pool from a spent POSITION MANAGEMENT
+            # reserve so a supervisor can act on the difference instead of
+            # treating both as one opaque SKIPPED_BUDGET.
+            return self.fail_closed(
+                ctx, "SKIPPED_BUDGET", detail=ticket.reason or "SKIPPED_BUDGET"
+            )
         response = (
             await self.provider.complete_json(
                 prompt=prompt,
@@ -264,7 +299,19 @@ class ChiefTraderEngine:
                 return self.fail_closed(ctx, "INVALID_LLM_OUTPUT")
         return self.fail_closed(ctx, response.error if response is not None else "LLM_UNAVAILABLE")
 
-    def fail_closed(self, ctx: ChiefTraderContext, reason: str | None) -> ChiefTraderDecision:
+    def fail_closed(
+        self,
+        ctx: ChiefTraderContext,
+        reason: str | None,
+        *,
+        detail: str | None = None,
+    ) -> ChiefTraderDecision:
+        # ``reason`` stays the primary code (callers/tests rely on it);
+        # ``detail`` appends the precise sub-reason, e.g. distinguishing a
+        # spent entry pool from a spent position-management reserve.
+        codes = [reason or "LLM_UNAVAILABLE"]
+        if detail and detail not in codes:
+            codes.append(detail)
         return ChiefTraderDecision(
             decision_id=new_id("llm"),
             symbol=ctx.symbol,
@@ -274,7 +321,7 @@ class ChiefTraderEngine:
             else OpenAction.FAIL_CLOSED,
             market_regime=ctx.regime,
             thesis="FAIL_CLOSED",
-            reason_codes=[reason or "LLM_UNAVAILABLE"],
+            reason_codes=codes,
             model_version=self.model_version,
             created_at=datetime.now(UTC).isoformat(),
             model_provider=getattr(self.provider, "name", "unconfigured"),

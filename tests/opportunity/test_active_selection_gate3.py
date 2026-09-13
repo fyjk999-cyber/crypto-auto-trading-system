@@ -111,7 +111,11 @@ def _candidate(symbol: str, *, strength: float = 0.9, scan_id: str = "scan-1") -
 
 
 class FakeSelectingChief:
-    """Stand-in for the SAME canonical ChiefTrader selection phase."""
+    """Stand-in for the SAME canonical ChiefTrader selection phase.
+
+    ``payload`` may be a single dict (used for every call) or a list of dicts
+    returned in call order, so a two-phase exploration round can be simulated.
+    """
 
     def __init__(self, payload=None, *, error: str | None = None, raise_exc=None) -> None:
         self.payload = payload
@@ -119,12 +123,19 @@ class FakeSelectingChief:
         self.raise_exc = raise_exc
         self.calls = 0
         self.last_context: dict | None = None
+        self.contexts: list[dict] = []
 
     async def select_markets(
         self, context, *, timeout_seconds, selection_id, scan_id, known_symbols=None
     ):
         self.calls += 1
+        index = self.calls - 1
+        if isinstance(self.payload, list):
+            payload = self.payload[min(index, len(self.payload) - 1)]
+        else:
+            payload = self.payload
         self.last_context = context
+        self.contexts.append(context)
         if self.raise_exc is not None:
             raise self.raise_exc
         if self.error is not None:
@@ -136,7 +147,7 @@ class FakeSelectingChief:
                 model="deepseek-chat",
             )
         parsed = parse_selection_payload(
-            self.payload, selection_id=selection_id, scan_id=scan_id
+            payload, selection_id=selection_id, scan_id=scan_id
         )
         if isinstance(parsed, str):
             return MarketSelectionResult(
@@ -183,7 +194,7 @@ def test_chief_can_select_a_factor_candidate():
         board=board,
     )
     assert record.status == ST_SUCCESS
-    assert record.selection_state == "SELECTED"
+    assert record.selection_state == "SELECT"
     assert record.selected_symbol_names == ["BTCUSDT"]
     assert record.scan_id == "scan-1"
     assert chief.calls == 1
@@ -245,20 +256,37 @@ def test_chief_can_return_no_research():
 
 
 def test_chief_can_select_a_market_directory_symbol():
+    """Two-phase flow: pool -> REQUEST_DIRECTORY -> same chief selects."""
     board = OpportunityBoard()
-    rows = tuple(_row(f"S{i}USDT", turnover=float(1000 - i)) for i in range(60))
+    rows = tuple(_row(f"S{i}USDT", turnover=float(100_000 - i)) for i in range(60))
     board.publish_snapshot(_snapshot(rows=rows))
     directory = MarketDirectory(board=board, page_size=20, max_pages=2)
-    _, _, record = _select(
-        {"selection_state": "SELECTED", "selected_symbols": [{"symbol": "S59USDT"}]},
-        board=board,
-        directory=directory,
+    chief = FakeSelectingChief(
+        [
+            {
+                "selection_state": "REQUEST_DIRECTORY",
+                "directory_query": {"sort": "estimated_turnover", "page": 1},
+            },
+            {"selection_state": "SELECT", "selected_symbols": [{"symbol": "S59USDT"}]},
+        ]
     )
-    # S59USDT falls outside the 30-symbol pool but is reachable via the directory
+    service = _service(board, chief, directory=directory)
+    record = asyncio.run(service.maybe_select(now=datetime.now(UTC)))
+
+    # S59USDT is outside the 30-symbol initial pool: it required exploration
     assert record.status == ST_SUCCESS
+    assert record.exploration_rounds == 1
     assert record.selected_symbols[0]["selection_source"] == CANDIDATE_SOURCE_DEEPSEEK_SELECTION
+    assert record.selected_symbols[0]["discovered_via_directory"] is True
+    assert record.selected_symbols[0]["from_initial_pool"] is False
+    assert record.selected_symbols[0]["directory_page_ref"]
     assert len(record.directory_query_refs) == MAX_DIRECTORY_PAGES_PER_ROUND
     assert "market directory" in record.selected_symbols[0]["pool_reasons"]
+    # the SAME chief produced both calls, and phase 1 had no directory pages
+    assert chief.calls == 2
+    assert "market_directory" not in chief.contexts[0]
+    assert chief.contexts[1]["market_directory"]["pages"]
+    assert chief.contexts[1]["phase"] == "DIRECTORY_EXPLORATION"
 
 
 def test_too_many_selected_symbols_is_rejected():
@@ -433,14 +461,17 @@ def test_selection_context_is_bounded_and_authority_explicit():
     chief = FakeSelectingChief({"selection_state": "NO_RESEARCH", "selected_symbols": []})
     service = _service(board, chief, directory=directory)
     asyncio.run(service.maybe_select(now=datetime.now(UTC)))
-    context = chief.last_context
+    context = chief.last_context  # phase 1
     assert context["scan_id"] == "scan-1"
     assert context["snapshot_age_seconds"] >= 0
     assert len(context["candidate_pool"]) <= 30
-    assert context["market_directory"]["pages"][0]["page_size"] == 20
-    assert len(context["market_directory"]["pages"]) == 2
+    # token optimisation: phase 1 must NOT preload directory pages
+    assert "market_directory" not in context
+    assert context["phase"] == "INITIAL_POOL"
     assert "no trade direction" in context["authority_note"]
     assert context["output_contract"]["maximum_selected_symbols"] == 3
+    assert context["output_contract"]["maximum_directory_pages"] == 2
+    assert "REQUEST_DIRECTORY" in context["output_contract"]["selection_state"]
 
 
 def test_selection_persistence_round_trip(database):

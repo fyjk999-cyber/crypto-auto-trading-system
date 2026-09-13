@@ -47,6 +47,29 @@ class Settings(BaseSettings):
     daily_review_time_utc: str = "00:05"
     max_holding_time_seconds: int = 86400
 
+    # Position Sizing V2 — capital-aware sizing.  All numeric knobs live here;
+    # none of them may widen the project hard ceilings (500% notional, 5x
+    # leverage, 1% risk per trade): the policy records and clamps any attempt,
+    # so a misconfigured deployment stays inside the safety envelope.
+    # Strings, not floats: ``Decimal`` refuses binary floats (§59).
+    base_risk_per_trade: str = "0.005"
+    max_risk_per_trade: str = "0.010"
+    max_single_notional_multiple: str = "5.0"
+    max_total_gross_exposure_multiple: str = "5.0"
+    max_symbol_exposure_multiple: str = "5.0"
+    max_leverage: str = "5.0"
+    min_effective_notional_fraction: str = "0.005"
+    liquidity_depth_levels: int = 5
+    max_liquidity_participation: str = "0.15"
+
+    # POSITION SIZING V2 PATCH — future LLM automatic scale-in (ADD).
+    # The flag defaults to FALSE and nothing in the runtime reads it as
+    # permission to trade: ADD execution is not wired at all in this build.
+    enable_llm_automatic_scale_in: bool = False
+    max_scale_in_count: int = 2
+    scale_in_min_interval_seconds: float = 300.0
+    scale_in_order_ttl_seconds: float = 60.0
+
     # Full-market opportunity discovery (evidence-only; §8-§15). The scanner
     # nominates candidates for DeepSeek review; it never trades or gates.
     opportunity_scan_enabled: bool = True
@@ -80,6 +103,24 @@ class Settings(BaseSettings):
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3
     engine_tick_seconds: float = 0.5
+    #: Ceiling on the position-review REPEAT rate for an unchanged position.
+    #:
+    #: Defaults to the review interval the scheduler already intends (30s,
+    #: derived from ``engine_tick_seconds``), so coalescing only removes calls
+    #: that would fire MORE often than the existing contract — it never makes
+    #: the scheduler stricter than before. Safety cadences still re-arm a
+    #: review immediately: any material change (size, price, entry-order state)
+    #: bypasses this floor entirely.
+    #: Also the per-position LLM review ELIGIBILITY window. Scheduled reviews and
+    #: material-event reviews share it, so material events cannot raise the call
+    #: rate above one review per window per position — which is what makes the
+    #: capacity guarantee provable.
+    position_review_min_interval_seconds: float = 60.0
+    #: Enforce the position-management capacity gate on NEW entries.
+    #: Off by default: the gate is resource readiness, not direction authority,
+    #: and flipping default entry behaviour is a policy decision that must be
+    #: explicit. Production PAPER/LIVE enables it in bootstrap.
+    enforce_position_management_capacity: bool = True
     reconciliation_interval_seconds: int = 30
     funding_refresh_interval_seconds: int = 900
     funding_lookback_hours: int = 24

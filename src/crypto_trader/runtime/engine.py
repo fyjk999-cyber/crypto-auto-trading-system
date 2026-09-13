@@ -62,7 +62,10 @@ from crypto_trader.ledger.service import (
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
-from crypto_trader.order.manager import OrderManager
+from crypto_trader.order.manager import (
+    POSITION_ACTION_STALE,
+    OrderManager,
+)
 from crypto_trader.perpetual.funding_coverage import FundingCoverageService
 from crypto_trader.persistence.database import Database
 from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
@@ -84,6 +87,11 @@ from crypto_trader.valuation.domain import (
 from crypto_trader.valuation.service import ValuationService
 
 logger = logging.getLogger("crypto_trader.engine")
+
+#: Bounded event retry. Safe because fill application and settlement
+#: are idempotent on fill_id, so a replay completes rather than duplicates.
+MAX_EVENT_ATTEMPTS = 3
+EVENT_RETRY_BACKOFF_SECONDS = 0.05
 
 
 class TradingEngine:
@@ -171,17 +179,46 @@ class TradingEngine:
         self.lease: Lease | None = None
         self._lease_valid = not require_lease
         self.reconciliation_halted = False
+        #: Set once durable unresolved orders have been recovered into the
+        #: PAPER broker. New execution must not start before this is True.
+        self.paper_order_recovery_ready = False
         self._event_queue: asyncio.Queue[ExchangeEvent] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
+        # Exchange events that resolved to no local order, or to the wrong one.
+        # Health deliberately does NOT latch on these (the consumer is working
+        # and one foreign event is not a component failure), so the count is
+        # surfaced in ``runtime_snapshot`` instead: an operator can page on a
+        # growing number instead of reading a permanently-OK flag.
+        self.exchange_event_identity_anomalies = 0
         self.position_review_timeout_seconds = 30.0
         self.position_review_interval_seconds = max(
             0.5, min(30.0, float(settings.engine_tick_seconds))
         )
+        # Per-position LLM review ELIGIBILITY window. Every review path —
+        # scheduled, material-change, partial-fill, order-state — shares it, so
+        # the call rate per position can never exceed one per window. That is
+        # what makes the management-capacity guarantee provable: a material
+        # event marks the position dirty and is coalesced into the next
+        # eligible review instead of buying an extra call. Deterministic
+        # safety (RiskEngine limits, kill switch, TIME_STOP, duplicate guard,
+        # reconciliation halt) is NOT rate-limited by this.
+        self.position_review_min_interval_seconds = float(
+            settings.position_review_min_interval_seconds
+        )
         self._position_review_state: dict[str, dict] = {}
+        # Bounded episode-materialization retry bookkeeping (per closed plan).
+        self._episode_retry_state: dict[str, dict] = {}
+        self._episode_retry_max_attempts = 5
+        self._episode_retry_window_seconds = 300.0
+        self._episode_retry_limit = 50
+        #: Plans whose bounded retry window closed without an Episode. Kept
+        #: separate from the attempt budget so the health report can tell a
+        #: genuine materialization failure from a transient one.
+        self._episode_retry_exhausted: set[str] = set()
 
     # ------------------------------------------------------------------ state
     async def start(self, run_id: str | None = None) -> str:
@@ -205,8 +242,21 @@ class TradingEngine:
         await self._seed_initial_balances()
         await self._load_instruments()
         await self._restore_paper_adapter_state()
-        self.order_manager.settlement_callback = self._settle_fill
+        self.order_manager.settlement_callback = self._settlement_callback
         await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        # FILL SETTLEMENT RECOVERY runs AFTER RecoveryService, which may itself
+        # discover factual broker fills. Any earlier interruption (event failure,
+        # crash, dropped event) leaves a durable fill without its ledger posting,
+        # projection or plan convergence; this catches both. Fail closed: an
+        # unsettled fill must not let trading loops start on an accounting state
+        # we cannot vouch for.
+        try:
+            await self._recover_fill_settlements()
+            self.health.set("fill_settlement", True)
+        except Exception as exc:
+            self.health.set("fill_settlement", False, f"{type(exc).__name__}: {exc}")
+            self.reconciliation_halted = True
+            raise
         await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
         # Daily review recovery is not an execution mutation and must not
@@ -419,12 +469,56 @@ class TradingEngine:
     async def _event_loop(self) -> None:
         while True:
             event = await self._event_queue.get()
-            try:
-                await self.process_exchange_event(event)
-            except Exception:
+            # BOUNDED RETRY: replaying an exchange event is safe because fill
+            # application is idempotent on fill_id and settlement completion is
+            # driven by a durable marker, so a retry can only COMPLETE an
+            # interrupted settlement - it cannot duplicate ledger, fee, position
+            # or episode effects. The bound is fixed; there is no unbounded loop.
+            exc: Exception | None = None
+            for attempt in range(1, MAX_EVENT_ATTEMPTS + 1):
+                try:
+                    await self.process_exchange_event(event)
+                    exc = None
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as attempt_exc:  # noqa: BLE001
+                    exc = attempt_exc
+                    if attempt < MAX_EVENT_ATTEMPTS:
+                        await asyncio.sleep(EVENT_RETRY_BACKOFF_SECONDS * attempt)
+            if exc is not None:
                 self.health.set("event_processing", False, "unhandled event error")
-            finally:
-                self._event_queue.task_done()
+                # A failed event used to be invisible: the queue still drained,
+                # so ``wait_for_event_queue`` reported success while the fill,
+                # ack or cancel had actually been lost. Record it durably so a
+                # lost exchange fact is never silent again.
+                try:
+                    payload = event.payload or {}
+                    await self.audit.log(
+                        "EXCHANGE_EVENT_FAILED",
+                        target=str(getattr(event, "event_id", "") or ""),
+                        run_id=self.run_id,
+                        exchange_order_id=payload.get("exchange_order_id"),
+                        after={
+                            "event_type": str(
+                                getattr(event.event_type, "value", event.event_type)
+                            ),
+                            "client_order_id": payload.get("client_order_id"),
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                            "attempt_count": MAX_EVENT_ATTEMPTS,
+                        },
+                    )
+                except Exception:  # noqa: BLE001 - observability must not kill the loop
+                    pass
+            else:
+                # Recovery, not masking: the consumer has just proved it is
+                # working. Without this, one anomaly (or one failed event) would
+                # latch ``event_processing`` to False for the life of the
+                # process and pin overall health, since ``overall()`` is an AND
+                # over every flag. The anomaly itself stays durably audited.
+                self.health.set("event_processing", True)
+            self._event_queue.task_done()
 
     async def _tick_loop(self) -> None:
         while True:
@@ -525,29 +619,368 @@ class TradingEngine:
                 ok = not report.errors
                 detail = "; ".join(report.errors[:3]) if report.errors else ""
                 self.health.set("funding_accounting", ok, detail)
+                if report.settled > 0 and ok:
+                    # The settlement is now COMMITTED to the durable ledger,
+                    # which is the authoritative cash truth; the process-local
+                    # PAPER cache has not seen it. Post-commit ordering: re-read
+                    # the committed projection and COPY it (no independent
+                    # arithmetic), so a retry cannot double-apply it.
+                    await self._resync_paper_balance_from_projection()
             except Exception as exc:
+                # A failed resync must NOT roll back the committed funding fact;
+                # reconciliation stays fail-closed and the next pass retries.
                 self.health.set("funding_accounting", False, type(exc).__name__)
             await asyncio.sleep(max(1, self.settings.funding_refresh_interval_seconds))
+
+    async def _retry_episode_materialization(self) -> int:
+        """Retry closed-but-unmaterialised episodes, bounded and idempotent.
+
+        Reuses the project's existing formal path
+        (``TradeEpisodeStore.materialize_pending_closed``) instead of adding a
+        second mechanism. The builder re-reads durable facts on every attempt
+        and is write-once per plan (``episode_<trade_plan_id>``), so racing
+        triggers still yield exactly one Episode.
+
+        Bounded on purpose: no infinite retry, no busy loop, no LLM calls. Once
+        the attempt budget is exhausted the plan stays un-materialised and the
+        existing fail-closed signal remains — completeness rules are NOT relaxed
+        to make health green.
+        """
+        if self.trade_episodes is None:
+            return 0
+        now = self.clock.now().timestamp()
+        try:
+            pending = await self.trade_episodes.pending_closed_plan_ids(
+                limit=self._episode_retry_limit
+            )
+        except Exception:
+            logger.warning("episode retry scan failed", exc_info=True)
+            return 0
+        if not pending:
+            return 0
+        eligible = []
+        for plan_id in pending:
+            # The retry window is anchored at the FIRST ACTUAL ATTEMPT. Creating
+            # the entry with ``first_attempt_at=now`` from a mere observation
+            # would restart the window on every scan and, once the attempt
+            # budget was spent, would let the plan look permanently exhausted
+            # without the retry budget ever having been honoured.
+            state = self._episode_retry_state.setdefault(plan_id, {"attempts": 0})
+            attempts = int(state["attempts"])
+            first_attempt_at = state.get("first_attempt_at")
+            elapsed = (now - float(first_attempt_at)) if first_attempt_at else 0.0
+            if attempts >= self._episode_retry_max_attempts:
+                self._episode_retry_exhausted.add(plan_id)
+                continue
+            if first_attempt_at is not None and elapsed > self._episode_retry_window_seconds:
+                self._episode_retry_exhausted.add(plan_id)
+                continue
+            if first_attempt_at is None:
+                state["first_attempt_at"] = now
+            state["attempts"] = attempts + 1
+            eligible.append(plan_id)
+        if not eligible:
+            return 0
+        try:
+            return await self.trade_episodes.materialize_pending_closed(
+                limit=len(eligible)
+            )
+        except Exception:
+            logger.warning("episode retry pass failed", exc_info=True)
+            return 0
+
+    async def _refresh_trade_episode_health(self) -> str:
+        """Report trade_episode health from DURABLE state, not from close time.
+
+        Observed control-plane defect: the close path sets this component once
+        and never revisits it, so an Episode that legitimately materialises
+        later (bounded retry, or any other legal path) left the component falsely
+        unhealthy forever.
+
+        Health only OBSERVES facts here: it reads the durable store and updates
+        one health component. It never builds, mutates or deletes an Episode and
+        never touches orders, fills, positions, balances or funding.
+
+        Aggregation over every CLOSED plan lacking an Episode (worst state wins):
+
+        * none pending              -> healthy
+        * pending, retry budget left -> not-ok with detail MATERIALIZATION_PENDING
+        * retry budget exhausted     -> not-ok with detail
+          EPISODE_MATERIALIZATION_FAILED (+ plan id, attempts, window age)
+
+        The severity order is FAILED > PENDING > HEALTHY, so one successful
+        Episode can never mask a failure elsewhere. The project's health
+        framework is boolean-only; no new DEGRADED state is invented, the
+        distinction is carried in ``detail``.
+        """
+        if self.trade_episodes is None:
+            return "UNAVAILABLE"
+        try:
+            outstanding = await self.trade_episodes.pending_closed_plan_ids(
+                limit=self._episode_retry_limit
+            )
+        except Exception:
+            logger.warning("trade episode health scan failed", exc_info=True)
+            self.health.set("trade_episode", False, "EPISODE_STATE_UNREADABLE")
+            return "UNREADABLE"
+        if not outstanding:
+            self.health.set("trade_episode", True)
+            self._episode_retry_exhausted.clear()
+            return "HEALTHY"
+        exhausted = [p for p in outstanding if p in self._episode_retry_exhausted]
+        if exhausted:
+            plan_id = sorted(exhausted)[0]
+            state = self._episode_retry_state.get(plan_id) or {}
+            self.health.set(
+                "trade_episode",
+                False,
+                "EPISODE_MATERIALIZATION_FAILED"
+                f" trade_plan_id={plan_id}"
+                f" attempts={int(state.get('attempts', 0))}"
+                f" max_attempts={self._episode_retry_max_attempts}"
+                f" window_seconds={self._episode_retry_window_seconds}"
+                f" outstanding={len(outstanding)}",
+            )
+            return "FAILED"
+        self.health.set(
+            "trade_episode",
+            False,
+            "EPISODE_MATERIALIZATION_PENDING"
+            f" closed_plans_without_episode={len(outstanding)}"
+            f" max_attempts={self._episode_retry_max_attempts}"
+            f" window_seconds={self._episode_retry_window_seconds}",
+        )
+        return "PENDING"
+
+    async def _resync_paper_balance_from_projection(self) -> None:
+        """Refresh the PAPER account cache from committed ledger projections.
+
+        Narrow by design: only the account balance is adopted. Orders, positions
+        and execution state keep their own lifecycle, so a pending partial order
+        cannot be rewound, duplicated or marked terminal here.
+        """
+        sync = getattr(self.adapter, "sync_balances_from_projection", None)
+        if sync is None:
+            return
+        async with self.database.session_factory() as session:
+            snapshot = await replay_projections(session)
+        if not snapshot.balances:
+            return
+        balances = {currency: row["total"] for currency, row in snapshot.balances.items()}
+        sync(balances)
+        self._initial_balances = balances
 
     async def _reconciliation_loop(self) -> None:
         while True:
             await asyncio.sleep(self.settings.reconciliation_interval_seconds)
+            # Bounded settlement recovery FIRST: comparing projections against the
+            # exchange is meaningless while a durable fill is still unaccounted.
+            try:
+                await self._recover_fill_settlements()
+                _settlement_ok = True
+            except Exception as exc:
+                _settlement_ok = False
+                logger.warning('fill settlement recovery failed', exc_info=True)
+                self.health.set('fill_settlement', False, f'{type(exc).__name__}: {exc}')
             report = await self.reconciliation.reconcile(self.adapter)
-            self.reconciliation_halted = report.halt
+            # A settlement blocker must never be overwritten by a clean
+            # normal reconciliation result.
+            self.reconciliation_halted = report.halt or not _settlement_ok
             self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]))
+            # Bounded episode-materialization retry on an EXISTING cadence.
+            #
+            # A close writes the plan synchronously, but the builder can still
+            # return None on that first attempt (the factual position
+            # projection may not be visible yet). Previously the only retry came
+            # from the funding loop at funding_refresh_interval_seconds (900s),
+            # so episode creation waited on an UNRELATED future event — measured
+            # 700.3s. Running the same idempotent builder here bounds that to the
+            # reconciliation cadence.
+            await self._retry_episode_materialization()
+            # Health must observe the durable result of the pass above, not the
+            # pass's return value: the component has to reflect what is actually
+            # persisted, whether the Episode came from this retry or from any
+            # other legal materialisation path.
+            await self._refresh_trade_episode_health()
+            # F3 ENTRY TTL, on the SAME cadence: no new timer, no new task, no
+            # provider polling. Bounded to the unresolved-order query.
+            await self._enforce_entry_order_ttl()
+
+    # ------------------------------------------------- F3 ENTRY TTL enforcement
+    async def _enforce_entry_order_ttl(self) -> int:
+        """Expire short-term ENTRY intents that are past their resting lifetime.
+
+        Reuses F4 reconciliation, F5 purpose classification and the F3 evaluator;
+        it creates no second reconciler, no second cancel engine and no second
+        scheduler. Cancellation goes through the existing lease-fenced
+        cancel-only path.
+        """
+        collector = getattr(self.order_manager, "unresolved_order_facts", None)
+        if collector is None:
+            return 0
+
+        from crypto_trader.order.entry_ttl import (
+            ACTION_CANCEL_REMAINING,
+            evaluate_entry_ttl,
+        )
+        from crypto_trader.order.reconciliation import (
+            ORDER_PURPOSE_ENTRY,
+            reconcile_order,
+        )
+
+        try:
+            facts = await collector()
+        except Exception:
+            logger.warning("entry ttl: unresolved order query failed", exc_info=True)
+            return 0
+
+        cancelled = 0
+        for record in facts:
+            if record.get("purpose") != ORDER_PURPOSE_ENTRY:
+                continue
+            order = await self.order_manager.get(record["order_id"])
+            if order is None:
+                continue
+
+            # Fresh factual reconciliation FIRST: the durable row is exactly the
+            # thing that may be stale, so it can never authorise a cancel alone.
+            broker_order = None
+            broker_error: Exception | None = None
+            try:
+                broker_order = await self._observe_broker_order(order)
+            except Exception as exc:  # observation failure != terminal fact
+                broker_error = exc
+            recon = reconcile_order(
+                order=order,
+                purpose=record["purpose"],
+                broker_order=broker_order,
+                broker_error=broker_error,
+            )
+
+            # Resting age comes ONLY from brokered acceptance.
+            accepted_at = await self._order_accepted_at(order)
+            decision = evaluate_entry_ttl(
+                fact=recon,
+                durable_status=record["status"],
+                resting_age=accepted_at,
+            )
+            if decision.action != ACTION_CANCEL_REMAINING:
+                if decision.action != "HOLD":
+                    await self.audit.log(
+                        "ENTRY_TTL_EVALUATED",
+                        target=str(record["order_id"]),
+                        run_id=self.run_id,
+                        after=decision.as_dict(),
+                    )
+                continue
+
+            # Lease-fenced: the TTL never bypasses execution ownership.
+            cancel = getattr(self, "_cancel_unsettled_entry_order", None)
+            if cancel is None or not await self._current_lease_valid():
+                await self.audit.log(
+                    "ENTRY_TTL_CANCEL_BLOCKED",
+                    target=str(record["order_id"]),
+                    run_id=self.run_id,
+                    after={
+                        **decision.as_dict(),
+                        "block_reason": "EXECUTION_LEASE_NOT_HELD",
+                    },
+                )
+                continue
+
+            await cancel(order)
+            cancelled += 1
+            await self.audit.log(
+                "ENTRY_TTL_EXPIRED",
+                target=str(record["order_id"]),
+                run_id=self.run_id,
+                order_id=str(record["order_id"]),
+                after={
+                    **decision.as_dict(),
+                    "cancel_remaining_only": True,
+                    "terminal_reason": (
+                        # A factual fill means a real position exists, so the
+                        # PLAN must keep living; only the unfilled remainder
+                        # expired.
+                        "ENTRY_REMAINDER_EXPIRED"
+                        if recon.state == "CONFIRMED_PARTIALLY_FILLED"
+                        else "ENTRY_ORDER_TTL_EXPIRED"
+                    ),
+                },
+            )
+        return cancelled
+
+    async def _observe_broker_order(self, order):
+        """Best-effort broker read. Absence/errors stay UNKNOWN, never terminal."""
+        getter = getattr(self.adapter, "get_order", None)
+        if getter is None:
+            return None
+        from crypto_trader.order.reconciliation import _decimal  # noqa: F401
+
+        exchange_id = getattr(order, "exchange_order_id", None)
+        if not exchange_id:
+            return None
+        return await getter(order.symbol, exchange_id)
+
+    async def _order_accepted_at(self, order) -> float | None:
+        """Confirmed RESTING age, from the factual broker acceptance events.
+
+        OPENED is preferred, then ACKNOWLEDGED. ``created_at`` is deliberately
+        never used here: a local object does not prove the broker accepted it.
+        """
+        from crypto_trader.order.entry_ttl import resting_age_seconds
+
+        opened_at = None
+        acknowledged_at = None
+        lister = getattr(self.order_manager, "list_events", None)
+        if callable(lister):
+            try:
+                for event in await lister(order.internal_order_id):
+                    raw = getattr(event, "event_type", "") or ""
+                    etype = str(getattr(raw, "value", raw))
+                    ts = getattr(event, "timestamp", None)
+                    if ts is None:
+                        continue
+                    if etype.endswith("ORDER_OPENED") and opened_at is None:
+                        opened_at = ts
+                    elif etype.endswith("ORDER_ACKNOWLEDGED") and acknowledged_at is None:
+                        acknowledged_at = ts
+            except Exception:
+                logger.debug("entry ttl: order event read failed", exc_info=True)
+        return resting_age_seconds(
+            opened_at=opened_at, acknowledged_at=acknowledged_at, created_at=None
+        )
 
     # ------------------------------------------------------------------ tick
     async def tick(self, *, include_position_reviews: bool = True) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
         for strategy in self.strategies:
-            desired_symbol = None
+            # Scheduling authority (MASTER DIRECTIVE / Market Intelligence V1):
+            # a strategy that implements desired_symbol() owns its own
+            # new-research attention. ``None`` means "no new autonomous research
+            # this tick" and MUST NOT be turned into a default-symbol review; a
+            # scheduler failure fails closed for that strategy's new-entry path.
             desired_getter = getattr(strategy, "desired_symbol", None)
             if callable(desired_getter):
                 try:
                     desired_symbol = desired_getter()
-                except Exception:
-                    desired_symbol = None  # scheduling failure never gates trading
-            ctx = await self._strategy_context(desired_symbol)
+                except Exception as exc:
+                    self.health.set(
+                        f"strategy:{strategy.name}",
+                        False,
+                        f"DESIRED_SYMBOL_FAILED:{type(exc).__name__}",
+                    )
+                    continue
+                if desired_symbol is None:
+                    # explicit NO_RESEARCH / no-new-entry signal: skip this
+                    # strategy for this tick (existing positions are reviewed
+                    # independently below and are unaffected).
+                    continue
+                ctx = await self._strategy_context(desired_symbol)
+            else:
+                # legacy strategy without a scheduler keeps its previous
+                # default-symbol context behavior
+                ctx = await self._strategy_context()
             if ctx is None:
                 continue
             try:
@@ -569,6 +1002,96 @@ class TradingEngine:
         self.health.set("engine_loop", True)
         return decisions
 
+    async def _position_change_signature(self, symbol: str, position) -> tuple:
+        """Factual state a position review may legitimately need to react to.
+
+        Built from observed facts only — position size / entry / leverage /
+        realised PnL, the live book, and the lifecycle state of the entry order
+        — so "materially unchanged" is a factual statement rather than a
+        heuristic guess. Order-state changes are explicit material events: an
+        entry order becoming terminal is exactly what unblocks a pending
+        REDUCE/EXIT, so it must re-arm a review immediately.
+        """
+        book = self.market_data.books.get(symbol)
+        bid = book.best_bid() if book is not None else None
+        ask = book.best_ask() if book is not None else None
+        plan_state = None
+        entry_order_status = None
+        plan = (
+            await self.trade_plans.get_active_for_symbol(symbol)
+            if self.trade_plans is not None
+            else None
+        )
+        if plan is not None:
+            plan_state = str(getattr(plan, "state", None))
+            order_id = getattr(plan, "order_id", None)
+            if order_id:
+                entry_order = await self.order_manager.get(order_id)
+                if entry_order is not None:
+                    entry_order_status = str(entry_order.status.value)
+        return (
+            str(getattr(position, "quantity", None)),
+            str(getattr(position, "avg_entry_price", None)),
+            str(getattr(position, "cost_basis", None)),
+            str(getattr(position, "leverage", None)),
+            str(getattr(position, "realized_pnl", None)),
+            str(bid.price if bid else None),
+            str(ask.price if ask else None),
+            plan_state,
+            entry_order_status,
+        )
+
+    async def _is_due_for_review(
+        self, symbol: str, position, state: dict, now_epoch: float
+    ) -> bool:
+        """Single eligibility gate for EVERY kind of position review.
+
+        Scheduled reviews, material-change reviews, partial-fill reviews and
+        order-state reviews all pass through here. A material change does NOT
+        buy an extra call: it marks the position dirty so that the NEXT eligible
+        review is prioritised and coalesces every event that landed in the
+        window. That is what keeps the capacity guarantee provable — without it,
+        material events could raise the call rate without bound.
+
+        Evidence freshness is unaffected: a coalesced review still re-reads the
+        current position, order, fills, book and PnL when it runs.
+        """
+        signature = await self._position_change_signature(symbol, position)
+        if signature != state.get("last_review_signature"):
+            # Material change observed: remember it, do not act outside the window.
+            state["position_review_dirty"] = True
+        if state["next_due_at"] > now_epoch:
+            state["last_suppression_reason"] = "REVIEW_COALESCED"
+            return False
+        last_started = state.get("last_started_at")
+        if last_started is None:
+            state.pop("last_suppression_reason", None)
+            return True
+        elapsed = now_epoch - float(last_started)
+        if elapsed >= self.position_review_min_interval_seconds:
+            state.pop("last_suppression_reason", None)
+            return True
+        # Inside the coalescing window with an unchanged signature: this call is
+        # deliberately NOT made. Recording it as REVIEW_COALESCED (never as
+        # SKIPPED_BUDGET) is what separates "redundant" from "starved".
+        state["last_suppression_reason"] = "REVIEW_COALESCED"
+        return False
+
+    def _note_review_suppressed(self, reason: str, symbol: str) -> None:
+        """Publish an intentionally suppressed position review.
+
+        Best effort by design: observability must never break the review loop.
+        """
+        manager = self.position_manager
+        chief = getattr(manager, "chief", None)
+        note = getattr(chief, "note_review_suppressed", None)
+        if note is None:
+            return
+        try:
+            note(reason=reason, operation=f"position_review:{symbol}")
+        except Exception:
+            logger.debug("suppression note failed", exc_info=True)
+
     async def _review_positions_once(self) -> list[RiskDecision]:
         if self.position_manager is None:
             return []
@@ -583,11 +1106,15 @@ class TradingEngine:
                 symbol,
                 {"next_due_at": 0.0, "failures": 0, "last_started_at": None},
             )
-            if state["next_due_at"] <= now_epoch:
+            if await self._is_due_for_review(symbol, position, state, now_epoch):
                 score = await self._position_review_priority(
                     position, state, now_wall, now_epoch
                 )
                 due.append((score, symbol, position))
+            else:
+                suppressed_reason = state.get("last_suppression_reason")
+                if suppressed_reason is not None:
+                    self._note_review_suppressed(suppressed_reason, symbol)
         if not due:
             return []
         due.sort(key=lambda row: row[0], reverse=True)
@@ -631,6 +1158,12 @@ class TradingEngine:
                     position, now_wall
                 )
                 self.health.set("position_manager", True)
+                # Remember WHAT was reviewed so an unchanged position can be
+                # coalesced instead of re-asked every tick.
+                state["last_review_signature"] = (
+                    await self._position_change_signature(symbol, position)
+                )
+                state["position_review_dirty"] = False
                 return signal
 
         reviewed = await asyncio.gather(
@@ -655,6 +1188,10 @@ class TradingEngine:
         overdue = max(0.0, now_epoch - state.get("next_due_at", 0.0))
         hold_bonus = 0.0
         risk_bonus = 0.0
+        # A position whose evidence changed inside the eligibility window is
+        # prioritised, so coalesced events are acted on at the next opportunity
+        # instead of waiting a further full window behind idle positions.
+        dirty_bonus = 5000.0 if state.get("position_review_dirty") else 0.0
         try:
             plan = await self.trade_plans.get_active_for_symbol(position.symbol)
         except Exception:
@@ -677,7 +1214,10 @@ class TradingEngine:
             notional = abs(position.quantity) * entry * spec
             if notional > 0 and unrealized < 0:
                 risk_bonus = float(abs(unrealized) / notional) * 1000.0
-        return (1 if overdue > 0 else 0, overdue + hold_bonus + risk_bonus)
+        return (
+            1 if overdue > 0 else 0,
+            overdue + hold_bonus + risk_bonus + dirty_bonus,
+        )
 
     def _review_backoff(self, state: dict) -> float:
         failures = max(1, int(state.get("failures", 0)))
@@ -850,8 +1390,16 @@ class TradingEngine:
                 if bid_size <= 0 or ask_size <= 0:
                     raise ValueError("factual market depth is unavailable")
                 sequence = market_state.generation
-                bids = [(market_state.best_bid, bid_size)]
-                asks = [(market_state.best_ask, ask_size)]
+                # Prefer the provider's factual multi-level depth when it is
+                # available so sizing can cap on real executable depth. A
+                # provider that exposes no levels keeps EXACTLY the previous
+                # single-best-level ingestion — never an inferred wider book.
+                bids = list(getattr(market_state, "book_bids", None) or []) or [
+                    (market_state.best_bid, bid_size)
+                ]
+                asks = list(getattr(market_state, "book_asks", None) or []) or [
+                    (market_state.best_ask, ask_size)
+                ]
             else:
                 fetched = await self.adapter.get_orderbook(symbol)
                 sequence = fetched.sequence
@@ -1004,6 +1552,151 @@ class TradingEngine:
         )
 
 
+    async def _position_management_capacity_available(self) -> bool:
+        """Resource-readiness gate for admitting one more position.
+
+        NOT direction authority: this never chooses or rewrites a direction; it
+        only answers whether the position-management capacity a new position
+        would consume is actually guaranteed. ChiefTrader stays the sole LONG /
+        SHORT authority and this gate can only ever make an entry wait.
+
+        Fail closed: if capacity cannot be computed, no new position is admitted.
+        A safe result of "zero new positions" is acceptable — trading frequency
+        must never be bought with unmanageable positions.
+        """
+        probe = getattr(self.adapter, "position_management_capacity", None)
+        if probe is None:
+            return True
+        try:
+            open_positions = len(
+                [
+                    p
+                    for p in (await self.portfolio.get_positions()).values()
+                    if p.quantity != 0
+                ]
+            )
+            facts = probe(open_positions=open_positions)
+        except Exception:
+            logger.warning("position management capacity check failed", exc_info=True)
+            return False
+        if facts.get("position_management_capacity_available"):
+            return True
+        await self.audit.log(
+            "POSITION_MANAGEMENT_CAPACITY_UNAVAILABLE",
+            target=f"open={open_positions}",
+            run_id=self.run_id,
+            after=facts,
+        )
+        return False
+
+    async def _resolve_stale_position_action(
+        self, order_id: str, *, trade_plan_id: str | None = None
+    ) -> None:
+        """RECONCILE_THEN_CANCEL_ONLY for a stale position-reducing order.
+
+        A resting order genuinely is pending, so the duplicate guard stays. But
+        a partially filled order must not lock position management forever. The
+        authorised policy is cancel-ONLY:
+
+          1. reconcile against authoritative state FIRST, so a fill that lands
+             at the last moment is consumed instead of being cancelled away;
+          2. only cancel when the refreshed class is still STALE;
+          3. never cancel an ambiguous (UNKNOWN / CANCEL_PENDING) state — that
+             stays fail-closed and keeps reconciling.
+
+        No replacement, no repricing, no market conversion, no resubmission. The
+        duplicate guard keeps blocking until a terminal state is acknowledged,
+        and the newest position intent is replayed through a fresh ChiefTrader
+        review rather than being re-submitted mechanically.
+        """
+        try:
+            facts = await self.order_manager.reconcile_pending_position_action(order_id)
+            if facts is None:
+                return
+            classification = facts.get("classification")
+            await self.audit.log(
+                "POSITION_ACTION_STALE_RECONCILED",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={
+                    "trade_plan_id": trade_plan_id,
+                    "status": facts["status"],
+                    "filled_quantity": facts["filled_quantity"],
+                    "remaining_quantity": facts["remaining_quantity"],
+                    "age_seconds": facts["age_seconds"],
+                    "classification": classification,
+                },
+            )
+            if classification != POSITION_ACTION_STALE:
+                # Ambiguous or already resolved: never act on top of it.
+                return
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_STALE_CANCEL_BLOCKED",
+                    target=order_id,
+                    run_id=self.run_id,
+                    order_id=order_id,
+                    after={"reason": "EXECUTION_LEASE_NOT_HELD"},
+                )
+                return
+            order = await self.order_manager.get(order_id)
+            if order is None:
+                return
+            await self.order_manager.cancel_pending(
+                order_id, reason="STALE_POSITION_REDUCING_ORDER"
+            )
+            # Re-check immediately before the exchange mutation.
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_STALE_CANCEL_BLOCKED",
+                    target=order_id,
+                    run_id=self.run_id,
+                    order_id=order_id,
+                    after={"reason": "EXECUTION_LEASE_LOST_BEFORE_CANCEL"},
+                )
+                return
+            await self.adapter.cancel_order(order.symbol, order.exchange_order_id)
+            await self.audit.log(
+                "POSITION_ACTION_STALE_CANCEL_REQUESTED",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={
+                    "trade_plan_id": trade_plan_id,
+                    "status": "CANCEL_PENDING",
+                    "policy": "RECONCILE_THEN_CANCEL_ONLY",
+                    "remaining_quantity": facts["remaining_quantity"],
+                },
+            )
+            # Once the cancel is acknowledged the blocking action is gone, so
+            # re-arm a fresh review instead of replaying an old intent: the
+            # newest HOLD/REDUCE/EXIT must come from ChiefTrader against current
+            # evidence, not from a mechanically re-submitted historical signal.
+            symbol = order.symbol
+            state = self._position_review_state.get(symbol)
+            if state is not None:
+                state["next_due_at"] = 0.0
+                state.pop("last_review_signature", None)
+            await self.audit.log(
+                "POSITION_REVIEW_REARMED_AFTER_STALE_CANCEL",
+                target=symbol,
+                run_id=self.run_id,
+                after={"trade_plan_id": trade_plan_id, "order_id": order_id},
+            )
+        except Exception:
+            # Fail closed: an ambiguous cancel must never become a new order.
+            logger.exception(
+                "POSITION_ACTION_STALE_CANCEL_FAILED order_id=%s", order_id
+            )
+            await self.audit.log(
+                "POSITION_ACTION_STALE_CANCEL_UNKNOWN",
+                target=order_id,
+                run_id=self.run_id,
+                order_id=order_id,
+                after={"reason": "CANCEL_RESULT_AMBIGUOUS", "fail_closed": True},
+            )
+
     async def _cancel_unsettled_entry_order(self, entry_order) -> None:
         """Cancel a non-terminal entry order before a later EXIT/REDUCE.
 
@@ -1061,68 +1754,20 @@ class TradingEngine:
             )
             raise
 
-    async def _cancel_pending_position_action(self, pending_order) -> None:
-        """Cancel a non-terminal partial REDUCE before a full EXIT can submit.
-
-        A partially filled reduce can rest indefinitely when the market leaves
-        its limit.  The persisted plan guard correctly blocks duplicate REDUCE
-        submissions, but a later EXIT decision must be able to supersede the
-        stale child order.  This uses the canonical OrderManager + adapter
-        cancellation path; no direct DB mutation and no fabricated fill.
-        """
-        try:
-            if pending_order.status.value == "CANCEL_PENDING":
-                return
-            if not await self._current_lease_valid():
-                await self.audit.log(
-                    "POSITION_ACTION_CANCEL_REDUCE_BLOCKED",
-                    target=pending_order.client_order_id,
-                    run_id=self.run_id,
-                    client_order_id=pending_order.client_order_id,
-                    order_id=pending_order.internal_order_id,
-                    after={"reason": "EXECUTION_LEASE_NOT_HELD"},
-                )
-                return
-            await self.order_manager.cancel_pending(
-                pending_order.internal_order_id,
-                reason="EXIT_SUPERSEDES_PENDING_REDUCE",
-            )
-            if not await self._current_lease_valid():
-                await self.audit.log(
-                    "POSITION_ACTION_CANCEL_REDUCE_BLOCKED",
-                    target=pending_order.client_order_id,
-                    run_id=self.run_id,
-                    client_order_id=pending_order.client_order_id,
-                    order_id=pending_order.internal_order_id,
-                    after={"reason": "EXECUTION_LEASE_LOST_BEFORE_CANCEL"},
-                )
-                return
-            await self.adapter.cancel_order(
-                pending_order.symbol, pending_order.exchange_order_id
-            )
-            await self.audit.log(
-                "POSITION_ACTION_CANCEL_REDUCE",
-                target=pending_order.client_order_id,
-                run_id=self.run_id,
-                client_order_id=pending_order.client_order_id,
-                order_id=pending_order.internal_order_id,
-                after={
-                    "status": "CANCEL_PENDING",
-                    "reason": "EXIT supersedes pending reduce",
-                },
-            )
-        except Exception:
-            logger.exception(
-                "POSITION_ACTION_CANCEL_REDUCE_FAILED order_id=%s symbol=%s",
-                pending_order.internal_order_id,
-                pending_order.symbol,
-            )
-            raise
-
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
         run_id = self.run_id
         symbol = signal.symbol
         client_order_id = f"{signal.strategy_id}_{signal.signal_id}"[:60]
+        # Resource readiness for a NEW entry only: a position-reducing action
+        # must never be gated by management capacity, or an unmanageable
+        # position could never be reduced. Authority-neutral: this can only make
+        # an entry wait, never pick or change a direction.
+        if (
+            signal.strategy_id == "live_llm"
+            and self.settings.enforce_position_management_capacity
+        ):
+            if not await self._position_management_capacity_available():
+                return None
         if self.enforce_llm_entry_authority and signal.strategy_id not in {
             "live_llm",
             "live_llm_position",
@@ -1244,29 +1889,41 @@ class TradingEngine:
                 if entry_order is not None and entry_order.status not in TERMINAL_ORDER_STATUSES:
                     await self._cancel_unsettled_entry_order(entry_order)
                 return None
-            pending_action = await self.order_manager.get_pending_position_action(
-                trade_plan_id
-            )
-            if pending_action is not None:
-                lifecycle_action = str(
-                    signal.metadata.get("lifecycle_action") or ""
+            if await self.order_manager.has_pending_position_action(trade_plan_id):
+                facts = await self.order_manager.pending_position_action_facts(
+                    trade_plan_id
                 )
-                if lifecycle_action == "EXIT":
-                    await self.audit.log(
-                        "POSITION_ACTION_EXIT_SUPERSEDES_PENDING",
-                        target=client_order_id,
-                        run_id=run_id,
-                        order_id=pending_action.internal_order_id,
-                        after={"trade_plan_id": trade_plan_id},
-                    )
-                    await self._cancel_pending_position_action(pending_action)
-                    return None
                 await self.audit.log(
                     "POSITION_ACTION_ALREADY_PENDING",
                     target=client_order_id,
                     run_id=run_id,
-                    after={"trade_plan_id": trade_plan_id},
+                    after={
+                        "trade_plan_id": trade_plan_id,
+                        "pending_action": facts,
+                        "requested_action": signal.metadata.get("lifecycle_action"),
+                        "requested_decision_id": signal.metadata.get("decision_id"),
+                        "latest_intent_preserved": True,
+                    },
                 )
+                if facts is not None and facts.get("stale"):
+                    await self.audit.log(
+                        "PARTIAL_ORDER_REVIEW_REQUIRED",
+                        target=client_order_id,
+                        run_id=run_id,
+                        after={
+                            "trade_plan_id": trade_plan_id,
+                            "order_id": facts["order_id"],
+                            "status": facts["status"],
+                            "remaining_quantity": facts["remaining_quantity"],
+                            "age_seconds": facts["age_seconds"],
+                            "stale_after_seconds": facts["stale_after_seconds"],
+                            "classification": facts.get("classification"),
+                            "blocked_action": signal.metadata.get("lifecycle_action"),
+                        },
+                    )
+                    await self._resolve_stale_position_action(
+                        facts["order_id"], trade_plan_id=trade_plan_id
+                    )
                 return None
 
         await self._refresh_execution_market(symbol)
@@ -1592,18 +2249,12 @@ class TradingEngine:
             )
             await RecoveryService(self.order_manager, self.adapter, self.audit).recover(run_id)
             return risk_decision
-        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
-            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
-            await self.audit.log(
-                "SUBMIT_TRANSIENT_FAILURE",
-                target=client_order_id,
-                run_id=run_id,
-                client_order_id=client_order_id,
-                order_id=order.internal_order_id,
-                after={"error": type(exc).__name__},
-            )
-            return risk_decision
         except OrderRejected as exc:
+            # MUST precede the ExchangeError clause below: OrderRejected is a
+            # subclass of ExchangeError, so catching ExchangeError first makes
+            # THIS branch dead code and turns a deterministic pre-broker refusal
+            # into a transient UNKNOWN - which is exactly how the IOST incident
+            # produced a false UNKNOWN that permanently blocked the plan.
             await self.order_manager.reject(
                 order.internal_order_id, str(exc), event_id=new_id("evt")
             )
@@ -1617,6 +2268,17 @@ class TradingEngine:
                 client_order_id=client_order_id,
                 order_id=order.internal_order_id,
                 after={"reason": str(exc)},
+            )
+            return risk_decision
+        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
+            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
+            await self.audit.log(
+                "SUBMIT_TRANSIENT_FAILURE",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=order.internal_order_id,
+                after={"error": type(exc).__name__},
             )
             return risk_decision
 
@@ -1690,24 +2352,6 @@ class TradingEngine:
                 },
             )
 
-    async def _apply_exchange_order_fill(self, local: object, exchange_order: object) -> None:
-        if exchange_order.filled_quantity <= local.filled_quantity:
-            return
-        fill = Fill(
-            fill_id=f"submit_{exchange_order.exchange_order_id}_filled",
-            trade_id=new_id("trade"),
-            order_id=local.internal_order_id,
-            client_order_id=local.client_order_id,
-            exchange_order_id=exchange_order.exchange_order_id,
-            symbol=local.symbol,
-            side=local.side,
-            price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
-            quantity=exchange_order.filled_quantity - local.filled_quantity,
-            fee=Decimal("0"),
-            timestamp=datetime.now(UTC),
-        )
-        await self.order_manager.apply_fill(fill)
-
     async def _persist_risk(self, decision: RiskDecision) -> None:
         async with self.database.session_factory() as session:
             session.add(
@@ -1732,12 +2376,96 @@ class TradingEngine:
         if event.event_type in (ExchangeEventType.MARKET_DELTA, ExchangeEventType.MARKET_SNAPSHOT):
             await self._process_market_event(event, payload)
             return
+        if event.event_type == ExchangeEventType.BALANCE_UPDATE:
+            # Balance updates are ACCOUNT-scoped, not order-scoped: a venue
+            # balance push carries no exchange order id. Handling it before the
+            # order-identity requirement below is what makes this branch
+            # reachable at all.
+            return
         exchange_order_id = payload.get("exchange_order_id")
         if not exchange_order_id:
             return
         local = await self.order_manager.get_by_exchange(str(exchange_order_id))
+        identity_mismatch = False
         if local is None:
-            # ack may arrive before submit() returns; order was persisted before submit
+            # The venue emits ack/open/fill INLINE while ``submit_order`` is
+            # still in flight (see ``_sync_submitted_order_state``), i.e. before
+            # the engine has persisted ``exchange_order_id``. Resolving on the
+            # durable ``client_order_id`` - which IS written before submission -
+            # removes the dependency on that scheduling window entirely, so a
+            # factual fill can never be lost because of WHEN the event happened
+            # to be dequeued. The ack transition below persists the exchange id,
+            # after which later events resolve by either key.
+            #
+            # The binding is validated, never assumed: a row that ALREADY
+            # carries a DIFFERENT venue id is a different order, so this event
+            # must not be applied to it (that would let a misrouted or replayed
+            # event rewrite a real order's fills and venue identity).
+            client_order_id = payload.get("client_order_id")
+            if client_order_id:
+                candidate = await self.order_manager.get_by_client(str(client_order_id))
+                if candidate is not None:
+                    bound = getattr(candidate, "exchange_order_id", None)
+                    if bound in (None, "") or str(bound) == str(exchange_order_id):
+                        local = candidate
+                    else:
+                        identity_mismatch = True
+        # An unmatched or inconsistently-identified exchange event is a real
+        # anomaly (unknown order, an identity that was never persisted, an
+        # identity that belongs to a different order, or a payload that
+        # contradicts the order it resolved to). It must never be invisible —
+        # but it also must not be reported as a HEALTH fault: the consumer
+        # itself is working, and a single foreign/replayed event is not a
+        # component failure. Health is reserved for events that actually FAIL to
+        # process below; the anomaly is counted and audited instead.
+        reason: str | None = None
+        if local is None:
+            reason = (
+                "LOCAL_ORDER_BOUND_TO_ANOTHER_VENUE_ORDER"
+                if identity_mismatch
+                else "NO_LOCAL_ORDER_FOR_EVENT"
+            )
+        else:
+            # A payload that names a DIFFERENT symbol or client order than the
+            # order it resolved to is self-inconsistent. Applying it would let a
+            # misrouted event write a foreign fill into this order.
+            payload_symbol = payload.get("symbol")
+            if payload_symbol and not _same_symbol(
+                self.adapter, payload_symbol, local.symbol
+            ):
+                reason = "EVENT_SYMBOL_DOES_NOT_MATCH_LOCAL_ORDER"
+            payload_client = payload.get("client_order_id")
+            if (
+                reason is None
+                and payload_client
+                and str(payload_client) != str(local.client_order_id)
+            ):
+                reason = "EVENT_CLIENT_ID_DOES_NOT_MATCH_LOCAL_ORDER"
+        if reason is not None:
+            self.exchange_event_identity_anomalies += 1
+            await self.audit.log(
+                "EXCHANGE_EVENT_ID_MISMATCH"
+                if reason != "NO_LOCAL_ORDER_FOR_EVENT"
+                else "EXCHANGE_EVENT_UNMATCHED",
+                target=str(exchange_order_id),
+                run_id=self.run_id,
+                exchange_order_id=str(exchange_order_id),
+                after={
+                    "event_type": str(
+                        getattr(event.event_type, "value", event.event_type)
+                    ),
+                    "client_order_id": payload.get("client_order_id"),
+                    "reason": reason,
+                    # Both sides of the contradiction, so the row can be
+                    # triaged without re-deriving them from the order store.
+                    "payload_symbol": payload.get("symbol"),
+                    "local_symbol": getattr(local, "symbol", None),
+                    "local_client_order_id": getattr(local, "client_order_id", None),
+                    "local_exchange_order_id": getattr(
+                        local, "exchange_order_id", None
+                    ),
+                },
+            )
             return
         event_id = event.event_id
         if event.event_type == ExchangeEventType.ORDER_ACK:
@@ -1751,7 +2479,13 @@ class TradingEngine:
             ExchangeEventType.ORDER_FILLED,
         ):
             fill = self._fill_from_payload(local, payload)
-            await self.order_manager.apply_fill(fill)
+            _, _, newly_applied = await self.order_manager.apply_fill(fill)
+            if newly_applied:
+                # The metric counts FACTUAL EXECUTIONS, so it is incremented
+                # exactly once, on first ingestion of a fill. Duplicate events,
+                # settlement retries, startup and runtime recovery must not
+                # inflate it.
+                self._record_execution_metric()
         elif event.event_type == ExchangeEventType.ORDER_CANCELLED:
             await self.order_manager.cancel_confirm(local.internal_order_id, event_id=event_id)
             await self._sync_terminal_entry_plan(
@@ -1766,8 +2500,6 @@ class TradingEngine:
             await self._sync_terminal_entry_plan(
                 local, TradePlanState.INVALIDATED, "ORDER_REJECTED"
             )
-        elif event.event_type == ExchangeEventType.BALANCE_UPDATE:
-            await self.portfolio.refresh(initial_balances=self._initial_balances)
 
     async def _process_market_event(self, event: ExchangeEvent, payload: dict) -> None:
         symbol = event.symbol or payload.get("symbol")
@@ -1810,15 +2542,24 @@ class TradingEngine:
         )
 
     # ----------------------------------------------------------------- ledger
-    async def _settle_fill(self, fill: Fill) -> None:
+    async def _settle_fill(
+        self, fill: Fill, *, record_metric: bool = False, post_downstream: bool = False
+    ):
+        """Ledger phase of settlement.
+
+        Does NOT refresh the projection or converge the plan unless explicitly
+        asked: keeping phase 1 narrow is what makes ``Fill + Ledger + ACCOUNTED +
+        stale projection`` a real, recoverable state instead of a transient blip.
+        Downstream convergence lives in ``_converge_fill_downstream``.
+        """
         order = await self.order_manager.get(fill.order_id)
         if order is None:
-            return
-        if self.market_intelligence is not None:
-            try:
-                self.market_intelligence.record_execution()
-            except Exception:  # observability must never affect execution
-                logger.warning("market_intelligence.record_execution failed", exc_info=True)
+            return None
+        # Observability counts EXECUTIONS, not settlement passes: a replay of an
+        # already-accounted fill must not inflate the metric.
+        # NOTE: the execution metric is NOT incremented here. Settlement may run
+        # many times per fill (retry, replay, recovery) while the execution count
+        # must not move; see _record_execution_metric at ingestion.
         position = await self.portfolio.get_position(fill.symbol)
         account = await self.portfolio.get_account(self.settings.effective_mode())
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
@@ -1863,7 +2604,7 @@ class TradingEngine:
             )
         metadata["base_asset"] = order.symbol.replace("USDT", "")
         metadata["approved_leverage"] = str(order.metadata.get("approved_leverage", "1"))
-        await self.ledger.record(
+        settlement_txn = await self.ledger.record(
             LedgerEntryType.TRADE,
             postings,
             account_id=account.account_id,
@@ -1873,6 +2614,30 @@ class TradingEngine:
             event_id=new_id("evt"),
             metadata=metadata,
         )
+        # FILL_SETTLED records the FACTUAL ACCOUNTING of a fill, so it belongs to
+        # the ledger phase. Emitting it only at the downstream phase would make
+        # the audit silently disappear for every settlement that stops at
+        # ACCOUNTED.
+        await self.audit.log(
+            "FILL_SETTLED",
+            target=fill.fill_id,
+            run_id=self.run_id,
+            order_id=order.internal_order_id,
+            client_order_id=order.client_order_id,
+            exchange_order_id=order.exchange_order_id,
+            before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
+            after={
+                "transaction_id": str(
+                    getattr(settlement_txn, "transaction_id", fill.fill_id)
+                )
+            },
+        )
+        if not post_downstream:
+            # Phase 1 stops here on purpose: the projection and the plan are
+            # converged by _converge_fill_downstream, so that
+            # "Fill + Ledger + ACCOUNTED + stale projection" is a real state the
+            # system can recover from rather than a transient blip.
+            return getattr(settlement_txn, "transaction_id", None)
         await self.portfolio.refresh(initial_balances=self._initial_balances)
         # A submitted order is not evidence of an active plan.  Promote only
         # after this factual fill has been projected into a non-zero position.
@@ -1930,16 +2695,368 @@ class TradingEngine:
                         order_id=order.internal_order_id,
                         after={"trade_plan_id": closed_plan.trade_plan_id},
                     )
-        await self.audit.log(
-            "FILL_SETTLED",
-            target=fill.fill_id,
-            run_id=self.run_id,
-            order_id=order.internal_order_id,
-            client_order_id=order.client_order_id,
-            exchange_order_id=order.exchange_order_id,
-            before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
-            after={"transaction_id": fill.fill_id},
+        return getattr(settlement_txn, "transaction_id", None)
+
+    def _record_execution_metric(self) -> None:
+        """Count one factual execution. Observability must never affect execution."""
+        if self.market_intelligence is None:
+            return
+        try:
+            self.market_intelligence.record_execution()
+        except Exception:
+            logger.warning("market_intelligence.record_execution failed", exc_info=True)
+
+    @staticmethod
+    def _order_metadata(order) -> dict:
+        """Order metadata from EITHER an ORM row or the domain object.
+
+        on an ORM row it is ``metadata_json``; on the domain model it is
+        ``metadata``. Settlement converges from both directions (a fresh fill
+        carries the ORM row, a duplicate event carries the domain object), so
+        reading only one shape silently disabled convergence from the other.
+        """
+        payload = getattr(order, "metadata_json", None)
+        if payload is None:
+            payload = getattr(order, "metadata", None)
+        return payload or {}
+
+    async def _settlement_callback(self, fill) -> None:
+        """Settlement entry point installed on the OrderManager.
+
+        Takes the DURABLE fill as its fact (the callback runs after the fill's
+        transaction commits) and routes through the single canonical driver, so
+        a new fill, a duplicate event, an event retry, startup recovery and
+        runtime recovery all share ONE settlement semantic.
+
+        Records WHY a failure happened before re-raising, so a dropped event
+        leaves durable evidence rather than only a health flag.
+        """
+        from crypto_trader.order.settlement import record_settlement_failure
+
+        try:
+            await self._ensure_fill_settled(fill.fill_id)
+        except Exception as exc:
+            try:
+                async with self.database.session_factory() as session:
+                    await record_settlement_failure(
+                        session, fill_id=fill.fill_id, error=exc
+                    )
+                    await session.commit()
+            except Exception:
+                # Best effort only: the durable PENDING marker is already the
+                # signal that settlement is incomplete, and this must never mask
+                # the original exception.
+                logger.warning("recording settlement failure failed", exc_info=True)
+            raise
+
+    async def _ensure_fill_settled(self, fill_id: str):
+        """THE single canonical settlement driver.
+
+        Phases are separated so each durable boundary is a real recoverable state:
+
+            PENDING   -> ledger posted                  -> ACCOUNTED
+            ACCOUNTED -> projection + plan + episode    -> COMPLETE
+
+        Each phase commits on its own, so an interruption leaves a state that a
+        later pass (duplicate event, retry, startup, runtime recovery) can finish.
+        Every phase is idempotent, so re-entry converges instead of duplicating.
+        """
+        from crypto_trader.order.settlement import (
+            STATE_ACCOUNTED,
+            STATE_COMPLETE,
+            SettlementOutcome,
+            assert_complete_settlements_consistent,
+            assert_prefix_settlement_history,
+            ensure_fill_settlement_row,
+            ledger_transaction_for_fill,
+            record_settlement_failure,
         )
+        from crypto_trader.persistence.models import FillORM, OrderORM
+
+        # ------------------------------------------------- phase 0: load facts
+        async with self.database.session_factory() as session:
+            await assert_prefix_settlement_history(session)
+            fill = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalar_one_or_none()
+            if fill is None:
+                return None, False
+            marker = await ensure_fill_settlement_row(session, fill)
+            if marker.state == STATE_COMPLETE:
+                # §16: COMPLETE is not a higher truth than the ledger.
+                txn = await ledger_transaction_for_fill(session, fill_id)
+                if txn is None:
+                    from crypto_trader.order.settlement import (
+                        SettlementStateContradiction,
+                    )
+
+                    raise SettlementStateContradiction(
+                        f"{fill_id} is marked COMPLETE but has no ledger transaction"
+                    )
+                return (
+                    SettlementOutcome(
+                        fill_id, STATE_COMPLETE, False, False, "ALREADY_COMPLETE"
+                    ),
+                    True,
+                )
+            marker.attempt_count = (marker.attempt_count or 0) + 1
+            await session.commit()
+            order = (
+                await session.execute(
+                    select(OrderORM).where(OrderORM.internal_order_id == fill.order_id)
+                )
+            ).scalar_one_or_none()
+
+        # --------------------------------------------- phase 1: LEDGER ONLY
+        async with self.database.session_factory() as session:
+            existing = await ledger_transaction_for_fill(session, fill_id)
+        already_accounted = existing is not None
+        txn_id = existing.transaction_id if existing is not None else None
+        if not already_accounted:
+            try:
+                txn_id = await self._post_fill_ledger(fill, order)
+            except Exception as exc:
+                async with self.database.session_factory() as session:
+                    await record_settlement_failure(session, fill_id=fill_id, error=exc)
+                    await session.commit()
+                raise
+            # Re-read: a concurrent idempotent path may have won the race, in
+            # which case THIS invocation did not create the accounting.
+            async with self.database.session_factory() as session:
+                again = await ledger_transaction_for_fill(session, fill_id)
+                if again is not None:
+                    txn_id = again.transaction_id
+                    already_accounted = True
+
+        async with self.database.session_factory() as session:
+            fresh = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalar_one()
+            marker = await ensure_fill_settlement_row(session, fresh)
+            marker.state = STATE_ACCOUNTED
+            marker.ledger_transaction_id = txn_id
+            await session.commit()
+
+        # ------------------------------------------- phase 2: DOWNSTREAM
+        # Errors propagate deliberately: a settlement that cannot converge must
+        # stay ACCOUNTED and be retried, never be marked COMPLETE.
+        await self._converge_fill_downstream(fill, order)
+
+        # ------------------------------------------- phase 3: COMPLETE
+        async with self.database.session_factory() as session:
+            fresh = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalar_one()
+            marker = await ensure_fill_settlement_row(session, fresh)
+            marker.state = STATE_COMPLETE
+            marker.completed_at = datetime.now(UTC)
+            marker.last_error_type = None
+            marker.last_error_message = None
+            await session.commit()
+            await assert_complete_settlements_consistent(session)
+
+        return (
+            SettlementOutcome(
+                fill_id,
+                STATE_COMPLETE,
+                not already_accounted,
+                already_accounted,
+            ),
+            already_accounted,
+        )
+
+    async def _post_fill_ledger(self, fill, order):
+        """Phase 1 in isolation: ledger transaction + fee accounting, nothing else.
+
+        Kept deliberately narrow so ``Fill exists + Ledger exists + ACCOUNTED +
+        stale projection`` is a state the system can actually sit in and recover
+        from.
+        """
+        return await self._settle_fill(fill, post_downstream=False)
+
+    async def _converge_fill_downstream(self, fill, order) -> None:
+        """Phase 2: rebuild the projection from ledger truth, then converge.
+
+        The projection is REFRESHED from the ledger - never patched with a
+        manufactured delta - so ``projection == ledger replay`` holds.
+        """
+        await self.portfolio.refresh(initial_balances=self._initial_balances or None)
+        await self._converge_plan_for_fill(order)
+
+    async def _converge_plan_for_fill(self, order) -> None:
+        """Converge the TradePlan implied by the now-factual position."""
+        trade_plan_id = str(self._order_metadata(order).get("trade_plan_id") or "")
+        if not trade_plan_id:
+            return
+        plan = await self.trade_plans.get(trade_plan_id)
+        if plan is None:
+            return
+        position = await self.portfolio.get_position(order.symbol)
+        quantity = getattr(position, "quantity", None) if position else None
+        metadata = self._order_metadata(order)
+        if plan.state == TradePlanState.CLOSED:
+            # Already closed (e.g. recovery started after the close committed).
+            # The episode still has to exist, so a COMPLETE marker never claims
+            # convergence that is not there.
+            await self._materialise_episode(trade_plan_id)
+            return
+        if plan.state == TradePlanState.APPROVED and quantity not in (None, 0):
+            expected_sign = 1 if plan.direction == "LONG" else -1
+            if quantity * expected_sign > 0:
+                await self.trade_plans.transition(trade_plan_id, TradePlanState.ACTIVE)
+        elif (
+            plan.state in {TradePlanState.ACTIVE, TradePlanState.RECOVERY}
+            and metadata.get("reduce_only") is True
+            and not quantity
+        ):
+            await self._close_plan_from_factual_position(plan, order)
+
+    async def _materialise_episode(self, trade_plan_id: str) -> None:
+        """Materialise the closed plan's episode, or raise.
+
+        Raises rather than logging: a COMPLETE settlement asserts the episode
+        exists, so a missing episode must block COMPLETE and be retried.
+        """
+        build = getattr(self.trade_episodes, "build_for_closed_plan", None)
+        if build is None:
+            return
+        episode = await build(trade_plan_id)
+        if episode is None:
+            raise RuntimeError(
+                f"closed plan {trade_plan_id} produced no TradeEpisode; "
+                "settlement cannot be COMPLETE"
+            )
+
+    async def _close_plan_from_factual_position(self, plan, order) -> None:
+        """Close the plan at the factual zero boundary, then materialise.
+
+        STRICT semantics: failures PROPAGATE so the settlement stays ACCOUNTED
+        and is retried. Logging-and-returning would let COMPLETE claim a
+        convergence that never happened.
+        """
+        close = getattr(self.trade_plans, "close_from_factual_position", None)
+        if close is None:
+            return
+        closed = await close(
+            plan.trade_plan_id,
+            exit_decision_id=str(self._order_metadata(order).get("decision_id") or ""),
+            reason=str(
+                self._order_metadata(order).get("lifecycle_action") or "POSITION_CLOSED"
+            ),
+        )
+        if closed is not None:
+            await self._materialise_episode(closed.trade_plan_id)
+
+    async def _materialise_missing_closed_episodes(self) -> int:
+        """Converge CLOSED plans that lack their episode.
+
+        A CLOSED plan without exactly one episode is a contradiction, but it is
+        also precisely the state an interruption at the close boundary leaves
+        behind - so recovery must first CLOSE the gap, and only then assert the
+        invariant. Asserting first would turn a recoverable state into a hard
+        startup failure, which is the opposite of converging from durable facts.
+        """
+        from crypto_trader.persistence.models import TradeEpisodeORM, TradePlanORM
+
+        build = getattr(self.trade_episodes, "build_for_closed_plan", None)
+        if build is None:
+            return 0
+        materialised = 0
+        async with self.database.session_factory() as session:
+            closed = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.state == "CLOSED")
+                )
+            ).scalars().all()
+        for plan in closed:
+            async with self.database.session_factory() as session:
+                existing = (
+                    await session.execute(
+                        select(TradeEpisodeORM).where(
+                            TradeEpisodeORM.trade_plan_id == plan.trade_plan_id
+                        )
+                    )
+                ).scalars().all()
+            if len(list(existing)) == 1:
+                continue
+            episode = await build(plan.trade_plan_id)
+            if episode is None:
+                # A CLOSED plan that cannot produce its episode stays a
+                # contradiction; the Layer A check below reports it.
+                continue
+            materialised += 1
+        if materialised:
+            await self.audit.log(
+                "CLOSED_EPISODE_MATERIALISED_ON_RECOVERY",
+                target=f"plans={materialised}",
+                run_id=self.run_id,
+                after={"materialised": materialised},
+            )
+        return materialised
+
+    async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
+        """Complete unfinished settlements. Bounded per pass, complete overall."""
+        from crypto_trader.order.settlement import (
+            assert_complete_settlements_consistent,
+            assert_ledger_projection_convergence,
+            assert_prefix_settlement_history,
+            pending_settlements,
+        )
+
+        await self._materialise_missing_closed_episodes()
+        completed = 0
+        while True:
+            async with self.database.session_factory() as session:
+                # GLOBAL consistency. pending_settlements deliberately EXCLUDES
+                # COMPLETE rows, so a COMPLETE marker that contradicts the ledger
+                # or a closed lifecycle would otherwise be skipped forever and
+                # never detected. The closed-plan episode gap is CLOSED first (see
+                # _materialise_missing_closed_episodes) so this asserts an
+                # invariant that recovery has already had the chance to satisfy -
+                # otherwise a recoverable state would become a hard failure.
+                await assert_complete_settlements_consistent(session)
+                await assert_prefix_settlement_history(session)
+                rows = await pending_settlements(session, limit=batch_size)
+                fill_ids = [f.fill_id for f in rows]
+            if not fill_ids:
+                break
+            progressed = 0
+            for fill_id in fill_ids:
+                outcome, _ = await self._ensure_fill_settled(fill_id)
+                if outcome is not None and outcome.state == "COMPLETE":
+                    progressed += 1
+                    completed += 1
+            if progressed == 0:
+                # No forward progress on a full pass: this is a BLOCKER, not a
+                # state to tolerate. Raising keeps the caller from reporting
+                # success while the accounting is still incomplete.
+                from crypto_trader.order.settlement import SettlementRecoveryStalled
+
+                self.health.set(
+                    "fill_settlement",
+                    False,
+                    f"unsettled fills remain: {fill_ids[:5]}",
+                )
+                raise SettlementRecoveryStalled(
+                    f"{len(fill_ids)} pending settlement(s) made no progress: "
+                    f"{fill_ids[:5]}"
+                )
+        # LAYER B: every settlement is COMPLETE, so current ledger truth and the
+        # persisted projection must now agree. Runs only after the pending scan is
+        # exhausted, because comparing them mid-recovery would report a
+        # disagreement that recovery is still in the middle of fixing.
+        async with self.database.session_factory() as session:
+            await assert_complete_settlements_consistent(session)
+            await assert_ledger_projection_convergence(session)
+
+        if completed:
+            await self.audit.log(
+                "FILL_SETTLEMENT_RECOVERED",
+                target=f"fills={completed}",
+                run_id=self.run_id,
+                after={"completed": completed},
+            )
+        return completed
 
     async def _sync_terminal_entry_plan(
         self, order, state: TradePlanState, reason: str
@@ -2006,11 +3123,70 @@ class TradingEngine:
             return
         account = await self.portfolio.get_account(self.settings.effective_mode())
         positions = await self.portfolio.get_positions()
+        # F6: unresolved ORDER state must be restored BEFORE any new execution,
+        # otherwise a resting order is invisible to reconciliation (MISSING)
+        # and a stale ENTRY can never be expired. Recovery copies durable facts
+        # only - it never submits, never invents a fill and never changes
+        # identity.
+        recovered, report = await self._recover_unresolved_orders()
         await restore(
             balances={currency: balance.total for currency, balance in account.balances.items()},
             positions=positions,
+            unresolved_orders=recovered,
         )
-        self.health.set("paper_restart_recovery", True)
+        self.paper_order_recovery_ready = True
+        self.health.set(
+            "paper_restart_recovery",
+            not report.fatal,
+            "; ".join(
+                f"{o.order_id}:{o.verdict}" for o in report.outcomes
+            )[:400],
+        )
+        if report.fatal:
+            # An identity contradiction means we cannot prove what the broker
+            # held. Fail closed: no new execution writer starts on a state we
+            # cannot vouch for. No blind resubmit, no assumed cancel.
+            self.reconciliation_halted = True
+
+    async def _recover_unresolved_orders(self):
+        """Load durable unresolved orders and classify their recoverability."""
+        from crypto_trader.order.restart_recovery import recover_unresolved_orders
+
+        report = None
+        collector = getattr(self.order_manager, "unresolved_order_facts", None)
+        if collector is None:
+            from crypto_trader.order.restart_recovery import RecoveryReport
+
+            return [], RecoveryReport()
+        try:
+            facts = await collector()
+        except Exception:
+            logger.warning("order recovery: unresolved query failed", exc_info=True)
+            from crypto_trader.order.restart_recovery import RecoveryReport
+
+            return [], RecoveryReport()
+        durable = []
+        for record in facts:
+            order = await self.order_manager.get(record["order_id"])
+            if order is not None:
+                durable.append(order)
+        rebuilt: list = []
+        report = recover_unresolved_orders(
+            durable_orders=durable,
+            broker_orders=getattr(self.adapter, "orders", {}) or {},
+            apply_restore=rebuilt.append,
+        )
+        if report.outcomes:
+            await self.audit.log(
+                "PAPER_ORDER_RECOVERY",
+                target=f"orders={len(report.outcomes)}",
+                run_id=self.run_id,
+                after={
+                    "counts": report.counts(),
+                    "outcomes": [o.as_dict() for o in report.outcomes][:50],
+                },
+            )
+        return rebuilt, report
 
     # ---------------------------------------------------------------- helpers
     def kill_switch_snapshot(self) -> dict:
@@ -2061,11 +3237,82 @@ class TradingEngine:
             },
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
+            "exchange_event_identity_anomalies": (
+                self.exchange_event_identity_anomalies
+            ),
             "kill_switch": self.kill_switch_snapshot(),
         }
 
     async def wait_for_event_queue(self) -> None:
         await self._event_queue.join()
+
+
+#: Never real instruments. Used only to detect a normalizer that does not
+#: discriminate instead of answering - see ``_same_symbol``. Two probes are
+#: needed: a sentinel catches a constant answer, and a second real-looking
+#: symbol catches a normalizer that collapses part of the symbol (e.g. one that
+#: maps every QUOTE USDT onto the same value, which would otherwise accept a
+#: foreign base asset).
+_SYMBOL_SENTINEL = "\x00dsh-symbol-sentinel\x00"
+_SYMBOL_PROBE = "ZZZUSDT"
+
+
+def _canonical_symbol(adapter, value: str) -> str:
+    """Return the adapter's canonical form, or "" when it cannot produce one.
+
+    "" is the explicit "no canonical answer" value, which keeps a degenerate or
+    failing normalizer from being mistaken for agreement.
+    """
+    try:
+        # ``getattr`` is inside the guard too: a normalizer served by a
+        # descriptor that raises must not escape and turn a refused event into a
+        # failed one.
+        normalize = getattr(adapter, "normalize_symbol", None)
+        if not callable(normalize):
+            return ""
+        result = normalize(value)
+        if result is None:
+            return ""
+        # ``str()`` is inside the guard too: a returned object whose __str__
+        # raises must degrade to "no canonical answer", never escape and turn a
+        # refused event into a failed one.
+        return str(result).strip()
+    except Exception:  # noqa: BLE001 - a normalizer must never break routing
+        return ""
+
+
+def _same_symbol(adapter, payload_symbol: object, local_symbol: object) -> bool:
+    """Compare a venue payload symbol with a local one, canonically.
+
+    Venues and the local book use different naming forms (``btcusdt``,
+    ``BTC-USDT-SWAP``, ``BTCUSDT``). Byte equality would refuse every event for
+    an order whose venue form differs from the local one - which would wedge the
+    trade plan at APPROVED, the very symptom this fix removes.
+
+    The adapter owns normalization, but only its answer for BOTH sides is
+    trusted: a normalizer that is missing, raises, or returns an empty/constant
+    value yields no canonical answer, and the comparison then falls back to a
+    case-insensitive one. That direction fails CLOSED - a genuinely different
+    symbol is still refused - whereas trusting a degenerate normalizer would
+    accept every pair and disable the guard.
+    """
+    try:
+        raw = str(payload_symbol)
+        local = str(local_symbol)
+    except Exception:  # noqa: BLE001 - an unrenderable symbol is not a match
+        return False
+    canonical_payload = _canonical_symbol(adapter, raw)
+    canonical_local = _canonical_symbol(adapter, local)
+    if canonical_payload and canonical_local:
+        # Only trust the answer when the normalizer actually DISCRIMINATES: one
+        # that maps an impossible sentinel onto the local symbol is not
+        # answering, it is returning a constant, and trusting it would accept
+        # every pair and silently disable this guard.
+        sentinel = _canonical_symbol(adapter, _SYMBOL_SENTINEL)
+        probe = _canonical_symbol(adapter, _SYMBOL_PROBE)
+        if sentinel != canonical_local and probe != canonical_local:
+            return canonical_payload == canonical_local
+    return raw.upper() == local.upper()
 
 
 def _raise_missing_contract_spec(symbol: str):

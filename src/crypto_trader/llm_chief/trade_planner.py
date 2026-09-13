@@ -32,7 +32,16 @@ class LiveLLMTradePlanner:
     ) -> tuple[TradePlan | None, SignalIntent | None]:
         if decision.action not in {"LONG", "SHORT"}:
             return None, None
-        quantity = quantity or Decimal(str(decision.position_size_request))
+        # POSITION SIZING V2: the authoritative entry quantity MUST be supplied
+        # by the deterministic Sizer. There is deliberately NO fallback to
+        # ``decision.position_size_request`` — that field is advisory only, and
+        # a fallback here would be a live path for the LLM's raw quantity to
+        # become the final order quantity without any sizing at all.
+        if quantity is None:
+            raise ValueError(
+                "Live LLM entry requires an explicitly sized quantity; the "
+                "advisory position_size_request is never an order quantity"
+            )
         if quantity <= 0 or not decision.thesis:
             raise ValueError("Live LLM entry decision requires positive size and thesis")
         plan = await self.plans.create(

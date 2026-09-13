@@ -35,7 +35,7 @@ def _instrument() -> Instrument:
 def _batch(
     *,
     equity: str = "1000",
-    margin: str = "500",
+    margin: str | None = "500",
     quality: str = "HEALTHY",
 ) -> ValuationBatch:
     return ValuationBatch(
@@ -44,7 +44,9 @@ def _batch(
         currency="USDT",
         quality=quality,
         raw_mtm_equity=Decimal(equity) if quality == "HEALTHY" else None,
-        available_margin=Decimal(margin) if quality == "HEALTHY" else None,
+        available_margin=(
+            Decimal(margin) if quality == "HEALTHY" and margin is not None else None
+        ),
     )
 
 
@@ -58,19 +60,31 @@ def test_sizing_uses_batch_equity_and_available_margin():
         side="LONG",
         requested_quantity=Decimal("100"),
         requested_leverage=Decimal("1"),
-        account=Account(equity=Decimal("100000")),
+        account=Account(equity=Decimal("999999")),
         positions={},
         instrument=_instrument(),
         price=Decimal("100"),
         stop_price=Decimal("90"),
+        # Factual visible depth on the consumed (ASK) side.
+        liquidity_depth_qty=Decimal("1000000"),
+        conviction=Decimal("0.80"),
     )
-    without_batch = sizer.size(**common)
-    with_batch = sizer.size(**common, valuation=_batch(equity="1000", margin="500"))
+    small = sizer.size(**common, valuation=_batch(equity="1000", margin="500"))
+    large = sizer.size(**common, valuation=_batch(equity="100000", margin="50000"))
     # The batch equity (not account.equity) drives the risk budget.
-    assert with_batch.sizing_equity == Decimal("1000")
-    assert with_batch.valuation_id == "val-p1-test"
-    assert with_batch.available_margin == Decimal("500")
-    assert with_batch.normalized_quantity < without_batch.normalized_quantity
+    assert small.sizing_equity == Decimal("1000")
+    assert small.valuation_id == "val-p1-test"
+    assert small.available_margin == Decimal("500")
+    assert large.sizing_equity == Decimal("100000")
+    assert large.normalized_quantity > small.normalized_quantity
+    # A missing batch is NOT a licence to fall back to ledger equity: with no
+    # proven valuation there is no new risk (POSITION SIZING V2 §28).
+    without_batch = sizer.size(**common)
+    assert without_batch.normalized_quantity == 0
+    assert "VALUATION_BATCH_REQUIRED" in without_batch.sizing_reason_codes
+    # risk_fraction=0.5 in this fixture exceeds the 1% hard ceiling, so the
+    # clamp is loudly recorded rather than silently applied (§60).
+    assert "CONFIG_CLAMPED:base_risk_per_trade" in without_batch.sizing_reason_codes
 
 
 def test_sizing_refuses_unavailable_or_unfunded_batch():
@@ -88,6 +102,8 @@ def test_sizing_refuses_unavailable_or_unfunded_batch():
         instrument=_instrument(),
         price=Decimal("100"),
         stop_price=Decimal("95"),
+        liquidity_depth_qty=Decimal("1000000"),
+        conviction=Decimal("0.80"),
     )
     unavailable = sizer.size(
         **common, valuation=_batch(quality="UNAVAILABLE")
@@ -98,6 +114,19 @@ def test_sizing_refuses_unavailable_or_unfunded_batch():
     no_margin = sizer.size(**common, valuation=_batch(equity="10000", margin="0"))
     assert no_margin.normalized_quantity == 0
     assert no_margin.sizing_reason_codes == ("INSUFFICIENT_AVAILABLE_MARGIN",)
+
+    unknown_margin = sizer.size(
+        **common, valuation=_batch(equity="10000", margin=None)
+    )
+    assert unknown_margin.normalized_quantity == 0
+    assert unknown_margin.sizing_reason_codes == ("AVAILABLE_MARGIN_UNKNOWN",)
+
+    unknown_liquidity = sizer.size(
+        **{**common, "liquidity_depth_qty": None},
+        valuation=_batch(equity="10000", margin="10000"),
+    )
+    assert unknown_liquidity.normalized_quantity == 0
+    assert unknown_liquidity.sizing_reason_codes == ("LIQUIDITY_UNKNOWN",)
 
 
 async def test_first_unavailable_never_seeds_peak_and_ratio_is_canonical(database):

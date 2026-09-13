@@ -154,23 +154,35 @@ def test_chief_decide_records_priority_by_position_state():
 
 
 def test_chief_tool_selection_is_budget_gated():
+    """Tool selection on behalf of an ENTRY workflow is gated by the entry pool.
+
+    The purpose is now inherited from the workflow (a position review's tool
+    selection draws on position capacity instead), so this test states the entry
+    case explicitly rather than relying on a hardcoded research priority.
+    """
     budget = GlobalLLMBudget(
         BudgetConfig(
             window_seconds=60,
             max_calls_per_window=1,
-            reserved_fraction_for_higher={P3_SELECTED_SYMBOL_RESEARCH: 1},
+            reserved_fraction_for_higher={P2_FINAL_ENTRY_DECISION: 1},
         )
     )
     engine = ChiefTraderEngine(provider=StubProvider(payload={"tools": []}), budget=budget)
-    selected, error = asyncio.run(engine.select_tools(_ctx(), ["trend"]))
+    selected, error = asyncio.run(
+        engine.select_tools(_ctx(PositionState.FLAT), ["trend"])
+    )
     assert selected is None
-    assert error == "SKIPPED_BUDGET"
+    assert error and error != "SKIPPED_BUDGET", (
+        "a denial must name the exhausted pool, not a bare SKIPPED_BUDGET"
+    )
 
 
 def test_tool_selection_success_is_recorded_in_the_budget():
     budget = GlobalLLMBudget(BudgetConfig(window_seconds=60, max_calls_per_window=20))
     engine = ChiefTraderEngine(provider=StubProvider(payload={"tools": ["trend"]}), budget=budget)
-    selected, error = asyncio.run(engine.select_tools(_ctx(), ["trend"]))
+    selected, error = asyncio.run(engine.select_tools(_ctx(PositionState.FLAT), ["trend"]))
     assert error is None
     assert selected == ["trend"]
-    assert budget.snapshot()["granted_by_priority"][P3_SELECTED_SYMBOL_RESEARCH] == 1
+    # An ENTRY workflow's tool selection is charged to the entry purpose, not to
+    # a research pool: the purpose is inherited from the workflow.
+    assert budget.snapshot()["granted_by_priority"][P2_FINAL_ENTRY_DECISION] == 1

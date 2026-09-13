@@ -382,6 +382,70 @@ function SystemPage({ snapshot }: { snapshot: TradingSnapshot }) {
   return <div className="system-grid"><Panel title="连接状态"><dl className="system-list"><div><dt>后端 API</dt><dd>{statusLabels[snapshot.health.status]}</dd></div><div><dt>WebSocket</dt><dd>{snapshot.websocket === "connected" ? "已连接" : snapshot.websocket === "connecting" ? "连接中" : "已断开"}</dd></div><div><dt>K线行情</dt><dd>{source === "HEALTHY" ? "OKX 实时" : sourceLabels[source] ?? "状态未知"}</dd></div><div><dt>OKX 公开行情</dt><dd>{sourceLabels[marketStatus] ?? "状态未知"}</dd></div><div><dt>OKX Demo</dt><dd className="muted-status">{okxOverview}</dd></div><div><dt>数据库</dt><dd>{text(pick(runtime, "database"))}</dd></div><div><dt>Scheduler</dt><dd>{text(pick(runtime, "scheduler"))}</dd></div><div><dt>Learning</dt><dd>{statusLabels[(snapshot.optional["/learning"] ?? { status: "loading" }).status]}</dd></div></dl></Panel><OkxConnectionCard /><Panel title="运行信息"><dl className="system-list"><div><dt>Adapter</dt><dd>{text(exchange.adapter)}</dd></div><div><dt>Daily Review</dt><dd>{statusLabels[(snapshot.optional["/daily-reviews"] ?? { status: "loading" }).status]}</dd></div><div><dt>RUNNING_SHA</dt><dd>{text(version.git_sha)}</dd></div><div><dt>run_id</dt><dd>{text(pick(runtime, "run_id"))}</dd></div><div><dt>EXECUTABLE_SCOPE</dt><dd>{text(pick(record(snapshot.optional["/opportunity/stats"]?.data), "executable_scope"), "UNKNOWN")}</dd></div><div><dt>环境</dt><dd>{text(version.environment, "本地")}</dd></div></dl></Panel><Panel title="接口地址" className="system-addresses"><p>API：{API_BASE_URL}</p><p>WebSocket：{WS_URL}</p></Panel></div>;
 }
 
+const modelSourceLabels: Record<string, string> = {
+  RUNTIME_OVERRIDE: "运行时覆盖（已持久化）",
+  PROVIDER_CONFIG: "进程环境配置",
+  DEFAULT: "系统默认",
+};
+
+function ModelSelector() {
+  const [state, setState] = useState<JsonRecord | null>(null);
+  const [selected, setSelected] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void getJson<JsonRecord>("/llm/models").then((response) => {
+      if (!active) return;
+      if (response.status === "ready" && response.data) {
+        setState(response.data);
+        setSelected(String(response.data.model ?? ""));
+      }
+    });
+    return () => { active = false; };
+  }, []);
+
+  const available = Array.isArray(state?.available) ? (state?.available as unknown[]).map(String) : [];
+  const current = String(state?.model ?? "");
+  const source = String(state?.source ?? "");
+
+  const switchModel = async () => {
+    if (busy) return;
+    if (!selected) { setMessage("请选择要切换的模型"); return; }
+    if (selected === current) { setMessage(`当前已经是 ${current}`); return; }
+    setBusy(true);
+    const response = await sendJson<JsonRecord>("/llm/model", "POST", { model: selected });
+    setBusy(false);
+    if (response.status === "ready" && response.data) {
+      setState(response.data);
+      setSelected(String(response.data.model ?? selected));
+      setMessage(`已切换至 ${String(response.data.model ?? selected)}`);
+      return;
+    }
+    setMessage(response.message ?? "切换失败");
+  };
+
+  return <Panel title="ChiefTrader 模型（运行时可切换）" className="span-2">
+    <div className="review-metrics">
+      <Metric label="当前模型" value={current || "--"} />
+      <Metric label="配置来源" value={modelSourceLabels[source] ?? (source || "--")} />
+      <Metric label="Provider" value={String(state?.provider ?? "--")} />
+      <Metric label="凭据状态" value={state?.configured === true ? "已配置" : "未配置"} />
+      <Metric label="可切换" value={state?.switch_supported === true ? "是" : "否"} />
+      <Metric label="可选模型" value={String(available.length)} />
+    </div>
+    <div className="tag-list">
+      <select aria-label="选择模型" value={selected} disabled={available.length === 0 || busy} onChange={(event) => setSelected(event.target.value)}>
+        {available.map((model) => <option key={model} value={model}>{model}</option>)}
+      </select>
+      <button className="text-button" type="button" disabled={busy || state?.switch_supported !== true || available.length === 0} onClick={() => void switchModel()}>切换模型</button>
+      {message ? <span>{message}</span> : null}
+    </div>
+    <p className="muted-line">切换仅改变 ChiefTrader 使用的模型并持久化；决策权限仍为 LIVE_LLM_ONLY，风控与执行路径不变（PAPER）。</p>
+  </Panel>;
+}
+
 function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const state = snapshot.optional["/llm/decisions"] ?? { status: "loading" as const };
   const decisions = list(record(state.data).decisions);
@@ -412,6 +476,7 @@ function AiTraderPage({ snapshot }: { snapshot: TradingSnapshot }) {
   const candidates = list(opp.candidates);
   const oppMarket = record(opp.market_sets);
   return <div className="system-grid">
+    <ModelSelector />
     <Panel title="市场机会 · 全市场因子扫描（仅证据，无方向权限）" source={oppState} className="span-2">
       <div className="review-metrics">
         <Metric label="全市场 Universe" value={numberText(opp.universe_size, 0)} />

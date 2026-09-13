@@ -11,11 +11,23 @@ from crypto_trader.llm.tools.registry import DynamicEvidencePackage, LLMToolRegi
 from crypto_trader.llm_chief.budget import (
     P1_POSITION_LIFECYCLE,
     P2_FINAL_ENTRY_DECISION,
+    REASON_BACKGROUND_RESEARCH_BUDGET_EXHAUSTED,
+    REASON_MARKET_SELECTION_BUDGET_EXHAUSTED,
+    REASON_SELECTED_SYMBOL_RESEARCH_BUDGET_EXHAUSTED,
     BudgetFallbackStats,
 )
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+
+OPTIONAL_RESEARCH_BUDGET_DENIALS = frozenset(
+    {
+        "SKIPPED_BUDGET",
+        REASON_SELECTED_SYMBOL_RESEARCH_BUDGET_EXHAUSTED,
+        REASON_MARKET_SELECTION_BUDGET_EXHAUSTED,
+        REASON_BACKGROUND_RESEARCH_BUDGET_EXHAUSTED,
+    }
+)
 
 
 class ToolDrivenChiefTrader:
@@ -64,9 +76,11 @@ class ToolDrivenChiefTrader:
         except TimeoutError:
             return self.chief.fail_closed(ctx, "TOOL_SELECTION_TIMEOUT"), None
         if selected is None:
-            if error == "SKIPPED_BUDGET":
-                # P3 is optional enrichment.  Its exhaustion must never become
-                # a hard prerequisite for the P1/P2 final decision.
+            if error in OPTIONAL_RESEARCH_BUDGET_DENIALS:
+                # Optional research exhaustion must never become a hard
+                # prerequisite for the P1/P2 final decision.  The merged
+                # ChiefTrader normally inherits P1/P2 for the whole workflow;
+                # this fallback also covers any explicit P3/P4/P5 denial.
                 return await self._decide_with_baseline_context(ctx, now=now)
             return self.chief.fail_closed(ctx, error or "TOOL_SELECTION_FAILED"), None
         remaining = deadline - loop.time()

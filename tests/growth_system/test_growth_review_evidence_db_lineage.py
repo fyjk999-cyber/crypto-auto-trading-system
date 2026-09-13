@@ -409,7 +409,10 @@ async def test_f6_20_public_growth_runtime_preserves_db_truth_without_trading_si
         return _f
 
     monkeypatch.setattr(LiveEntrySizingService, "size", trap("sizer"))
-    monkeypatch.setattr("crypto_trader.sizing.service.calculate_risk_normalized_size", trap("norm"))
+    monkeypatch.setattr(
+        "crypto_trader.sizing.risk_normalized.calculate_risk_normalized_size",
+        trap("norm"),
+    )
     monkeypatch.setattr(OrderManager, "create_from_intent", trap("order"))
     monkeypatch.setattr(ExecutionAuthority, "authorize", trap("auth"))
     monkeypatch.setattr(SimulatedExchangeAdapter, "submit_order", trap("exchange"))

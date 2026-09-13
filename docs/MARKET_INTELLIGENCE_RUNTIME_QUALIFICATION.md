@@ -16,52 +16,164 @@ changed, no gate is bypassed, and no trade is manufactured.
 
 | Fact | Cycle 1 | Cycle 2 |
 |---|---|---|
-| `scan_id` | `scan_29f3c6c8...` | `scan_ae1e4b35c06...` |
-| snapshot status | `PARTIAL` | `PARTIAL` |
+| `scan_id` | `scan_9b2cb29...` | `scan_de8b318...` |
+| snapshot status | `COMPLETE` | `COMPLETE` |
 | `discovered_count` (OKX live USDT perpetuals) | 463 | 463 |
 | `observable_count` | 463 | 463 |
 | `analysis_attempted_count` | 12 | 12 |
 | `analysis_ready_count` | 12 | 12 |
-| `execution_supported_count` | 245 | 245 |
 | funding batch quality | `VALID` | `VALID` |
-| OI sampling quality (per instrument) | `VALID` | `VALID` |
-| OI symbols sampled this cycle | 120 | 120 (rotated: new symbols first) |
-| factor candidates | 8 | 11 |
+| OI broad collection | `{'requested': 463, 'collected': 463}` | `{'requested': 463, 'collected': 463}` |
+| OI coverage ratio | 1.0 | 1.0 |
 | fair-rotation symbols | 6 | 6 |
 
 Additional observed facts:
 
 * `universe_type = "OKX Live USDT Perpetual Discovery Universe"` (not "all OKX markets").
-* funding quality histogram over 463 instruments: `{"VALID": 463}` — real rates including
-  factual zeros; a provider failure would appear as `REQUEST_FAILED`, never `0`.
-* several factor candidates were rotation symbols with `"fair rotation"` reasons,
-  proving factor-blind markets still receive research exposure.
+* **One broad OI request covers the whole universe**: `instType=SWAP` returned
+  463/463 USDT perpetual rows
+  (ratio 1.0) — the previous 120-symbol rotation is gone.
+* `status = COMPLETE` while `analysis_attempted_count`
+  (12) is far below the universe:
+  intentional bounded coverage is reported as coverage, never as scan failure.
+* funding quality histogram over 463 instruments:
+  `{'VALID': 463}` — real rates including factual zeros; a provider
+  failure would appear as `REQUEST_FAILED`, never `0`.
 * snapshot ids are unique per cycle and snapshots are never mutated in place.
-
-`PARTIAL` is correct: the OI sampling is bounded to 120 instruments per cycle, so the
-remaining instruments are truthfully reported as `UNSUPPORTED` (not zero, not VALID).
 
 ## 2. Real ChiefTrader market selection
 
 | Fact | Value |
 |---|---|
-| `selection_id` | `mkt_sel_0fecdaed...` |
-| `scan_id` | `scan_ae1e4b35c06...` (matches the snapshot) |
+| `selection_id` | `mkt_sel_48615d6b...` |
+| `scan_id` | `scan_de8b3189a85...` (matches the snapshot) |
 | status | `SUCCESS` |
-| selection_state | `SELECTED` |
+| selection_state | `SELECT` |
 | provider / model | `deepseek` / `deepseek-flash` |
-| latency_ms | 1565 |
-| input / output tokens | 15059 / 208 |
+| latency_ms | 2217 |
+| input / output tokens | 6376 / 188 |
 | pool size | 30 (bounded) |
-| directory pages offered | 2 (bounded) |
-| selected symbols | `ZECUSDT`, `CNPYUSDT`, `ANIMEUSDT` (3 of 30 pool entries) |
+| directory pages in phase 1 | NONE (duplicate/bounded pages are fetched only on REQUEST_DIRECTORY) |
+| selected symbols | `CNPYUSDT`, `IOSTUSDT`, `BZUSDT` |
 | persisted to `market_selections` | YES |
 | duplicate guard (`scan_id` re-request) | YES — same `selection_id`, no second model call |
+
+Phase 1 no longer preloads directory pages, which cut live input tokens from
+~15.2k to 6364 with no evidence removed. Directory data is fetched
+only when the ChiefTrader asks: the controlled exploration round's real phase 2
+measured 16056 input tokens with the directory result attached.
 
 The model could also have returned `NO_RESEARCH`; that path is exercised deterministically
 in `tests/opportunity/test_active_selection_gate3.py::test_chief_can_return_no_research`,
 and the schema rejects any directional/order fields with
 `error_code = AUTHORITY_LEAK:<path>`.
+
+## 2b. Real ChiefTrader directory exploration (controlled induction)
+
+The phase-1 answer was scripted to `REQUEST_DIRECTORY` (a controlled harness
+decision, so the path is safely inducible); **the directory layer and phase 2 are
+real**:
+
+| Fact | Value |
+|---|---|
+| directory query | `{'sort': 'abs_move', 'page': 1}` |
+| exploration rounds | 1 (hard cap 1) |
+| bounded pages returned | 2 (cap 2, <=25 rows each) |
+| final status | `SUCCESS` / `SELECT` |
+| symbols discovered via directory | ['RAYUSDT', 'IOSTUSDT', 'ICXUSDT'] |
+| provenance | `discovered_via_directory=true` + `directory_page_ref` persisted per symbol |
+
+So the system can answer, from persisted lineage, whether a symbol came from the
+initial pool or from the ChiefTrader's own bounded exploration.
+
+## 2c. Research-attention authority — END-TO-END through TradingEngine
+
+`TradingEngine.tick()` is the real production path. The OpportunityBoard always
+had a programmatic candidate (`SNDKUSDT`) and the strategy has a default
+symbol (`BTCUSDT`), so any strategy invocation in a blocked
+state would prove a fallback.
+
+```
+END_TO_END_PROGRAMMATIC_FALLBACK_WHEN_SELECTION_ENABLED = NO
+```
+
+| Selection state | engine strategy invocations | context requests |
+|---|---|---|
+| `NO_RESEARCH` | 0 | [] |
+| `LLM_UNAVAILABLE` | 0 | [] |
+| `TIMEOUT` | 0 | [] |
+| `FAILED` | 0 | [] |
+| `SKIPPED_BUDGET` | 0 | [] |
+| `DEFERRED` | 0 | [] |
+| `QUEUE_EXHAUSTED` | 0 | [] |
+| `MISMATCHED_SCAN_ID` | 0 | [] |
+| `EXPIRED_SELECTION` | 0 | [] |
+
+```
+NO_RESEARCH_ENGINE_STRATEGY_INVOCATIONS = 0
+SELECTION_FAILURE_ENGINE_STRATEGY_INVOCATIONS = 0
+SELECTION_BUDGET_DEFER_ENGINE_STRATEGY_INVOCATIONS = 0
+QUEUE_EXHAUSTED_ENGINE_STRATEGY_INVOCATIONS = 0
+STALE_SELECTION_ENGINE_STRATEGY_INVOCATIONS = 0
+
+VALID_SELECTION_REACHES_SELECTED_SYMBOL = YES
+    EXPECTED_SELECTED_SYMBOL        = ETHUSDT
+    ACTUAL_STRATEGY_CONTEXT_SYMBOL  = ETHUSDT
+
+NO_RESEARCH_POSITION_REVIEW_CONTINUES = YES
+    NEW_ENTRY_RESEARCH_INVOCATIONS = 0
+    POSITION_REVIEW_INVOCATIONS    = 1
+```
+
+## 2d. OI factual timing
+
+```
+OI_SOURCE = OKX /api/v5/public/open-interest
+OI_PROVIDER_TIMESTAMP_PRESERVED = YES
+    symbol           = BTCUSDT
+    provider_ts      = 2026-09-11T14:15:26.314000+00:00
+    stored_sample_ts = 2026-09-11T14:15:26.314000+00:00
+
+OI_INSUFFICIENT_HISTORY_QUALITY = MISSING   (reason: OI_CHANGE_UNAVAILABLE:INSUFFICIENT_HISTORY: fewer than two timestamped samples)
+OI_UNKNOWN_WINDOW_QUALITY      = UNSUPPORTED
+```
+
+## 2c. Research-attention authority (deterministic, production path)
+
+`LiveLLMDecisionStrategy.desired_symbol()` is the canonical production path that
+decides which symbol receives autonomous NEW research. The OpportunityBoard in
+this run always had a programmatic candidate/rotation symbol available
+(`AMDUSDT`), so any returned symbol would prove a
+fallback.
+
+```
+PROGRAMMATIC_FALLBACK_WHEN_SELECTION_ENABLED = NO
+```
+
+| Selection state | `desired_symbol()` | board candidate consumed |
+|---|---|---|
+| `NO_RESEARCH` | `None` | False |
+| `SELECTION_LLM_UNAVAILABLE` | `None` | False |
+| `SELECTION_TIMEOUT` | `None` | False |
+| `SELECTION_FAILED` | `None` | False |
+| `SELECTION_SKIPPED_BUDGET` | `None` | False |
+| `SELECTION_DEFERRED` | `None` | False |
+| `SELECTION_QUEUE_EXHAUSTED` | `None` | False |
+
+```
+NO_RESEARCH_WITH_EXISTING_BOARD_CANDIDATE:
+desired_symbol = None
+
+SELECTION_LLM_UNAVAILABLE_WITH_EXISTING_BOARD_CANDIDATE:
+desired_symbol = None
+
+SELECTION_QUEUE_EXHAUSTED_WITH_EXISTING_BOARD_CANDIDATE:
+desired_symbol = None
+```
+
+The board agenda is used only when MarketSelection is disabled
+(`selection_service is None`), which is covered separately by the production-path
+unit tests in `tests/opportunity/test_research_attention_authority.py`.
 
 ## 3. Real research round + lineage
 
@@ -69,13 +181,13 @@ For the first selected symbol the SAME ChiefTrader selected tools and made the f
 decision:
 
 ```
-symbol              = ZECUSDT (matches the selected research target)
+symbol              = CNPYUSDT (matches the selected research target)
 tools selected      = multi_timeframe_history, orderbook, momentum, volatility,
                       liquidity, funding, open_interest, market_regime
-evidence items      = 8 (all symbol == ZECUSDT)
-decision action     = NO_TRADE
-stored.scan_id      = scan_ae1e4b35c06...      (== selection.scan_id)
-stored.selection_id = mkt_sel_0fecdaed...   (== selection.selection_id)
+evidence items      = 8 (all symbol == CNPYUSDT)
+decision action     = WAIT
+stored.scan_id      = scan_de8b3189a85...      (== selection.scan_id)
+stored.selection_id = mkt_sel_d2e05d52...   (== selection.selection_id)
 ```
 
 So the factual chain
@@ -86,7 +198,7 @@ MarketObservationSnapshot -> MarketSelection -> ResearchTarget -> ToolSelection
 ```
 
 was reconstructed from real runtime records. No `TradePlan`, `RiskDecision`, order or
-fill exists for this decision, because the ChiefTrader chose `NO_TRADE`.
+fill exists for this decision, because the ChiefTrader chose `WAIT`.
 
 ## 4. PAPER trade observation
 

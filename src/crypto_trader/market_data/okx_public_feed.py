@@ -13,6 +13,11 @@ from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import DataHealth, MarketState, SourceStatus
 
+#: Factual book levels preserved on the market state, matching the bound used
+#: by the canonical book snapshot.  Sizing caps on real executable depth, so a
+#: wider factual window is strictly more accurate (never less safe).
+DEPTH_LEVELS = 25
+
 
 class OKXPublicMarketFeed:
     """Bounded per-symbol REST polling; failed fields stay explicitly unavailable."""
@@ -224,10 +229,20 @@ class OKXPublicMarketFeed:
             state.depth = sum((level.quantity for level in book.bids.values()), Decimal("0")) + sum(
                 (level.quantity for level in book.asks.values()), Decimal("0")
             )
+            # Preserve the factual multi-level depth the provider already gave
+            # us so sizing can cap on real executable depth (§19/§20) instead of
+            # the best level alone. Bounded to the same 25 levels the canonical
+            # book snapshot exposes.
+            state.book_bids = book.top_levels(side="BID", levels=DEPTH_LEVELS)
+            state.book_asks = book.top_levels(side="ASK", levels=DEPTH_LEVELS)
             self._status(state, "orderbook", now, DataHealth.HEALTHY)
         except Exception as exc:
             state.best_bid = Decimal("0")
             state.best_ask = Decimal("0")
+            state.best_bid_size = Decimal("0")
+            state.best_ask_size = Decimal("0")
+            state.book_bids = []
+            state.book_asks = []
             state.spread = Decimal("0")
             state.depth = Decimal("0")
             self._status(state, "orderbook", now, DataHealth.UNAVAILABLE, exc)

@@ -11,6 +11,7 @@ legs were replaced by crypto spot trade journals defined in SPAC section 6.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -812,6 +814,12 @@ class LedgerService:
             )
             raise JournalUnbalanced(f"journal unbalanced: debit={debits} credit={credits}")
         transaction_id = transaction_id or new_id("txn")
+        # Empty string is a VALUE, not absence: several rows carrying ""
+        # would collide once fill_id/event_id are UNIQUE. Normalising to
+        # NULL preserves "no identity" semantics and keeps the unique
+        # index meaningful (SQLite permits many NULLs).
+        fill_id = fill_id or None
+        event_id = event_id or None
         created_at = created_at or datetime.now(UTC)
         if ownership_status is None:
             ownership_status = OWNERSHIP_VERIFIED if account_id else OWNERSHIP_UNKNOWN
@@ -861,7 +869,56 @@ class LedgerService:
                         metadata_json={},
                     )
                 )
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                # A CONCURRENT writer committed the same fill_id/event_id first.
+                # The pre-check above cannot prevent this: it runs in its OWN
+                # session, so two writers can both observe "absent" and both
+                # insert. The unique index is the real guard, and losing that
+                # race means the accounting ALREADY EXISTS - so return the
+                # existing transaction instead of duplicating the economic
+                # effect. This is what makes settlement idempotent under
+                # CONCURRENCY, not merely under sequential replay.
+                await session.rollback()
+                # The winning writer may not be visible on THIS connection the
+                # instant our constraint fails. Re-read with a short bounded
+                # wait: the row exists by definition (that is why we lost), so
+                # the only question is when it becomes readable.
+                existing = None
+                for _attempt in range(50):
+                    # Re-read by IDENTITY, not by (fill_id AND event_id).
+                    #
+                    # Each settlement attempt builds its OWN event_id, and that
+                    # value is persisted on the transaction. So a loser re-reading
+                    # with its own fresh event_id never matches the winner's row -
+                    # the AND combination can never be satisfied across attempts.
+                    # fill_id is the stable identity here; event_id is per-attempt.
+                    async with self.session_factory() as read_session:
+                        read_session.expire_all()
+                        existing = await self._find_transaction(
+                            read_session,
+                            fill_id=fill_id,
+                            event_id=None if fill_id else event_id,
+                        )
+                    if existing is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                if existing is None:
+                    # Genuinely absent after waiting: do NOT guess and do NOT
+                    # synthesise accounting. Surface it.
+                    raise
+                row = (
+                    await session.execute(
+                        select(LedgerTransactionORM)
+                        .options(selectinload(LedgerTransactionORM.entries))
+                        .where(
+                            LedgerTransactionORM.transaction_id
+                            == existing.transaction_id
+                        )
+                    )
+                ).scalar_one()
+                return await _txn_to_domain(row)
         return LedgerTransaction(
             transaction_id=transaction_id,
             entry_type=entry_type,

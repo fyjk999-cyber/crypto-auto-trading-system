@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.enums import (
@@ -30,12 +30,14 @@ from crypto_trader.order.provenance import (
     HistoricalQuantityProvenance,
     HistoricalQuantityStatus,
 )
+from crypto_trader.order.settlement import ensure_fill_settlement_row
 from crypto_trader.order.state_machine import OrderStateMachine
 from crypto_trader.persistence.models import (
     FillORM,
     LedgerTransactionORM,
     OrderEventORM,
     OrderORM,
+    TradePlanORM,
 )
 
 SettlementCallback = Callable[[Fill], Awaitable[None]]
@@ -98,12 +100,36 @@ def _orm_to_fill(row: FillORM) -> Fill:
     )
 
 
+#: Liveness classes for a blocking position-reducing order. These are durable
+#: facts, not policy: choosing what to DO about a class is execution policy.
+POSITION_ACTION_RESTING_VALID = "RESTING_VALID"
+POSITION_ACTION_STALE = "STALE"
+POSITION_ACTION_RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"
+POSITION_ACTION_TERMINAL = "TERMINAL"
+
+#: A position-reducing order that rests (partially filled with quantity left)
+#: longer than this is reported as STALE so a supervisor / execution policy can
+#: react. Detection is deliberately separate from the duplicate guard: the guard
+#: stays indefinite (a resting order IS pending), while staleness makes the
+#: resulting management gap observable instead of silently permanent.
+DEFAULT_STALE_POSITION_ACTION_SECONDS = 900.0
+
+
 class OrderManager:
     def __init__(
-        self, session_factory, settlement_callback: SettlementCallback | None = None
+        self,
+        session_factory,
+        settlement_callback: SettlementCallback | None = None,
+        *,
+        stale_position_action_seconds: float = DEFAULT_STALE_POSITION_ACTION_SECONDS,
+        unresolved_order_scan_limit: int = 200,
     ) -> None:
         self.session_factory = session_factory
         self.settlement_callback = settlement_callback
+        self.stale_position_action_seconds = float(stale_position_action_seconds)
+        #: Hard bound on the unresolved-order scan so liveness can never degrade
+        #: into a full order-history scan.
+        self.unresolved_order_scan_limit = max(1, int(unresolved_order_scan_limit))
 
     async def create_from_intent(self, intent: OrderIntent, *, trading_mode: TradingMode) -> Order:
         now = datetime.now(UTC)
@@ -250,7 +276,258 @@ class OrderManager:
     async def has_pending_position_action(self, trade_plan_id: str) -> bool:
         """Return factual restart-safe suppression for duplicate REDUCE/EXIT orders."""
 
-        return await self.get_pending_position_action(trade_plan_id) is not None
+        pending = [
+            OrderStatus.CREATED.value,
+            OrderStatus.VALIDATED.value,
+            OrderStatus.SUBMITTING.value,
+            OrderStatus.SUBMITTED.value,
+            OrderStatus.ACKNOWLEDGED.value,
+            OrderStatus.OPEN.value,
+            OrderStatus.PARTIALLY_FILLED.value,
+            OrderStatus.CANCEL_PENDING.value,
+            OrderStatus.UNKNOWN.value,
+        ]
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OrderORM).where(
+                        OrderORM.strategy_id == "live_llm_position",
+                        OrderORM.status.in_(pending),
+                    )
+                )
+            ).scalars()
+            return any(
+                (row.metadata_json or {}).get("trade_plan_id") == trade_plan_id
+                for row in rows
+            )
+
+    async def unresolved_order_facts(self) -> list[dict]:
+        """Factual state of EVERY unresolved order, with its purpose.
+
+        Replaces the previous ``strategy_id == "live_llm_position"`` filter,
+        which structurally excluded ``live_llm`` ENTRY orders from the liveness
+        pipeline (live evidence: one rested OPEN for 278 minutes while appearing
+        in no reconciliation record).
+
+        Bounded by construction: it reads only unresolved statuses and never
+        scans order history.
+        """
+        from crypto_trader.order.reconciliation import (
+            UNRESOLVED_ORDER_STATUSES,
+            classify_order_purpose,
+        )
+
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OrderORM)
+                        .where(OrderORM.status.in_(UNRESOLVED_ORDER_STATUSES))
+                        .order_by(OrderORM.created_at)
+                        .limit(self.unresolved_order_scan_limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            plan_states: dict[str, str] = {}
+            plan_ids = {
+                (r.metadata_json or {}).get("trade_plan_id")
+                for r in rows
+                if (r.metadata_json or {}).get("trade_plan_id")
+            }
+            if plan_ids:
+                plan_rows = (
+                    await session.execute(
+                        select(TradePlanORM.trade_plan_id, TradePlanORM.state).where(
+                            TradePlanORM.trade_plan_id.in_(tuple(plan_ids))
+                        )
+                    )
+                ).all()
+                plan_states = {str(pid): str(state) for pid, state in plan_rows}
+
+            facts: list[dict] = []
+            now = datetime.now(UTC)
+            for row in rows:
+                meta = row.metadata_json or {}
+                plan_id = meta.get("trade_plan_id")
+                purpose = classify_order_purpose(
+                    strategy_id=row.strategy_id,
+                    reduce_only=meta.get("reduce_only"),
+                    direction=meta.get("direction") or meta.get("lifecycle_action"),
+                    trade_plan_state=plan_states.get(str(plan_id)) if plan_id else None,
+                )
+                created = row.created_at
+                if created is not None and created.tzinfo is None:
+                    created = created.replace(tzinfo=UTC)
+                age_seconds = (
+                    (now - created).total_seconds() if created is not None else None
+                )
+                filled = Decimal(str(row.filled_quantity or 0))
+                facts.append(
+                    {
+                        "order_id": row.internal_order_id,
+                        "symbol": row.symbol,
+                        "status": row.status,
+                        "purpose": purpose,
+                        "trade_plan_id": plan_id,
+                        "quantity": str(row.quantity),
+                        "filled_quantity": str(filled),
+                        "remaining_quantity": str(
+                            max(Decimal("0"), Decimal(str(row.quantity or 0)) - filled)
+                        ),
+                        "age_seconds": age_seconds,
+                    }
+                )
+            return facts
+
+    async def pending_position_action_facts(
+        self, trade_plan_id: str
+    ) -> dict | None:
+        """Factual state of the pending position-reducing order, if any.
+
+        The duplicate guard is intentionally indefinite (a resting order really
+        is pending), but ``PARTIALLY_FILLED`` must not be allowed to mean
+        "management locked forever" with no observable state. This reports the
+        facts a supervisor / execution policy needs — remaining quantity, age,
+        and whether the order has outlived the stale window — without deciding
+        to cancel, amend or replace anything (that is execution policy).
+        """
+        pending = [
+            OrderStatus.CREATED.value,
+            OrderStatus.VALIDATED.value,
+            OrderStatus.SUBMITTING.value,
+            OrderStatus.SUBMITTED.value,
+            OrderStatus.ACKNOWLEDGED.value,
+            OrderStatus.OPEN.value,
+            OrderStatus.PARTIALLY_FILLED.value,
+            OrderStatus.CANCEL_PENDING.value,
+            OrderStatus.UNKNOWN.value,
+        ]
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(OrderORM).where(
+                            OrderORM.strategy_id == "live_llm_position",
+                            OrderORM.status.in_(pending),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            matching = [
+                row
+                for row in rows
+                if (row.metadata_json or {}).get("trade_plan_id") == trade_plan_id
+            ]
+            if not matching:
+                return None
+            # Oldest pending action is the one blocking the plan.
+            row = min(matching, key=lambda r: r.created_at)
+            filled = Decimal(str(row.filled_quantity or 0))
+            remaining = Decimal(str(row.quantity or 0)) - filled
+            created = row.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age_seconds = (
+                (datetime.now(UTC) - created).total_seconds()
+                if created is not None
+                else None
+            )
+            stale = (
+                age_seconds is not None
+                and age_seconds >= self.stale_position_action_seconds
+                and remaining > 0
+            )
+            return {
+                "order_id": row.internal_order_id,
+                "status": row.status,
+                "quantity": str(row.quantity),
+                "filled_quantity": str(filled),
+                "remaining_quantity": str(remaining),
+                "age_seconds": age_seconds,
+                "stale": stale,
+                "stale_after_seconds": self.stale_position_action_seconds,
+                "classification": self.classify_pending_position_action(
+                    status=row.status,
+                    remaining=remaining,
+                    age_seconds=age_seconds,
+                ),
+            }
+
+    def classify_pending_position_action(
+        self,
+        *,
+        status: str,
+        remaining: Decimal,
+        age_seconds: float | None,
+    ) -> str:
+        """Explicit liveness class for a blocking position-reducing order.
+
+        ``PARTIALLY_FILLED`` must not silently mean "management locked
+        forever", so every blocking order lands in exactly one class and the
+        caller never has to guess.
+
+        ``MARKET_MOVED`` is deliberately NOT decided here: it needs a
+        price-distance threshold, and inventing one would be an execution
+        policy change rather than liveness reporting. The durable facts a
+        policy needs (limit price, live book, age) are already exposed.
+        """
+        if remaining <= 0:
+            # Fully filled: nothing left resting, so it cannot block.
+            return POSITION_ACTION_TERMINAL
+        if status in (OrderStatus.UNKNOWN.value, OrderStatus.CANCEL_PENDING.value):
+            # Broker state is not authoritative right now. Never act on top of
+            # an ambiguous state; reconcile until it resolves.
+            return POSITION_ACTION_RECONCILIATION_REQUIRED
+        if status in (
+            OrderStatus.FILLED.value,
+            OrderStatus.CANCELLED.value,
+            OrderStatus.REJECTED.value,
+            OrderStatus.EXPIRED.value,
+        ):
+            return POSITION_ACTION_TERMINAL
+        if age_seconds is not None and age_seconds >= self.stale_position_action_seconds:
+            return POSITION_ACTION_STALE
+        return POSITION_ACTION_RESTING_VALID
+
+    async def reconcile_pending_position_action(self, order_id: str) -> dict | None:
+        """Re-read an order against authoritative state BEFORE acting on it.
+
+        Runs ahead of any cancel so a fill landing at the last moment is
+        consumed first: the order is re-read, its factual fill state is used and
+        its remaining quantity recomputed. Returns refreshed facts, or ``None``
+        when the order no longer exists.
+        """
+        async with self.session_factory() as session:
+            row = await session.get(OrderORM, order_id)
+            if row is None:
+                return None
+            filled = Decimal(str(row.filled_quantity or 0))
+            remaining = Decimal(str(row.quantity or 0)) - filled
+            created = row.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=UTC)
+            age_seconds = (
+                (datetime.now(UTC) - created).total_seconds()
+                if created is not None
+                else None
+            )
+            return {
+                "order_id": row.internal_order_id,
+                "status": row.status,
+                "quantity": str(row.quantity),
+                "filled_quantity": str(filled),
+                "remaining_quantity": str(remaining),
+                "age_seconds": age_seconds,
+                "classification": self.classify_pending_position_action(
+                    status=row.status,
+                    remaining=remaining,
+                    age_seconds=age_seconds,
+                ),
+            }
 
     async def list_all(self, limit: int = 200) -> list[Order]:
         async with self.session_factory() as session:
@@ -383,6 +660,24 @@ class OrderManager:
             order_id, OrderEventType.ORDER_UNKNOWN, payload={"reason": reason}
         )
 
+    async def count_fills_for_order(self, order_id: str) -> int:
+        """Durable factual fill rows for an order.
+
+        Recovery needs this to decide whether "venue says not found" may be read
+        as "this order never did anything". A factual fill outranks that answer,
+        so the count must be READ, never assumed.
+        """
+        async with self.session_factory() as session:
+            return int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(FillORM)
+                        .where(FillORM.order_id == order_id)
+                    )
+                ).scalar_one()
+            )
+
     async def apply_fill(self, fill: Fill) -> tuple[Order, Fill, bool]:
         """Apply a normalized fill exactly once. Returns (order, fill, newly_applied)."""
         async with self.session_factory() as session:
@@ -390,11 +685,26 @@ class OrderManager:
                 await session.execute(select(FillORM).where(FillORM.fill_id == fill.fill_id))
             ).scalar_one_or_none()
             if existing is not None:
-                return (
-                    _orm_to_order(await session.get(OrderORM, existing.order_id)),
-                    _orm_to_fill(existing),
-                    False,
-                )
+                # A durable fill is NOT necessarily a settled fill. Returning
+                # immediately made an interrupted settlement PERMANENT: no
+                # redelivered event and no restart could ever complete it.
+                # The marker is created idempotently; convergence is driven
+                # separately and idempotently.
+                await ensure_fill_settlement_row(session, existing)
+                await session.commit()
+                # Leave the transaction BEFORE invoking settlement: the callback
+                # opens its own sessions and would otherwise collide with this
+                # one. The durable FillORM is the input fact.
+                order_domain = _orm_to_order(await session.get(OrderORM, existing.order_id))
+                duplicate = _orm_to_fill(existing)
+                callback = self.settlement_callback
+                if callback is not None:
+                    # A DUPLICATE exchange event must by itself be able to finish
+                    # an interrupted settlement. Requiring the caller to invoke
+                    # the engine's driver by hand would make recovery depend on
+                    # whoever happens to be calling.
+                    await callback(duplicate)
+                return (order_domain, duplicate, False)
             order_row: OrderORM | None = None
             if fill.exchange_order_id:
                 order_row = (
@@ -445,6 +755,16 @@ class OrderManager:
                 timestamp=fill.timestamp,
                 payload_json={"fill_id": fill.fill_id, "fill_quantity": str(fill.quantity)},
             )
+            # Same transaction as the FillORM insert: "fill persisted" and
+            # "settlement known to be pending" must never diverge.
+            await ensure_fill_settlement_row(
+                session,
+                type("_F", (), {
+                    "fill_id": fill.fill_id,
+                    "order_id": fill.order_id,
+                    "symbol": fill.symbol,
+                })(),
+            )
             fill_row = FillORM(
                 fill_id=fill.fill_id,
                 trade_id=fill.trade_id or new_id("trd"),
@@ -465,17 +785,33 @@ class OrderManager:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
+                # A CONCURRENT transaction committed this same fill first. This is
+                # the SAME situation as a sequentially replayed fill and must
+                # behave IDENTICALLY: ensure the durable marker exists, leave the
+                # transaction, then drive settlement. Returning here (as this
+                # branch used to) skipped settlement entirely, so a fill that lost
+                # the race could stay half-settled forever.
+                existing_after_race = None
                 async with self.session_factory() as s2:
                     existing_after_race = (
-                        await s2.execute(select(FillORM).where(FillORM.fill_id == fill.fill_id))
+                        await s2.execute(
+                            select(FillORM).where(FillORM.fill_id == fill.fill_id)
+                        )
                     ).scalar_one_or_none()
+                    if existing_after_race is not None:
+                        await ensure_fill_settlement_row(s2, existing_after_race)
+                        await s2.commit()
                 if existing_after_race is not None:
-                    return (
-                        _orm_to_order(await self.get(existing_after_race.order_id)),
-                        _orm_to_fill(existing_after_race),
-                        False,
-                    )
+                    # self.get() already returns the DOMAIN order; wrapping it in
+                    # _orm_to_order would expect an ORM row and raise.
+                    order_domain = await self.get(existing_after_race.order_id)
+                    raced = _orm_to_fill(existing_after_race)
+                    callback = self.settlement_callback
+                    if callback is not None:
+                        await callback(raced)
+                    return (order_domain, raced, False)
                 raise exc
+
         order = _orm_to_order(order_row)
         if self.settlement_callback is not None:
             await self.settlement_callback(fill)
