@@ -172,10 +172,22 @@ async def assert_prefix_settlement_history(session) -> None:
 async def assert_complete_settlements_consistent(session) -> None:
     """A COMPLETE marker must not contradict the factual lifecycle.
 
-    COMPLETE asserts: ledger posted, projection converged, plan converged, and
-    episode materialised when the plan closed. If any of those is missing, the
-    state is corrupt and must fail closed - never be skipped as already-settled.
+    COMPLETE asserts: the ledger is posted, the projection converged, the plan
+    converged, and - when the plan CLOSED - its episode was materialised. If any
+    of those is missing the state is corrupt and MUST fail closed rather than be
+    skipped as already-settled. Nothing is guessed or rebuilt: inventing the
+    missing row would hide exactly the contradiction this check exists to expose.
+
+    This is a GLOBAL scan and must run before the pending-FILL scan, because
+    ``pending_settlements`` deliberately excludes COMPLETE rows - without this,
+    a bad COMPLETE would be skipped forever.
     """
+    from crypto_trader.persistence.models import (
+        OrderORM,
+        TradeEpisodeORM,
+        TradePlanORM,
+    )
+
     rows = (
         await session.execute(
             select(FillSettlementORM).where(FillSettlementORM.state == STATE_COMPLETE)
@@ -187,10 +199,50 @@ async def assert_complete_settlements_consistent(session) -> None:
             raise SettlementStateContradiction(
                 f"{marker.fill_id} is marked COMPLETE but has no ledger transaction"
             )
-        if marker.ledger_transaction_id and txn.transaction_id != marker.ledger_transaction_id:
+        if (
+            marker.ledger_transaction_id
+            and txn.transaction_id != marker.ledger_transaction_id
+        ):
             raise SettlementStateContradiction(
                 f"{marker.fill_id} COMPLETE references {marker.ledger_transaction_id} "
                 f"but the factual transaction is {txn.transaction_id}"
+            )
+
+        # ---- closed-lifecycle half of the invariant
+        fill = (
+            await session.execute(select(FillORM).where(FillORM.fill_id == marker.fill_id))
+        ).scalar_one_or_none()
+        if fill is None:
+            continue
+        order = (
+            await session.execute(
+                select(OrderORM).where(OrderORM.internal_order_id == fill.order_id)
+            )
+        ).scalar_one_or_none()
+        if order is None:
+            continue
+        trade_plan_id = str((order.metadata_json or {}).get("trade_plan_id") or "")
+        if not trade_plan_id:
+            continue
+        plan = (
+            await session.execute(
+                select(TradePlanORM).where(TradePlanORM.trade_plan_id == trade_plan_id)
+            )
+        ).scalar_one_or_none()
+        if plan is None or plan.state != "CLOSED":
+            continue
+        episodes = (
+            await session.execute(
+                select(TradeEpisodeORM).where(
+                    TradeEpisodeORM.trade_plan_id == trade_plan_id
+                )
+            )
+        ).scalars().all()
+        if len(episodes) != 1:
+            raise SettlementStateContradiction(
+                f"{marker.fill_id} is marked COMPLETE and plan {trade_plan_id} is "
+                f"CLOSED but has {len(episodes)} TradeEpisode(s); exactly one is "
+                "required"
             )
 
 

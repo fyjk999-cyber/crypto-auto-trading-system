@@ -757,17 +757,33 @@ class OrderManager:
                 await session.commit()
             except IntegrityError as exc:
                 await session.rollback()
+                # A CONCURRENT transaction committed this same fill first. This is
+                # the SAME situation as a sequentially replayed fill and must
+                # behave IDENTICALLY: ensure the durable marker exists, leave the
+                # transaction, then drive settlement. Returning here (as this
+                # branch used to) skipped settlement entirely, so a fill that lost
+                # the race could stay half-settled forever.
+                existing_after_race = None
                 async with self.session_factory() as s2:
                     existing_after_race = (
-                        await s2.execute(select(FillORM).where(FillORM.fill_id == fill.fill_id))
+                        await s2.execute(
+                            select(FillORM).where(FillORM.fill_id == fill.fill_id)
+                        )
                     ).scalar_one_or_none()
+                    if existing_after_race is not None:
+                        await ensure_fill_settlement_row(s2, existing_after_race)
+                        await s2.commit()
                 if existing_after_race is not None:
-                    return (
-                        _orm_to_order(await self.get(existing_after_race.order_id)),
-                        _orm_to_fill(existing_after_race),
-                        False,
-                    )
+                    # self.get() already returns the DOMAIN order; wrapping it in
+                    # _orm_to_order would expect an ORM row and raise.
+                    order_domain = await self.get(existing_after_race.order_id)
+                    raced = _orm_to_fill(existing_after_race)
+                    callback = self.settlement_callback
+                    if callback is not None:
+                        await callback(raced)
+                    return (order_domain, raced, False)
                 raise exc
+
         order = _orm_to_order(order_row)
         if self.settlement_callback is not None:
             await self.settlement_callback(fill)

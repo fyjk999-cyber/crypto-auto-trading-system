@@ -2678,6 +2678,20 @@ class TradingEngine:
         except Exception:
             logger.warning("market_intelligence.record_execution failed", exc_info=True)
 
+    @staticmethod
+    def _order_metadata(order) -> dict:
+        """Order metadata from EITHER an ORM row or the domain object.
+
+        on an ORM row it is ``metadata_json``; on the domain model it is
+        ``metadata``. Settlement converges from both directions (a fresh fill
+        carries the ORM row, a duplicate event carries the domain object), so
+        reading only one shape silently disabled convergence from the other.
+        """
+        payload = getattr(order, "metadata_json", None)
+        if payload is None:
+            payload = getattr(order, "metadata", None)
+        return payload or {}
+
     async def _settlement_callback(self, fill) -> None:
         """Settlement entry point installed on the OrderManager.
 
@@ -2843,7 +2857,7 @@ class TradingEngine:
 
     async def _converge_plan_for_fill(self, order) -> None:
         """Converge the TradePlan implied by the now-factual position."""
-        trade_plan_id = str((order.metadata_json or {}).get("trade_plan_id") or "")
+        trade_plan_id = str(self._order_metadata(order).get("trade_plan_id") or "")
         if not trade_plan_id:
             return
         plan = await self.trade_plans.get(trade_plan_id)
@@ -2851,7 +2865,7 @@ class TradingEngine:
             return
         position = await self.portfolio.get_position(order.symbol)
         quantity = getattr(position, "quantity", None) if position else None
-        metadata = order.metadata_json or {}
+        metadata = self._order_metadata(order)
         if plan.state == TradePlanState.CLOSED:
             # Already closed (e.g. recovery started after the close committed).
             # The episode still has to exist, so a COMPLETE marker never claims
@@ -2897,9 +2911,9 @@ class TradingEngine:
             return
         closed = await close(
             plan.trade_plan_id,
-            exit_decision_id=str((order.metadata_json or {}).get("decision_id") or ""),
+            exit_decision_id=str(self._order_metadata(order).get("decision_id") or ""),
             reason=str(
-                (order.metadata_json or {}).get("lifecycle_action") or "POSITION_CLOSED"
+                self._order_metadata(order).get("lifecycle_action") or "POSITION_CLOSED"
             ),
         )
         if closed is not None:
@@ -2908,6 +2922,7 @@ class TradingEngine:
     async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
         """Complete unfinished settlements. Bounded per pass, complete overall."""
         from crypto_trader.order.settlement import (
+            assert_complete_settlements_consistent,
             assert_prefix_settlement_history,
             pending_settlements,
         )
@@ -2915,6 +2930,11 @@ class TradingEngine:
         completed = 0
         while True:
             async with self.database.session_factory() as session:
+                # GLOBAL consistency FIRST. pending_settlements deliberately
+                # EXCLUDES COMPLETE rows, so a COMPLETE marker that contradicts
+                # the ledger or a closed lifecycle would otherwise be skipped
+                # forever and never detected.
+                await assert_complete_settlements_consistent(session)
                 await assert_prefix_settlement_history(session)
                 rows = await pending_settlements(session, limit=batch_size)
                 fill_ids = [f.fill_id for f in rows]
