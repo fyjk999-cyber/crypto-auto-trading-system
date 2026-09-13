@@ -225,6 +225,7 @@ class GrowthReviewEvidenceLoader:
             complete = (
                 bool(risk_ids)
                 and not duplicate
+                and len(risk_ids) == len(set(risk_ids))
                 and all(risk_id in risk_by_id for risk_id in risk_ids)
             )
             if complete:

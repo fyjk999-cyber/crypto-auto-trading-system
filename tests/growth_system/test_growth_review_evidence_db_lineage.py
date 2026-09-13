@@ -7,7 +7,11 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from crypto_trader.learning.growth_review_evidence import GrowthReviewEvidenceLoader
-from crypto_trader.persistence.models import LLMDecisionORM, TradeEpisodeORM
+from crypto_trader.persistence.models import (
+    LLMDecisionORM,
+    RiskDecisionORM,
+    TradeEpisodeORM,
+)
 
 
 def _decision(decision_id, action, thesis, created_at):
@@ -80,3 +84,85 @@ async def test_decision_db_lineage_target_excludes_distractors(database):
     assert evidence.known_at == review_now.isoformat()
     assert evidence.reviewed_at == review_now.isoformat()
     evidence.validate_availability()
+
+
+
+def _risk_episode(eid, risk_ids):
+    closed = datetime(2026, 9, 9, 11, tzinfo=UTC)
+    return TradeEpisodeORM(
+        episode_id=eid, trade_plan_id=f"plan-{eid}", symbol="BTCUSDT",
+        direction="LONG", entry_decision_id=f"dec-{eid}", exit_decision_id=None,
+        position_decision_ids_json=[], risk_decision_ids_json=risk_ids,
+        order_ids_json=[], fill_ids_json=[], entry_price=Decimal("100"),
+        exit_price=Decimal("101"), opened_quantity=Decimal("1"),
+        closed_quantity=Decimal("1"), leverage=Decimal("1"),
+        fees=Decimal("0"), funding_pnl=Decimal("0"), gross_pnl=Decimal("1"),
+        net_pnl=Decimal("1"), holding_time_seconds=60.0,
+        entry_market_regime="TRENDING", terminal_reason="EXIT", factual=True,
+        review_status="PENDING", opened_at=closed - timedelta(hours=1),
+        closed_at=closed,
+    )
+
+
+def _risk(rid, reason):
+    return RiskDecisionORM(
+        risk_decision_id=rid, client_order_id=f"client-{rid}", symbol="BTCUSDT",
+        side="BUY", decision="APPROVED", reason=reason,
+        checks_json={"source": rid}, run_id="run-risk-target",
+        timestamp=datetime(2026, 9, 9, 10, 30, tzinfo=UTC),
+    )
+
+
+async def test_risk_db_lineage_order_complete_and_distractor(database):
+    ep = _risk_episode("ep-db-risk-target", ["risk-target-2", "risk-target-1"])
+    decision = _decision(
+        "dec-ep-db-risk-target", "OPEN_LONG", "D",
+        datetime(2026, 9, 9, 10, tzinfo=UTC),
+    )
+    async with database.session_factory() as session:
+        session.add_all([
+            ep, decision,
+            _risk("risk-target-1", "SECOND_FACTUAL_RISK"),
+            _risk("risk-target-2", "PRIMARY_FACTUAL_RISK"),
+            _risk("risk-distractor", "DISTRACTOR_REASON"),
+        ])
+        await session.commit()
+    async with database.session_factory() as session:
+        reloaded = (await session.execute(select(TradeEpisodeORM).where(
+            TradeEpisodeORM.episode_id == "ep-db-risk-target"))).scalar_one()
+    evidence = await GrowthReviewEvidenceLoader(database.session_factory).load(
+        reloaded, account_id="default", mode="PAPER",
+        now=datetime(2026, 9, 10, 11, tzinfo=UTC),
+    )
+    assert evidence.risk_availability == "AVAILABLE"
+    assert evidence.risk_decision_ids == ["risk-target-2", "risk-target-1"]
+    assert evidence.risk_decision_id == "risk-target-2"
+    assert evidence.risk_result == "APPROVED"
+    assert evidence.risk_reason_codes == ["PRIMARY_FACTUAL_RISK"]
+    assert "risk-distractor" not in evidence.risk_decision_ids
+    assert evidence.execution_availability == "UNAVAILABLE"
+    evidence.validate_availability()
+
+
+async def test_risk_db_partial_and_duplicate_fail_closed(database):
+    partial = _risk_episode("ep-db-risk-partial", ["risk-present", "risk-missing"])
+    duplicate = _risk_episode("ep-db-risk-duplicate", ["risk-dup", "risk-dup"])
+    async with database.session_factory() as session:
+        session.add_all([
+            partial, duplicate, _risk("risk-present", "PRESENT"), _risk("risk-dup", "DUP"),
+        ])
+        await session.commit()
+    loader = GrowthReviewEvidenceLoader(database.session_factory)
+    async with database.session_factory() as session:
+        p = (await session.execute(select(TradeEpisodeORM).where(
+            TradeEpisodeORM.episode_id == "ep-db-risk-partial"))).scalar_one()
+        d = (await session.execute(select(TradeEpisodeORM).where(
+            TradeEpisodeORM.episode_id == "ep-db-risk-duplicate"))).scalar_one()
+    pe = await loader.load(p, account_id="default", mode="PAPER")
+    de = await loader.load(d, account_id="default", mode="PAPER")
+    for ev in (pe, de):
+        assert ev.risk_availability == "UNAVAILABLE"
+        assert ev.risk_decision_ids == [] and ev.risk_decision_id is None
+        assert ev.risk_result == "UNKNOWN"
+        ev.validate_availability()
+    assert "RISK" in pe.missing_evidence
