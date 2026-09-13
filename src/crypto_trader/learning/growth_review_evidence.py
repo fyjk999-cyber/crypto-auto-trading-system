@@ -95,164 +95,28 @@ class GrowthReviewEvidence:
             ("risk_availability", "risk_decision_id"),
         )
         for availability_field, reference_field in checks:
-            if getattr(self, availability_field) == EvidenceAvailability.AVAILABLE and not getattr(self, reference_field, None):
-                raise ValueError(f"CONTRADICTORY_AVAILABILITY:{availability_field}")
+            available = (
+                getattr(self, availability_field)
+                == EvidenceAvailability.AVAILABLE
+            )
+            if available and not getattr(self, reference_field, None):
+                raise ValueError(
+                    f"CONTRADICTORY_AVAILABILITY:{availability_field}"
+                )
         for availability_field, value_field in (
             ("factor_snapshot_availability", "factor_snapshot"),
             ("sizing_availability", "sizing_final_quantity"),
             ("mfe_mae_availability", "mfe"),
             ("slippage_availability", "slippage"),
         ):
-            if getattr(self, availability_field) != EvidenceAvailability.AVAILABLE and getattr(self, value_field, None) not in (None, MISSING):
-                raise ValueError(f"CONTRADICTORY_AVAILABILITY:{availability_field}")
-            if getattr(self, availability_field) == EvidenceAvailability.AVAILABLE and getattr(self, value_field, None) in (None, MISSING):
-                raise ValueError(f"CONTRADICTORY_AVAILABILITY:{availability_field}")
-
-
-class GrowthReviewEvidenceLoader:
-    """Resolve canonical persisted facts; never recompute or invent them."""
-
-    def __init__(self, session_factory) -> None:
-        self.session_factory = session_factory
-
-    async def load(
-        self,
-        episode: TradeEpisodeORM,
-        *,
-        account_id: str = "default",
-        mode: str = "PAPER",
-        evidence_domain: str | None = None,
-        now: datetime | None = None,
-    ) -> GrowthReviewEvidence:
-        evidence = GrowthReviewEvidence(
-            episode_id=episode.episode_id,
-            account_id=account_id,
-            execution_mode=mode,
-            evidence_domain=evidence_domain or mode,
-            symbol=episode.symbol,
-            direction=episode.direction,
-            decision_id=episode.entry_decision_id,
-            order_ids=list(episode.order_ids_json or []),
-            fill_ids=list(episode.fill_ids_json or []),
-            exit_decision_id=episode.exit_decision_id,
-            exit_reason=episode.terminal_reason or MISSING,
-            holding_seconds=episode.holding_time_seconds,
-            gross_pnl=episode.gross_pnl,
-            fees=episode.fees,
-            funding=episode.funding_pnl,
-            net_pnl=episode.net_pnl,
-            known_at=(now or datetime.now(UTC)).isoformat(),
-            reviewed_at=(now or datetime.now(UTC)).isoformat(),
-        )
-        async with self.session_factory() as session:
-            if episode.entry_decision_id:
-                decision = await session.get(
-                    LLMDecisionORM, episode.entry_decision_id
+            availability = getattr(self, availability_field)
+            value = getattr(self, value_field, None)
+            has_value = value not in (None, MISSING)
+            if availability != EvidenceAvailability.AVAILABLE and has_value:
+                raise ValueError(
+                    f"CONTRADICTORY_AVAILABILITY:{availability_field}"
                 )
-                if decision is None:
-                    evidence.missing_evidence.append("DECISION")
-                else:
-                    evidence.decision_availability = EvidenceAvailability.AVAILABLE
-                    evidence.decision_action = _value(decision, "action")
-                    evidence.decision_thesis = _value(decision, "thesis")
-                    evidence.decision_conviction = _value(
-                        decision, "raw_llm_confidence"
-                    )
-            else:
-                evidence.missing_evidence.append("DECISION")
-            risk = (
-                await session.execute(
-                    select(RiskDecisionORM)
-                    .where(RiskDecisionORM.decision_id == episode.entry_decision_id)
-                    .limit(1)
+            if availability == EvidenceAvailability.AVAILABLE and not has_value:
+                raise ValueError(
+                    f"CONTRADICTORY_AVAILABILITY:{availability_field}"
                 )
-            ).scalar_one_or_none() if episode.entry_decision_id else None
-            if risk is not None:
-                evidence.risk_availability = EvidenceAvailability.AVAILABLE
-                evidence.risk_decision_id = _value(risk, "decision_id")
-                evidence.risk_result = _value(risk, "approved")
-                evidence.risk_reason_codes = list(
-                    _value(risk, "reason_codes") or []
-                )
-            else:
-                evidence.missing_evidence.append("RISK")
-            orders = (
-                await session.execute(
-                    select(OrderORM).where(
-                        OrderORM.order_id.in_(tuple(evidence.order_ids or ["none"]))
-                    )
-                )
-            ).scalars().all() if evidence.order_ids else []
-            fills = (
-                await session.execute(
-                    select(FillORM).where(
-                        FillORM.fill_id.in_(tuple(evidence.fill_ids or ["none"]))
-                    )
-                )
-            ).scalars().all() if evidence.fill_ids else []
-            if orders and fills:
-                prices = [
-                    float(_value(fill, "price"))
-                    for fill in fills
-                    if _value(fill, "price") is not None
-                ]
-                evidence.execution_availability = EvidenceAvailability.AVAILABLE
-                evidence.weighted_entry_price = (
-                    sum(prices) / len(prices) if prices else MISSING
-                )
-            else:
-                evidence.missing_evidence.append("ORDERS_FILLS")
-        for name in (
-            "factor_snapshot",
-            "sizing_audit_id",
-            "sizing_final_quantity",
-            "sizing_risk_budget",
-            "sizing_binding_cap",
-            "requested_leverage",
-            "approved_leverage",
-            "stop_at_entry",
-            "slippage",
-            "mfe",
-            "mae",
-        ):
-            if getattr(evidence, name) is MISSING:
-                evidence.missing_evidence.append(name.upper())
-        return evidence
-
-
-class CausalEvidenceUnavailable(ValueError):
-    pass
-
-
-_REF_AVAILABILITY = {
-    "decision": "decision_availability",
-    "factor": "factor_snapshot_availability",
-    "factor_snapshot": "factor_snapshot_availability",
-    "sizing": "sizing_availability",
-    "risk": "risk_availability",
-    "order": "execution_availability",
-    "fill": "execution_availability",
-    "position": "position_lifecycle_availability",
-    "exit": "exit_availability",
-    "mfe": "mfe_mae_availability",
-    "mae": "mfe_mae_availability",
-    "slippage": "slippage_availability",
-    "accounting": "fees_availability",
-    "fees": "fees_availability",
-    "funding": "funding_availability",
-}
-
-
-def validate_causal_evidence_refs(
-    evidence: GrowthReviewEvidence, refs: list[str]
-) -> None:
-    """Reusable causal claims may cite only AVAILABLE canonical evidence."""
-    if not refs:
-        raise CausalEvidenceUnavailable("CAUSAL_CLAIM_REQUIRES_EVIDENCE_REFS")
-    for ref in refs:
-        prefix = str(ref).split(":", 1)[0].lower()
-        field = _REF_AVAILABILITY.get(prefix)
-        if field is None:
-            raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
-        if getattr(evidence, field) != EvidenceAvailability.AVAILABLE:
-            raise CausalEvidenceUnavailable(f"EVIDENCE_UNAVAILABLE:{ref}")
