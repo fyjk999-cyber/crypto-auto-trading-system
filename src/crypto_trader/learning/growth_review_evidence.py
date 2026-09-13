@@ -3,18 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
 from typing import Any
-
-from sqlalchemy import select
-
-from crypto_trader.persistence.models import (
-    FillORM,
-    LLMDecisionORM,
-    OrderORM,
-    RiskDecisionORM,
-    TradeEpisodeORM,
-)
 
 MISSING = "UNKNOWN"
 
@@ -120,3 +109,37 @@ class GrowthReviewEvidence:
                 raise ValueError(
                     f"CONTRADICTORY_AVAILABILITY:{availability_field}"
                 )
+
+
+class CausalEvidenceUnavailable(ValueError):
+    pass
+
+
+_REF_AVAILABILITY = {
+    "decision": "decision_availability",
+    "factor": "factor_snapshot_availability",
+    "factor_snapshot": "factor_snapshot_availability",
+    "sizing": "sizing_availability",
+    "risk": "risk_availability",
+    "order": "execution_availability",
+    "fill": "execution_availability",
+    "position": "position_lifecycle_availability",
+    "exit": "exit_availability",
+    "mfe": "mfe_mae_availability",
+    "mae": "mfe_mae_availability",
+    "slippage": "slippage_availability",
+    "accounting": "fees_availability",
+    "fees": "fees_availability",
+    "funding": "funding_availability",
+}
+
+
+def validate_causal_evidence_refs(evidence, refs):
+    if not refs:
+        raise CausalEvidenceUnavailable("CAUSAL_CLAIM_REQUIRES_EVIDENCE_REFS")
+    for ref in refs:
+        field = _REF_AVAILABILITY.get(str(ref).split(":", 1)[0].lower())
+        if field is None:
+            raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
+        if getattr(evidence, field) != EvidenceAvailability.AVAILABLE:
+            raise CausalEvidenceUnavailable(f"EVIDENCE_UNAVAILABLE:{ref}")
