@@ -103,3 +103,21 @@ async def test_alpha_short_path_is_symmetric_decision_layer():
         meta_short, regime=regime.regime, volatility=feature.realized_vol_20 or Decimal("0.01")
     )
     assert lev_long == lev_short
+
+
+def test_latest_realized_volatility_is_factual_or_none():
+    alpha = MultiStrategyAlpha("BTCUSDT")
+    book = OrderBook(symbol="BTCUSDT")
+    book.apply_snapshot(1, [(Decimal("100"), Decimal("1"))], [(Decimal("100.1"), Decimal("1"))])
+    ctx = StrategyContext(
+        symbol="BTCUSDT",
+        book=book,
+        account=Account(balances={}, equity=Decimal("10000")),
+        positions={},
+        clock_time=TS + timedelta(minutes=121),
+    )
+    # Unwarmed engine must report UNAVAILABLE, never zero.
+    assert alpha.latest_realized_volatility(ctx) is None
+    alpha.mde = seed_uptrend_mde()
+    volatility = alpha.latest_realized_volatility(ctx)
+    assert volatility is not None and volatility > 0

@@ -96,6 +96,22 @@ class MultiStrategyAlpha(StrategyPlugin):
             "source_refs": [f"okx-candles:{self.symbol}", f"alpha:{self.version}"],
         }
 
+    def latest_realized_volatility(self, ctx: StrategyContext):
+        """Canonical closed-bar realized volatility for this exact context.
+
+        Returns ``None`` when the per-symbol engine is not warmed enough to
+        compute factual features.  Callers must treat ``None`` as unavailable,
+        never as zero.
+        """
+        prepared = self._prepare(ctx)
+        if prepared is None:
+            return None
+        feature, _, _ = prepared
+        value = feature.realized_vol_20
+        if value is None or value <= 0:
+            return None
+        return value
+
     def analyze_tool(self, ctx: StrategyContext, name: str) -> dict:
         """Execute only the factual analysis explicitly selected by ChiefTrader."""
 

@@ -555,9 +555,7 @@ class TradingEngine:
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.health.set(
-                    f"strategy:{strategy.name}",
-                    False,
-                    f"{type(exc).__name__}: {exc}"[:300],
+                    f"strategy:{strategy.name}", False, type(exc).__name__
                 )
                 continue
             self.consecutive_failures = 0
@@ -869,7 +867,7 @@ class TradingEngine:
         valuation = await self._build_valuation_candidate(
             account=account, positions=positions, symbol=symbol
         )
-        return StrategyContext(
+        result = StrategyContext(
             symbol=symbol,
             book=book,
             account=account,
@@ -891,6 +889,18 @@ class TradingEngine:
             instrument=self._instruments.get(symbol),
             valuation=valuation,
         )
+        if result.realized_volatility is None and self.evidence_router is not None:
+            try:
+                resolved = await self.evidence_router.resolve(symbol)
+                if resolved is not None:
+                    volatility = resolved.latest_realized_volatility(result)
+                    if volatility is not None:
+                        result.realized_volatility = volatility
+            except Exception:
+                # Evidence enrichment is best-effort; unavailable remains None
+                # and the sizer fails closed instead of inventing volatility.
+                pass
+        return result
 
     async def _refresh_execution_market(self, symbol: str) -> bool:
         """Refresh the same-symbol market book immediately before Risk/Execution.
