@@ -85,6 +85,11 @@ from crypto_trader.valuation.domain import (
 )
 from crypto_trader.valuation.service import ValuationService
 
+#: Bounded event retry: an event is retried a small fixed number of times,
+#: never in an unbounded loop.
+MAX_EVENT_ATTEMPTS = 3
+EVENT_RETRY_BACKOFF_SECONDS = 0.05
+
 logger = logging.getLogger("crypto_trader.engine")
 
 
@@ -226,8 +231,21 @@ class TradingEngine:
         await self._seed_initial_balances()
         await self._load_instruments()
         await self._restore_paper_adapter_state()
-        self.order_manager.settlement_callback = self._settle_fill
+        self.order_manager.settlement_callback = self._settlement_callback
         await RecoveryService(self.order_manager, self.adapter, self.audit).recover(self.run_id)
+        # FILL SETTLEMENT RECOVERY: RecoveryService may have discovered factual
+        # broker fills, and any earlier interruption (event failure, crash,
+        # dropped event) leaves a durable fill without its ledger posting /
+        # projection / plan convergence. Scanning AFTER RecoveryService catches
+        # both. Fail closed: an unsettled fill must not let trading loops start
+        # on an accounting state we cannot vouch for.
+        try:
+            await self._recover_fill_settlements()
+            self.health.set("fill_settlement", True)
+        except Exception as exc:
+            self.health.set("fill_settlement", False, f"{type(exc).__name__}: {exc}")
+            self.reconciliation_halted = True
+            raise
         await self._sync_terminal_entry_plans()
         self.health.set("recovery", True)
         # Daily review recovery is not an execution mutation and must not
@@ -431,12 +449,51 @@ class TradingEngine:
     async def _event_loop(self) -> None:
         while True:
             event = await self._event_queue.get()
-            try:
-                await self.process_exchange_event(event)
-            except Exception:
-                self.health.set("event_processing", False, "unhandled event error")
-            finally:
-                self._event_queue.task_done()
+            # Bounded retry: an event is no longer silently discarded. Replaying
+            # is safe because fill application is idempotent on fill_id and
+            # settlement completion is driven by the durable marker, so a retry
+            # can only COMPLETE an interrupted settlement - never duplicate one.
+            last_exc: Exception | None = None
+            for attempt in range(1, MAX_EVENT_ATTEMPTS + 1):
+                try:
+                    await self.process_exchange_event(event)
+                    last_exc = None
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < MAX_EVENT_ATTEMPTS:
+                        await asyncio.sleep(EVENT_RETRY_BACKOFF_SECONDS * attempt)
+            if last_exc is not None:
+                self.health.set(
+                    "event_processing",
+                    False,
+                    f"{type(last_exc).__name__}: {last_exc}",
+                )
+                try:
+                    await self.audit.log(
+                        "EXCHANGE_EVENT_PROCESSING_FAILED",
+                        target=str(getattr(event, "event_id", "unknown")),
+                        run_id=self.run_id,
+                        order_id=getattr(event, "order_id", None),
+                        client_order_id=getattr(event, "client_order_id", None),
+                        exchange_order_id=getattr(event, "exchange_order_id", None),
+                        after={
+                            "event_id": getattr(event, "event_id", None),
+                            "event_type": str(
+                                getattr(getattr(event, "event_type", None), "value", None)
+                                or getattr(event, "event_type", None)
+                            ),
+                            "symbol": getattr(event, "symbol", None),
+                            "exception_type": type(last_exc).__name__,
+                            "exception_message": str(last_exc)[:500],
+                            "attempt_count": MAX_EVENT_ATTEMPTS,
+                        },
+                    )
+                except Exception:
+                    logger.warning("event failure audit failed", exc_info=True)
+            self._event_queue.task_done()
 
     async def _tick_loop(self) -> None:
         while True:
@@ -691,8 +748,20 @@ class TradingEngine:
     async def _reconciliation_loop(self) -> None:
         while True:
             await asyncio.sleep(self.settings.reconciliation_interval_seconds)
+            # Bounded settlement recovery FIRST: normal reconciliation compares
+            # projections against the exchange, which is meaningless while a
+            # durable fill is still unaccounted.
+            try:
+                await self._recover_fill_settlements()
+                settlement_ok = True
+            except Exception as exc:
+                settlement_ok = False
+                logger.warning("fill settlement recovery failed", exc_info=True)
+                self.health.set("fill_settlement", False, f"{type(exc).__name__}: {exc}")
             report = await self.reconciliation.reconcile(self.adapter)
-            self.reconciliation_halted = report.halt
+            # A settlement blocker must never be overwritten by a clean normal
+            # reconciliation result.
+            self.reconciliation_halted = report.halt or not settlement_ok
             self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]))
             # Bounded episode-materialization retry on an EXISTING cadence.
             #
@@ -2364,11 +2433,14 @@ class TradingEngine:
         )
 
     # ----------------------------------------------------------------- ledger
-    async def _settle_fill(self, fill: Fill) -> None:
+    async def _settle_fill(self, fill: Fill, *, record_metric: bool = True):
         order = await self.order_manager.get(fill.order_id)
         if order is None:
-            return
-        if self.market_intelligence is not None:
+            return None
+        # Observability must count EXECUTIONS, not settlement passes. When this
+        # runs as a recovery of an already-accounted fill the metric is skipped,
+        # so a replay cannot inflate it.
+        if record_metric and self.market_intelligence is not None:
             try:
                 self.market_intelligence.record_execution()
             except Exception:  # observability must never affect execution
@@ -2417,7 +2489,7 @@ class TradingEngine:
             )
         metadata["base_asset"] = order.symbol.replace("USDT", "")
         metadata["approved_leverage"] = str(order.metadata.get("approved_leverage", "1"))
-        await self.ledger.record(
+        settlement_txn = await self.ledger.record(
             LedgerEntryType.TRADE,
             postings,
             account_id=account.account_id,
@@ -2492,8 +2564,209 @@ class TradingEngine:
             client_order_id=order.client_order_id,
             exchange_order_id=order.exchange_order_id,
             before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
-            after={"transaction_id": fill.fill_id},
+            after={"transaction_id": str(getattr(settlement_txn, "transaction_id", fill.fill_id))},
         )
+        return getattr(settlement_txn, "transaction_id", None)
+
+    async def _settlement_callback(self, fill) -> None:
+        """Settlement entry point installed on the OrderManager.
+
+        Records a durable failure reason before re-raising, so a dropped event
+        leaves evidence of WHY the fill is unsettled. The event loop retries
+        this; because settlement is idempotent, a retry can only complete it.
+        """
+        from crypto_trader.order.settlement import record_settlement_failure
+
+        try:
+            await self._settle_fill(fill)
+        except Exception as exc:
+            # Best effort, and never masking the original exception: the durable
+            # PENDING marker is already the signal that settlement is incomplete,
+            # so failing to enrich it must not change behaviour. The richer reason
+            # is recorded by startup/runtime recovery, which runs in its own
+            # session (nested writes here would collide with the fill's
+            # transaction).
+            try:
+                async with self.database.session_factory() as session:
+                    await record_settlement_failure(
+                        session, fill_id=fill.fill_id, error=exc
+                    )
+                    await session.commit()
+            except Exception:
+                logger.warning("recording settlement failure failed", exc_info=True)
+            raise
+
+    async def _ensure_fill_settled(self, fill_id: str):
+        """Drive one durable fill to COMPLETE, idempotently.
+
+        Runs in SEPARATE short transactions per phase (ledger, projection+plan,
+        marker) rather than one long one: the downstream refresh writes its own
+        tables, so holding a single write transaction across it deadlocks against
+        itself. Each phase is individually idempotent - the ledger is guarded on
+        fill_id and the plan transition is a no-op when already applied - so
+        re-entering after any interruption converges instead of duplicating.
+        """
+        from crypto_trader.order.settlement import (
+            STATE_COMPLETE,
+            assert_prefix_settlement_history,
+            ensure_fill_settlement_row,
+            ledger_transaction_for_fill,
+            record_settlement_failure,
+        )
+        from crypto_trader.persistence.models import FillORM, OrderORM
+
+        # ---------------------------------------------------------- phase 0
+        async with self.database.session_factory() as session:
+            await assert_prefix_settlement_history(session)
+            fill = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalar_one_or_none()
+            if fill is None:
+                return None, False
+            marker = await ensure_fill_settlement_row(session, fill)
+            if marker.state == STATE_COMPLETE:
+                return None, True
+            marker.attempt_count = (marker.attempt_count or 0) + 1
+            await session.commit()
+            order = (
+                await session.execute(
+                    select(OrderORM).where(OrderORM.internal_order_id == fill.order_id)
+                )
+            ).scalar_one_or_none()
+
+        # ---------------------------------------------------------- phase 1
+        async with self.database.session_factory() as session:
+            existing = await ledger_transaction_for_fill(session, fill_id)
+        already_accounted = existing is not None
+        txn_id = existing.transaction_id if existing is not None else None
+        if existing is None:
+            try:
+                txn_id = await self._settle_fill(fill)
+            except Exception as exc:
+                async with self.database.session_factory() as session:
+                    await record_settlement_failure(session, fill_id=fill_id, error=exc)
+                    await session.commit()
+                raise
+            async with self.database.session_factory() as session:
+                again = await ledger_transaction_for_fill(session, fill_id)
+                if again is not None:
+                    txn_id = again.transaction_id
+
+        async with self.database.session_factory() as session:
+            fresh = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalar_one()
+            marker = await ensure_fill_settlement_row(session, fresh)
+            marker.state = "ACCOUNTED"
+            marker.ledger_transaction_id = txn_id
+            await session.commit()
+            fill = fresh
+
+        # ---------------------------------------------------------- phase 2
+        await self.portfolio.refresh(initial_balances=self._initial_balances or None)
+        await self._converge_plan_for_fill(order)
+
+        # ---------------------------------------------------------- phase 3
+        async with self.database.session_factory() as session:
+            fresh = (
+                await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
+            ).scalar_one()
+            marker = await ensure_fill_settlement_row(session, fresh)
+            marker.state = STATE_COMPLETE
+            marker.completed_at = datetime.now(UTC)
+            marker.last_error_type = None
+            marker.last_error_message = None
+            await session.commit()
+
+        from crypto_trader.order.settlement import SettlementOutcome
+
+        return (
+            SettlementOutcome(fill_id, STATE_COMPLETE, not already_accounted, already_accounted),
+            already_accounted,
+        )
+
+    async def _settle_ledger_phase(self, fill, order):
+        """Canonical ledger posting, reusing the fill-id idempotent path."""
+        return await self._settle_fill(fill, record_metric=True)
+
+    async def _settle_downstream_phase(self, fill, order, ledger_transaction_id):
+        """Portfolio projection + TradePlan convergence (both idempotent)."""
+        await self.portfolio.refresh(initial_balances=self._initial_balances or None)
+        await self._converge_plan_for_fill(order)
+
+    async def _converge_plan_for_fill(self, order) -> None:
+        """Promote/close the plan implied by the now-factual position."""
+        trade_plan_id = str((order.metadata_json or {}).get("trade_plan_id") or "")
+        if not trade_plan_id:
+            return
+        plan = await self.trade_plans.get(trade_plan_id)
+        if plan is None:
+            return
+        position = await self.portfolio.get_position(order.symbol)
+        quantity = getattr(position, "quantity", None) if position else None
+        if plan.state == TradePlanState.APPROVED and quantity not in (None, 0):
+            expected_sign = 1 if plan.direction == "LONG" else -1
+            if quantity * expected_sign > 0:
+                await self.trade_plans.transition(trade_plan_id, TradePlanState.ACTIVE)
+        elif (
+            plan.state in {TradePlanState.ACTIVE, TradePlanState.RECOVERY}
+            and (order.metadata_json or {}).get("reduce_only") is True
+            and not quantity
+        ):
+            await self._close_plan_from_factual_position(plan, order)
+
+    async def _close_plan_from_factual_position(self, plan, order) -> None:
+        close = getattr(self.trade_plans, "close_from_factual_position", None)
+        if close is None:
+            return
+        try:
+            await close(
+                plan.trade_plan_id,
+                exit_decision_id=str(
+                    (order.metadata_json or {}).get("decision_id") or ""
+                ),
+                entry_decision_id=plan.decision_id,
+            )
+        except Exception:
+            logger.warning("plan close from factual position failed", exc_info=True)
+
+    async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
+        """Complete every unfinished settlement. Bounded per pass, complete overall."""
+        from crypto_trader.order.settlement import (
+            assert_prefix_settlement_history,
+            pending_settlements,
+        )
+
+        completed = 0
+        while True:
+            async with self.database.session_factory() as session:
+                await assert_prefix_settlement_history(session)
+                rows = await pending_settlements(session, limit=batch_size)
+                fill_ids = [f.fill_id for f in rows]
+            if not fill_ids:
+                break
+            progressed = 0
+            for fill_id in fill_ids:
+                outcome, _ = await self._ensure_fill_settled(fill_id)
+                if outcome.state == "COMPLETE":
+                    progressed += 1
+                    completed += 1
+            if progressed == 0:
+                # No forward progress: fail closed rather than spin.
+                self.health.set(
+                    "fill_settlement",
+                    False,
+                    f"unsettled fills remain: {fill_ids[:5]}",
+                )
+                break
+        if completed:
+            await self.audit.log(
+                "FILL_SETTLEMENT_RECOVERED",
+                target=f"fills={completed}",
+                run_id=self.run_id,
+                after={"completed": completed},
+            )
+        return completed
 
     async def _sync_terminal_entry_plan(
         self, order, state: TradePlanState, reason: str

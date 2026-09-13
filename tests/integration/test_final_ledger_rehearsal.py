@@ -100,6 +100,42 @@ def _release_lease_canonically(db_path: Path) -> None:
             "UPDATE engine_runs SET state = 'STOPPED', ended_at = '2026-09-13T02:00:00'"
             " WHERE ended_at IS NULL"
         )
+        # The snapshot predates the fill_settlements table. Create it and apply
+        # the migration's backfill semantics: a historical fill WITH a ledger
+        # posting is ACCOUNTED (still needs a convergence pass), one WITHOUT is
+        # PENDING. Either way startup recovery picks it up.
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fill_settlements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fill_id VARCHAR(64) NOT NULL,
+                order_id VARCHAR(64),
+                symbol VARCHAR(32),
+                state VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error_type VARCHAR(64),
+                last_error_message TEXT,
+                ledger_transaction_id VARCHAR(64),
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                completed_at DATETIME,
+                CONSTRAINT uq_fill_settlements_fill_id UNIQUE (fill_id),
+                FOREIGN KEY(fill_id) REFERENCES fills (fill_id)
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT OR IGNORE INTO fill_settlements
+                (fill_id, order_id, symbol, state, attempt_count, created_at, updated_at)
+            SELECT f.fill_id, f.order_id, f.symbol,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM ledger_transactions t WHERE t.fill_id = f.fill_id
+                   ) THEN 'ACCOUNTED' ELSE 'PENDING' END,
+                   0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            FROM fills f
+            """
+        )
         con.commit()
     finally:
         con.close()
