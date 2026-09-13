@@ -460,3 +460,69 @@ async def test_b1a_backtest_real_retriever_and_tool_path(v2_db):
 
     assert after == before
 
+async def test_b1a_real_account_isolation(v2_db):
+    from crypto_trader.learning.growth_card_retrieval import (
+        CardRankingPolicy,
+        ExperienceCardRetriever,
+        register_experience_card_tool,
+    )
+    from crypto_trader.llm.tools.registry import LLMToolRegistry
+    from tests.growth_system_v2.conftest import (
+        AS_OF,
+        market_context,
+        seed_card,
+        trigger,
+    )
+    from tests.growth_system_v2.test_chief_card_integration import (
+        _context,
+        _tool_context,
+    )
+
+    await seed_card(
+        v2_db,
+        rule_id="card-b1a-acct-a",
+        account_id="acct-a",
+        mode="PAPER",
+    )
+    await seed_card(
+        v2_db,
+        rule_id="card-b1a-acct-b",
+        account_id="acct-b",
+        mode="PAPER",
+    )
+
+    retriever = ExperienceCardRetriever(
+        v2_db.session_factory,
+        policy=CardRankingPolicy(),
+    )
+    result = await retriever.retrieve(
+        trigger=trigger(),
+        context=market_context(),
+        as_of=AS_OF,
+        account_id="acct-a",
+        mode="PAPER",
+    )
+    assert [item.rule_id for item in result.selected] == [
+        "card-b1a-acct-a"
+    ]
+
+    registry = LLMToolRegistry()
+    register_experience_card_tool(registry, retriever)
+    tool_context = {
+        **_tool_context(),
+        "mode": "PAPER",
+        "account_id": "acct-a",
+        "chief_context": _context(),
+    }
+    evidence = await registry.call(
+        "experience_cards",
+        "BTCUSDT",
+        tool_context,
+    )
+
+    assert evidence.source_refs == ["card:card-b1a-acct-a:v1"]
+    assert all(
+        "card-b1a-acct-b" not in ref
+        for ref in evidence.source_refs
+    )
+
