@@ -5,10 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
+<<<<<<< Updated upstream
 from crypto_trader.domain.errors import MarketDataUnhealthy, OrderRejected
 from crypto_trader.domain.models import Instrument, Order
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
+=======
+from crypto_trader.domain.errors import MarketDataUnhealthy
+>>>>>>> Stashed changes
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import MarketState
@@ -27,6 +31,7 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
     ) -> None:
         super().__init__(initial_balances=initial_balances, instruments=instruments)
         self.feed = feed or OKXPublicMarketFeed(symbol="BTCUSDT")
+<<<<<<< Updated upstream
 
     @staticmethod
     def _factual_size(symbol: str, side: str, value: Decimal | None) -> Decimal:
@@ -138,12 +143,18 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             lot_size=str(raw.get("lotSz")),
             min_size=str(raw.get("minSz")),
         )
+=======
+
+    async def get_market_state(self, symbol: str) -> MarketState:
+        return await self.feed.refresh(symbol)
+>>>>>>> Stashed changes
 
     async def get_orderbook(self, symbol: str, limit: int = 100) -> OrderBook:
         try:
             state = await self.feed.refresh(symbol)
             if state.health.value != "HEALTHY":
                 raise MarketDataUnhealthy(f"OKX public market unavailable for {symbol}")
+<<<<<<< Updated upstream
             if state.best_bid <= 0 or state.best_ask <= 0:
                 raise MarketDataUnhealthy(f"OKX factual price unavailable for {symbol}")
             bid_size = self._factual_size(symbol, "bid", state.best_bid_size)
@@ -158,11 +169,22 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
             return book
         except MarketDataUnhealthy:
             raise
+=======
+            book = OrderBook(symbol=symbol, exchange="OKX")
+            book.apply_snapshot(
+                int(datetime.now(UTC).timestamp() * 1000),
+                [(state.best_bid, Decimal("1"))],
+                [(state.best_ask, Decimal("1"))],
+                now=datetime.now(UTC),
+            )
+            return book
+>>>>>>> Stashed changes
         except Exception as exc:
             raise MarketDataUnhealthy(f"OKX public market unavailable for {symbol}: {exc}") from exc
 
     async def refresh_market_state(self, symbol: str) -> MarketState:
         state = await self.feed.refresh(symbol)
+<<<<<<< Updated upstream
         if state.health.value != "HEALTHY":
             raise MarketDataUnhealthy(f"OKX public market unavailable for {symbol}")
         if state.best_bid <= 0 or state.best_ask <= 0:
@@ -179,6 +201,18 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         )
         self.books[symbol] = book
         self.sequence[symbol] = book.sequence or 0
+=======
+        # keep simulated book aligned to the real mid so paper fills reflect real levels
+        if state.best_bid > 0 and state.best_ask > 0:
+            book = OrderBook(symbol=symbol, exchange="OKX")
+            book.apply_snapshot(
+                int(datetime.now(UTC).timestamp()),
+                [(state.best_bid, Decimal("1"))],
+                [(state.best_ask, Decimal("1"))],
+            )
+            self.books[symbol] = book
+            self.sequence[symbol] = book.sequence or 0
+>>>>>>> Stashed changes
         return state
 
     async def submit_order(self, order: Order) -> Order:

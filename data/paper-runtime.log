@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 INFO:     Started server process [45868]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
@@ -342,3 +343,12 @@ INFO:     127.0.0.1:51747 - "GET /llm/decisions HTTP/1.1" 200 OK
 INFO:     127.0.0.1:51753 - "GET /market HTTP/1.1" 200 OK
 INFO:     127.0.0.1:51741 - "GET /positions HTTP/1.1" 200 OK
 INFO:     127.0.0.1:53589 - "GET /runtime HTTP/1.1" 200 OK
+=======
+INFO:     Started server process [18518]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:55687 - "GET /internal/runtime-health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55688 - "GET /llm/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55689 - "GET /market HTTP/1.1" 200 OK
+>>>>>>> Stashed changes

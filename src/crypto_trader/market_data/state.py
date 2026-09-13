@@ -21,12 +21,12 @@ class DataHealth(str, Enum):
 
 class SourceStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    source: str = "BINANCE_USDM_PUBLIC"
+    source: str = "UNKNOWN"
     status: DataHealth = DataHealth.UNAVAILABLE
     age_seconds: float = -1.0
     updated_at: datetime | None = None
     last_error: str | None = None
-    data_source: str = "BINANCE_USDM_PUBLIC"
+    data_source: str = "UNKNOWN"
 
 
 class MarketState(BaseModel):
@@ -57,8 +57,8 @@ class MarketState(BaseModel):
     open_interest_change: StrictDecimal | None = None
     basis: StrictDecimal | None = None
     realized_volatility: StrictDecimal | None = None
-    source: str = "BINANCE_USDM_PUBLIC"
-    exchange: str = "BINANCE"
+    source: str = "UNKNOWN"
+    exchange: str = "UNKNOWN"
     exchange_timestamp: datetime | None = None
     received_timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     freshness: DataHealth = DataHealth.UNAVAILABLE

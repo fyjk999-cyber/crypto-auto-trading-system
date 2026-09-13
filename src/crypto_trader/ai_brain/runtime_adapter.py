@@ -43,17 +43,18 @@ def map_trading_intent(
     if intent_action == "ADD":
         if position_quantity <= 0:
             return IntentMapping("NO_TRADE", "", 0.0, "no position to add", False)
+        quantity = requested_change or position_quantity * 0.25
         return IntentMapping(
             "ADD",
             "BUY" if side == "LONG" else "SELL",
-            min(requested_change, position_quantity),
+            min(quantity, position_quantity),
             "add exposure",
             True,
         )
     if intent_action == "REDUCE":
         if position_quantity <= 0:
             return IntentMapping("NO_TRADE", "", 0.0, "no position to reduce", False)
-        quantity = min(requested_change, position_quantity)
+        quantity = min(requested_change or position_quantity * 0.5, position_quantity)
         return IntentMapping(
             "REDUCE",
             "SELL" if side == "LONG" else "BUY",

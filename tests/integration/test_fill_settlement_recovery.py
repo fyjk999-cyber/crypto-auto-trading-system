@@ -191,7 +191,6 @@ async def test_existing_fill_replays_settlement(database):
     async with database.session_factory() as session:
         fill_row = (await session.execute(select(FillORM))).scalars().one()
         fill_id = fill_row.fill_id
-        domain = type(fill_row)
     from crypto_trader.order.manager import _orm_to_fill
 
     async with database.session_factory() as session:
