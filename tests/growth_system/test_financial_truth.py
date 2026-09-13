@@ -74,6 +74,26 @@ def test_long_and_short_use_net_of_fees_and_funding():
     assert stats.net_status == NET_STATUS_COMPLETE
 
 
+def test_profit_factor_uses_documented_gross_profit_over_gross_loss():
+    stats = _run(
+        [
+            _record("pf-win", realized="10", fees="0", funding="0"),
+            _record("pf-loss", realized="-5", fees="0", funding="0"),
+        ]
+    )
+    assert stats.profit_factor == Decimal("2")
+    assert stats.profit_factor_status == "OK"
+    # A pure-loss set has gross_profit=0, so the ratio is exactly 0.0, never
+    # a copied amount or sentinel.
+    loss_only = _run([_record("pf-only-loss", realized="-5")])
+    assert loss_only.profit_factor == Decimal("0")
+    assert loss_only.profit_factor_status == "OK"
+    # A pure-win set has no denominator; the ratio stays undefined.
+    win_only = _run([_record("pf-only-win", realized="10")])
+    assert win_only.profit_factor is None
+    assert win_only.profit_factor_status == PF_STATUS_NO_LOSSES
+
+
 def test_gross_winner_can_be_net_loser():
     stats = _run([_record("gross-win-net-loss", realized="1", fees="0.7", funding="-0.5")])
     assert stats.gross_pnl == Decimal("1")

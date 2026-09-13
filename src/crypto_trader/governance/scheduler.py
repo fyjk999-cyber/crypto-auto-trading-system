@@ -28,6 +28,7 @@ class DailyReviewScheduler:
         mode: str = "PAPER",
         profile_version: str | None = None,
         card_learner=None,
+        growth_learning=None,
     ) -> None:
         self.session_factory = session_factory
         self.persistence = MemoryPersistence(session_factory)
@@ -42,6 +43,7 @@ class DailyReviewScheduler:
         self.mode = mode
         self.profile_version = profile_version
         self.card_learner = card_learner
+        self.growth_learning = growth_learning
 
     async def run_once(self, date: str | None = None) -> dict:
         now = datetime.now().astimezone() if self.use_local_time else datetime.now(UTC)
@@ -100,6 +102,11 @@ class DailyReviewScheduler:
             ):
                 raise RuntimeError("DAILY_REVIEW_CLAIM_LOST")
             await self.learning.review_many(pending)
+            # Canonical runtime growth path: structured evidence-bound review
+            # -> lesson/proposition/pattern -> Adaptive Experience Card.
+            growth_learning = await self._run_growth_learning(
+                date, pending, claim_token
+            )
             # Growth V2: after factual learning/pattern update, propose/apply
             # card changes on the same claim.  The learner re-validates the
             # fence before every write; claim loss produces NO card mutation.
@@ -174,6 +181,7 @@ class DailyReviewScheduler:
                 "episode_count": len(episodes),
                 "reviewed_this_attempt": len(pending),
                 "card_learning": card_learning,
+                "growth_learning": growth_learning,
             }
         except Exception as exc:
             await self.persistence.fail_daily_review(
@@ -181,6 +189,36 @@ class DailyReviewScheduler:
             )
             raise
 
+
+    async def _run_growth_learning(
+        self, date: str, pending: list, claim_token: str
+    ) -> dict:
+        if self.growth_learning is None:
+            return {"status": "NOT_CONFIGURED"}
+        if not pending:
+            return {"status": "NO_DATA"}
+
+        async def fence() -> bool:
+            return await self.persistence.heartbeat_daily_review(
+                date,
+                claim_token,
+                owner=self.owner,
+                lease_seconds=self.claim_lease_seconds,
+            )
+
+        try:
+            report = await self.growth_learning.run(
+                pending,
+                review_date=date,
+                claim_token=claim_token,
+                owner=self.owner,
+                fence=fence,
+            )
+        except Exception as exc:
+            return {"status": "FAILED", "error": type(exc).__name__}
+        if not await fence():
+            raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_GROWTH_PUBLISH")
+        return report.as_dict()
 
     async def _learn_cards(self, date: str, claim_token: str) -> dict:
         if self.card_learner is None:

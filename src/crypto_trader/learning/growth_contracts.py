@@ -118,6 +118,18 @@ class CandidateExplanation(BaseModel):
     uncertainty: str = Field(default="", max_length=MAX_TEXT)
 
 
+class LearningItem(BaseModel):
+    """One evidence-backed causal item (mistake / future rule / factor)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1, max_length=MAX_TEXT)
+    evidence_refs: list[str] = Field(min_length=1, max_length=MAX_REFS)
+    confidence: ConfidenceAxis = "UNKNOWN"
+    applicability: dict[str, Any] = Field(default_factory=dict)
+    counter_conditions: list[str] = Field(default_factory=list, max_length=16)
+
+
 class TestableLesson(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -140,6 +152,10 @@ class StructuredReview(BaseModel):
     observation_facts: list[ObservationFact] = Field(min_length=1, max_length=64)
     candidate_explanations: list[CandidateExplanation] = Field(default_factory=list, max_length=32)
     testable_lessons: list[TestableLesson] = Field(default_factory=list, max_length=32)
+    success_factors: list[LearningItem] = Field(default_factory=list, max_length=32)
+    failure_factors: list[LearningItem] = Field(default_factory=list, max_length=32)
+    mistakes: list[LearningItem] = Field(default_factory=list, max_length=32)
+    future_rules: list[LearningItem] = Field(default_factory=list, max_length=32)
     applicability_scope: dict[str, Any] = Field(default_factory=dict)
     uncertainty: str = Field(default="", max_length=MAX_TEXT)
     data_gaps: list[str] = Field(default_factory=list, max_length=32)
@@ -158,6 +174,13 @@ class StructuredReview(BaseModel):
         for lesson in self.testable_lessons:
             refs.extend(lesson.evidence_refs)
             refs.extend(lesson.contrary_refs)
+        for item in (
+            *self.success_factors,
+            *self.failure_factors,
+            *self.mistakes,
+            *self.future_rules,
+        ):
+            refs.extend(item.evidence_refs)
         return refs
 
 

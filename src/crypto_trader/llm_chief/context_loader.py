@@ -29,11 +29,13 @@ class ChiefContextLoader:
         limit: int = 5,
         account_id: str = "default",
         mode: str = "PAPER",
+        learned_tools_enabled: bool = True,
     ) -> None:
         self.session_factory = session_factory
         self.limit = limit
         self.account_id = account_id or "default"
         self.mode = mode or "PAPER"
+        self.learned_tools_enabled = learned_tools_enabled
 
     @staticmethod
     def _legacy_card_allowed(row, as_of: datetime, account_id: str, mode: str) -> bool:
@@ -129,6 +131,54 @@ class ChiefContextLoader:
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
         as_of = _context_as_of(context)
+        if not self.learned_tools_enabled:
+            # Canonical runtime: research/support context only.  Learned
+            # experience reaches the Chief exclusively through experience_cards.
+            async with self.session_factory() as session:
+                research = (
+                    await session.execute(
+                        select(ResearchReportORM)
+                        .where(
+                            ResearchReportORM.created_at <= as_of,
+                            or_(
+                                ResearchReportORM.symbol.is_(None),
+                                ResearchReportORM.symbol == context.symbol,
+                            ),
+                        )
+                        .order_by(ResearchReportORM.created_at.desc())
+                        .limit(self.limit * 5)
+                    )
+                ).scalars().all()
+                research = [
+                    row
+                    for row in research
+                    if _scope_applies(
+                        row.applicability_scope_json,
+                        context.symbol,
+                        context.regime,
+                    )
+                ][: self.limit]
+            return replace(
+                context,
+                knowledge=[
+                    {
+                        "kind": "RESEARCH",
+                        "research_id": row.research_id,
+                        "summary": row.summary,
+                        "conclusion": row.conclusion,
+                        "confidence": row.confidence,
+                    }
+                    for row in research
+                ],
+                similar_episodes=[],
+                coin_profile={},
+                compressed_experience=[],
+                failure_warnings=[],
+                memory_refs=[],
+                research_refs=[row.research_id for row in research],
+                episode_refs=[],
+                pattern_refs=[],
+            )
         async with self.session_factory() as session:
             episodes = (
                 await session.execute(
@@ -320,6 +370,27 @@ class ChiefContextLoader:
             "coin_profile": self._coin_profile_evidence,
             "factor_intelligence": self._pattern_evidence,
         }
+        learned_tools = {
+            "memory_search",
+            "episode_search",
+            "factor_intelligence",
+            "coin_profile",
+        }
+        if not self.learned_tools_enabled and name in learned_tools:
+            return ToolEvidence(
+                tool_name=name,
+                symbol=context.symbol,
+                timestamp=as_of or _context_as_of(context),
+                features={
+                    "scope_unavailable": True,
+                    "reason": "LEGACY_LEARNED_TOOL_DISABLED_CANONICAL_V2_PATH",
+                },
+                supporting_evidence=[],
+                contrary_evidence=[],
+                confidence_of_measurement=0.0,
+                data_quality="NO_MATCHES",
+                source_refs=[],
+            )
         loader = loaders.get(name)
         if loader is None:
             raise ValueError(f"unknown learned-context tool: {name}")

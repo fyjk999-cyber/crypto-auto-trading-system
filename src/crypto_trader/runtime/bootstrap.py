@@ -25,6 +25,9 @@ from crypto_trader.learning.growth_card_retrieval import (
     ExperienceCardRetriever,
     register_experience_card_tool,
 )
+from crypto_trader.learning.growth_runtime_learning import (
+    GrowthRuntimeLearningService,
+)
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
@@ -215,6 +218,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         database.session_factory,
         account_id="default",
         mode=settings.trading_mode.value,
+        learned_tools_enabled=False,
     )
     llm_provider = DeepSeekProvider()
     # Single logical global model-budget authority (8): created
@@ -328,6 +332,13 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 account_id="default",
                 mode=settings.trading_mode.value,
                 card_learner=DailyCardLearner(database.session_factory),
+                growth_learning=GrowthRuntimeLearningService(
+                    database.session_factory,
+                    provider=llm_provider,
+                    account_id="default",
+                    mode=settings.trading_mode.value,
+                    currency=settings.paper_settlement_asset,
+                ),
             )
             if settings.auto_start_runtime
             else None
