@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderSide
-from crypto_trader.domain.models import Account, Position
+from crypto_trader.domain.models import Account, Instrument, Position
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
@@ -103,6 +103,17 @@ def context(quantity: str, symbol: str = "ETHUSDT") -> tuple[StrategyContext, Po
             mark_price=Decimal("100"),
         ),
         position,
+    )
+
+
+def _instrument(symbol: str = "BTCUSDT") -> Instrument:
+    return Instrument(
+        symbol=symbol,
+        base_asset=symbol.replace("USDT", ""),
+        quote_asset="USDT",
+        tick_size=Decimal("0.1"),
+        step_size=Decimal("0.1"),
+        min_qty=Decimal("0.1"),
     )
 
 
@@ -232,3 +243,23 @@ async def test_malformed_open_decision_is_durable_fail_closed_and_throttled(data
     assert rows[0].position_state == PositionState.OPEN
     assert rows[0].action == "FAIL_CLOSED"
     assert rows[0].trade_plan_id is not None
+
+
+async def test_reduce_quantity_is_aligned_to_lot_step_and_dust_is_closed(database):
+    await active_plan(database, "SHORT", symbol="BTCUSDT")
+    ctx, position = context("-0.15", symbol="BTCUSDT")
+    ctx.instrument = _instrument()
+    signal = await manager(database, Chief("REDUCE", "0.075")).review(ctx, position)
+    assert signal is not None
+    # 0.075 floors below one 0.1 lot; deterministic layer closes the dust.
+    assert signal.quantity == Decimal("0.15")
+    assert signal.metadata["reduce_only"] is True
+
+
+async def test_reduce_quantity_is_floored_to_executable_step(database):
+    await active_plan(database, "SHORT", symbol="BTCUSDT")
+    ctx, position = context("-2", symbol="BTCUSDT")
+    ctx.instrument = _instrument()
+    signal = await manager(database, Chief("REDUCE", "0.75")).review(ctx, position)
+    assert signal is not None
+    assert signal.quantity == Decimal("0.7")

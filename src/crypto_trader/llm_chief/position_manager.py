@@ -10,6 +10,7 @@ from typing import Any
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Position, SignalIntent
+from crypto_trader.domain.money import floor_to_step
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision import OpenAction, PositionState
@@ -187,11 +188,25 @@ class LiveLLMPositionManager:
         if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
             return None
 
-        quantity = (
-            abs(position.quantity)
-            if decision.action == OpenAction.EXIT or time_stop
-            else Decimal(str(decision.position_size_request))
-        )
+        if decision.action == OpenAction.EXIT or time_stop:
+            quantity = abs(position.quantity)
+        else:
+            quantity = Decimal(str(decision.position_size_request))
+            instrument = ctx.instrument
+            step_size = (
+                Decimal(str(instrument.step_size))
+                if instrument is not None
+                else Decimal("0")
+            )
+            if step_size > 0:
+                quantity = floor_to_step(quantity, step_size)
+                remaining = abs(position.quantity) - quantity
+                min_qty = Decimal(str(instrument.min_qty))
+                if quantity <= 0 or (remaining > 0 and remaining < min_qty):
+                    # A partial reduction below one executable lot would leave
+                    # untradeable dust.  The deterministic layer closes the
+                    # remaining position instead of emitting an invalid order.
+                    quantity = abs(position.quantity)
         if quantity <= 0 or quantity > abs(position.quantity):
             await self.audit.log(
                 "LIVE_LLM_POSITION_DECISION_INVALID",
