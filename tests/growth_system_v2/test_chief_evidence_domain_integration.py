@@ -55,6 +55,7 @@ def test_canonical_domain_weight_caps_are_enforced():
     assert effective_evidence_weight(1.0, "PAPER") <= 0.75
     assert effective_evidence_weight(1.0, "LIVE") <= 1.00
 
+
 async def test_b1a_paper_real_retriever_and_tool_path(v2_db):
     from decimal import Decimal
 
