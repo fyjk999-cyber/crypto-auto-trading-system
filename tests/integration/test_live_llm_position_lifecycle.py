@@ -778,3 +778,75 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     assert order.metadata["decision_id"] == entry.decision_id
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     await engine.stop()
+
+
+async def test_exit_supersedes_stale_partial_reduce_order(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    clock = MutableClock()
+    engine.clock = clock
+    await engine.start("run-exit-supersede")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    entry = ChiefTraderDecision(
+        decision_id="entry-exit-supersede",
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="factual thesis",
+        position_size_request=0.1,
+        leverage_request=2,
+        stop_loss=95,
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry,
+        limit_price=Decimal("101"),
+        execution_metadata=BTC_EXECUTION_METADATA,
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    # Limit executable bid depth so the first EXIT only partially fills.
+    book = engine.adapter.books["BTCUSDT"]
+    book.apply_snapshot(
+        engine.adapter.sequence["BTCUSDT"] + 1,
+        [(Decimal("99.95"), Decimal("0.04"))],
+        [(Decimal("100.05"), Decimal("1"))],
+    )
+    engine.position_manager = LiveLLMPositionManager(
+        chief=SequencedChief([("EXIT", "0"), ("EXIT", "0"), ("EXIT", "0")]),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=30,
+    )
+    await engine.tick()
+    await engine.wait_for_event_queue()
+    partial_order = list(engine.adapter.orders.values())[-1]
+    assert partial_order.status == OrderStatus.PARTIALLY_FILLED
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.06")
+
+    clock.advance()
+    assert await engine.tick() == []
+    await engine.wait_for_event_queue()
+    cancelled = list(engine.adapter.orders.values())[-1]
+    assert cancelled.internal_order_id == partial_order.internal_order_id
+    assert cancelled.status in {OrderStatus.CANCELLED, OrderStatus.CANCEL_PENDING}
+    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+
+    # A later EXIT must now be allowed to close the remaining factual position.
+    engine.adapter.seed_book("BTCUSDT")
+    clock.advance()
+    await engine.tick()
+    await engine.wait_for_event_queue()
+    final_plan = await plans.get(plan.trade_plan_id)
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None and position.quantity == 0
+    assert final_plan is not None and final_plan.state == TradePlanState.CLOSED
+    await engine.stop()

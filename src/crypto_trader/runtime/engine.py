@@ -1061,6 +1061,64 @@ class TradingEngine:
             )
             raise
 
+    async def _cancel_pending_position_action(self, pending_order) -> None:
+        """Cancel a non-terminal partial REDUCE before a full EXIT can submit.
+
+        A partially filled reduce can rest indefinitely when the market leaves
+        its limit.  The persisted plan guard correctly blocks duplicate REDUCE
+        submissions, but a later EXIT decision must be able to supersede the
+        stale child order.  This uses the canonical OrderManager + adapter
+        cancellation path; no direct DB mutation and no fabricated fill.
+        """
+        try:
+            if pending_order.status.value == "CANCEL_PENDING":
+                return
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_CANCEL_REDUCE_BLOCKED",
+                    target=pending_order.client_order_id,
+                    run_id=self.run_id,
+                    client_order_id=pending_order.client_order_id,
+                    order_id=pending_order.internal_order_id,
+                    after={"reason": "EXECUTION_LEASE_NOT_HELD"},
+                )
+                return
+            await self.order_manager.cancel_pending(
+                pending_order.internal_order_id,
+                reason="EXIT_SUPERSEDES_PENDING_REDUCE",
+            )
+            if not await self._current_lease_valid():
+                await self.audit.log(
+                    "POSITION_ACTION_CANCEL_REDUCE_BLOCKED",
+                    target=pending_order.client_order_id,
+                    run_id=self.run_id,
+                    client_order_id=pending_order.client_order_id,
+                    order_id=pending_order.internal_order_id,
+                    after={"reason": "EXECUTION_LEASE_LOST_BEFORE_CANCEL"},
+                )
+                return
+            await self.adapter.cancel_order(
+                pending_order.symbol, pending_order.exchange_order_id
+            )
+            await self.audit.log(
+                "POSITION_ACTION_CANCEL_REDUCE",
+                target=pending_order.client_order_id,
+                run_id=self.run_id,
+                client_order_id=pending_order.client_order_id,
+                order_id=pending_order.internal_order_id,
+                after={
+                    "status": "CANCEL_PENDING",
+                    "reason": "EXIT supersedes pending reduce",
+                },
+            )
+        except Exception:
+            logger.exception(
+                "POSITION_ACTION_CANCEL_REDUCE_FAILED order_id=%s symbol=%s",
+                pending_order.internal_order_id,
+                pending_order.symbol,
+            )
+            raise
+
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
         run_id = self.run_id
         symbol = signal.symbol
@@ -1186,7 +1244,23 @@ class TradingEngine:
                 if entry_order is not None and entry_order.status not in TERMINAL_ORDER_STATUSES:
                     await self._cancel_unsettled_entry_order(entry_order)
                 return None
-            if await self.order_manager.has_pending_position_action(trade_plan_id):
+            pending_action = await self.order_manager.get_pending_position_action(
+                trade_plan_id
+            )
+            if pending_action is not None:
+                lifecycle_action = str(
+                    signal.metadata.get("lifecycle_action") or ""
+                )
+                if lifecycle_action == "EXIT":
+                    await self.audit.log(
+                        "POSITION_ACTION_EXIT_SUPERSEDES_PENDING",
+                        target=client_order_id,
+                        run_id=run_id,
+                        order_id=pending_action.internal_order_id,
+                        after={"trade_plan_id": trade_plan_id},
+                    )
+                    await self._cancel_pending_position_action(pending_action)
+                    return None
                 await self.audit.log(
                     "POSITION_ACTION_ALREADY_PENDING",
                     target=client_order_id,
