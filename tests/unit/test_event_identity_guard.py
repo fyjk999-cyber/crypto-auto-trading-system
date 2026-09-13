@@ -92,3 +92,49 @@ def test_an_unrenderable_symbol_is_not_a_match() -> None:
             raise RuntimeError("no")
 
     assert _same_symbol(SimulatedExchangeAdapter(), Hostile(), LOCAL) is False
+
+
+class _CollapsesQuote:
+    """Discriminating for the sentinel probe, but collapses the quote asset."""
+
+    def normalize_symbol(self, raw):
+        return str(raw).upper()[-4:]
+
+
+class _UnrenderableResult:
+    class _Value:
+        def __str__(self) -> str:
+            raise RuntimeError("no")
+
+    def normalize_symbol(self, raw):  # noqa: ARG002
+        return _UnrenderableResult._Value()
+
+
+class _NonStringResult:
+    def normalize_symbol(self, raw):  # noqa: ARG002
+        return object()
+
+
+def test_a_partially_discriminating_normalizer_still_fails_closed() -> None:
+    """One probe is not enough: a normalizer can collapse part of the symbol.
+
+    ``_CollapsesQuote`` answers differently for the impossible sentinel (so a
+    constant is ruled out) yet maps every ``USDT`` instrument to the same value.
+    Without the second probe it would accept a foreign base asset.
+    """
+    adapter = _CollapsesQuote()
+    for payload in ("ETHUSDT", "BCHUSDT", "ETH-USDT-SWAP"):
+        assert _same_symbol(adapter, payload, LOCAL) is False, payload
+    assert _same_symbol(adapter, "btcusdt", LOCAL) is True
+
+
+def test_a_raising_or_non_string_normalizer_result_is_not_fatal() -> None:
+    """A hostile normalizer RESULT must degrade, not escape into the event loop.
+
+    Escaping would drop the event and flip engine health instead of answering
+    the routing question.
+    """
+    assert _same_symbol(_UnrenderableResult(), "ETHUSDT", LOCAL) is False
+    assert _same_symbol(_UnrenderableResult(), "btcusdt", LOCAL) is True
+    assert _same_symbol(_NonStringResult(), "ETHUSDT", LOCAL) is False
+    assert _same_symbol(_NonStringResult(), "btcusdt", LOCAL) is True

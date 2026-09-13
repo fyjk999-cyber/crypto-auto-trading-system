@@ -2754,9 +2754,14 @@ class TradingEngine:
         await self._event_queue.join()
 
 
-#: Never a real instrument. Used only to detect a normalizer that returns a
-#: constant instead of answering - see ``_same_symbol``.
+#: Never real instruments. Used only to detect a normalizer that does not
+#: discriminate instead of answering - see ``_same_symbol``. Two probes are
+#: needed: a sentinel catches a constant answer, and a second real-looking
+#: symbol catches a normalizer that collapses part of the symbol (e.g. one that
+#: maps every QUOTE USDT onto the same value, which would otherwise accept a
+#: foreign base asset).
 _SYMBOL_SENTINEL = "\x00dsh-symbol-sentinel\x00"
+_SYMBOL_PROBE = "ZZZUSDT"
 
 
 def _canonical_symbol(adapter, value: str) -> str:
@@ -2770,11 +2775,14 @@ def _canonical_symbol(adapter, value: str) -> str:
         return ""
     try:
         result = normalize(value)
+        if result is None:
+            return ""
+        # ``str()`` is inside the guard too: a returned object whose __str__
+        # raises must degrade to "no canonical answer", never escape and turn a
+        # refused event into a failed one.
+        return str(result).strip()
     except Exception:  # noqa: BLE001 - a normalizer must never break routing
         return ""
-    if result is None:
-        return ""
-    return str(result).strip()
 
 
 def _same_symbol(adapter, payload_symbol: object, local_symbol: object) -> bool:
@@ -2804,7 +2812,9 @@ def _same_symbol(adapter, payload_symbol: object, local_symbol: object) -> bool:
         # that maps an impossible sentinel onto the local symbol is not
         # answering, it is returning a constant, and trusting it would accept
         # every pair and silently disable this guard.
-        if _canonical_symbol(adapter, _SYMBOL_SENTINEL) != canonical_local:
+        sentinel = _canonical_symbol(adapter, _SYMBOL_SENTINEL)
+        probe = _canonical_symbol(adapter, _SYMBOL_PROBE)
+        if sentinel != canonical_local and probe != canonical_local:
             return canonical_payload == canonical_local
     return raw.upper() == local.upper()
 

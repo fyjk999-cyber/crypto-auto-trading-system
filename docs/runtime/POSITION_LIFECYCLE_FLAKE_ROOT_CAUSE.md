@@ -198,8 +198,14 @@ with no error, no alert and no audit record.
    case-insensitive comparison whenever that normalizer cannot answer (missing,
    raising, empty, or returning a constant - detected by probing it with an
    impossible sentinel, so a degenerate normalizer cannot silently disable the
-   guard). The guard is therefore exactly as canonical as the configured
-   adapter. Measured accept/refuse matrix for a local `BTCUSDT`:
+   guard). Two probes are used because one is not enough: the sentinel rules out
+   a constant answer, and a second real-looking symbol (`ZZZUSDT`) rules out a
+   normalizer that collapses part of the symbol (e.g. one that maps every `USDT`
+   instrument to the same value, which would otherwise accept a foreign base
+   asset). The guard is as canonical as the configured adapter *when that
+   adapter discriminates*; a non-discriminating adapter is ignored in favour of
+   the case-insensitive fallback, which refuses what it cannot confirm. Measured
+   accept/refuse matrix for a local `BTCUSDT`:
 
    | payload | OKX | Simulator / Paper-Real-Market | Binance | Bybit |
    |---|---|---|---|---|
@@ -285,7 +291,7 @@ reproducible with the command in parentheses.
 | determinism suite (L1-L19, 20 tests) | 30/30 clean | full file, 30 iterations |
 | lifecycle file | 30/30 and 50/50 clean | `pytest tests/integration/test_live_llm_position_lifecycle.py` |
 | order-varied context | 15/15 clean | lifecycle file adjacent to `test_order_reconciliation.py`, both orders |
-| full suite | 1546 passed x3, then 1549 passed x3 | `pytest -q` (external OKX file included; it failed on the network in one earlier run and is classified separately) |
+| full suite | 1554 passed x3 including the external OKX file; 1547 passed / 1550 collected when it is deselected | `pytest -q` (the live-OKX file may fail on the network and is classified separately) |
 
 Instrumentation of a passing run BEFORE the fix showed 23
 `EVENT_DROPPED_LOCAL_ORDER_NOT_VISIBLE` records, all `ORDER_ACK`, plus the fatal
