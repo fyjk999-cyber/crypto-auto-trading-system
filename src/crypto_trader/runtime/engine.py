@@ -2177,18 +2177,12 @@ class TradingEngine:
             )
             await RecoveryService(self.order_manager, self.adapter, self.audit).recover(run_id)
             return risk_decision
-        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
-            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
-            await self.audit.log(
-                "SUBMIT_TRANSIENT_FAILURE",
-                target=client_order_id,
-                run_id=run_id,
-                client_order_id=client_order_id,
-                order_id=order.internal_order_id,
-                after={"error": type(exc).__name__},
-            )
-            return risk_decision
         except OrderRejected as exc:
+            # MUST precede the ExchangeError clause below: OrderRejected is a
+            # subclass of ExchangeError, so catching ExchangeError first makes
+            # THIS branch dead code and turns a deterministic pre-broker refusal
+            # into a transient UNKNOWN - which is exactly how the IOST incident
+            # produced a false UNKNOWN that permanently blocked the plan.
             await self.order_manager.reject(
                 order.internal_order_id, str(exc), event_id=new_id("evt")
             )
@@ -2202,6 +2196,17 @@ class TradingEngine:
                 client_order_id=client_order_id,
                 order_id=order.internal_order_id,
                 after={"reason": str(exc)},
+            )
+            return risk_decision
+        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
+            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
+            await self.audit.log(
+                "SUBMIT_TRANSIENT_FAILURE",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                order_id=order.internal_order_id,
+                after={"error": type(exc).__name__},
             )
             return risk_decision
 
