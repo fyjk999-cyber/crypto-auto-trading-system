@@ -30,6 +30,7 @@ from crypto_trader.order.provenance import (
     HistoricalQuantityProvenance,
     HistoricalQuantityStatus,
 )
+from crypto_trader.order.settlement import ensure_fill_settlement_row
 from crypto_trader.order.state_machine import OrderStateMachine
 from crypto_trader.persistence.models import (
     FillORM,
@@ -656,6 +657,13 @@ class OrderManager:
                 await session.execute(select(FillORM).where(FillORM.fill_id == fill.fill_id))
             ).scalar_one_or_none()
             if existing is not None:
+                # A durable fill is NOT necessarily a settled fill. Returning
+                # immediately made an interrupted settlement PERMANENT: no
+                # redelivered event and no restart could ever complete it.
+                # The marker is created idempotently; convergence is driven
+                # separately and idempotently.
+                await ensure_fill_settlement_row(session, existing)
+                await session.commit()
                 return (
                     _orm_to_order(await session.get(OrderORM, existing.order_id)),
                     _orm_to_fill(existing),
@@ -710,6 +718,16 @@ class OrderManager:
                 status_after=result.new_status.value,
                 timestamp=fill.timestamp,
                 payload_json={"fill_id": fill.fill_id, "fill_quantity": str(fill.quantity)},
+            )
+            # Same transaction as the FillORM insert: "fill persisted" and
+            # "settlement known to be pending" must never diverge.
+            await ensure_fill_settlement_row(
+                session,
+                type("_F", (), {
+                    "fill_id": fill.fill_id,
+                    "order_id": fill.order_id,
+                    "symbol": fill.symbol,
+                })(),
             )
             fill_row = FillORM(
                 fill_id=fill.fill_id,
