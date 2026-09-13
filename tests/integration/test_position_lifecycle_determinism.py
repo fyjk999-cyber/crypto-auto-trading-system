@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from crypto_trader.domain.enums import ExchangeEventType, OrderSide, OrderStatus
-from crypto_trader.domain.models import ExchangeEvent
+from crypto_trader.domain.models import ExchangeEvent, OrderIntent
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
@@ -575,43 +575,64 @@ async def test_L12_clock_boundary_exactly_at_time_stop_is_deterministic(tmp_path
 
 # ============================================ reviewer-driven hardening (R1/R2)
 async def test_L13_an_event_bound_to_another_venue_order_is_refused(database):
-    """R1: the client_order_id fallback must never RE-BIND venue identity.
+    """R1/F-2: the client_order_id fallback must never RE-BIND venue identity.
 
-    A row that already carries a different venue order id belongs to a different
-    order. Applying the event would let a misrouted or replayed event rewrite a
-    real order's fills and venue identity.
+    The crafted fill is sized to FIT the remaining quantity on purpose. A
+    quantity larger than the remainder is refused by ``apply_fill``'s
+    over-quantity backstop whatever the routing does, which would make the state
+    assertions below pass on the vulnerable revision for the wrong reason. This
+    payload is the one that actually exploited the fallback: it drove a real
+    order's ``filled_quantity`` up, adopted the attacker's venue id (permanently
+    orphaning the real one) and wrote a fraudulent settlement into the ledger.
     """
-    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    engine, adapter, _, _, _, _ = await _open_long_position(
+        database, quantity="1", ask_quantity="0.4"
+    )
     try:
         entry = next(iter(adapter.orders.values()))
         local = await engine.order_manager.get_by_client(entry.client_order_id)
-        assert local is not None and local.exchange_order_id is not None
+        assert local is not None
+        # 0.4 of 1 filled: 0.6 of room remains, so a 0.2 fill is accepted by the
+        # order's own invariants and only the routing guard can stop it.
+        assert local.filled_quantity == Decimal("0.4")
+        assert local.exchange_order_id is not None
+        real_venue_id = local.exchange_order_id
 
-        await asyncio.wait_for(
-            engine._enqueue_event(
-                ExchangeEvent(
-                    event_id="evt-misrouted",
-                    event_type=ExchangeEventType.ORDER_FILLED,
-                    symbol="BTCUSDT",
-                    timestamp=datetime.now(UTC),
-                    payload={
-                        "exchange_order_id": "sim_ATTACKER_ORDER",
-                        "client_order_id": entry.client_order_id,
-                        "fill_id": "fill-wrong",
-                        "fill_price": "50",
-                        "fill_quantity": "0.1",
-                        "status": "FILLED",
-                    },
-                )
-            ),
-            timeout=5,
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-misrouted-partial",
+                event_type=ExchangeEventType.ORDER_FILLED,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": "sim_ATTACKER_ORDER",
+                    "client_order_id": entry.client_order_id,
+                    "fill_id": "fill-wrong",
+                    "fill_price": "50",
+                    "fill_quantity": "0.2",
+                    "status": "FILLED",
+                },
+            )
         )
         await engine.wait_for_event_queue()
 
+        # STATE FIRST: on the vulnerable revision this is the assertion that
+        # fails, and it fails in the EXPLOITED state (a larger filled quantity
+        # and the attacker's venue id adopted over the real one) rather than on
+        # a merely missing audit record.
         after = await engine.order_manager.get_by_client(entry.client_order_id)
-        # Identity and fill accounting are untouched.
-        assert after.exchange_order_id == local.exchange_order_id
-        assert after.filled_quantity == local.filled_quantity
+        assert after.exchange_order_id == real_venue_id
+        assert after.filled_quantity == Decimal("0.4")
+        assert after.avg_fill_price == local.avg_fill_price
+        # The real venue identity is still resolvable, and no bogus settlement
+        # entered the ledger.
+        assert (await engine.order_manager.get_by_exchange(real_venue_id)) is not None
+        settlements = [
+            row
+            for row in await AuditService(database.session_factory).list_recent(limit=60)
+            if row.action == "FILL_SETTLED"
+        ]
+        assert len(settlements) == 1
 
         mismatch = [
             row
@@ -623,6 +644,7 @@ async def test_L13_an_event_bound_to_another_venue_order_is_refused(database):
             mismatch[0].after_json["reason"]
             == "LOCAL_ORDER_BOUND_TO_ANOTHER_VENUE_ORDER"
         )
+        assert engine.exchange_event_identity_anomalies == 1
     finally:
         await engine.stop()
 
@@ -729,5 +751,188 @@ async def test_L15_account_scoped_balance_updates_are_reachable(database):
             if row.action in {"EXCHANGE_EVENT_UNMATCHED", "EXCHANGE_EVENT_ID_MISMATCH"}
         ]
         assert unmatched == []
+    finally:
+        await engine.stop()
+
+
+async def test_L16_a_self_inconsistent_event_is_refused(database):
+    """F-3: an event that resolves by its own venue id must still be consistent.
+
+    A payload naming a different symbol, or a different client order, than the
+    order its venue id resolves to would otherwise write a foreign fill into
+    that order.
+    """
+    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    try:
+        entry = next(iter(adapter.orders.values()))
+        local = await engine.order_manager.get_by_client(entry.client_order_id)
+        assert local is not None
+
+        for event_id, payload, expected in (
+            (
+                "evt-symbol",
+                {
+                    "exchange_order_id": local.exchange_order_id,
+                    "client_order_id": entry.client_order_id,
+                    "symbol": "ETHUSDT",
+                    "fill_id": "fill-sym",
+                    "fill_price": "9999",
+                    "fill_quantity": "1",
+                    "status": "FILLED",
+                },
+                "EVENT_SYMBOL_DOES_NOT_MATCH_LOCAL_ORDER",
+            ),
+            (
+                "evt-client",
+                {
+                    "exchange_order_id": local.exchange_order_id,
+                    "client_order_id": "live_llm_foreign-order",
+                    "symbol": "BTCUSDT",
+                    "fill_id": "fill-cli",
+                    "fill_price": "9999",
+                    "fill_quantity": "1",
+                    "status": "FILLED",
+                },
+                "EVENT_CLIENT_ID_DOES_NOT_MATCH_LOCAL_ORDER",
+            ),
+        ):
+            await engine._enqueue_event(
+                ExchangeEvent(
+                    event_id=event_id,
+                    event_type=ExchangeEventType.ORDER_FILLED,
+                    symbol="BTCUSDT",
+                    timestamp=datetime.now(UTC),
+                    payload=payload,
+                )
+            )
+            await engine.wait_for_event_queue()
+            after = await engine.order_manager.get_by_client(entry.client_order_id)
+            assert after.exchange_order_id == local.exchange_order_id
+            assert after.filled_quantity == local.filled_quantity
+            assert after.avg_fill_price == local.avg_fill_price
+            reasons = {
+                row.after_json["reason"]
+                for row in await AuditService(database.session_factory).list_recent(limit=80)
+                if row.action == "EXCHANGE_EVENT_ID_MISMATCH"
+            }
+            assert expected in reasons
+        assert engine.exchange_event_identity_anomalies == 2
+    finally:
+        await engine.stop()
+
+
+async def test_L17_identity_anomalies_are_counted_and_pageable(database):
+    """F-4: a non-latching anomaly still has to be visible to an operator."""
+    engine, adapter, _, _, _, _ = await _open_long_position(database)
+    try:
+        assert engine.runtime_snapshot()["exchange_event_identity_anomalies"] == 0
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-foreign",
+                event_type=ExchangeEventType.ORDER_ACK,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": "sim_foreign",
+                    "client_order_id": "foreign-client",
+                    "symbol": "BTCUSDT",
+                },
+            )
+        )
+        await engine.wait_for_event_queue()
+        # Visible in the runtime snapshot even though health stays OK, so a
+        # growing count is pageable without latching the engine unhealthy.
+        assert engine.runtime_snapshot()["exchange_event_identity_anomalies"] == 1
+        assert _event_processing_ok(engine) is True
+    finally:
+        await engine.stop()
+
+
+async def test_L18_a_fill_arriving_before_the_venue_id_is_persisted_still_lands(database):
+    """The root-cause contract, pinned WITHOUT depending on scheduling.
+
+    L1 exercises the same window through a real submit, but whether an inline
+    event is dequeued before the venue id is persisted is ultimately a
+    scheduling outcome. This test removes that dependency entirely: it puts one
+    order row into EXACTLY the race-window state (submitted locally, no venue id
+    persisted) and dispatches the fill. Any future change that stops resolving
+    events on the durable client_order_id fails here deterministically.
+    """
+    engine, adapter, _, _, plans, plan = await _open_long_position(database, race=False)
+    try:
+        intent = OrderIntent(
+            client_order_id="live_llm_race-window-entry",
+            strategy_id="live_llm",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            quantity=Decimal("0.1"),
+            price=Decimal("101"),
+            metadata=dict(BTC_EXECUTION_METADATA, direction="LONG"),
+        )
+        order = await engine.order_manager.create_from_intent(
+            intent, trading_mode=engine.settings.effective_mode()
+        )
+        await engine.order_manager.validate(order.internal_order_id)
+        await engine.order_manager.submitting(order.internal_order_id)
+        await engine.order_manager.submitted(order.internal_order_id)
+
+        window_state = await engine.order_manager.get(order.internal_order_id)
+        assert window_state is not None
+        # This IS the window: the local row exists, the venue id does not.
+        assert window_state.exchange_order_id is None
+        assert window_state.client_order_id == order.client_order_id
+
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-race-window-fill",
+                event_type=ExchangeEventType.ORDER_FILLED,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": "sim_race_window_venue_id",
+                    "client_order_id": order.client_order_id,
+                    "symbol": "BTCUSDT",
+                    "fill_id": "fill-race-window",
+                    "fill_price": "100.05",
+                    "fill_quantity": "0.05",
+                    "status": "PARTIALLY_FILLED",
+                },
+            )
+        )
+        await engine.wait_for_event_queue()
+
+        after = await engine.order_manager.get(order.internal_order_id)
+        assert after is not None
+        # The factual fill landed ...
+        assert after.filled_quantity == Decimal("0.05")
+        assert after.status == OrderStatus.PARTIALLY_FILLED
+        # ... and the venue identity became durable as a result of processing it.
+        assert after.exchange_order_id == "sim_race_window_venue_id"
+
+        # A later event resolves by the now-durable venue id, and a duplicate of
+        # the same logical fill must not double count.
+        await engine._enqueue_event(
+            ExchangeEvent(
+                event_id="evt-race-window-fill-2",
+                event_type=ExchangeEventType.ORDER_FILLED,
+                symbol="BTCUSDT",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "exchange_order_id": "sim_race_window_venue_id",
+                    "client_order_id": order.client_order_id,
+                    "symbol": "BTCUSDT",
+                    "fill_id": "fill-race-window-2",
+                    "fill_price": "100.05",
+                    "fill_quantity": "0.05",
+                    "status": "FILLED",
+                },
+            )
+        )
+        await engine.wait_for_event_queue()
+        final = await engine.order_manager.get(order.internal_order_id)
+        assert final is not None
+        assert final.filled_quantity == Decimal("0.1")
+        assert final.status == OrderStatus.FILLED
+        assert engine.exchange_event_identity_anomalies == 0
     finally:
         await engine.stop()

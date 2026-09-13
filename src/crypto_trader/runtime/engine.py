@@ -180,6 +180,12 @@ class TradingEngine:
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
+        # Exchange events that resolved to no local order, or to the wrong one.
+        # Health deliberately does NOT latch on these (the consumer is working
+        # and one foreign event is not a component failure), so the count is
+        # surfaced in ``runtime_snapshot`` instead: an operator can page on a
+        # growing number instead of reading a permanently-OK flag.
+        self.exchange_event_identity_anomalies = 0
         self.position_review_timeout_seconds = 30.0
         self.position_review_interval_seconds = max(
             0.5, min(30.0, float(settings.engine_tick_seconds))
@@ -2328,21 +2334,40 @@ class TradingEngine:
                         local = candidate
                     else:
                         identity_mismatch = True
+        # An unmatched or inconsistently-identified exchange event is a real
+        # anomaly (unknown order, an identity that was never persisted, an
+        # identity that belongs to a different order, or a payload that
+        # contradicts the order it resolved to). It must never be invisible —
+        # but it also must not be reported as a HEALTH fault: the consumer
+        # itself is working, and a single foreign/replayed event is not a
+        # component failure. Health is reserved for events that actually FAIL to
+        # process below; the anomaly is counted and audited instead.
+        reason: str | None = None
         if local is None:
-            # An unmatched exchange event is a real anomaly (unknown order, an
-            # identity that was never persisted, or an identity that belongs to
-            # a different order). It must never be invisible — but it also must
-            # not be reported as a HEALTH fault: the consumer itself is working,
-            # and a single foreign/replayed event is not a component failure.
-            # Health is reserved for events that actually FAIL to process below.
             reason = (
                 "LOCAL_ORDER_BOUND_TO_ANOTHER_VENUE_ORDER"
                 if identity_mismatch
                 else "NO_LOCAL_ORDER_FOR_EVENT"
             )
+        else:
+            # A payload that names a DIFFERENT symbol or client order than the
+            # order it resolved to is self-inconsistent. Applying it would let a
+            # misrouted event write a foreign fill into this order.
+            payload_symbol = payload.get("symbol")
+            if payload_symbol and str(payload_symbol) != str(local.symbol):
+                reason = "EVENT_SYMBOL_DOES_NOT_MATCH_LOCAL_ORDER"
+            payload_client = payload.get("client_order_id")
+            if (
+                reason is None
+                and payload_client
+                and str(payload_client) != str(local.client_order_id)
+            ):
+                reason = "EVENT_CLIENT_ID_DOES_NOT_MATCH_LOCAL_ORDER"
+        if reason is not None:
+            self.exchange_event_identity_anomalies += 1
             await self.audit.log(
                 "EXCHANGE_EVENT_ID_MISMATCH"
-                if identity_mismatch
+                if reason != "NO_LOCAL_ORDER_FOR_EVENT"
                 else "EXCHANGE_EVENT_UNMATCHED",
                 target=str(exchange_order_id),
                 run_id=self.run_id,
@@ -2709,6 +2734,9 @@ class TradingEngine:
             },
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
+            "exchange_event_identity_anomalies": (
+                self.exchange_event_identity_anomalies
+            ),
             "kill_switch": self.kill_switch_snapshot(),
         }
 

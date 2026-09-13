@@ -48,16 +48,23 @@ class InlineEventDrainedAdapter(SimulatedExchangeAdapter):
 ```
 
 `join()` waits until every event the adapter emitted inline has been fully
-processed — the reproduction depends on no sleep, no retry and no wall-clock
-threshold. The `asyncio.wait_for(..., timeout=10)` in the harness is a hang
-guard only: it is never the mechanism, and the test fails deterministically
-without the fix and passes deterministically with it (measured below). Its one
-side effect is that a stalled event loop would surface as a `TimeoutError` out
-of `submit_order` rather than as "event loop stalled" — a test-harness-only
-concern, since the gate exists only in the test.
+processed, so the reproduction depends on no sleep, no retry and no wall-clock
+threshold. The `asyncio.wait_for(..., timeout=10)` in the harness is a bounded
+hang guard only; it is never the mechanism. Its one side effect is that a
+stalled event loop would surface as a `TimeoutError` out of `submit_order`
+rather than as "event loop stalled" — a harness-only concern, since the gate
+exists only in the test.
 
-Before the fix this reproduction failed **every single time**, with exactly the
-flaky symptom (`plan == APPROVED`, venue order `FILLED`).
+Before the fix this reproduction failed **every single time** (measured: 20/20
+and 10/10 on the unfixed base, with the resolved engine module asserted to be
+the base tree's), with exactly the flaky symptom (`plan == APPROVED`, venue
+order `FILLED`).
+
+Because *which* interleaving the scheduler picks is ultimately not something a
+test can own, the contract is ALSO pinned without any timing dependence by L18,
+which places one order row in exactly the race-window state (submitted locally,
+no venue id persisted) and dispatches the fill. L18 fails deterministically on
+the unfixed revision and passes on the fixed one.
 
 Instrumentation of a *passing* run showed the leak is normally present but
 mostly benign:
@@ -91,7 +98,9 @@ The causal chain, in order:
 2. The exchange adapter emits `ORDER_ACK`, `ORDER_OPENED` and
    `ORDER_PARTIALLY_FILLED`/`ORDER_FILLED` events **inline, while
    `submit_order` is still in flight** (this is documented in
-   `_sync_submitted_order_state`).
+   `_sync_submitted_order_state`). In this revision the adapter that actually
+   does so is `SimulatedExchangeAdapter`; see §4 for what that means for live
+   adapters.
 3. The engine's background `_event_loop` task consumes those events
    concurrently. Every handler began with
    `local = await self.order_manager.get_by_exchange(exchange_order_id)`.
@@ -223,6 +232,9 @@ untouched.
 | L13 | an event bound to another venue order is refused, not applied |
 | L14 | an anomaly is audited; a real processing failure marks health unhealthy and the next good event recovers it |
 | L15 | account-scoped balance updates (no order id) are reachable |
+| L16 | a payload that contradicts the order it resolved to is refused |
+| L17 | identity anomalies are counted in the runtime snapshot (pageable, non-latching) |
+| L18 | a fill arriving before the venue id is durable still lands (no timing dependence) |
 
 L1 is the direct root-cause regression: it failed 100 % of the time before the
 fix (20/20 on the unfixed base) and passes 100 % after (100/100). L1 also asserts
@@ -233,11 +245,23 @@ revision of this fix was independently reviewed.
 
 ## 7. Stress result
 
-See the closure report accompanying this change for the measured numbers
-(isolated root-cause test x100, lifecycle file x50, determinism suite x20,
-order-varied runs x20, full suite x5). Instrumented runs after the fix show
-`EVENT_DROPPED_LOCAL_ORDER_NOT_VISIBLE` for fills at **zero**, and no
-`EXCHANGE_EVENT_FAILED` records at all.
+Measured on the fixed revision unless stated otherwise; each figure is
+reproducible with the command in parentheses.
+
+| measurement | result | command |
+|---|---|---|
+| root-cause test on the UNFIXED base | 20/20 and 10/10 **fail** | `pytest test_position_lifecycle_determinism.py::test_L1_... ` in a worktree at the base SHA |
+| root-cause test on the fixed revision | 100/100 **pass** | same test, 100 iterations |
+| determinism suite (L1-L18) | 60/60 clean | full file, 60 iterations |
+| lifecycle file | 30/30 and 50/50 clean | `pytest tests/integration/test_live_llm_position_lifecycle.py` |
+| order-varied context | 20/20 clean | lifecycle file adjacent to `test_order_reconciliation.py`, both orders |
+| full suite | see the closure report for this revision's exact runs | `pytest -q` |
+
+Instrumentation of a passing run BEFORE the fix showed 23
+`EVENT_DROPPED_LOCAL_ORDER_NOT_VISIBLE` records, all `ORDER_ACK`, plus the fatal
+`ORDER_FILLED` drop (`fill_quantity=0.1`) in the deterministic reproduction.
+After the fix, fills are never dropped and no `EXCHANGE_EVENT_FAILED` record is
+produced.
 
 ## 8. Remaining limitations
 
@@ -263,5 +287,12 @@ order-varied runs x20, full suite x5). Instrumented runs after the fix show
    for going live rather than a fix to a running live path. That wiring must
    demonstrate the identity contract (durable `client_order_id` on every order
    event) when it happens.
-5. **Auto scale-in remains disabled.** `OpenAction.ADD` is still refused
+5. **Identity anomalies are audited and counted, not alerted.** A single
+   unmatched/foreign event must not latch engine health (that was worse), and a
+   systemic identity failure would leave `event_processing` OK. The count is
+   therefore surfaced as `runtime_snapshot()["exchange_event_identity_anomalies"]`
+   and every anomaly is an audit row, so a growing count is pageable — but no
+   threshold, alert rule or dashboard consumes those yet. Adding rate-based
+   alerting (or splitting the health component by event class) is a follow-up.
+6. **Auto scale-in remains disabled.** `OpenAction.ADD` is still refused
    (`LIVE_LLM_POSITION_ADD_REFUSED`); nothing in this change enables it.
