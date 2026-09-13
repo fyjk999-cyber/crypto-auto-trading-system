@@ -123,6 +123,7 @@ class GrowthRuntimeReport:
     lessons_created: int = 0
     patterns_created: int = 0
     cards_created: int = 0
+    retrievable_cards: int = 0
     compressions_created: int = 0
     retrievals: int = 0
     traces: int = 0
@@ -140,6 +141,7 @@ class GrowthRuntimeReport:
             "lessons_created": self.lessons_created,
             "patterns_created": self.patterns_created,
             "cards_created": self.cards_created,
+            "retrievable_cards": self.retrievable_cards,
             "compressions_created": self.compressions_created,
             "retrievals": self.retrievals,
             "traces": self.traces,
@@ -153,7 +155,9 @@ def runtime_status(report: GrowthRuntimeReport) -> str:
         return "NO_DATA"
     if report.structured_reviews_created == 0:
         return "BLOCKED"
-    if report.cards_created == 0 and report.compressions_created == 0:
+    if report.retrievable_cards == 0 and report.compressions_created == 0:
+        if report.cards_created or report.lessons_created or report.patterns_created:
+            return "CANDIDATE_LEARNING"
         return "REVIEW_ONLY"
     if report.errors or report.trace_failures:
         return "DEGRADED"
@@ -167,7 +171,15 @@ def _episode_review_input(
     mode: str,
     currency: str,
 ) -> EpisodeReviewInput:
-    canonical_regime, _context = normalize_regime(episode.entry_market_regime)
+    canonical_regime, regime_context = normalize_regime(episode.entry_market_regime)
+    missing = []
+    market_changes = [
+        {
+            "entry_market_regime_raw": episode.entry_market_regime,
+            "regime_context": regime_context,
+            "holding_time_seconds": episode.holding_time_seconds,
+        }
+    ]
     return EpisodeReviewInput(
         episode_id=episode.episode_id,
         account_id=account_id,
@@ -192,13 +204,17 @@ def _episode_review_input(
         closed_at=episode.closed_at,
         entry_market_regime=canonical_regime,
         terminal_reason=episode.terminal_reason,
-        thesis="",
+        thesis=f"closed episode terminal_reason={episode.terminal_reason}",
         selected_tools=[],
-        trade_plan={},
+        trade_plan={
+            "trade_plan_id": episode.trade_plan_id,
+            "holding_time_seconds": episode.holding_time_seconds,
+            "fees": str(episode.fees),
+        },
         risk_adjustments=[],
         position_actions=[],
-        market_changes=[],
-        missing_evidence=[],
+        market_changes=market_changes,
+        missing_evidence=missing,
     )
 
 
@@ -222,6 +238,22 @@ def _binding(
         regime=canonical_regime,
         direction=episode.direction,
     )
+
+
+def _future_rule_scope(item) -> dict:
+    applicability = dict(item.applicability or {})
+    scope: dict = {"scope": "SYMBOL_REGIME"}
+    for key in ("scope", "symbols", "regimes", "directions"):
+        if key in applicability:
+            scope[key] = applicability[key]
+    if "regime" in applicability and "regimes" not in scope:
+        scope["regimes"] = [applicability["regime"]]
+    if "symbol" in applicability and "symbols" not in scope:
+        scope["symbols"] = [applicability["symbol"]]
+    if "direction" in applicability and "directions" not in scope:
+        scope["directions"] = [applicability["direction"]]
+    scope["counter_conditions"] = list(item.counter_conditions or [])
+    return scope
 
 
 class GrowthRuntimeLearningService:
@@ -321,9 +353,9 @@ class GrowthRuntimeLearningService:
                     TestableLesson(
                         statement=item.statement,
                         testable_prediction=item.statement,
-                        scope={"applicability": item.applicability},
+                        scope=_future_rule_scope(item),
                         evidence_refs=list(item.evidence_refs),
-                        contrary_refs=[],
+                        contrary_refs=list(item.counter_conditions or []),
                         uncertainty="FUTURE_RULE",
                         confidence=item.confidence,
                     )
@@ -332,12 +364,18 @@ class GrowthRuntimeLearningService:
             await self._persist_audit_learning(attempt)
 
         if not succeeded:
-            report.status = "REVIEW_ONLY" if attempts else "BLOCKED"
+            report.status = (
+                "FAILED"
+                if attempts and report.errors
+                else "REVIEW_ONLY"
+                if attempts
+                else "BLOCKED"
+            )
             return report
 
-        known_at = max(
-            (episode.closed_at for episode in episodes), default=now or datetime.now(UTC)
-        )
+        # Epistemic time: knowledge becomes known when the review/publish runs,
+        # never backdated to the historical episode close time.
+        known_at = now or datetime.now(UTC)
         try:
             published = await self.publisher.publish_attempts(
                 succeeded,
@@ -352,12 +390,13 @@ class GrowthRuntimeLearningService:
         report.lessons_created = int(published.get("lessons", 0))
         report.patterns_created = int(published.get("published_count", 0))
 
-        cards, patterns = await self._materialize_cards(
+        cards, retrievable, patterns = await self._materialize_cards(
             episode_ids={attempt.review.episode_id for attempt in succeeded if attempt.review},
             known_at=known_at,
             fence=fence,
         )
         report.cards_created = cards
+        report.retrievable_cards = retrievable
         report.status = runtime_status(report)
         if report.status == "NO_DATA":
             report.status = "REVIEW_ONLY"
@@ -405,15 +444,16 @@ class GrowthRuntimeLearningService:
         episode_ids: set[str],
         known_at: datetime,
         fence: Fence,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         if not episode_ids:
-            return 0, 0
+            return 0, 0, 0
         patterns = await self.store.current_patterns_for_scope(
             account_id=self.account_id,
             mode=self.mode,
             statuses=RETRIEVABLE_STATUSES,
         )
         materialized = 0
+        retrievable = 0
         considered = 0
         for pattern in patterns:
             members = set(pattern.success_refs_json or []) | set(
@@ -442,10 +482,26 @@ class GrowthRuntimeLearningService:
                 rationale="CANONICAL_PATTERN_TO_EXPERIENCE_CARD",
                 now=known_at,
             )
+            guidance = dict(proposal.proposed_guidance or {})
+            guidance.update(
+                {
+                    "proposition_key": (pattern.scope_json or {}).get(
+                        "proposition_key"
+                    ),
+                    "regime": pattern.regime,
+                    "direction": pattern.direction,
+                    "evidence_domain": (pattern.features_json or {}).get(
+                        "evidence_domain"
+                    ),
+                }
+            )
+            proposal.proposed_guidance = guidance
             proposal.account_id = pattern.account_id
             proposal.mode = pattern.mode
             proposal.share_scope = SHARE_SCOPE_ACCOUNT_MODE
             result = await self.card_store.apply(proposal, fence=fence, now=known_at)
             if result.created_rule_ids:
                 materialized += 1
-        return materialized, considered
+                if result.status in {"ACTIVE", "WATCH"}:
+                    retrievable += 1
+        return materialized, retrievable, considered

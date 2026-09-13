@@ -218,7 +218,14 @@ class DailyReviewScheduler:
             return {"status": "FAILED", "error": type(exc).__name__}
         if not await fence():
             raise RuntimeError("DAILY_REVIEW_CLAIM_LOST_BEFORE_GROWTH_PUBLISH")
-        return report.as_dict()
+        payload = report.as_dict()
+        if payload.get("status") in {"FAILED", "BLOCKED"}:
+            # Do not mark the episode REVIEWED / daily review SUCCEEDED: the
+            # exact input identity must remain retryable on the next run.
+            raise RuntimeError(
+                f"GROWTH_LEARNING_RETRYABLE:{payload.get('status')}"
+            )
+        return payload
 
     async def _learn_cards(self, date: str, claim_token: str) -> dict:
         if self.card_learner is None:

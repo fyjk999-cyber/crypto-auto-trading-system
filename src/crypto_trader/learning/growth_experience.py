@@ -215,7 +215,7 @@ class AdaptiveCardStore:
                 proposal.operation = OP_UPDATE
                 proposal.proposed_status = proposal.proposed_status or existing.status
                 await session.rollback()
-                return await self._update(proposal)
+                return await self._update(proposal, now=now)
             source_ids = sorted(set(proposal.source_episode_ids))
             row = AICompressedExperienceORM(
                 rule_id=rule_id,
