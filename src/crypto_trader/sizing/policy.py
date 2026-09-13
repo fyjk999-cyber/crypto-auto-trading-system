@@ -30,6 +30,14 @@ HARD_MAX_NOTIONAL_MULTIPLE = Decimal("5")
 HARD_MAX_RISK_PER_TRADE = Decimal("0.010")
 HARD_MAX_LIQUIDITY_PARTICIPATION = Decimal("1")
 
+#: Floor under the ENTRY minimum valid stop distance. Unlike the ceilings above
+#: this is a LOWER bound on a protection: configuration may make the minimum
+#: stop distance LARGER (safer) but can never make it smaller, because a smaller
+#: minimum is precisely the "invalid ultra-tight stop buys maximum size" path
+#: this guard exists to close. Same risk philosophy as the ADD policy defaults.
+HARD_MIN_STOP_DISTANCE_FRACTION = Decimal("0.001")
+HARD_MIN_STOP_DISTANCE_VOLATILITY_MULTIPLE = Decimal("1.0")
+
 #: Reason code recorded when a configured value had to be clamped to a hard
 #: ceiling (the clamp is loud, never silent).
 CONFIG_CLAMPED_PREFIX = "CONFIG_CLAMPED:"
@@ -66,6 +74,15 @@ class PositionSizingPolicy:
 
     # Economic viability gate (§23, §24)
     min_effective_notional_fraction: Decimal = Decimal("0.005")
+
+    # Deterministic minimum valid stop distance (§97/§98 semantics, entry path).
+    # A stop closer than this is REJECTED, never silently widened: sizing on a
+    # wider distance while executing the tighter stop would not increase the
+    # theoretical loss but would manufacture systematic noise stop-outs.
+    min_stop_distance_fraction: Decimal = HARD_MIN_STOP_DISTANCE_FRACTION
+    min_stop_distance_volatility_multiple: Decimal = (
+        HARD_MIN_STOP_DISTANCE_VOLATILITY_MULTIPLE
+    )
 
     # Factual market liquidity (§19, §20, §21)
     liquidity_depth_levels: int = 5
@@ -193,6 +210,29 @@ class PositionSizingPolicy:
             levels = 1
         object.__setattr__(self, "liquidity_depth_levels", levels)
 
+        # The minimum stop distance ratchets the OTHER way: bigger is safer, so
+        # the hard floor is a lower bound and configuration may only tighten it.
+        object.__setattr__(
+            self,
+            "min_stop_distance_fraction",
+            _decimal(
+                "min_stop_distance_fraction",
+                self.min_stop_distance_fraction,
+                floor=HARD_MIN_STOP_DISTANCE_FRACTION,
+                default=HARD_MIN_STOP_DISTANCE_FRACTION,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "min_stop_distance_volatility_multiple",
+            _decimal(
+                "min_stop_distance_volatility_multiple",
+                self.min_stop_distance_volatility_multiple,
+                floor=HARD_MIN_STOP_DISTANCE_VOLATILITY_MULTIPLE,
+                default=HARD_MIN_STOP_DISTANCE_VOLATILITY_MULTIPLE,
+            ),
+        )
+
         static_cap = self.static_max_order_notional
         if static_cap is not None:
             parsed_cap = _finite_or_none(static_cap)
@@ -230,6 +270,37 @@ class PositionSizingPolicy:
         """Smallest economically meaningful position notional (§23)."""
         return D(equity) * self.min_effective_notional_fraction
 
+    def minimum_stop_distance(
+        self, *, price: Decimal, volatility: Decimal | None
+    ) -> Decimal:
+        """Deterministic floor for the ENTRY stop distance.
+
+        ``MinimumValidStopDistance = max(
+            price x min_stop_distance_fraction,
+            price x volatility x min_stop_distance_volatility_multiple,
+        )``
+
+        The same risk philosophy as the ADD policy: an absolute fraction floor
+        that always applies, widened by factual realized volatility when the
+        market is genuinely moving. ``volatility`` is the realized per-tick
+        return standard deviation (a fraction), never an LLM number, and an
+        UNKNOWN volatility simply contributes no widening - the absolute floor
+        still holds.
+        """
+        price_value = D(price)
+        if price_value <= 0:
+            return Decimal("0")
+        floor = price_value * self.min_stop_distance_fraction
+        volatility_value = _finite_or_none(volatility)
+        if volatility_value is not None and volatility_value > 0:
+            floor = max(
+                floor,
+                price_value
+                * volatility_value
+                * self.min_stop_distance_volatility_multiple,
+            )
+        return floor
+
     def to_evidence(self) -> dict:
         return {
             "base_risk_per_trade": str(self.base_risk_per_trade),
@@ -242,6 +313,10 @@ class PositionSizingPolicy:
             "max_symbol_exposure_multiple": str(self.max_symbol_exposure_multiple),
             "max_leverage": str(self.max_leverage),
             "min_effective_notional_fraction": str(self.min_effective_notional_fraction),
+            "min_stop_distance_fraction": str(self.min_stop_distance_fraction),
+            "min_stop_distance_volatility_multiple": str(
+                self.min_stop_distance_volatility_multiple
+            ),
             "liquidity_depth_levels": self.liquidity_depth_levels,
             "max_liquidity_participation": str(self.max_liquidity_participation),
             "static_max_order_notional": (

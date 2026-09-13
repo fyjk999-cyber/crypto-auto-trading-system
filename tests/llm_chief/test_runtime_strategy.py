@@ -305,7 +305,11 @@ async def test_live_entry_propagates_factual_volatility_to_sizing_and_risk(datab
     planner = FakePlanner(events)
     strategy = LiveLLMDecisionStrategy(
         evidence_engine=FakeEvidenceEngine(),
-        chief=FakeChief("LONG", size=10),
+        # A 10% realized volatility raises the entry minimum stop distance to
+        # 10% of price, so this entry carries a stop 10% away: the test is about
+        # VOLATILITY PROPAGATION and the resulting 1x leverage clamp, not about
+        # stop tightness.
+        chief=FakeChief("LONG", size=10, stop_loss=90),
         planner=planner,
         decisions=LLMDecisionStore(database.session_factory),
         audit=FakeAudit(events),
@@ -383,8 +387,9 @@ async def test_short_entry_caps_on_bid_depth_not_ask_depth(database):
     planner = FakePlanner(events)
     strategy = LiveLLMDecisionStrategy(
         evidence_engine=FakeEvidenceEngine(),
-        # A 0.1% stop: the risk budget alone would allow far more than the thin
-        # bid side can actually absorb, so LIQUIDITY becomes the binding cap.
+        # A 0.6% stop (above the 100.5 mark, so it is directionally valid for a
+        # SHORT): the risk budget alone would allow far more than the thin bid
+        # side can absorb, so LIQUIDITY becomes the binding cap.
         chief=FakeChief("SHORT", stop_loss=100.6),
         planner=planner,
         decisions=LLMDecisionStore(database.session_factory),
@@ -392,6 +397,11 @@ async def test_short_entry_caps_on_bid_depth_not_ask_depth(database):
         sizer=LiveEntrySizingService(),
     )
     context = make_ctx()
+    # A quiet market: the deterministic minimum stop distance is then the
+    # absolute 0.1% floor, which this 0.6% stop comfortably clears. The ctx
+    # default (1% realized volatility) would raise the floor to 1% on its own,
+    # which is not what this test is about.
+    context.realized_volatility = Decimal("0.0005")
     # Thin bids, deep asks: a SHORT must be limited by the THIN bid side.
     context.book.apply_snapshot(
         2,
@@ -467,3 +477,47 @@ async def test_the_sizer_metadata_contract_is_accepted_by_the_risk_engine(databa
     assert decision.checks["sizing_risk_budget_verified"] == "50.00000"
     # RiskEngine independently confirmed the Sizer's approved leverage.
     assert Decimal(decision.checks["approved_leverage"]) <= Decimal("5")
+
+
+async def test_live_entry_refuses_an_ultra_tight_stop_instead_of_taking_maximum_size(database):
+    """The runtime must surface the entry stop-distance guard, not swallow it.
+
+    A stop far closer than the deterministic minimum (here: 0.1% of price, the
+    absolute floor) is an INVALID stop. The risk budget alone cannot defend the
+    account, because a tighter stop shrinks the risk unit and INFLATES the
+    notional the budget buys. The entry is refused with a durable reason code
+    rather than sized up to the 500% ceiling.
+    """
+    events = []
+    planner = FakePlanner(events)
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        # A LONG prices off the best ASK (100.20). This stop is 0.05 away from
+        # it (0.05%), below the 0.1% deterministic minimum, and still below the
+        # 100.195 mid, so it passes the directional check and is refused ONLY by
+        # the stop-distance guard.
+        chief=FakeChief("LONG", size=10, stop_loss=100.15),
+        planner=planner,
+        decisions=LLMDecisionStore(database.session_factory),
+        audit=FakeAudit(events),
+        sizer=LiveEntrySizingService(),
+    )
+    context = make_ctx()
+    context.realized_volatility = Decimal("0.0005")
+    context.book.apply_snapshot(
+        2,
+        [(Decimal("100.19"), Decimal("1000"))],
+        [(Decimal("100.20"), Decimal("1000"))],
+    )
+
+    assert await strategy.on_market_data(context) == []
+    assert planner.calls == 0
+    rejections = [
+        event
+        for event in events
+        if event[0:2] == ("audit", "LIVE_LLM_SIZING_REJECTED")
+    ]
+    assert rejections, "the rejected entry left no durable audit record"
+    assert rejections[-1][2]["after"]["reason_codes"] == [
+        "STOP_DISTANCE_BELOW_MINIMUM"
+    ]

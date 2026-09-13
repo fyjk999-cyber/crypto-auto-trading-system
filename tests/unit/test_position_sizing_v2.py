@@ -117,17 +117,24 @@ def test_stop_distance_determines_notional_as_pct_of_equity(stop_price, expected
     assert result.audit.stop_distance == Decimal("100") - stop_price
 
 
-def test_case_e_tiny_stop_is_capped_at_500_percent_not_one_million():
-    """Case E — 0.05% stop would imply 1,000,000; the 500% ceiling binds."""
+def test_case_e_a_stop_below_the_minimum_is_rejected_not_capped():
+    """Case E — SUPERSEDED by the entry minimum-stop-distance guard (§10, §13).
+
+    Previously a 0.05% stop inflated risk_qty to 1,000,000 and the 500% ceiling
+    bound the result. Capping still handed the LLM the MAXIMUM permitted size
+    for an INVALID stop, which is exactly the manipulation the guard closes: a
+    tighter stop shrinks the risk unit, so the risk budget alone cannot defend
+    against it. A 0.05% stop is now below the 0.1% deterministic minimum and the
+    entry is REJECTED outright - it never reaches the ceiling.
+    """
     result = size(stop_price=Decimal("99.95"))
 
-    assert result.rejected is False
-    # The risk model alone would have asked for 1,000,000 notional.
-    assert result.audit.risk_qty * Decimal("100") == Decimal("1000000")
-    assert result.risk_normalized_notional == Decimal("500000")
-    assert result.risk_normalized_notional == EQUITY * HARD_MAX_NOTIONAL_MULTIPLE
-    assert result.binding_cap != "RISK_BUDGET"
-    assert set(result.binding_caps) & {"5X_CAP", "MARGIN", "PORTFOLIO", "SYMBOL"}
+    assert result.rejected is True
+    assert result.risk_normalized_notional == Decimal("0")
+    assert result.sizing_reason_codes[-1] == "STOP_DISTANCE_BELOW_MINIMUM"
+    assert result.audit.stop_distance == Decimal("0.05")
+    assert result.audit.minimum_stop_distance == Decimal("0.1")
+    assert result.audit.stop_distance_source == "LLM_REQUESTED"
 
 
 def test_large_stop_distance_always_produces_a_smaller_notional():
@@ -192,7 +199,13 @@ def test_sizing_is_capital_aware_across_account_sizes():
 
 # =============================================================== §44 / §45 caps
 def test_five_x_ceiling_holds_for_any_stop_and_confidence():
-    for stop in (Decimal("99.99"), Decimal("99.999"), Decimal("99.9999")):
+    """Every VALID stop, at every conviction, stays inside the 5x ceiling.
+
+    The stops are >= the deterministic minimum (0.1% of 100). Stops BELOW it are
+    rejected before cap math and are covered by the stop-distance guard tests -
+    using them here would make this assertion pass vacuously on a zero notional.
+    """
+    for stop in (Decimal("99.9"), Decimal("99.8"), Decimal("99"), Decimal("95")):
         for conviction in (Decimal("0.0"), Decimal("0.80"), Decimal("1.0")):
             result = size(
                 stop_price=stop,
@@ -200,11 +213,20 @@ def test_five_x_ceiling_holds_for_any_stop_and_confidence():
                 valuation=valuation(equity=Decimal("100000"), margin=Decimal("1000000")),
                 liquidity_depth_qty=Decimal("1000000000"),
             )
+            assert result.rejected is False
+            assert result.risk_normalized_notional > 0
             assert result.risk_normalized_notional <= EQUITY * HARD_MAX_NOTIONAL_MULTIPLE
+    # The tightest valid stop still reaches the ceiling - the ceiling is real.
+    tightest = size(
+        stop_price=Decimal("99.9"),
+        valuation=valuation(equity=Decimal("100000"), margin=Decimal("1000000")),
+        liquidity_depth_qty=Decimal("1000000000"),
+    )
+    assert tightest.risk_normalized_notional == EQUITY * HARD_MAX_NOTIONAL_MULTIPLE
 
 
 def test_stop_loss_risk_stays_inside_the_effective_risk_budget():
-    stops = (Decimal("99"), Decimal("99.5"), Decimal("99.8"), Decimal("99.9"), Decimal("99.95"))
+    stops = (Decimal("99"), Decimal("99.5"), Decimal("99.8"), Decimal("99.9"), Decimal("99.85"))
     for stop in stops:
         for conviction in (Decimal("0.0"), Decimal("0.80"), Decimal("1.0")):
             result = size(
@@ -213,6 +235,8 @@ def test_stop_loss_risk_stays_inside_the_effective_risk_budget():
                 valuation=valuation(equity=Decimal("100000"), margin=Decimal("1000000")),
                 liquidity_depth_qty=Decimal("1000000000"),
             )
+            assert result.rejected is False
+            assert result.max_loss_estimate > 0
             assert result.max_loss_estimate <= result.audit.risk_budget
             assert result.audit.risk_budget <= EQUITY * HARD_MAX_RISK_PER_TRADE
 
@@ -283,14 +307,17 @@ def test_confidence_is_never_used_as_leverage():
 def test_liquidity_caps_quantity_at_participation_of_factual_depth():
     result = size(
         price=Decimal("1"),
-        stop_price=Decimal("0.9995"),
+        # 0.1% of 1.0 - exactly the deterministic minimum for a price of 1, so
+        # the stop guard passes and LIQUIDITY is what binds.
+        stop_price=Decimal("0.999"),
         requested_leverage=Decimal("1"),
         liquidity_depth_qty=Decimal("100000"),
         valuation=valuation(equity=Decimal("100000"), margin=Decimal("100000")),
     )
 
     assert result.rejected is False
-    assert result.audit.risk_qty == Decimal("1000000")
+    assert result.audit.minimum_stop_distance == Decimal("0.001")
+    assert result.audit.risk_qty == Decimal("500000")
     assert result.audit.liquidity_cap_qty == Decimal("15000")
     assert result.normalized_quantity <= Decimal("15000")
     assert "LIQUIDITY" in result.binding_caps
@@ -411,8 +438,11 @@ def test_requested_leverage_above_the_hard_cap_is_clamped():
 
 
 def test_volatility_and_illiquidity_clamp_leverage_to_one():
-    volatile = size(volatility=Decimal("0.10"))
+    # A 10% realized volatility also raises the minimum stop distance to 10% of
+    # price, so the entry must carry a stop at least that far away.
+    volatile = size(volatility=Decimal("0.10"), stop_price=Decimal("90"))
     illiquid = size(liquidity=Decimal("0"))
+    assert volatile.rejected is False
     assert volatile.risk_bounded_leverage == Decimal("1")
     assert illiquid.risk_bounded_leverage == Decimal("1")
 
@@ -1250,3 +1280,141 @@ def test_disabling_the_economic_gate_is_recorded_loudly():
     policy = PositionSizingPolicy(min_effective_notional_fraction=Decimal("0"))
     assert policy.min_effective_notional_fraction == Decimal("0")
     assert "CONFIG_NOTE:min_effective_notional_fraction_disabled" in policy.reason_codes
+
+
+# =============================== §13/§14 ENTRY MINIMUM STOP DISTANCE GUARD (T1-T10)
+# An invalid ultra-tight stop must NOT be a path to maximum size. A tighter stop
+# shrinks the risk unit, so the risk budget alone cannot defend the account: it
+# INFLATES the notional the budget buys until the 500% ceiling is what stops it.
+# The entry is therefore REJECTED, never silently widened (sizing on a wider
+# distance while executing the tighter stop would keep the theoretical loss
+# identical while manufacturing systematic noise stop-outs).
+
+
+def test_T1_a_normal_stop_is_unchanged_by_the_guard():
+    """T1: stop comfortably above the minimum -> identical sizing."""
+    result = size(stop_price=Decimal("99"))
+
+    assert result.rejected is False
+    assert result.risk_normalized_notional == Decimal("50000")
+    assert result.audit.stop_distance == Decimal("1.0")
+    assert result.audit.minimum_stop_distance == Decimal("0.1")
+    # The effective sizing distance IS the requested distance.
+    assert result.audit.stop_distance_source == "LLM_REQUESTED"
+
+
+def test_T2_a_stop_exactly_at_the_minimum_is_accepted():
+    """T2: the boundary is inclusive (>=), not exclusive."""
+    result = size(stop_price=Decimal("99.9"))
+
+    assert result.rejected is False
+    assert result.audit.stop_distance == result.audit.minimum_stop_distance
+    assert result.risk_normalized_notional == Decimal("500000")
+
+
+@pytest.mark.parametrize("stop", ["99.9001", "99.95", "99.99", "99.999", "99.9999"])
+def test_T3_a_stop_below_the_minimum_is_rejected(stop):
+    """T3: anything closer than the minimum is refused, not resized."""
+    result = size(stop_price=Decimal(stop))
+
+    assert result.rejected is True
+    assert result.risk_normalized_notional == Decimal("0")
+    assert result.normalized_quantity == Decimal("0")
+    assert result.sizing_reason_codes[-1] == "STOP_DISTANCE_BELOW_MINIMUM"
+
+
+def test_T4_an_absurd_stop_cannot_buy_the_500_percent_ceiling():
+    """T4: 0.01% - the theoretical 5,000,000 notional is unreachable."""
+    result = size(stop_price=Decimal("99.99"))
+
+    assert result.rejected is True
+    assert result.risk_normalized_notional == Decimal("0")
+    assert result.audit.minimum_stop_distance == Decimal("0.1")
+    # The invalid stop never even reaches cap math.
+    assert result.binding_cap == "NONE"
+
+
+def test_T5_high_volatility_expands_the_minimum_stop():
+    """T5: a factual 2% realized volatility raises the floor to 2% of price."""
+    volatile = size(stop_price=Decimal("99"), volatility=Decimal("0.02"))
+
+    assert volatile.rejected is True
+    assert volatile.audit.minimum_stop_distance == Decimal("2.0")
+    assert volatile.sizing_reason_codes[-1] == "STOP_DISTANCE_BELOW_MINIMUM"
+
+    wide_enough = size(stop_price=Decimal("98"), volatility=Decimal("0.02"))
+    assert wide_enough.rejected is False
+    assert wide_enough.audit.minimum_stop_distance == Decimal("2.0")
+
+
+def test_T6_low_volatility_still_uses_the_absolute_floor():
+    """T6: a quiet market never relaxes the absolute fraction floor."""
+    for volatility in (Decimal("0"), Decimal("0.0000001")):
+        result = size(stop_price=Decimal("99.95"), volatility=volatility)
+        assert result.rejected is True
+        assert result.audit.minimum_stop_distance == Decimal("0.1")
+
+
+def test_T7_the_guard_does_not_weaken_the_5x_cap():
+    """T7: the tightest VALID stop still stops exactly at 5x equity."""
+    result = size(
+        stop_price=Decimal("99.9"),
+        valuation=valuation(equity=Decimal("100000"), margin=Decimal("10000000")),
+        liquidity_depth_qty=Decimal("1000000000"),
+    )
+
+    assert result.rejected is False
+    assert result.risk_normalized_notional == EQUITY * HARD_MAX_NOTIONAL_MULTIPLE
+    assert result.audit.notional_pct_of_equity == HARD_MAX_NOTIONAL_MULTIPLE
+
+
+def test_T8_the_guard_does_not_weaken_the_one_percent_risk_cap():
+    """T8: max loss at the stop still cannot exceed 1% of equity."""
+    for stop in (Decimal("99.9"), Decimal("99"), Decimal("95")):
+        for conviction in (Decimal("0.0"), Decimal("0.80"), Decimal("1.0")):
+            result = size(stop_price=stop, conviction=conviction)
+            assert result.max_loss_estimate <= EQUITY * HARD_MAX_RISK_PER_TRADE
+
+
+def test_T9_the_guard_preserves_account_scaling():
+    """T9: the floor is a FRACTION of price, so scaling is untouched."""
+    small = size(
+        valuation=valuation(equity="10000", margin="10000"),
+        account=Account(equity=Decimal("10000")),
+        liquidity_depth_qty=Decimal("1000000"),
+    )
+    large = size(stop_price=Decimal("99"), valuation=valuation(equity="100000"))
+
+    assert small.rejected is False and large.rejected is False
+    assert small.audit.minimum_stop_distance == large.audit.minimum_stop_distance
+    assert large.risk_normalized_notional == small.risk_normalized_notional * 10
+
+
+def test_T10_the_guard_does_not_enable_scale_in():
+    """T10: this guard is a defensive entry rule; ADD stays disabled."""
+    from crypto_trader.scale_in import ADD_EXECUTION_ENABLED, ScaleInPolicy
+    from crypto_trader.scale_in.policy import ENABLE_LLM_AUTOMATIC_SCALE_IN
+
+    assert ENABLE_LLM_AUTOMATIC_SCALE_IN is False
+    assert ADD_EXECUTION_ENABLED is False
+    assert ScaleInPolicy().enabled is False
+    assert ScaleInPolicy().average_down_enabled is False
+
+
+def test_the_guard_floor_cannot_be_configured_downward():
+    """One-way ratchet: config may tighten the floor, never weaken it."""
+    from crypto_trader.sizing.policy import HARD_MIN_STOP_DISTANCE_FRACTION
+
+    lowered = PositionSizingPolicy(min_stop_distance_fraction=Decimal("0.00001"))
+    assert lowered.min_stop_distance_fraction == HARD_MIN_STOP_DISTANCE_FRACTION
+    assert "CONFIG_CLAMPED:min_stop_distance_fraction" in lowered.reason_codes
+
+    tightened = PositionSizingPolicy(min_stop_distance_fraction=Decimal("0.01"))
+    assert tightened.min_stop_distance_fraction == Decimal("0.01")
+    assert tightened.hard_ceiling_violations == ()
+
+    # A wildly tight stop is refused even by a policy that tries to allow it.
+    service = LiveEntrySizingService(
+        policy=PositionSizingPolicy(min_stop_distance_fraction=Decimal("0.00001"))
+    )
+    assert service.policy.min_stop_distance_fraction == HARD_MIN_STOP_DISTANCE_FRACTION

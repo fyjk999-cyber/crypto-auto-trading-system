@@ -48,6 +48,11 @@ REJECT_INSUFFICIENT_AVAILABLE_MARGIN = "INSUFFICIENT_AVAILABLE_MARGIN"
 REJECT_LIQUIDITY_UNKNOWN = "LIQUIDITY_UNKNOWN"
 REJECT_INVALID_SIZING_INPUT = "INVALID_SIZING_INPUT"
 REJECT_STOP_DISTANCE_UNAVAILABLE = "STOP_DISTANCE_UNAVAILABLE"
+#: §7/§8 — an ultra-tight stop is an INVALID stop, not a path to maximum size.
+#: Rejected rather than silently widened: sizing on a wider distance while
+#: executing the tighter stop would not raise the theoretical loss but would
+#: manufacture systematic noise stop-outs.
+REJECT_STOP_DISTANCE_BELOW_MINIMUM = "STOP_DISTANCE_BELOW_MINIMUM"
 REJECT_BELOW_MINIMUM_LOT = "BELOW_MINIMUM_LOT"
 REJECT_BELOW_ECONOMIC_NOTIONAL = "BELOW_ECONOMIC_NOTIONAL"
 REJECT_NO_PORTFOLIO_CAPACITY = "NO_PORTFOLIO_GROSS_CAPACITY"
@@ -64,6 +69,9 @@ class SizingAudit:
 
     entry_price: Decimal
     stop_price: Decimal | None
+    #: The requested (LLM) stop distance, and the distance actually used for
+    #: risk sizing. They are equal on every ACCEPTED entry: a request below the
+    #: deterministic minimum is rejected, never quietly resized.
     stop_distance: Decimal
     stop_distance_pct: Decimal
 
@@ -104,6 +112,14 @@ class SizingAudit:
     notional_pct_of_equity: Decimal | None
     min_effective_notional: Decimal | None
 
+    #: Deterministic minimum valid stop distance for this entry, and the source
+    #: of the distance actually used. On an ACCEPTED entry both distances are
+    #: equal: a stop below the minimum is REJECTED (STOP_DISTANCE_BELOW_MINIMUM),
+    #: never silently widened.
+    minimum_stop_distance: Decimal = Decimal("0")
+    minimum_stop_distance_pct: Decimal = Decimal("0")
+    stop_distance_source: str = "LLM_REQUESTED"
+
     #: Every cap that bound the final quantity. ``binding_cap`` is the first of
     #: these in the canonical order; the extra names make ties honest (with
     #: ``available_margin == equity`` at 5x, MARGIN and 5X_CAP genuinely tie).
@@ -121,6 +137,9 @@ class SizingAudit:
             "stop_price": _s(self.stop_price),
             "stop_distance": _s(self.stop_distance),
             "stop_distance_pct": _s(self.stop_distance_pct),
+            "minimum_stop_distance": _s(self.minimum_stop_distance),
+            "minimum_stop_distance_pct": _s(self.minimum_stop_distance_pct),
+            "stop_distance_source": self.stop_distance_source,
             "base_risk_fraction": _s(self.base_risk_fraction),
             "conviction": _s(self.conviction),
             "conviction_multiplier": _s(self.conviction_multiplier),

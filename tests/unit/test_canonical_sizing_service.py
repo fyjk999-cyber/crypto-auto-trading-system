@@ -87,7 +87,10 @@ def test_sizing_uses_account_equity_volatility_contract_and_minimum_lot():
     assert contract.risk_normalized_notional == Decimal("200")
     below_lot = size(valuation=batch(equity="1"), instrument=instrument("1", "1"))
     assert below_lot.normalized_quantity == 0
-    volatile = size(volatility=Decimal("0.10"))
+    # A 10% realized volatility also raises the entry minimum stop distance to
+    # 10% of price, so the stop must be at least that far away to be sized.
+    volatile = size(volatility=Decimal("0.10"), stop_price=Decimal("90"))
+    assert volatile.rejected is False
     assert volatile.risk_bounded_leverage == 1
 
 
@@ -102,7 +105,9 @@ def test_existing_exposure_reduces_remaining_portfolio_capacity():
     result = size(
         positions={"BTCUSDT": position},
         valuation=batch(equity="1000", margin="1000000"),
-        stop_price=Decimal("99.99"),
+        # 0.1% of 100 - exactly the deterministic minimum, so the stop guard
+        # passes and PORTFOLIO is what binds (the asserted numbers are unchanged).
+        stop_price=Decimal("99.9"),
         liquidity_depth_qty=Decimal("1000000"),
     )
     assert result.rejected is False

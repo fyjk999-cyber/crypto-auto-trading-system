@@ -65,6 +65,7 @@ from crypto_trader.sizing.audit import (
     REJECT_LIQUIDITY_UNKNOWN,
     REJECT_NO_PORTFOLIO_CAPACITY,
     REJECT_NO_SYMBOL_CAPACITY,
+    REJECT_STOP_DISTANCE_BELOW_MINIMUM,
     REJECT_STOP_DISTANCE_UNAVAILABLE,
     REJECT_VALUATION_BATCH_REQUIRED,
     REJECT_VALUATION_BATCH_UNAVAILABLE,
@@ -143,6 +144,10 @@ class _Request:
     #: Set when the caller SUPPLIED a stop that is not a usable factual number
     #: (non-finite). It is never silently rewritten into a different price.
     stop_unusable: bool = False
+    #: Deterministic minimum valid stop distance for THIS entry (absolute
+    #: fraction floor, widened by factual realized volatility). Supplied by the
+    #: policy - never by the LLM - and used only to REJECT an invalid stop.
+    minimum_stop_distance: Decimal = Decimal("0")
 
     @property
     def equity(self) -> Decimal | None:
@@ -228,6 +233,9 @@ class LiveEntrySizingService:
             stop_price_value = _finite_decimal(stop_price)
             if stop_price_value is None:
                 stop_unusable = True
+        minimum_stop_distance = policy.minimum_stop_distance(
+            price=price_value, volatility=volatility
+        )
         request = _Request(
             side=str(side).upper(),
             price=price_value,
@@ -248,6 +256,7 @@ class LiveEntrySizingService:
             liquidity_depth_qty=liquidity_depth_qty,
             valuation=valuation,
             stop_unusable=stop_unusable,
+            minimum_stop_distance=minimum_stop_distance,
         )
 
         # ------------------------------------------- fail-closed entry guards
@@ -610,6 +619,17 @@ def _guard_failure(request: _Request) -> str | None:
         # risk-normalised quantity.  Never treat the whole price as risk, and
         # never substitute a fabricated stop price.
         return REJECT_STOP_DISTANCE_UNAVAILABLE
+    if (
+        request.minimum_stop_distance > 0
+        and request.stop_distance < request.minimum_stop_distance
+    ):
+        # An ultra-tight stop is an INVALID stop, not a licence to buy maximum
+        # size. The risk budget alone cannot catch it: a tighter stop shrinks
+        # the risk unit and therefore INFLATES the notional the budget buys.
+        # REJECT (never silently widen): sizing against a wider distance while
+        # executing the tighter stop would keep the theoretical loss identical
+        # while manufacturing systematic noise stop-outs.
+        return REJECT_STOP_DISTANCE_BELOW_MINIMUM
     # §22: no factual depth (missing or non-positive) is UNKNOWN and must never
     # be replaced by an assumption of infinite liquidity.
     if request.liquidity_depth is None or request.liquidity_depth <= 0:
@@ -668,6 +688,13 @@ def _audit_kwargs(
         "entry_price": request.price,
         "stop_price": request.stop_price,
         "stop_distance": request.stop_distance,
+        "minimum_stop_distance": request.minimum_stop_distance,
+        "minimum_stop_distance_pct": (
+            (request.minimum_stop_distance / request.price)
+            if request.price > 0
+            else Decimal("0")
+        ),
+        "stop_distance_source": "LLM_REQUESTED",
         "stop_distance_pct": (
             (request.stop_distance / request.price) if request.price > 0 else Decimal("0")
         ),
