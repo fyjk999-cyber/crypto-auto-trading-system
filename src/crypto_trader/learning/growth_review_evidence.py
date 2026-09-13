@@ -19,6 +19,12 @@ from crypto_trader.persistence.models import (
 MISSING = "UNKNOWN"
 
 
+class EvidenceAvailability(str):
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
 def _value(obj, name: str):
     return getattr(obj, name, None) if obj is not None else None
 
@@ -68,6 +74,17 @@ class GrowthReviewEvidence:
     missing_evidence: list[str] = field(default_factory=list)
     known_at: str | None = None
     reviewed_at: str | None = None
+    decision_availability: str = EvidenceAvailability.UNAVAILABLE
+    factor_snapshot_availability: str = EvidenceAvailability.UNAVAILABLE
+    sizing_availability: str = EvidenceAvailability.UNAVAILABLE
+    risk_availability: str = EvidenceAvailability.UNAVAILABLE
+    execution_availability: str = EvidenceAvailability.UNAVAILABLE
+    position_lifecycle_availability: str = EvidenceAvailability.UNAVAILABLE
+    exit_availability: str = EvidenceAvailability.UNAVAILABLE
+    mfe_mae_availability: str = EvidenceAvailability.UNAVAILABLE
+    slippage_availability: str = EvidenceAvailability.UNAVAILABLE
+    fees_availability: str = EvidenceAvailability.AVAILABLE
+    funding_availability: str = EvidenceAvailability.AVAILABLE
 
     def as_payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -116,6 +133,7 @@ class GrowthReviewEvidenceLoader:
                 if decision is None:
                     evidence.missing_evidence.append("DECISION")
                 else:
+                    evidence.decision_availability = EvidenceAvailability.AVAILABLE
                     evidence.decision_action = _value(decision, "action")
                     evidence.decision_thesis = _value(decision, "thesis")
                     evidence.decision_conviction = _value(
@@ -131,6 +149,7 @@ class GrowthReviewEvidenceLoader:
                 )
             ).scalar_one_or_none() if episode.entry_decision_id else None
             if risk is not None:
+                evidence.risk_availability = EvidenceAvailability.AVAILABLE
                 evidence.risk_decision_id = _value(risk, "decision_id")
                 evidence.risk_result = _value(risk, "approved")
                 evidence.risk_reason_codes = list(
@@ -158,6 +177,7 @@ class GrowthReviewEvidenceLoader:
                     for fill in fills
                     if _value(fill, "price") is not None
                 ]
+                evidence.execution_availability = EvidenceAvailability.AVAILABLE
                 evidence.weighted_entry_price = (
                     sum(prices) / len(prices) if prices else MISSING
                 )

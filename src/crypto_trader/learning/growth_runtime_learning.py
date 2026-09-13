@@ -237,6 +237,19 @@ def _episode_review_input(
             "slippage": None,
             "mfe": None,
             "mae": None,
+            "availability": {
+                "decision": "AVAILABLE",
+                "factor_snapshot": "UNAVAILABLE",
+                "sizing": "UNAVAILABLE",
+                "risk": "UNAVAILABLE",
+                "execution": "UNAVAILABLE",
+                "position_lifecycle": "UNAVAILABLE",
+                "exit": "AVAILABLE",
+                "mfe_mae": "UNAVAILABLE",
+                "slippage": "UNAVAILABLE",
+                "fees": "AVAILABLE",
+                "funding": "AVAILABLE",
+            },
         },
     )
 
