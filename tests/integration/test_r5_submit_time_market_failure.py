@@ -44,6 +44,7 @@ from crypto_trader.persistence.models import (
     PositionProjectionORM,
     TradePlanORM,
 )
+from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.trade_plan.service import TradePlanService
 from tests.conftest import make_paper_engine
@@ -215,13 +216,19 @@ async def test_R5_submit_time_market_failure_is_REJECTED_not_UNKNOWN(database):
         )
 
         # ------------------------------- fail ONLY once submit_order is reached
+        #
+        # Patched on the INSTANCE only. Patching the class would leak into every
+        # other test that uses PaperRealMarketAdapter - an earlier version did
+        # exactly that and broke two unrelated simulator tests.
         counters = {"adapter_submit": 0, "broker_submit": 0}
         original_submit = adapter.submit_order
-        base_submit = super(PaperRealMarketAdapter, adapter).submit_order
+        base_submit = SimulatedExchangeAdapter.submit_order
 
         async def counting_base(order):
             counters["broker_submit"] += 1
-            return await base_submit(order)
+            return await base_submit(adapter, order)
+
+        adapter.submit_order = counting_base
 
         async def fail_at_submit(order):
             counters["adapter_submit"] += 1
@@ -230,13 +237,9 @@ async def test_R5_submit_time_market_failure_is_REJECTED_not_UNKNOWN(database):
             return await original_submit(order)
 
         adapter.submit_order = fail_at_submit
-        import crypto_trader.simulator.exchange as _sim
-
-        adapter.__class__.submit_order = fail_at_submit
         try:
             await engine.tick()
         finally:
-            adapter.__class__.submit_order = _sim.SimulatedExchangeAdapter.submit_order
             adapter.submit_order = original_submit
 
         assert counters["adapter_submit"] == 1, (
