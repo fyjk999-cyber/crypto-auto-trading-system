@@ -499,3 +499,23 @@ def test_cp3b_unavailable_future_rule_is_not_published():
     assert attempt.review.model_dump(mode="json") == before
     assert attempt.review.future_rules[0].statement == "PUB_FUTURE_BLOCKED"
     assert any("EVIDENCE_UNAVAILABLE:accounting:funding" in item for item in blocked)
+
+
+def test_absolute_trading_rule_is_blocked_before_publisher():
+    from crypto_trader.learning.growth_runtime_learning import (
+        _prepare_publication_attempt,
+    )
+
+    evidence = GrowthReviewEvidence(episode_id="ep-abs-rule")
+    raw = _attempt(
+        [("Always enter after volume.", ["episode:ep-abs-rule"])],
+        episode_id="ep-abs-rule",
+    )
+    before = raw.review.model_dump(mode="json")
+    safe, blocked = _prepare_publication_attempt(raw, evidence=evidence)
+    assert safe is None
+    assert raw.review.model_dump(mode="json") == before
+    assert any(
+        "ABSOLUTE_RULE_LANGUAGE_BLOCKED:ep-abs-rule" in item
+        for item in blocked
+    )

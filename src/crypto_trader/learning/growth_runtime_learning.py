@@ -33,6 +33,7 @@ from crypto_trader.learning.growth_knowledge import (
     EpisodeBinding,
     GrowthKnowledgePublisher,
     KnowledgeStore,
+    contains_absolute_rule,
 )
 from crypto_trader.learning.growth_review import (
     STATUS_FAILED,
@@ -276,6 +277,11 @@ def _prepare_publication_attempt(
     safe_lessons = []
     blocked: list[str] = []
     for lesson in review.testable_lessons:
+        if contains_absolute_rule(lesson.statement):
+            blocked.append(
+                f"ABSOLUTE_RULE_LANGUAGE_BLOCKED:{review.episode_id}"
+            )
+            continue
         try:
             validate_causal_evidence_refs(evidence, list(lesson.evidence_refs))
             if lesson.contrary_refs:
@@ -287,6 +293,11 @@ def _prepare_publication_attempt(
             continue
         safe_lessons.append(lesson.model_copy(deep=True))
     for item in review.future_rules:
+        if contains_absolute_rule(item.statement):
+            blocked.append(
+                f"ABSOLUTE_RULE_LANGUAGE_BLOCKED:{review.episode_id}"
+            )
+            continue
         try:
             validate_causal_evidence_refs(evidence, list(item.evidence_refs))
         except CausalEvidenceUnavailable as exc:
