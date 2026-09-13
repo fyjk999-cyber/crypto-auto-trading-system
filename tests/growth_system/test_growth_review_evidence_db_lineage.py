@@ -340,3 +340,124 @@ async def test_execution_db_partial_and_duplicate_fill_fail_closed(database):
         assert ev.weighted_entry_price == "UNKNOWN"
         assert "ORDERS_FILLS" in ev.missing_evidence
         ev.validate_availability()
+
+
+async def test_f6_20_public_growth_runtime_preserves_db_truth_without_trading_side_effects(
+    database, monkeypatch
+):
+    from crypto_trader.execution.authority import ExecutionAuthority
+    from crypto_trader.governance.trade_episode import TradeEpisodeStore
+    from crypto_trader.learning.growth_models import create_growth_schema
+    from crypto_trader.learning.growth_review import StructuredReviewService
+    from crypto_trader.learning.growth_runtime_learning import GrowthRuntimeLearningService
+    from crypto_trader.order.manager import OrderManager
+    from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
+    from crypto_trader.sizing.service import (
+        LiveEntrySizingService,
+    )
+    from tests.growth_system.test_review_schema_and_refs import FakeProvider
+
+    await create_growth_schema(database.engine)
+
+    ep = _exec_episode(
+        "ep-f6-runtime",
+        ["order-f6-runtime-2", "order-f6-runtime-1"],
+        ["fill-f6-runtime-2", "fill-f6-runtime-1"],
+    )
+    ep.entry_decision_id = "decision-f6-runtime"
+    ep.risk_decision_ids_json = ["risk-f6-runtime-2", "risk-f6-runtime-1"]
+    decided = _decision("decision-f6-runtime", "OPEN_LONG", "F6_RUNTIME_TARGET_THESIS",
+                        datetime(2026, 9, 9, 10, tzinfo=UTC))
+    risk1 = RiskDecisionORM(risk_decision_id="risk-f6-runtime-1", client_order_id="c1",
+                            symbol="BTCUSDT", side="BUY", decision="APPROVED",
+                            reason="SECOND_F6_RUNTIME_RISK",
+                            timestamp=datetime(2026, 9, 9, 10, tzinfo=UTC))
+    risk2 = RiskDecisionORM(risk_decision_id="risk-f6-runtime-2", client_order_id="c2",
+                            symbol="BTCUSDT", side="BUY", decision="APPROVED",
+                            reason="PRIMARY_F6_RUNTIME_RISK",
+                            timestamp=datetime(2026, 9, 9, 10, tzinfo=UTC))
+    async with database.session_factory() as session:
+        session.add_all([
+            ep, decided, risk1, risk2,
+            _order("order-f6-runtime-1", 100, 1),
+            _order("order-f6-runtime-2", 200, 3),
+            _fill("fill-f6-runtime-1", "order-f6-runtime-1", 100, 1),
+            _fill("fill-f6-runtime-2", "order-f6-runtime-2", 200, 3),
+        ])
+        await session.commit()
+    episodes = await TradeEpisodeStore(database.session_factory).load_all_closed_on("2026-09-09")
+    runtime_episode = next(e for e in episodes if e.episode_id == "ep-f6-runtime")
+    review_now = datetime(2026, 9, 10, 11, tzinfo=UTC)
+    counters = {"sizer": 0, "norm": 0, "order": 0, "auth": 0, "exchange": 0}
+
+    def trap(name):
+        def _f(*a, **k):
+            counters[name] += 1
+            raise AssertionError("TRADING_OR_SIZER_CALL")
+        return _f
+
+    monkeypatch.setattr(LiveEntrySizingService, "size", trap("sizer"))
+    monkeypatch.setattr("crypto_trader.sizing.service.calculate_risk_normalized_size", trap("norm"))
+    monkeypatch.setattr(OrderManager, "create_from_intent", trap("order"))
+    monkeypatch.setattr(ExecutionAuthority, "authorize", trap("auth"))
+    monkeypatch.setattr(SimulatedExchangeAdapter, "submit_order", trap("exchange"))
+    monkeypatch.setattr(SimulatedExchangeAdapter, "_apply_fill_to_balances", trap("exchange"))
+    monkeypatch.setattr(SimulatedExchangeAdapter, "_apply_linear_perp_fill", trap("exchange"))
+
+    provider = FakeProvider([None], ok=False)
+    service = GrowthRuntimeLearningService(
+        database.session_factory, provider=provider, account_id="default", mode="PAPER"
+    )
+    assert isinstance(service.review_service, StructuredReviewService)
+    captured = {}
+    real_load = service.evidence_loader.load
+
+    async def load_spy(episode, **kwargs):
+        result = await real_load(episode, **kwargs)
+        captured["evidence"] = result
+        return result
+
+    real_review = service.review_service.review
+
+    async def review_spy(payload, **kwargs):
+        captured["payload"] = payload
+        captured["allowed_refs"] = set(kwargs["allowed_refs"])
+        return await real_review(payload, **kwargs)
+
+    monkeypatch.setattr(service.evidence_loader, "load", load_spy)
+    monkeypatch.setattr(service.review_service, "review", review_spy)
+    publisher_calls = []
+    async def publisher_trap(*a, **k):
+        publisher_calls.append(1)
+        raise AssertionError("PUBLISHER_REACHED")
+    monkeypatch.setattr(service.publisher, "publish_attempts", publisher_trap)
+
+    async def fence():
+        return True
+
+    await service.run([runtime_episode], review_date="2026-09-10",
+                      claim_token="f6-20-token", owner="growth-f6-test",
+                      fence=fence, now=review_now)
+    evidence = captured["evidence"]
+    payload = captured["payload"]
+    assert len(provider.calls) == 1 and not publisher_calls
+    assert payload.review_evidence == evidence.as_payload()
+    assert payload.missing_evidence == evidence.missing_evidence
+    assert evidence.decision_id == "decision-f6-runtime"
+    assert evidence.decision_action == "OPEN_LONG"
+    assert evidence.risk_decision_ids == ["risk-f6-runtime-2", "risk-f6-runtime-1"]
+    assert evidence.risk_reason_codes == ["PRIMARY_F6_RUNTIME_RISK"]
+    assert evidence.order_ids == ["order-f6-runtime-2", "order-f6-runtime-1"]
+    assert evidence.fill_ids == ["fill-f6-runtime-2", "fill-f6-runtime-1"]
+    assert evidence.weighted_entry_price == Decimal("175")
+    assert evidence.fees == Decimal("1.25") and evidence.exit_reason == "TAKE_PROFIT"
+    assert evidence.known_at == review_now.isoformat()
+    assert all(v == 0 for v in counters.values())
+    expected_refs = {
+        "episode:ep-f6-runtime", "decision:decision-f6-runtime",
+        "risk:risk-f6-runtime-2", "risk:risk-f6-runtime-1",
+        "order:order-f6-runtime-2", "order:order-f6-runtime-1",
+        "fill:fill-f6-runtime-2", "fill:fill-f6-runtime-1",
+        "exit:terminal", "accounting:fees", "accounting:funding",
+    }
+    assert captured["allowed_refs"] == expected_refs

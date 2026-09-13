@@ -76,7 +76,7 @@ def _episode(
 def _learning_item(episode_id: str, statement: str) -> dict:
     return {
         "statement": statement,
-        "evidence_refs": [f"episode:{episode_id}", f"fill:f_{episode_id}"],
+        "evidence_refs": [f"episode:{episode_id}"],
         "confidence": "LOW",
         "applicability": {"regime": "TRENDING", "direction": "LONG"},
         "counter_conditions": ["follow-through volume absent"],
