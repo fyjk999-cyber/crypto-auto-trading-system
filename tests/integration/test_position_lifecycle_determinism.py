@@ -936,3 +936,65 @@ async def test_L18_a_fill_arriving_before_the_venue_id_is_persisted_still_lands(
         assert engine.exchange_event_identity_anomalies == 0
     finally:
         await engine.stop()
+
+
+async def test_L19_a_symbol_naming_variant_is_not_refused(database):
+    """R-1: the consistency guard must not reject LEGITIMATE events.
+
+    Venues and the local book use different naming forms. A byte-exact symbol
+    comparison would refuse every event for such an order - wedging the trade
+    plan at APPROVED, the very symptom this fix removes. A payload that only
+    differs in naming must be accepted; the event is what carries the fact.
+    """
+    engine, adapter, _, _, _, _ = await _open_long_position(database, race=False)
+    try:
+        intent = OrderIntent(
+            client_order_id="live_llm_naming-variant",
+            strategy_id="live_llm",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            quantity=Decimal("0.1"),
+            price=Decimal("101"),
+            metadata=dict(BTC_EXECUTION_METADATA, direction="LONG"),
+        )
+        order = await engine.order_manager.create_from_intent(
+            intent, trading_mode=engine.settings.effective_mode()
+        )
+        await engine.order_manager.validate(order.internal_order_id)
+        await engine.order_manager.submitting(order.internal_order_id)
+        await engine.order_manager.submitted(order.internal_order_id)
+
+        for event_id, symbol_form in (
+            ("evt-lowercase", "btcusdt"),
+            ("evt-canonical", "BTCUSDT"),
+        ):
+            await engine._enqueue_event(
+                ExchangeEvent(
+                    event_id=event_id,
+                    event_type=ExchangeEventType.ORDER_FILLED,
+                    symbol="BTCUSDT",
+                    timestamp=datetime.now(UTC),
+                    payload={
+                        # One order has ONE venue id: only the naming form varies.
+                        "exchange_order_id": "sim_naming_venue_id",
+                        "client_order_id": order.client_order_id,
+                        # The only difference is the naming form.
+                        "symbol": symbol_form,
+                        "fill_id": f"fill-{event_id}",
+                        "fill_price": "100.05",
+                        "fill_quantity": "0.05",
+                        "status": "PARTIALLY_FILLED",
+                    },
+                )
+            )
+            await engine.wait_for_event_queue()
+
+            after = await engine.order_manager.get(order.internal_order_id)
+            assert after is not None
+            assert after.filled_quantity == (
+                Decimal("0.05") if event_id == "evt-lowercase" else Decimal("0.1")
+            ), f"event {event_id} was refused by the naming guard"
+
+        assert engine.exchange_event_identity_anomalies == 0
+    finally:
+        await engine.stop()

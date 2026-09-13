@@ -2354,7 +2354,9 @@ class TradingEngine:
             # order it resolved to is self-inconsistent. Applying it would let a
             # misrouted event write a foreign fill into this order.
             payload_symbol = payload.get("symbol")
-            if payload_symbol and str(payload_symbol) != str(local.symbol):
+            if payload_symbol and not _same_symbol(
+                self.adapter, payload_symbol, local.symbol
+            ):
                 reason = "EVENT_SYMBOL_DOES_NOT_MATCH_LOCAL_ORDER"
             payload_client = payload.get("client_order_id")
             if (
@@ -2378,6 +2380,14 @@ class TradingEngine:
                     ),
                     "client_order_id": payload.get("client_order_id"),
                     "reason": reason,
+                    # Both sides of the contradiction, so the row can be
+                    # triaged without re-deriving them from the order store.
+                    "payload_symbol": payload.get("symbol"),
+                    "local_symbol": getattr(local, "symbol", None),
+                    "local_client_order_id": getattr(local, "client_order_id", None),
+                    "local_exchange_order_id": getattr(
+                        local, "exchange_order_id", None
+                    ),
                 },
             )
             return
@@ -2742,6 +2752,26 @@ class TradingEngine:
 
     async def wait_for_event_queue(self) -> None:
         await self._event_queue.join()
+
+
+def _same_symbol(adapter, payload_symbol: object, local_symbol: object) -> bool:
+    """Compare a venue payload symbol with a local one, canonically.
+
+    Venues and the local book use different naming forms (``btcusdt``,
+    ``BTC-USDT-SWAP``, ``BTCUSDT``). Byte equality would refuse every event for
+    an order whose venue form differs from the local one - which would wedge the
+    trade plan at APPROVED, the very symptom this fix removes. The adapter owns
+    normalization; a byte comparison is only the last-resort fallback.
+    """
+    raw = str(payload_symbol)
+    local = str(local_symbol)
+    normalize = getattr(adapter, "normalize_symbol", None)
+    if callable(normalize):
+        try:
+            return str(normalize(raw)) == str(normalize(local))
+        except Exception:  # noqa: BLE001 - a normalizer must never break routing
+            pass
+    return raw.upper() == local.upper()
 
 
 def _raise_missing_contract_spec(symbol: str):

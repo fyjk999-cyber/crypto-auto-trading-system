@@ -188,11 +188,21 @@ with no error, no alert and no audit record.
    Without that guard the fallback would have traded "drop the event" for
    "misapply it" — a misrouted or replayed event could rewrite a real order's
    fills and venue identity.
-2. **No silent loss.** An event that resolves to no local order writes an
-   `EXCHANGE_EVENT_UNMATCHED` (or `EXCHANGE_EVENT_ID_MISMATCH`) audit record
-   instead of returning invisibly. This is deliberately **not** a health fault:
-   the consumer is working, and one foreign/replayed event is not a component
-   failure.
+2. **No silent loss — for events that carry an order identity.** An event that
+   resolves to no local order writes an `EXCHANGE_EVENT_UNMATCHED` (or
+   `EXCHANGE_EVENT_ID_MISMATCH`) audit record instead of returning invisibly, and
+   a payload that contradicts the order it resolved to (different symbol form or
+   different client order) is refused and audited the same way. Symbol
+   comparison is canonical (the adapter's own `normalize_symbol`, with a
+   case-insensitive fallback), so a naming variant accepts rather than wedges.
+   Scope limit, stated honestly: an order event with **no** `exchange_order_id`
+   at all still returns before this path — it is not silent *by design*, it is
+   simply not routed here. `BinanceAdapter.dispatch_raw_event` is such a shape
+   and currently has no caller; wiring it as-is would need this addressed first.
+   Health is deliberately **not** touched by any of these anomalies: the consumer
+   is working, and one foreign/replayed event is not a component failure. They
+   are counted in `runtime_snapshot()["exchange_event_identity_anomalies"]` and
+   audited instead.
 3. **No invisible failures, and no latched health.** `_event_loop` records an
    `EXCHANGE_EVENT_FAILED` audit event (event type, ids, error type) in addition
    to flipping health, and the next successfully processed event clears
@@ -235,6 +245,7 @@ untouched.
 | L16 | a payload that contradicts the order it resolved to is refused |
 | L17 | identity anomalies are counted in the runtime snapshot (pageable, non-latching) |
 | L18 | a fill arriving before the venue id is durable still lands (no timing dependence) |
+| L19 | a symbol naming variant is accepted, not refused (the guard cannot wedge a plan) |
 
 L1 is the direct root-cause regression: it failed 100 % of the time before the
 fix (20/20 on the unfixed base) and passes 100 % after (100/100). L1 also asserts
@@ -250,12 +261,12 @@ reproducible with the command in parentheses.
 
 | measurement | result | command |
 |---|---|---|
-| root-cause test on the UNFIXED base | 20/20 and 10/10 **fail** | `pytest test_position_lifecycle_determinism.py::test_L1_... ` in a worktree at the base SHA |
+| root-cause test on the UNFIXED base | 20/20 and 10/10 **fail** | `pytest "tests/integration/test_position_lifecycle_determinism.py::test_L1_lifecycle_transition_is_deterministic_without_any_sleep"` in a worktree at the base SHA (assert the resolved `crypto_trader.runtime.engine.__file__` first) |
 | root-cause test on the fixed revision | 100/100 **pass** | same test, 100 iterations |
 | determinism suite (L1-L18) | 60/60 clean | full file, 60 iterations |
 | lifecycle file | 30/30 and 50/50 clean | `pytest tests/integration/test_live_llm_position_lifecycle.py` |
 | order-varied context | 20/20 clean | lifecycle file adjacent to `test_order_reconciliation.py`, both orders |
-| full suite | see the closure report for this revision's exact runs | `pytest -q` |
+| full suite | 1546 passed x3, then 1549 passed x3 | `pytest -q` (external OKX file included; it failed on the network in one earlier run and is classified separately) |
 
 Instrumentation of a passing run BEFORE the fix showed 23
 `EVENT_DROPPED_LOCAL_ORDER_NOT_VISIBLE` records, all `ORDER_ACK`, plus the fatal
