@@ -25,6 +25,7 @@ from crypto_trader.learning.growth_card_retrieval import (
     ExperienceCardRetriever,
     register_experience_card_tool,
 )
+from crypto_trader.learning.growth_retrieval import GrowthContextLoader
 from crypto_trader.learning.growth_runtime_learning import (
     GrowthRuntimeLearningService,
 )
@@ -239,7 +240,18 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     card_trace_store = CardDecisionTraceStore(database.session_factory)
     card_retriever = ExperienceCardRetriever(database.session_factory)
     register_experience_card_tool(tools, card_retriever, trace_store=card_trace_store)
-    tool_chief = ToolDrivenChiefTrader(chief, tools)
+    growth_selection_recorder = GrowthContextLoader(
+        database.session_factory,
+        base_loader=chief_context,
+        account_id="default",
+        mode=settings.trading_mode.value,
+    )
+    tool_chief = ToolDrivenChiefTrader(
+        chief,
+        tools,
+        selection_recorder=growth_selection_recorder,
+        card_trace_store=card_trace_store,
+    )
     # Market-Intelligence V1: bounded read-only market directory + durable
     # selection store. Selection is research attention only; the SAME chief
     # (already budget-bound above) owns the final decision.

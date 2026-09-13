@@ -724,12 +724,18 @@ class CardDecisionTraceStore:
     async def attach_decision(
         self, *, trace_id: str, decision_id: str | None, evidence_package_id: str | None
     ) -> bool:
-        from sqlalchemy import update
+        from sqlalchemy import or_, update
 
         async with self.session_factory() as session:
             result = await session.execute(
                 update(GrowthCardDecisionTraceORM)
-                .where(GrowthCardDecisionTraceORM.trace_id == trace_id)
+                .where(
+                    GrowthCardDecisionTraceORM.trace_id == trace_id,
+                    or_(
+                        GrowthCardDecisionTraceORM.decision_id.is_(None),
+                        GrowthCardDecisionTraceORM.decision_id == decision_id,
+                    ),
+                )
                 .values(
                     decision_id=decision_id,
                     evidence_package_id=evidence_package_id,

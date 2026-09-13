@@ -19,9 +19,18 @@ class ToolDrivenChiefTrader:
     tool_round_budget_seconds = 45.0
     tool_selection_timeout_seconds = 20.0
 
-    def __init__(self, chief: ChiefTraderEngine, tools: LLMToolRegistry) -> None:
+    def __init__(
+        self,
+        chief: ChiefTraderEngine,
+        tools: LLMToolRegistry,
+        *,
+        selection_recorder=None,
+        card_trace_store=None,
+    ) -> None:
         self.chief = chief
         self.tools = tools
+        self.selection_recorder = selection_recorder
+        self.card_trace_store = card_trace_store
 
     async def decide(
         self,
@@ -69,7 +78,38 @@ class ToolDrivenChiefTrader:
             ctx,
             quant_evidence=[package.model_dump(mode="json")],
         )
-        return await self.chief.decide(enriched), package
+        # The exact deterministic prompt rendered here is the same prompt that
+        # ChiefTraderEngine.decide sends to the provider. Persist its hash only
+        # after the provider returns a decision, then bind any card trace to
+        # that application-owned decision id.
+        final_prompt = self.chief.render_prompt(enriched)
+        decision = await self.chief.decide(enriched)
+        if self.selection_recorder is not None:
+            await self.selection_recorder.record_selection(
+                context=enriched,
+                selected_tools=package.selected_tools,
+                evidence_package=package,
+                decision_id=decision.decision_id,
+                prompt=final_prompt,
+            )
+        await self._attach_card_trace(decision, package)
+        return decision, package
+
+    async def _attach_card_trace(self, decision, package) -> None:
+        if self.card_trace_store is None:
+            return
+        for item in package.items:
+            finding = item.finding
+            trace_id = finding.get("card_trace_id") if isinstance(finding, dict) else None
+            if trace_id:
+                attached = await self.card_trace_store.attach_decision(
+                    trace_id=str(trace_id),
+                    decision_id=decision.decision_id,
+                    evidence_package_id=None,
+                )
+                if not attached:
+                    raise RuntimeError("card evidence trace could not be attached")
+                return
 
     async def _build_evidence(
         self,

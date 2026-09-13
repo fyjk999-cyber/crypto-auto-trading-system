@@ -31,7 +31,7 @@ from typing import Any
 
 from sqlalchemy import or_, select
 
-from crypto_trader.learning.growth_contracts import bounded_text
+from crypto_trader.learning.growth_contracts import bounded_text, canonical_json
 from crypto_trader.learning.growth_knowledge import (
     COMPRESSION_PUBLISHED,
     RETRIEVABLE_STATUSES,
@@ -552,9 +552,6 @@ class GrowthContextLoader:
         prompt: str | None = None,
     ) -> GrowthToolSelectionORM:
         """Persist the selected tools, returned refs and prompt hash."""
-        context_id = sha256(
-            f"{self.account_id}|{self.mode}|{context.symbol}|{context.prepared_at}".encode()
-        ).hexdigest()[:40]
         refs: list[str] = []
         if evidence_package is not None:
             refs = list(getattr(evidence_package, "source_refs", []) or [])
@@ -563,6 +560,26 @@ class GrowthContextLoader:
             if hasattr(evidence_package, "model_dump")
             else None
         )
+        tool_versions = dict(
+            getattr(evidence_package, "tool_versions", {}) or {}
+        )
+        # A tool-selection record is an immutable decision-time evidence
+        # identity, not merely a timestamp slot. Policy/tool/package changes
+        # must create a new record instead of overwriting prior evidence.
+        context_id = sha256(
+            canonical_json(
+                {
+                    "account_id": self.account_id,
+                    "mode": self.mode,
+                    "symbol": context.symbol,
+                    "prepared_at": context.prepared_at,
+                    "selected_tools": list(selected_tools),
+                    "returned_refs": refs,
+                    "tool_versions": tool_versions,
+                    "evidence_package": package_json,
+                }
+            ).encode("utf-8")
+        ).hexdigest()[:40]
         prompt_hash = (
             sha256(prompt.encode("utf-8")).hexdigest() if prompt is not None else None
         )
@@ -588,6 +605,7 @@ class GrowthContextLoader:
                     returned_refs_json=refs,
                     evidence_package_json=package_json,
                     prompt_hash=prompt_hash,
+                    tool_versions_json=tool_versions,
                 )
                 session.add(row)
             else:
@@ -596,6 +614,7 @@ class GrowthContextLoader:
                 row.returned_refs_json = refs
                 row.evidence_package_json = package_json
                 row.prompt_hash = prompt_hash
+                row.tool_versions_json = tool_versions
             await session.commit()
             return row
 
