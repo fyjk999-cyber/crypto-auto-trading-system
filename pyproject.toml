@@ -46,6 +46,7 @@ markers = [
   "chaos: chaos and adversarial tests",
   "e2e: end-to-end paper trading tests",
   "slow: slower tests",
+    "stress: repeated-run gates (SECTION 40)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 
