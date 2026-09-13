@@ -8,7 +8,9 @@ from sqlalchemy import select
 
 from crypto_trader.learning.growth_review_evidence import GrowthReviewEvidenceLoader
 from crypto_trader.persistence.models import (
+    FillORM,
     LLMDecisionORM,
+    OrderORM,
     RiskDecisionORM,
     TradeEpisodeORM,
 )
@@ -166,3 +168,110 @@ async def test_risk_db_partial_and_duplicate_fail_closed(database):
         assert ev.risk_result == "UNKNOWN"
         ev.validate_availability()
     assert "RISK" in pe.missing_evidence
+
+
+
+def _exec_episode(eid, order_ids, fill_ids):
+    closed = datetime(2026, 9, 9, 11, tzinfo=UTC)
+    return TradeEpisodeORM(
+        episode_id=eid, trade_plan_id=f"plan-{eid}", symbol="BTCUSDT",
+        direction="LONG", entry_decision_id=f"dec-{eid}", exit_decision_id=None,
+        position_decision_ids_json=[], risk_decision_ids_json=[],
+        order_ids_json=order_ids, fill_ids_json=fill_ids,
+        entry_price=Decimal("100"), exit_price=Decimal("110"),
+        opened_quantity=Decimal("4"), closed_quantity=Decimal("4"),
+        leverage=Decimal("2"), fees=Decimal("1.25"),
+        funding_pnl=Decimal("-0.40"), gross_pnl=Decimal("40"),
+        net_pnl=Decimal("38.35"), holding_time_seconds=3600.0,
+        entry_market_regime="TRENDING", terminal_reason="TAKE_PROFIT",
+        factual=True, review_status="PENDING",
+        opened_at=closed - timedelta(hours=1), closed_at=closed,
+    )
+
+
+def _order(oid, price, qty):
+    return OrderORM(
+        internal_order_id=oid, client_order_id=f"client-{oid}", symbol="BTCUSDT",
+        side="BUY", order_type="LIMIT", time_in_force="GTC",
+        price=Decimal(str(price)), quantity=Decimal(str(qty)),
+        filled_quantity=Decimal(str(qty)), avg_fill_price=Decimal(str(price)),
+        status="FILLED", trading_mode="PAPER", strategy_id="growth-db-proof",
+        run_id="run-execution-target",
+        created_at=datetime(2026, 9, 9, 10, tzinfo=UTC),
+        updated_at=datetime(2026, 9, 9, 10, 1, tzinfo=UTC),
+    )
+
+
+def _fill(fid, oid, price, qty):
+    return FillORM(
+        fill_id=fid, trade_id=f"trade-{fid}", order_id=oid,
+        client_order_id=f"client-{oid}", symbol="BTCUSDT", side="BUY",
+        price=Decimal(str(price)), quantity=Decimal(str(qty)),
+        fee=Decimal("0.25"), fee_currency="USDT",
+        timestamp=datetime(2026, 9, 9, 10, 2, tzinfo=UTC),
+    )
+
+
+async def test_execution_db_lineage_full_target(database):
+    ep = _exec_episode(
+        "ep-db-execution-target",
+        ["order-target-2", "order-target-1"],
+        ["fill-target-2", "fill-target-1"],
+    )
+    decision = _decision("dec-ep-db-execution-target", "OPEN_LONG", "T",
+                         datetime(2026, 9, 9, 10, tzinfo=UTC))
+    async with database.session_factory() as session:
+        session.add_all([
+            ep, decision,
+            _order("order-target-1", 100, 1),
+            _order("order-target-2", 200, 3),
+            _order("order-distractor", 999, 9),
+            _fill("fill-target-1", "order-target-1", 100, 1),
+            _fill("fill-target-2", "order-target-2", 200, 3),
+            _fill("fill-distractor", "order-distractor", 999, 9),
+        ])
+        await session.commit()
+    async with database.session_factory() as session:
+        reloaded = (await session.execute(select(TradeEpisodeORM).where(
+            TradeEpisodeORM.episode_id == "ep-db-execution-target"))).scalar_one()
+    review_now = datetime(2026, 9, 10, 11, tzinfo=UTC)
+    ev = await GrowthReviewEvidenceLoader(database.session_factory).load(
+        reloaded, account_id="default", mode="PAPER", now=review_now,
+    )
+    assert ev.execution_availability == "AVAILABLE"
+    assert ev.order_ids == ["order-target-2", "order-target-1"]
+    assert ev.fill_ids == ["fill-target-2", "fill-target-1"]
+    assert "order-distractor" not in ev.order_ids
+    assert "fill-distractor" not in ev.fill_ids
+    assert ev.weighted_entry_price == Decimal("175")
+    assert ev.exit_availability == "AVAILABLE"
+    assert ev.exit_reason == "TAKE_PROFIT"
+    assert ev.fees == Decimal("1.25") and ev.net_pnl == Decimal("38.35")
+    assert ev.known_at == review_now.isoformat()
+    ev.validate_availability()
+
+
+async def test_execution_db_partial_and_duplicates_fail_closed(database):
+    partial = _exec_episode(
+        "ep-db-order-partial",
+        ["order-present", "order-missing"],
+        ["fill-present"],
+    )
+    dup_order = _exec_episode("ep-db-order-dup", ["order-dup", "order-dup"], ["fill-dup"])
+    async with database.session_factory() as session:
+        session.add_all([
+            partial, dup_order,
+            _order("order-present", 100, 1), _fill("fill-present", "order-present", 100, 1),
+            _order("order-dup", 100, 1), _fill("fill-dup", "order-dup", 100, 1),
+        ])
+        await session.commit()
+    loader = GrowthReviewEvidenceLoader(database.session_factory)
+    for eid in ("ep-db-order-partial", "ep-db-order-dup"):
+        async with database.session_factory() as session:
+            row = (await session.execute(select(TradeEpisodeORM).where(
+                TradeEpisodeORM.episode_id == eid))).scalar_one()
+        ev = await loader.load(row, account_id="default", mode="PAPER")
+        assert ev.execution_availability == "UNAVAILABLE"
+        assert ev.weighted_entry_price == "UNKNOWN"
+        assert "ORDERS_FILLS" in ev.missing_evidence
+        ev.validate_availability()
