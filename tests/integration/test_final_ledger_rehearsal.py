@@ -20,6 +20,7 @@ READ-ONLY throughout; every mutation happens in the snapshot copy.
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from decimal import Decimal
 from pathlib import Path
@@ -517,5 +518,93 @@ async def test_R3_legacy_entry_broker_identity_is_preserved(tmp_path):
             assert after[order_id][1] == ident[1], f"{order_id}: broker id changed"
             assert after[order_id][2] == ident[2], f"{order_id}: quantity changed"
             assert after[order_id][3] == ident[3], f"{order_id}: filled quantity changed"
+    finally:
+        await engine.stop()
+
+
+# --------------------------------------------- R3 full convergence (measured)
+
+
+@pytest.mark.asyncio
+async def test_R3_full_chain_OPEN_to_CANCELLED(tmp_path):
+    """§3/§6: both legacy ENTRYs must reach a factual CANCELLED.
+
+    Measured end to end on the isolated snapshot through the canonical path:
+    reconcile -> purpose -> TTL -> lease-fenced cancel -> exchange event ->
+    durable state. The legacy IOST BUY must not enlarge the factual position.
+    """
+    dest, facts = await _stopped_snapshot(tmp_path)
+    db = await _database(dest)
+    engine = make_paper_engine(db, **_settings(dest))
+    await engine.start()
+    try:
+        legacy_ids = []
+        async with db.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OrderORM).where(OrderORM.status == "OPEN").where(
+                        OrderORM.strategy_id == "live_llm"
+                    )
+                )
+            ).scalars().all()
+            legacy_ids = [r.internal_order_id for r in rows]
+        assert legacy_ids, "expected at least one legacy ENTRY in the snapshot"
+
+        with _AdapterInstrumentation(engine) as inst:
+            cancelled = await engine._enforce_entry_order_ttl()
+            await engine.wait_for_event_queue()
+            await asyncio.sleep(0.3)
+
+        assert cancelled == len(legacy_ids), (
+            f"expected {len(legacy_ids)} cancels, got {cancelled}"
+        )
+        async with db.session_factory() as session:
+            finals = (
+                await session.execute(
+                    select(OrderORM).where(OrderORM.internal_order_id.in_(legacy_ids))
+                )
+            ).scalars().all()
+        for row in finals:
+            assert row.status == "CANCELLED", f"{row.symbol}: {row.status}"
+            assert Decimal(str(row.filled_quantity)) == Decimal("0")
+        # The adapter's in-memory book must agree with the durable outcome.
+        for row in finals:
+            broker = engine.adapter.orders.get(row.exchange_order_id)
+            assert broker is not None
+            assert str(getattr(broker.status, "value", broker.status)) == "CANCELLED"
+
+        # No new execution, and the factual position is untouched.
+        assert inst.submits == 0, f"convergence submitted {inst.submits}"
+        assert inst.fills == 0, f"convergence filled {inst.fills}"
+        async with db.session_factory() as session:
+            position = (
+                await session.execute(
+                    select(PositionProjectionORM).where(
+                        PositionProjectionORM.symbol == POSITION_SYMBOL
+                    )
+                )
+            ).scalar_one()
+        assert Decimal(str(position.quantity)) == Decimal(str(facts["quantity"])), (
+            "a legacy ENTRY changed the factual position"
+        )
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_R3_second_cycle_creates_no_duplicate_cancel(tmp_path):
+    """Idempotency: re-running convergence after CANCELLED must be a no-op."""
+    dest, _ = await _stopped_snapshot(tmp_path)
+    db = await _database(dest)
+    engine = make_paper_engine(db, **_settings(dest))
+    await engine.start()
+    try:
+        await engine._enforce_entry_order_ttl()
+        await engine.wait_for_event_queue()
+        await asyncio.sleep(0.3)
+        with _AdapterInstrumentation(engine) as inst:
+            again = await engine._enforce_entry_order_ttl()
+        assert again == 0, "already-cancelled orders were cancelled again"
+        assert inst.submits == 0
     finally:
         await engine.stop()
