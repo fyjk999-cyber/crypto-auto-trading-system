@@ -355,3 +355,59 @@ async def test_runtime_payload_spy_and_review_failure_isolation():
     )
     assert [p.episode_id for p in review.payloads] == ["ep-review-bad", "ep-review-good"]
     assert review.payloads[1].review_evidence == _valid_evidence("ep-review-good").as_payload()
+
+
+class _AllowedRefReview:
+    def __init__(self): self.calls = []
+    async def review(self, payload, **kwargs):
+        self.calls.append((payload.episode_id, set(kwargs.get("allowed_refs", set()))))
+        return SimpleNamespace(status="FAILED", review=None, error_type="FAKE")
+
+
+def _spy_evidence(eid, **overrides):
+    values = dict(
+        episode_id=eid, decision_id="decision-spy", decision_availability="AVAILABLE",
+        risk_decision_id="risk-spy", risk_decision_ids=["risk-spy"],
+        risk_availability="AVAILABLE", order_ids=["order-spy"],
+        fill_ids=["fill-spy"], execution_availability="AVAILABLE",
+        exit_reason="SPY_EXIT", exit_availability="AVAILABLE",
+        fees=0, fees_availability="AVAILABLE", funding=0,
+        funding_availability="AVAILABLE", missing_evidence=[],
+    )
+    values.update(overrides)
+    return GrowthReviewEvidence(**values)
+
+
+async def _run_allowed_ref_spy(evidence, eid="ep-spy"):
+    from crypto_trader.learning.growth_runtime_learning import GrowthRuntimeLearningService
+    service = GrowthRuntimeLearningService(None, provider=SimpleNamespace())
+    service.evidence_loader = _RuntimeLoader(lambda ep: evidence)
+    review = _AllowedRefReview()
+    service.review_service = review
+    await service.run([_runtime_episode(eid)], review_date="2026-09-13",
+                      claim_token="t", owner="o", fence=_true)
+    return review.calls[0][1]
+
+
+async def test_runtime_allowed_refs_spy_positive():
+    refs = await _run_allowed_ref_spy(_spy_evidence("ep-spy"))
+    assert {
+        "episode:ep-spy", "decision:decision-spy", "risk:risk-spy",
+        "order:order-spy", "fill:fill-spy", "exit:terminal",
+        "accounting:fees", "accounting:funding",
+    } <= refs
+
+
+async def test_runtime_allowed_refs_spy_negative():
+    ev = GrowthReviewEvidence(
+        episode_id="ep-hidden", decision_id="decision-hidden",
+        decision_availability="UNAVAILABLE", risk_decision_ids=[],
+        risk_availability="UNAVAILABLE", order_ids=["order-hidden"],
+        fill_ids=["fill-hidden"], execution_availability="UNAVAILABLE",
+        exit_reason="UNKNOWN", exit_availability="UNAVAILABLE",
+        fees_availability="UNAVAILABLE", funding_availability="UNAVAILABLE",
+    )
+    ep = _runtime_episode("ep-hidden")
+    ep.exit_decision_id = "x_hidden"
+    refs = await _run_allowed_ref_spy(ev, "ep-hidden")
+    assert refs == {"episode:ep-hidden"}

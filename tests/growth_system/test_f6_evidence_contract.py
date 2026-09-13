@@ -233,3 +233,28 @@ def test_ref_07_all_causal_unavailable():
         funding_availability="UNAVAILABLE",
     )
     assert _refs(ev) == {"episode:ep-1"}
+
+
+
+def test_unavailable_ref_rejected_by_structured_review_validation():
+    from crypto_trader.learning.growth_contracts import (
+        ObservationFact,
+        ReferenceValidationError,
+        StructuredReview,
+        validate_review,
+    )
+    review = StructuredReview(
+        episode_id="ep-hidden",
+        observation_facts=[
+            ObservationFact(
+                statement="Hidden risk caused loss.",
+                evidence_refs=["risk:risk-hidden"],
+            )
+        ],
+    )
+    with pytest.raises(ReferenceValidationError):
+        validate_review(
+            review,
+            allowed_refs={"episode:ep-hidden"},
+            expected_episode_id="ep-hidden",
+        )
