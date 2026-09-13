@@ -196,3 +196,116 @@ async def test_cp2a_valid_claim_reaches_reusable_knowledge(growth_db):
     assert any((row.scope_json or {}).get("proposition_key") == key for row in patterns)
     assert report.structured_reviews_created == 1
     assert report.reviews_with_causal_lessons == 1
+
+
+async def test_cp2b_runtime_mixed_preserves_raw_and_filters_publisher(
+    growth_db, monkeypatch
+):
+    from sqlalchemy import select
+
+    import crypto_trader.learning.growth_runtime_learning as runtime_module
+    from crypto_trader.learning.growth_knowledge import proposition_identity
+    from crypto_trader.learning.growth_models import (
+        GrowthLessonORM,
+        GrowthPatternORM,
+        GrowthReviewAttemptORM,
+    )
+    from crypto_trader.learning.growth_runtime_learning import (
+        GrowthRuntimeLearningService,
+    )
+    from crypto_trader.persistence.models import AITradeReviewORM
+    from tests.growth_system.test_review_schema_and_refs import FakeProvider
+    from tests.growth_system.test_runtime_learning_closure import (
+        _episode,
+        _payload,
+        _seed_episode,
+        _true,
+    )
+
+    episode = _episode("ep-pub07")
+    await _seed_episode(growth_db, episode)
+    scope = {
+        "scope": "SYMBOL_REGIME", "symbols": ["BTCUSDT"],
+        "regimes": ["TRENDING"],
+    }
+    safe = {
+        "statement": "PUB07_SAFE", "testable_prediction": "safe prediction",
+        "scope": scope, "evidence_refs": ["episode:ep-pub07"],
+        "contrary_refs": [], "uncertainty": "candidate", "confidence": "LOW",
+    }
+    blocked = {
+        "statement": "PUB07_BLOCKED", "testable_prediction": "blocked prediction",
+        "scope": scope, "evidence_refs": ["accounting:fees"],
+        "contrary_refs": [], "uncertainty": "candidate", "confidence": "LOW",
+    }
+    service = GrowthRuntimeLearningService(
+        growth_db.session_factory,
+        provider=FakeProvider([_payload("ep-pub07", lessons=[safe, blocked])]),
+        min_pattern_samples=3,
+    )
+    events, captured = [], {}
+    real_validator = runtime_module.validate_causal_evidence_refs
+
+    def validator_spy(evidence, refs):
+        refs = list(refs)
+        events.append(("validate", tuple(refs)))
+        real_validator(evidence, refs)
+        if evidence.episode_id == "ep-pub07" and "accounting:fees" in refs:
+            raise CausalEvidenceUnavailable("EVIDENCE_UNAVAILABLE:accounting:fees")
+
+    monkeypatch.setattr(runtime_module, "validate_causal_evidence_refs", validator_spy)
+    real_review = service.review_service.review
+
+    async def review_spy(*args, **kwargs):
+        attempt = await real_review(*args, **kwargs)
+        captured["raw_attempt"] = attempt
+        return attempt
+
+    monkeypatch.setattr(service.review_service, "review", review_spy)
+    real_publish = service.publisher.publish_attempts
+
+    async def publish_spy(attempts, **kwargs):
+        attempts = list(attempts)
+        events.append(("publisher", None))
+        captured["publisher_attempts"] = attempts
+        return await real_publish(attempts, **kwargs)
+
+    monkeypatch.setattr(service.publisher, "publish_attempts", publish_spy)
+    report = await service.run(
+        [episode], review_date="2026-09-09", claim_token="token-r4",
+        owner="worker", fence=_true,
+    )
+    validates = [i for i, e in enumerate(events) if e[0] == "validate"]
+    publishers = [i for i, e in enumerate(events) if e[0] == "publisher"]
+    assert len(validates) >= 2 and len(publishers) == 1
+    assert max(validates) < publishers[0]
+    raw_attempt = captured["raw_attempt"]
+    publisher_attempt = captured["publisher_attempts"][0]
+    assert publisher_attempt is not raw_attempt
+    assert publisher_attempt.review is not raw_attempt.review
+    assert publisher_attempt.attempt_id == raw_attempt.attempt_id
+    assert publisher_attempt.input_hash == raw_attempt.input_hash
+    assert [x.statement for x in publisher_attempt.review.testable_lessons] == ["PUB07_SAFE"]
+    assert [x.statement for x in raw_attempt.review.testable_lessons] == ["PUB07_SAFE", "PUB07_BLOCKED"]
+    async with growth_db.session_factory() as session:
+        row = (await session.execute(select(GrowthReviewAttemptORM).where(
+            GrowthReviewAttemptORM.episode_id == "ep-pub07"))).scalar_one()
+        audit = (await session.execute(select(AITradeReviewORM).where(
+            AITradeReviewORM.episode_id == "ep-pub07"))).scalar_one()
+        safe_rows = (await session.execute(select(GrowthLessonORM).where(
+            GrowthLessonORM.statement == "PUB07_SAFE"))).scalars().all()
+        blocked_rows = (await session.execute(select(GrowthLessonORM).where(
+            GrowthLessonORM.statement == "PUB07_BLOCKED"))).scalars().all()
+        patterns = (await session.execute(select(GrowthPatternORM))).scalars().all()
+    assert row.status == "SUCCEEDED"
+    raw_statements = [i["statement"] for i in row.result_json["testable_lessons"]]
+    assert "PUB07_SAFE" in raw_statements and "PUB07_BLOCKED" in raw_statements
+    assert "PUB07_SAFE" in (audit.lessons_json or [])
+    assert "PUB07_BLOCKED" in (audit.lessons_json or [])
+    assert safe_rows and not blocked_rows
+    assert safe_rows[-1].support_refs_json == ["episode:ep-pub07"]
+    blocked_key = proposition_identity("PUB07_BLOCKED", scope)
+    assert all((r.scope_json or {}).get("proposition_key") != blocked_key for r in patterns)
+    assert report.structured_reviews_created == 1
+    assert report.reviews_with_causal_lessons == 1
+    assert any("CAUSAL_EVIDENCE_BLOCKED" in e and "accounting:fees" in e for e in report.errors)
