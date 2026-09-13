@@ -25,6 +25,12 @@ class EvidenceAvailability(str):
     NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
+def _episode_ids(episode, domain_name: str, json_name: str) -> list[str]:
+    if hasattr(episode, domain_name):
+        return list(getattr(episode, domain_name) or [])
+    return list(getattr(episode, json_name, None) or [])
+
+
 def _value(obj, name: str):
     return getattr(obj, name, None) if obj is not None else None
 
@@ -146,8 +152,8 @@ class GrowthReviewEvidenceLoader:
             symbol=episode.symbol,
             direction=episode.direction,
             decision_id=episode.entry_decision_id,
-            order_ids=list(episode.order_ids_json or []),
-            fill_ids=list(episode.fill_ids_json or []),
+            order_ids=_episode_ids(episode, "order_ids", "order_ids_json"),
+            fill_ids=_episode_ids(episode, "fill_ids", "fill_ids_json"),
             exit_decision_id=episode.exit_decision_id,
             exit_reason=episode.terminal_reason or MISSING,
             holding_seconds=episode.holding_time_seconds,
@@ -172,13 +178,20 @@ class GrowthReviewEvidenceLoader:
                     evidence.decision_conviction = MISSING
             else:
                 evidence.missing_evidence.append("DECISION")
-            risk = (
+            risk_ids = _episode_ids(
+                episode, "risk_decision_ids", "risk_decision_ids_json"
+            )
+            risks = (
                 await session.execute(
-                    select(RiskDecisionORM)
-                    .where(RiskDecisionORM.risk_decision_id == episode.entry_decision_id)
-                    .limit(1)
+                    select(RiskDecisionORM).where(
+                        RiskDecisionORM.risk_decision_id.in_(tuple(risk_ids))
+                    )
                 )
-            ).scalar_one_or_none() if episode.entry_decision_id else None
+            ).scalars().all() if risk_ids else []
+            risk = next(
+                (row for rid in risk_ids for row in risks if row.risk_decision_id == rid),
+                None,
+            )
             if risk is not None:
                 evidence.risk_availability = EvidenceAvailability.AVAILABLE
                 evidence.risk_decision_id = _value(risk, "risk_decision_id")

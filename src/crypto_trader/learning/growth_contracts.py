@@ -99,6 +99,18 @@ class EpisodeReviewInput(BaseModel):
         for tool in self.selected_tools:
             refs.update(tool.source_refs)
             refs.add(f"tool:{tool.tool_name}")
+        evidence = self.review_evidence or {}
+        availability = evidence.get("availability", {})
+        if availability.get("risk") == "AVAILABLE":
+            risk_ids = list(evidence.get("risk_decision_ids") or [])
+            primary = evidence.get("risk_decision_id")
+            if primary and primary not in risk_ids:
+                risk_ids.insert(0, primary)
+            refs.update(f"risk:{risk_id}" for risk_id in risk_ids if risk_id)
+        if availability.get("fees") == "AVAILABLE":
+            refs.add("accounting:fees")
+        if availability.get("funding") == "AVAILABLE":
+            refs.add("accounting:funding")
         return refs
 
 

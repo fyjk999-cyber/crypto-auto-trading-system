@@ -40,6 +40,9 @@ from crypto_trader.learning.growth_review import (
     ReviewAttempt,
     StructuredReviewService,
 )
+from crypto_trader.learning.growth_review_evidence import (
+    GrowthReviewEvidenceLoader,
+)
 from crypto_trader.learning.growth_v2_contracts import (
     SHARE_SCOPE_ACCOUNT_MODE,
     ContextSignature,
@@ -170,6 +173,7 @@ def _episode_review_input(
     account_id: str,
     mode: str,
     currency: str,
+    review_evidence=None,
 ) -> EpisodeReviewInput:
     canonical_regime, regime_context = normalize_regime(episode.entry_market_regime)
     market_changes = [
@@ -219,7 +223,7 @@ def _episode_review_input(
             "SLIPPAGE",
             "MFE_MAE",
         ],
-        review_evidence={
+        review_evidence=(review_evidence.as_payload() if review_evidence is not None else {
             "episode_id": episode.episode_id,
             "decision_id": episode.entry_decision_id,
             "exit_decision_id": episode.exit_decision_id,
@@ -250,7 +254,7 @@ def _episode_review_input(
                 "fees": "AVAILABLE",
                 "funding": "AVAILABLE",
             },
-        },
+        }),
     )
 
 
@@ -316,6 +320,7 @@ class GrowthRuntimeLearningService:
         self.publisher = GrowthKnowledgePublisher(
             session_factory, min_pattern_samples=min_pattern_samples
         )
+        self.evidence_loader = GrowthReviewEvidenceLoader(session_factory)
         self.review_service = (
             StructuredReviewService(provider, session_factory)
             if provider is not None
@@ -349,11 +354,18 @@ class GrowthRuntimeLearningService:
         bindings: dict[str, EpisodeBinding] = {}
         succeeded: list[ReviewAttempt] = []
         for episode in episodes:
+            evidence = await self.evidence_loader.load(
+                episode,
+                account_id=self.account_id,
+                mode=self.mode,
+                now=now,
+            )
             payload = _episode_review_input(
                 episode,
                 account_id=self.account_id,
                 mode=self.mode,
                 currency=self.currency,
+                review_evidence=evidence,
             )
             bindings[episode.episode_id] = _binding(
                 episode,
