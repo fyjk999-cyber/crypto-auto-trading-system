@@ -182,6 +182,15 @@ class LiveLLMPositionManager:
                 "symbol": position.symbol,
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_authority": "LIVE_LLM_ONLY",
+                # Why this decision happened must be readable from the AUDIT
+                # ALONE. A FAIL_CLOSED whose cause (NO_API_KEY, budget
+                # exhaustion, provider failure, invalid model output) is only
+                # discoverable by joining llm_decisions makes an unmanaged
+                # position impossible to explain at the point an operator
+                # actually looks - which is exactly how this went undiagnosed.
+                "reason_codes": list(decision.reason_codes or []),
+                "model_provider": decision.model_provider,
+                "model": decision.model,
             },
         )
         if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
