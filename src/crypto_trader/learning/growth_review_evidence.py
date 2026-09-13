@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -109,6 +110,14 @@ class GrowthReviewEvidence:
             if available and not getattr(self, reference_field, None):
                 raise ValueError(
                     f"CONTRADICTORY_AVAILABILITY:{availability_field}"
+                )
+            if (
+                availability_field == "execution_availability"
+                and available
+                and (not self.order_ids or not self.fill_ids)
+            ):
+                raise ValueError(
+                    "CONTRADICTORY_AVAILABILITY:execution_availability"
                 )
             if (
                 availability_field == "risk_availability"
@@ -218,32 +227,61 @@ class GrowthReviewEvidenceLoader:
                 evidence.risk_decision_ids = []
                 evidence.risk_decision_id = None
                 evidence.missing_evidence.append("RISK")
-            orders = (
+            expected_order_ids = _episode_ids(
+                episode, "order_ids", "order_ids_json"
+            )
+            expected_fill_ids = _episode_ids(
+                episode, "fill_ids", "fill_ids_json"
+            )
+            order_rows = (
                 await session.execute(
                     select(OrderORM).where(
-                        OrderORM.internal_order_id.in_(tuple(evidence.order_ids or ["none"]))
+                        OrderORM.internal_order_id.in_(tuple(expected_order_ids))
                     )
                 )
-            ).scalars().all() if evidence.order_ids else []
-            fills = (
+            ).scalars().all() if expected_order_ids else []
+            fill_rows = (
                 await session.execute(
                     select(FillORM).where(
-                        FillORM.fill_id.in_(tuple(evidence.fill_ids or ["none"]))
+                        FillORM.fill_id.in_(tuple(expected_fill_ids))
                     )
                 )
-            ).scalars().all() if evidence.fill_ids else []
-            if orders and fills:
-                prices = [
-                    float(_value(fill, "price"))
-                    for fill in fills
-                    if _value(fill, "price") is not None
-                ]
+            ).scalars().all() if expected_fill_ids else []
+            orders_by_id = {row.internal_order_id: row for row in order_rows}
+            fills_by_id = {row.fill_id: row for row in fill_rows}
+            duplicate = len(orders_by_id) != len(order_rows) or len(
+                fills_by_id
+            ) != len(fill_rows)
+            complete = (
+                bool(expected_order_ids)
+                and bool(expected_fill_ids)
+                and not duplicate
+                and all(oid in orders_by_id for oid in expected_order_ids)
+                and all(fid in fills_by_id for fid in expected_fill_ids)
+            )
+            evidence.order_ids = list(expected_order_ids)
+            evidence.fill_ids = list(expected_fill_ids)
+            if complete:
                 evidence.execution_availability = EvidenceAvailability.AVAILABLE
-                evidence.weighted_entry_price = (
-                    sum(prices) / len(prices) if prices else MISSING
-                )
+                quantities = [
+                    Decimal(str(_value(fills_by_id[fid], "quantity") or 0))
+                    for fid in expected_fill_ids
+                ]
+                prices = [
+                    Decimal(str(_value(fills_by_id[fid], "price") or 0))
+                    for fid in expected_fill_ids
+                ]
+                total_qty = sum(quantities, Decimal("0"))
+                if total_qty > 0:
+                    evidence.weighted_entry_price = (
+                        sum((p * q for p, q in zip(prices, quantities, strict=True)), Decimal("0"))
+                        / total_qty
+                    )
             else:
-                evidence.missing_evidence.append("ORDERS_FILLS")
+                evidence.execution_availability = EvidenceAvailability.UNAVAILABLE
+                evidence.weighted_entry_price = MISSING
+                if "ORDERS_FILLS" not in evidence.missing_evidence:
+                    evidence.missing_evidence.append("ORDERS_FILLS")
         for name in (
             "factor_snapshot",
             "sizing_audit_id",
