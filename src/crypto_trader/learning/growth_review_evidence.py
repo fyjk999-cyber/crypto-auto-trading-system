@@ -334,18 +334,36 @@ _REF_AVAILABILITY = {
     "mfe": "mfe_mae_availability",
     "mae": "mfe_mae_availability",
     "slippage": "slippage_availability",
-    "accounting": "fees_availability",
     "fees": "fees_availability",
     "funding": "funding_availability",
 }
+
+
+def _availability_field_for_ref(evidence, ref):
+    prefix, _, subtype = str(ref).partition(":")
+    prefix = prefix.lower()
+    if prefix == "episode":
+        if str(ref) != f"episode:{evidence.episode_id}":
+            raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
+        return None
+    if prefix == "accounting":
+        if subtype == "fees":
+            return "fees_availability"
+        if subtype == "funding":
+            return "funding_availability"
+        raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
+    field = _REF_AVAILABILITY.get(prefix)
+    if field is None:
+        raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
+    return field
 
 
 def validate_causal_evidence_refs(evidence, refs):
     if not refs:
         raise CausalEvidenceUnavailable("CAUSAL_CLAIM_REQUIRES_EVIDENCE_REFS")
     for ref in refs:
-        field = _REF_AVAILABILITY.get(str(ref).split(":", 1)[0].lower())
+        field = _availability_field_for_ref(evidence, ref)
         if field is None:
-            raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
+            continue
         if getattr(evidence, field) != EvidenceAvailability.AVAILABLE:
             raise CausalEvidenceUnavailable(f"EVIDENCE_UNAVAILABLE:{ref}")
