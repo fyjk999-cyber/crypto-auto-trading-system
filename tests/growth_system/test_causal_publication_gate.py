@@ -286,7 +286,9 @@ async def test_cp2b_runtime_mixed_preserves_raw_and_filters_publisher(
     assert publisher_attempt.attempt_id == raw_attempt.attempt_id
     assert publisher_attempt.input_hash == raw_attempt.input_hash
     assert [x.statement for x in publisher_attempt.review.testable_lessons] == ["PUB07_SAFE"]
-    assert [x.statement for x in raw_attempt.review.testable_lessons] == ["PUB07_SAFE", "PUB07_BLOCKED"]
+    assert [
+        item.statement for item in raw_attempt.review.testable_lessons
+    ] == ["PUB07_SAFE", "PUB07_BLOCKED"]
     async with growth_db.session_factory() as session:
         row = (await session.execute(select(GrowthReviewAttemptORM).where(
             GrowthReviewAttemptORM.episode_id == "ep-pub07"))).scalar_one()
@@ -392,3 +394,108 @@ async def test_cp3a_zero_safe_stops_before_publisher_and_cards(
     assert report.lessons_created == 0 and report.patterns_created == 0
     assert report.cards_created == 0 and report.status == "REVIEW_ONLY"
     assert any("CAUSAL_EVIDENCE_BLOCKED" in e for e in report.errors)
+
+
+async def test_cp3b_future_rule_scope_not_contrary_refs(growth_db):
+    from sqlalchemy import select
+
+    from crypto_trader.learning.growth_models import (
+        GrowthLessonORM,
+        GrowthReviewAttemptORM,
+    )
+    from crypto_trader.learning.growth_runtime_learning import (
+        GrowthRuntimeLearningService,
+    )
+    from crypto_trader.persistence.models import AITradeReviewORM
+    from tests.growth_system.test_review_schema_and_refs import FakeProvider
+    from tests.growth_system.test_runtime_learning_closure import (
+        _episode,
+        _payload,
+        _seed_episode,
+        _true,
+    )
+
+    episode = _episode("ep-future-rule")
+    await _seed_episode(growth_db, episode)
+    rule = {
+        "statement": "PUB_FUTURE_VALID",
+        "evidence_refs": ["episode:ep-future-rule"],
+        "confidence": "LOW",
+        "applicability": {"regime": "TRENDING", "direction": "LONG"},
+        "counter_conditions": ["follow-through volume absent"],
+    }
+    service = GrowthRuntimeLearningService(
+        growth_db.session_factory,
+        provider=FakeProvider([_payload("ep-future-rule", lessons=[], future_rules=[rule])]),
+        min_pattern_samples=3,
+    )
+    report = await service.run(
+        [episode], review_date="2026-09-09", claim_token="token-r4",
+        owner="worker", fence=_true,
+    )
+    async with growth_db.session_factory() as session:
+        attempt = (await session.execute(select(GrowthReviewAttemptORM).where(
+            GrowthReviewAttemptORM.episode_id == "ep-future-rule"))).scalar_one()
+        audit = (await session.execute(select(AITradeReviewORM).where(
+            AITradeReviewORM.episode_id == "ep-future-rule"))).scalar_one()
+        lesson = (await session.execute(select(GrowthLessonORM).where(
+            GrowthLessonORM.statement == "PUB_FUTURE_VALID"))).scalar_one()
+    assert attempt.status == "SUCCEEDED"
+    assert attempt.result_json["testable_lessons"] == []
+    raw_rule = attempt.result_json["future_rules"][0]
+    assert raw_rule["statement"] == "PUB_FUTURE_VALID"
+    assert raw_rule["counter_conditions"] == ["follow-through volume absent"]
+    assert audit.future_rules_json[0]["counter_conditions"] == ["follow-through volume absent"]
+    assert lesson.support_refs_json == ["episode:ep-future-rule"]
+    assert lesson.contrary_refs_json == []
+    assert (lesson.scope_json or {})["counter_conditions"] == ["follow-through volume absent"]
+    all_refs = list(lesson.support_refs_json or []) + list(lesson.contrary_refs_json or [])
+    assert all_refs == ["episode:ep-future-rule"]
+    assert report.structured_reviews_created == 1
+    assert report.reviews_with_future_rules == 1
+    assert report.reviews_with_causal_lessons == 1
+
+
+def test_cp3b_unavailable_future_rule_is_not_published():
+    from crypto_trader.learning.growth_contracts import (
+        LearningItem,
+        ObservationFact,
+        StructuredReview,
+    )
+    from crypto_trader.learning.growth_review import (
+        STATUS_SUCCEEDED,
+        ReviewAttempt,
+    )
+    from crypto_trader.learning.growth_runtime_learning import (
+        _prepare_publication_attempt,
+    )
+
+    evidence = GrowthReviewEvidence(
+        episode_id="ep-future-blocked", funding_availability="UNAVAILABLE"
+    )
+    review = StructuredReview(
+        episode_id="ep-future-blocked",
+        observation_facts=[ObservationFact(
+            statement="f", evidence_refs=["episode:ep-future-blocked"],
+        )],
+        testable_lessons=[],
+        future_rules=[LearningItem(
+            statement="PUB_FUTURE_BLOCKED",
+            evidence_refs=["accounting:funding"],
+            confidence="LOW",
+            applicability={"regime": "TRENDING", "direction": "LONG"},
+            counter_conditions=["funding regime normalizes"],
+        )],
+    )
+    attempt = ReviewAttempt(
+        status=STATUS_SUCCEEDED, attempt_id="attempt-future-blocked",
+        review=review, account_id="default", mode="PAPER",
+        symbol="BTCUSDT", direction="LONG",
+        review_date="2026-09-09", input_hash="hash-future-blocked",
+    )
+    before = attempt.review.model_dump(mode="json")
+    safe, blocked = _prepare_publication_attempt(attempt, evidence=evidence)
+    assert safe is None
+    assert attempt.review.model_dump(mode="json") == before
+    assert attempt.review.future_rules[0].statement == "PUB_FUTURE_BLOCKED"
+    assert any("EVIDENCE_UNAVAILABLE:accounting:funding" in item for item in blocked)
