@@ -84,3 +84,20 @@ async def test_trace_selected_evidence_is_typed_and_exact(growth_db):
     assert row.selected_evidence_json[0]["evidence_ref"] == "card:card_t:v1"
     assert row.selected_evidence_json[0]["evidence_domain"] == "PAPER"
     assert row.selected_evidence_json[0]["domain_weight"] == 0.75
+
+
+def test_availability_invariant_fails_closed():
+    ev = GrowthReviewEvidence(episode_id="ep", risk_availability="AVAILABLE", risk_decision_id=None)
+    try:
+        ev.validate_availability()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("contradictory availability must fail closed")
+    ev2 = GrowthReviewEvidence(episode_id="ep", slippage_availability="UNAVAILABLE", slippage=0)
+    try:
+        ev2.validate_availability()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unavailable slippage=0 must fail closed")

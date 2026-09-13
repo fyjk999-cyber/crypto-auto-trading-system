@@ -1,0 +1,104 @@
+........................................................................ [  5%]
+........................................................................ [ 11%]
+........................................................................ [ 17%]
+........................................................................ [ 23%]
+......................................................s................. [ 29%]
+........................................................................ [ 35%]
+...........................................................F............ [ 41%]
+........................................................................ [ 47%]
+........................................................................ [ 52%]
+........................................................................ [ 58%]
+........................................................................ [ 64%]
+........................................................................ [ 70%]
+........................................................................ [ 76%]
+........................................................................ [ 82%]
+........................................................................ [ 88%]
+........................................................................ [ 94%]
+........................................................................ [100%]
+=================================== FAILURES ===================================
+_ test_partial_exit_fill_stays_active_until_factual_remaining_position_closes __
+
+database = <crypto_trader.persistence.database.Database object at 0x115958b90>
+
+    async def test_partial_exit_fill_stays_active_until_factual_remaining_position_closes(database):
+        engine = make_paper_engine(database, engine_tick_seconds=3600)
+        clock = MutableClock()
+        engine.clock = clock
+        await engine.start("run-partial-exit")
+        assert await engine._strategy_context("BTCUSDT") is not None
+        decisions = LLMDecisionStore(database.session_factory)
+        plans = TradePlanService(database.session_factory)
+        entry = ChiefTraderDecision(
+            decision_id="entry-partial-exit",
+            symbol="BTCUSDT",
+            action="LONG",
+            market_regime="TREND",
+            thesis="factual partial-exit thesis",
+            position_size_request=0.1,
+            leverage_request=2,
+            stop_loss=95,
+            model_provider="deepseek",
+            model="deepseek-v4-pro",
+        )
+        await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+        plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+            entry, limit_price=Decimal("101"),
+            execution_metadata=BTC_EXECUTION_METADATA,
+        )
+        assert plan is not None and signal is not None
+        await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+        await engine.process_signal(signal)
+        await engine.wait_for_event_queue()
+    
+        book = engine.adapter.books["BTCUSDT"]
+        book.apply_snapshot(
+            engine.adapter.sequence["BTCUSDT"] + 1,
+            [(Decimal("99.95"), Decimal("0.04"))],
+            [(Decimal("100.05"), Decimal("1"))],
+        )
+        engine.position_manager = LiveLLMPositionManager(
+            chief=SequencedChief([("EXIT", "0"), ("EXIT", "0")]),
+            evidence_engine=Evidence(),
+            decisions=decisions,
+            plans=plans,
+            audit=engine.audit,
+            review_cooldown_seconds=30,
+        )
+        await engine.tick()
+        await engine.wait_for_event_queue()
+    
+        partially_closed = await engine.portfolio.get_position("BTCUSDT")
+        partial_plan = await plans.get(plan.trade_plan_id)
+        partial_order = list(engine.adapter.orders.values())[-1]
+        assert partially_closed is not None and partially_closed.quantity == Decimal("0.06")
+        assert partial_plan is not None and partial_plan.state == TradePlanState.ACTIVE
+        assert partial_plan.exit_decision_id is None
+        assert partial_order.status == OrderStatus.PARTIALLY_FILLED
+    
+        await engine.adapter.cancel_order("BTCUSDT", partial_order.exchange_order_id)
+        await engine.wait_for_event_queue()
+        engine.adapter.seed_book("BTCUSDT")
+        clock.advance()
+        await engine.tick()
+        await engine.wait_for_event_queue()
+    
+        closed = await engine.portfolio.get_position("BTCUSDT")
+        closed_plan = await plans.get(plan.trade_plan_id)
+>       assert closed is not None and closed.quantity == 0
+E       AssertionError: assert (Position(symbol='BTCUSDT', base_asset='BTC', quote_asset='USDT', quantity=Decimal('0.06'), avg_entry_price=Decimal('10..., contract_multiplier=Decimal('1'), leverage=Decimal('2'), updated_at=datetime.datetime(2026, 9, 13, 5, 3, 58, 230964)) is not None and Decimal('0.06') == 0)
+E        +  where Decimal('0.06') = Position(symbol='BTCUSDT', base_asset='BTC', quote_asset='USDT', quantity=Decimal('0.06'), avg_entry_price=Decimal('10..., contract_multiplier=Decimal('1'), leverage=Decimal('2'), updated_at=datetime.datetime(2026, 9, 13, 5, 3, 58, 230964)).quantity
+
+tests/integration/test_live_llm_position_lifecycle.py:417: AssertionError
+=============================== warnings summary ===============================
+../crypto-auto-trading-system-growth-r2-fix/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth-r2-fix/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+tests/integration/test_v4_review4.py::test_mark_price_unavailable_variants[rows0]
+  /Users/huhongjie/.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/asyncio/base_events.py:2017: SAWarning: The garbage collector is trying to clean up non-checked-in connection <AdaptedConnection <aiosqlite.core.Connection object at 0x1170c02c0>>, which will be terminated.  Please ensure that SQLAlchemy pooled connections are returned to the pool explicitly, either by calling ``close()`` or by using appropriate context managers to manage their lifecycle.
+    def get_debug(self):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/integration/test_live_llm_position_lifecycle.py::test_partial_exit_fill_stays_active_until_factual_remaining_position_closes
+1 failed, 1222 passed, 1 skipped, 2 warnings in 229.37s (0:03:49)

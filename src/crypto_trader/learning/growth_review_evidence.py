@@ -89,6 +89,25 @@ class GrowthReviewEvidence:
     def as_payload(self) -> dict[str, Any]:
         return asdict(self)
 
+    def validate_availability(self) -> None:
+        checks = (
+            ("decision_availability", "decision_id"),
+            ("risk_availability", "risk_decision_id"),
+        )
+        for availability_field, reference_field in checks:
+            if getattr(self, availability_field) == EvidenceAvailability.AVAILABLE and not getattr(self, reference_field, None):
+                raise ValueError(f"CONTRADICTORY_AVAILABILITY:{availability_field}")
+        for availability_field, value_field in (
+            ("factor_snapshot_availability", "factor_snapshot"),
+            ("sizing_availability", "sizing_final_quantity"),
+            ("mfe_mae_availability", "mfe"),
+            ("slippage_availability", "slippage"),
+        ):
+            if getattr(self, availability_field) != EvidenceAvailability.AVAILABLE and getattr(self, value_field, None) not in (None, MISSING):
+                raise ValueError(f"CONTRADICTORY_AVAILABILITY:{availability_field}")
+            if getattr(self, availability_field) == EvidenceAvailability.AVAILABLE and getattr(self, value_field, None) in (None, MISSING):
+                raise ValueError(f"CONTRADICTORY_AVAILABILITY:{availability_field}")
+
 
 class GrowthReviewEvidenceLoader:
     """Resolve canonical persisted facts; never recompute or invent them."""
