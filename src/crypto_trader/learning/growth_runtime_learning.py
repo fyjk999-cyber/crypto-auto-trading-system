@@ -445,7 +445,14 @@ class GrowthRuntimeLearningService:
             if safe_attempt is not None:
                 publishable_attempts.append(safe_attempt)
 
+        report.reviews_with_causal_lessons = sum(
+            1
+            for safe_attempt in publishable_attempts
+            if safe_attempt.review is not None
+            and bool(safe_attempt.review.testable_lessons)
+        )
         if not publishable_attempts:
+            report.reviews_with_causal_lessons = 0
             report.status = "REVIEW_ONLY"
             return report
 
