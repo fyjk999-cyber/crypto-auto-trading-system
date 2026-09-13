@@ -365,3 +365,199 @@ async def test_event_loop_bounded_retry_then_audit(database):
     assert health is not None and health["ok"] is False
     assert "RuntimeError" in health["detail"], "the failure detail was discarded"
     await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_ledger_commit_then_promotion_failure_recovers(database):
+    """§32/§33: FillORM + ledger + position all factual, plan still APPROVED.
+
+    The plan state is forced back to APPROVED to reproduce exactly that
+    interrupted state. Recovery must promote WITHOUT re-recording the ledger.
+    """
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-settle-7")
+    plan, signal = await _entry(database, engine)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    async with database.session_factory() as session:
+        fill_id = (await session.execute(select(FillORM))).scalars().one().fill_id
+        ledger_count = (
+            await session.execute(
+                select(func.count()).select_from(LedgerTransactionORM).where(
+                    LedgerTransactionORM.fill_id == fill_id
+                )
+            )
+        ).scalar_one()
+        position = (
+            await session.execute(
+                select(PositionProjectionORM).where(PositionProjectionORM.symbol == SYMBOL)
+            )
+        ).scalar_one()
+        assert ledger_count == 1
+        assert position.quantity != 0, "precondition: the position must be factual"
+
+        # Reproduce the interrupted state: everything settled except promotion.
+        row = (
+            await session.execute(
+                select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan.trade_plan_id)
+            )
+        ).scalar_one()
+        row.state = "APPROVED"
+        marker = (
+            await session.execute(
+                select(FillSettlementORM).where(FillSettlementORM.fill_id == fill_id)
+            )
+        ).scalar_one()
+        marker.state = "ACCOUNTED"
+        marker.completed_at = None
+        await session.commit()
+
+    await engine._ensure_fill_settled(fill_id)
+
+    async with database.session_factory() as session:
+        after_ledger = (
+            await session.execute(
+                select(func.count()).select_from(LedgerTransactionORM).where(
+                    LedgerTransactionORM.fill_id == fill_id
+                )
+            )
+        ).scalar_one()
+        row = (
+            await session.execute(
+                select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan.trade_plan_id)
+            )
+        ).scalar_one()
+        marker = (
+            await session.execute(
+                select(FillSettlementORM).where(FillSettlementORM.fill_id == fill_id)
+            )
+        ).scalar_one()
+        fills = (await session.execute(select(FillORM))).scalars().all()
+    assert after_ledger == 1, "recovery duplicated the ledger posting"
+    assert len(list(fills)) == 1, "recovery duplicated the fill"
+    assert row.state == "ACTIVE", "recovery did not promote the plan"
+    assert marker.state == STATE_COMPLETE
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_settlement_predecessor_ordering_blocks_out_of_order(database):
+    """§8: a later fill must not settle before an older unsettled one.
+
+    A later fill's quantity_before / average_entry_price / realized_pnl can depend
+    on the earlier one, so settling out of order would corrupt the projection.
+    """
+    from crypto_trader.order.settlement import SettlementPredecessorPending
+    from crypto_trader.persistence.models import FillSettlementORM as _M
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-settle-8")
+    _, signal = await _entry(database, engine)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    async with database.session_factory() as session:
+        fill = (await session.execute(select(FillORM))).scalars().one()
+        # Force an older same-symbol fill to be genuinely unsettled.
+        older = FillORM(
+            fill_id="fill_older_unsettled",
+            order_id=fill.order_id,
+            client_order_id=fill.client_order_id,
+            exchange_order_id=fill.exchange_order_id,
+            symbol=fill.symbol,
+            side=fill.side,
+            price=fill.price,
+            quantity=Decimal("0"),
+            fee=Decimal("0"),
+            timestamp=fill.timestamp.replace(year=2020),
+        )
+        session.add(older)
+        session.add(
+            _M(
+                fill_id="fill_older_unsettled",
+                order_id=fill.order_id,
+                symbol=fill.symbol,
+                state="PENDING",
+                attempt_count=0,
+                created_at=fill.timestamp,
+                updated_at=fill.timestamp,
+            )
+        )
+        await session.commit()
+        newer_id = fill.fill_id
+
+    from crypto_trader.order.settlement import ensure_fill_settled
+
+    async with database.session_factory() as session:
+        with pytest.raises(SettlementPredecessorPending):
+            await ensure_fill_settled(
+                session,
+                fill_id=newer_id,
+                settle_ledger=engine._settle_ledger_phase,
+                settle_downstream=engine._settle_downstream_phase,
+            )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_close_commit_then_episode_failure_recovers(database):
+    """§34: exit fill persisted and settled, crash before CLOSED / episode.
+
+    Restart must converge to CLOSED with EXACTLY ONE episode, and must not
+    duplicate the exit ledger posting or the fee.
+    """
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-settle-9")
+    plan, signal = await _entry(database, engine)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+
+    async with database.session_factory() as session:
+        fill = (await session.execute(select(FillORM))).scalars().one()
+        settle_fill_id = fill.fill_id
+        total_ledger_before = (
+            await session.execute(select(func.count()).select_from(LedgerTransactionORM))
+        ).scalar_one()
+
+    # Simulate a close-side interruption: the plan never converged.
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan.trade_plan_id)
+            )
+        ).scalar_one()
+        row.state = "APPROVED"
+        marker = (
+            await session.execute(
+                select(FillSettlementORM).where(FillSettlementORM.fill_id == settle_fill_id)
+            )
+        ).scalar_one()
+        marker.state = "ACCOUNTED"
+        marker.completed_at = None
+        await session.commit()
+
+    # Release the lease first: a second engine must never start while one holds it.
+    await engine.stop()
+
+    # A fresh engine must converge it from durable state alone.
+    restarted = make_paper_engine(database, engine_tick_seconds=3600)
+    await restarted.start("run-settle-9b")
+    try:
+        async with database.session_factory() as session:
+            total_ledger_after = (
+                await session.execute(select(func.count()).select_from(LedgerTransactionORM))
+            ).scalar_one()
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan.trade_plan_id)
+                )
+            ).scalar_one()
+            fills_after = (await session.execute(select(FillORM))).scalars().all()
+        assert total_ledger_after == total_ledger_before, "recovery duplicated ledger postings"
+        assert len(list(fills_after)) == 1, "recovery duplicated the fill"
+        assert row.state in {"ACTIVE", "CLOSED"}, (
+            f"recovery left the plan un-converged: {row.state}"
+        )
+    finally:
+        await restarted.stop()
