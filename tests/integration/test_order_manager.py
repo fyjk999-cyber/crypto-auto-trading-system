@@ -119,9 +119,17 @@ async def test_duplicate_fill_is_single_application(database):
     _, _, first = await mgr.apply_fill(fill)
     _, _, second = await mgr.apply_fill(fill)
     assert first is True and second is False
-    assert applied == ["fill_1"]
+    # The callback now runs on BOTH calls, which is required: a duplicate
+    # exchange event must by itself be able to finish a settlement that was
+    # interrupted after the fill commit. What must not duplicate is the FILL and
+    # its quantity - `newly_applied` already reports that.
+    assert applied == ["fill_1", "fill_1"], (
+        "a duplicate event must still drive settlement convergence"
+    )
     order = await mgr.get(order.internal_order_id)
-    assert order.filled_quantity == Decimal("0.5")
+    assert order.filled_quantity == Decimal("0.5"), (
+        "the duplicate must not add quantity"
+    )
 
 
 async def test_cancel_fill_race(database):

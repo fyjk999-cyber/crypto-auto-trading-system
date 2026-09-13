@@ -157,7 +157,11 @@ async def test_duplicate_fill_event_test(database):
     _, _, first = await mgr.apply_fill(fill)
     _, _, second = await mgr.apply_fill(fill)
     assert (first, second) == (True, False)
-    assert applied == ["dup_fill"]
+    # The callback runs on both calls by design: a duplicate exchange event must
+    # be able to finish a settlement interrupted after the fill commit.
+    assert applied == ["dup_fill", "dup_fill"], (
+        "a duplicate event must still drive settlement convergence"
+    )
 
 
 async def test_cancel_fill_race_test():

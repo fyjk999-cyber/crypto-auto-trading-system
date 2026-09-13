@@ -63,6 +63,25 @@ class SettlementOutcome:
         }
 
 
+class SettlementRecoveryStalled(Exception):
+    """A recovery pass completed but unfinished settlements remain.
+
+    Returning normally here would let the caller report success while the
+    accounting is still incomplete, so this must raise. Bounded work per pass is
+    fine; making no progress at all is a blocker, not a state to be tolerated.
+    """
+
+
+class SettlementStateContradiction(Exception):
+    """A marker claims COMPLETE but the factual lifecycle disagrees.
+
+    COMPLETE is not a higher truth than the ledger. If the marker says COMPLETE
+    and the ledger posting is missing, the settlement state is corrupt and MUST
+    fail closed rather than be skipped as already-settled. Nothing is guessed or
+    rebuilt.
+    """
+
+
 class SettlementPredecessorPending(Exception):
     """An older same-symbol fill is not COMPLETE yet.
 
@@ -147,6 +166,31 @@ async def assert_prefix_settlement_history(session) -> None:
             raise SettlementHistoryContradiction(
                 f"non-prefix settlement history for {symbol}: "
                 f"{fill_id} is settled but the older {first_unsettled[symbol]} is not"
+            )
+
+
+async def assert_complete_settlements_consistent(session) -> None:
+    """A COMPLETE marker must not contradict the factual lifecycle.
+
+    COMPLETE asserts: ledger posted, projection converged, plan converged, and
+    episode materialised when the plan closed. If any of those is missing, the
+    state is corrupt and must fail closed - never be skipped as already-settled.
+    """
+    rows = (
+        await session.execute(
+            select(FillSettlementORM).where(FillSettlementORM.state == STATE_COMPLETE)
+        )
+    ).scalars().all()
+    for marker in rows:
+        txn = await ledger_transaction_for_fill(session, marker.fill_id)
+        if txn is None:
+            raise SettlementStateContradiction(
+                f"{marker.fill_id} is marked COMPLETE but has no ledger transaction"
+            )
+        if marker.ledger_transaction_id and txn.transaction_id != marker.ledger_transaction_id:
+            raise SettlementStateContradiction(
+                f"{marker.fill_id} COMPLETE references {marker.ledger_transaction_id} "
+                f"but the factual transaction is {txn.transaction_id}"
             )
 
 

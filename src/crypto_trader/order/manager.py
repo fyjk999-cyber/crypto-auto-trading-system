@@ -664,11 +664,19 @@ class OrderManager:
                 # separately and idempotently.
                 await ensure_fill_settlement_row(session, existing)
                 await session.commit()
-                return (
-                    _orm_to_order(await session.get(OrderORM, existing.order_id)),
-                    _orm_to_fill(existing),
-                    False,
-                )
+                # Leave the transaction BEFORE invoking settlement: the callback
+                # opens its own sessions and would otherwise collide with this
+                # one. The durable FillORM is the input fact.
+                order_domain = _orm_to_order(await session.get(OrderORM, existing.order_id))
+                duplicate = _orm_to_fill(existing)
+                callback = self.settlement_callback
+                if callback is not None:
+                    # A DUPLICATE exchange event must by itself be able to finish
+                    # an interrupted settlement. Requiring the caller to invoke
+                    # the engine's driver by hand would make recovery depend on
+                    # whoever happens to be calling.
+                    await callback(duplicate)
+                return (order_domain, duplicate, False)
             order_row: OrderORM | None = None
             if fill.exchange_order_id:
                 order_row = (

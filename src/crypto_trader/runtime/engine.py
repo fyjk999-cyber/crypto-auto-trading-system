@@ -2353,7 +2353,6 @@ class TradingEngine:
             # balance push carries no exchange order id. Handling it before the
             # order-identity requirement below is what makes this branch
             # reachable at all.
-            await self.portfolio.refresh(initial_balances=self._initial_balances)
             return
         exchange_order_id = payload.get("exchange_order_id")
         if not exchange_order_id:
@@ -2452,7 +2451,13 @@ class TradingEngine:
             ExchangeEventType.ORDER_FILLED,
         ):
             fill = self._fill_from_payload(local, payload)
-            await self.order_manager.apply_fill(fill)
+            _, _, newly_applied = await self.order_manager.apply_fill(fill)
+            if newly_applied:
+                # The metric counts FACTUAL EXECUTIONS, so it is incremented
+                # exactly once, on first ingestion of a fill. Duplicate events,
+                # settlement retries, startup and runtime recovery must not
+                # inflate it.
+                self._record_execution_metric()
         elif event.event_type == ExchangeEventType.ORDER_CANCELLED:
             await self.order_manager.cancel_confirm(local.internal_order_id, event_id=event_id)
             await self._sync_terminal_entry_plan(
@@ -2509,17 +2514,24 @@ class TradingEngine:
         )
 
     # ----------------------------------------------------------------- ledger
-    async def _settle_fill(self, fill: Fill, *, record_metric: bool = True):
+    async def _settle_fill(
+        self, fill: Fill, *, record_metric: bool = False, post_downstream: bool = False
+    ):
+        """Ledger phase of settlement.
+
+        Does NOT refresh the projection or converge the plan unless explicitly
+        asked: keeping phase 1 narrow is what makes ``Fill + Ledger + ACCOUNTED +
+        stale projection`` a real, recoverable state instead of a transient blip.
+        Downstream convergence lives in ``_converge_fill_downstream``.
+        """
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return None
         # Observability counts EXECUTIONS, not settlement passes: a replay of an
         # already-accounted fill must not inflate the metric.
-        if record_metric and self.market_intelligence is not None:
-            try:
-                self.market_intelligence.record_execution()
-            except Exception:  # observability must never affect execution
-                logger.warning("market_intelligence.record_execution failed", exc_info=True)
+        # NOTE: the execution metric is NOT incremented here. Settlement may run
+        # many times per fill (retry, replay, recovery) while the execution count
+        # must not move; see _record_execution_metric at ingestion.
         position = await self.portfolio.get_position(fill.symbol)
         account = await self.portfolio.get_account(self.settings.effective_mode())
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
@@ -2574,6 +2586,30 @@ class TradingEngine:
             event_id=new_id("evt"),
             metadata=metadata,
         )
+        # FILL_SETTLED records the FACTUAL ACCOUNTING of a fill, so it belongs to
+        # the ledger phase. Emitting it only at the downstream phase would make
+        # the audit silently disappear for every settlement that stops at
+        # ACCOUNTED.
+        await self.audit.log(
+            "FILL_SETTLED",
+            target=fill.fill_id,
+            run_id=self.run_id,
+            order_id=order.internal_order_id,
+            client_order_id=order.client_order_id,
+            exchange_order_id=order.exchange_order_id,
+            before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
+            after={
+                "transaction_id": str(
+                    getattr(settlement_txn, "transaction_id", fill.fill_id)
+                )
+            },
+        )
+        if not post_downstream:
+            # Phase 1 stops here on purpose: the projection and the plan are
+            # converged by _converge_fill_downstream, so that
+            # "Fill + Ledger + ACCOUNTED + stale projection" is a real state the
+            # system can recover from rather than a transient blip.
+            return getattr(settlement_txn, "transaction_id", None)
         await self.portfolio.refresh(initial_balances=self._initial_balances)
         # A submitted order is not evidence of an active plan.  Promote only
         # after this factual fill has been projected into a non-zero position.
@@ -2631,32 +2667,32 @@ class TradingEngine:
                         order_id=order.internal_order_id,
                         after={"trade_plan_id": closed_plan.trade_plan_id},
                     )
-        await self.audit.log(
-            "FILL_SETTLED",
-            target=fill.fill_id,
-            run_id=self.run_id,
-            order_id=order.internal_order_id,
-            client_order_id=order.client_order_id,
-            exchange_order_id=order.exchange_order_id,
-            before={"fill_quantity": str(fill.quantity), "fill_price": str(fill.price)},
-            after={
-                "transaction_id": str(
-                    getattr(settlement_txn, "transaction_id", fill.fill_id)
-                )
-            },
-        )
         return getattr(settlement_txn, "transaction_id", None)
+
+    def _record_execution_metric(self) -> None:
+        """Count one factual execution. Observability must never affect execution."""
+        if self.market_intelligence is None:
+            return
+        try:
+            self.market_intelligence.record_execution()
+        except Exception:
+            logger.warning("market_intelligence.record_execution failed", exc_info=True)
 
     async def _settlement_callback(self, fill) -> None:
         """Settlement entry point installed on the OrderManager.
 
-        Records WHY a settlement failed before re-raising, so a dropped event
+        Takes the DURABLE fill as its fact (the callback runs after the fill's
+        transaction commits) and routes through the single canonical driver, so
+        a new fill, a duplicate event, an event retry, startup recovery and
+        runtime recovery all share ONE settlement semantic.
+
+        Records WHY a failure happened before re-raising, so a dropped event
         leaves durable evidence rather than only a health flag.
         """
         from crypto_trader.order.settlement import record_settlement_failure
 
         try:
-            await self._settle_fill(fill)
+            await self._ensure_fill_settled(fill.fill_id)
         except Exception as exc:
             try:
                 async with self.database.session_factory() as session:
@@ -2672,19 +2708,22 @@ class TradingEngine:
             raise
 
     async def _ensure_fill_settled(self, fill_id: str):
-        """Drive one durable fill to COMPLETE, idempotently.
+        """THE single canonical settlement driver.
 
-        Runs in SEPARATE short transactions per phase: the projection refresh
-        writes its own tables, so holding one write transaction across it
-        deadlocks against itself. Each phase is individually idempotent (the
-        ledger is guarded on fill_id, plan transitions are no-ops when already
-        applied), so re-entry after any interruption converges instead of
-        duplicating.
+        Phases are separated so each durable boundary is a real recoverable state:
+
+            PENDING   -> ledger posted                  -> ACCOUNTED
+            ACCOUNTED -> projection + plan + episode    -> COMPLETE
+
+        Each phase commits on its own, so an interruption leaves a state that a
+        later pass (duplicate event, retry, startup, runtime recovery) can finish.
+        Every phase is idempotent, so re-entry converges instead of duplicating.
         """
         from crypto_trader.order.settlement import (
             STATE_ACCOUNTED,
             STATE_COMPLETE,
             SettlementOutcome,
+            assert_complete_settlements_consistent,
             assert_prefix_settlement_history,
             ensure_fill_settlement_row,
             ledger_transaction_for_fill,
@@ -2692,7 +2731,7 @@ class TradingEngine:
         )
         from crypto_trader.persistence.models import FillORM, OrderORM
 
-        # ---------------------------------------------------------- phase 0
+        # ------------------------------------------------- phase 0: load facts
         async with self.database.session_factory() as session:
             await assert_prefix_settlement_history(session)
             fill = (
@@ -2702,6 +2741,16 @@ class TradingEngine:
                 return None, False
             marker = await ensure_fill_settlement_row(session, fill)
             if marker.state == STATE_COMPLETE:
+                # §16: COMPLETE is not a higher truth than the ledger.
+                txn = await ledger_transaction_for_fill(session, fill_id)
+                if txn is None:
+                    from crypto_trader.order.settlement import (
+                        SettlementStateContradiction,
+                    )
+
+                    raise SettlementStateContradiction(
+                        f"{fill_id} is marked COMPLETE but has no ledger transaction"
+                    )
                 return (
                     SettlementOutcome(
                         fill_id, STATE_COMPLETE, False, False, "ALREADY_COMPLETE"
@@ -2716,25 +2765,26 @@ class TradingEngine:
                 )
             ).scalar_one_or_none()
 
-        # ---------------------------------------------------------- phase 1
+        # --------------------------------------------- phase 1: LEDGER ONLY
         async with self.database.session_factory() as session:
             existing = await ledger_transaction_for_fill(session, fill_id)
         already_accounted = existing is not None
         txn_id = existing.transaction_id if existing is not None else None
-        if existing is None:
+        if not already_accounted:
             try:
-                txn_id = await self._settle_fill(fill)
+                txn_id = await self._post_fill_ledger(fill, order)
             except Exception as exc:
                 async with self.database.session_factory() as session:
                     await record_settlement_failure(session, fill_id=fill_id, error=exc)
                     await session.commit()
                 raise
-            # Re-read: a concurrent idempotent path may have won the race. The
-            # guard means exactly one factual accounting result still holds.
+            # Re-read: a concurrent idempotent path may have won the race, in
+            # which case THIS invocation did not create the accounting.
             async with self.database.session_factory() as session:
                 again = await ledger_transaction_for_fill(session, fill_id)
                 if again is not None:
                     txn_id = again.transaction_id
+                    already_accounted = True
 
         async with self.database.session_factory() as session:
             fresh = (
@@ -2745,11 +2795,12 @@ class TradingEngine:
             marker.ledger_transaction_id = txn_id
             await session.commit()
 
-        # ---------------------------------------------------------- phase 2
-        await self.portfolio.refresh(initial_balances=self._initial_balances or None)
-        await self._converge_plan_for_fill(order)
+        # ------------------------------------------- phase 2: DOWNSTREAM
+        # Errors propagate deliberately: a settlement that cannot converge must
+        # stay ACCOUNTED and be retried, never be marked COMPLETE.
+        await self._converge_fill_downstream(fill, order)
 
-        # ---------------------------------------------------------- phase 3
+        # ------------------------------------------- phase 3: COMPLETE
         async with self.database.session_factory() as session:
             fresh = (
                 await session.execute(select(FillORM).where(FillORM.fill_id == fill_id))
@@ -2760,13 +2811,35 @@ class TradingEngine:
             marker.last_error_type = None
             marker.last_error_message = None
             await session.commit()
+            await assert_complete_settlements_consistent(session)
 
         return (
             SettlementOutcome(
-                fill_id, STATE_COMPLETE, not already_accounted, already_accounted
+                fill_id,
+                STATE_COMPLETE,
+                not already_accounted,
+                already_accounted,
             ),
             already_accounted,
         )
+
+    async def _post_fill_ledger(self, fill, order):
+        """Phase 1 in isolation: ledger transaction + fee accounting, nothing else.
+
+        Kept deliberately narrow so ``Fill exists + Ledger exists + ACCOUNTED +
+        stale projection`` is a state the system can actually sit in and recover
+        from.
+        """
+        return await self._settle_fill(fill, post_downstream=False)
+
+    async def _converge_fill_downstream(self, fill, order) -> None:
+        """Phase 2: rebuild the projection from ledger truth, then converge.
+
+        The projection is REFRESHED from the ledger - never patched with a
+        manufactured delta - so ``projection == ledger replay`` holds.
+        """
+        await self.portfolio.refresh(initial_balances=self._initial_balances or None)
+        await self._converge_plan_for_fill(order)
 
     async def _converge_plan_for_fill(self, order) -> None:
         """Converge the TradePlan implied by the now-factual position."""
@@ -2779,6 +2852,12 @@ class TradingEngine:
         position = await self.portfolio.get_position(order.symbol)
         quantity = getattr(position, "quantity", None) if position else None
         metadata = order.metadata_json or {}
+        if plan.state == TradePlanState.CLOSED:
+            # Already closed (e.g. recovery started after the close committed).
+            # The episode still has to exist, so a COMPLETE marker never claims
+            # convergence that is not there.
+            await self._materialise_episode(trade_plan_id)
+            return
         if plan.state == TradePlanState.APPROVED and quantity not in (None, 0):
             expected_sign = 1 if plan.direction == "LONG" else -1
             if quantity * expected_sign > 0:
@@ -2790,27 +2869,41 @@ class TradingEngine:
         ):
             await self._close_plan_from_factual_position(plan, order)
 
+    async def _materialise_episode(self, trade_plan_id: str) -> None:
+        """Materialise the closed plan's episode, or raise.
+
+        Raises rather than logging: a COMPLETE settlement asserts the episode
+        exists, so a missing episode must block COMPLETE and be retried.
+        """
+        build = getattr(self.trade_episodes, "build_for_closed_plan", None)
+        if build is None:
+            return
+        episode = await build(trade_plan_id)
+        if episode is None:
+            raise RuntimeError(
+                f"closed plan {trade_plan_id} produced no TradeEpisode; "
+                "settlement cannot be COMPLETE"
+            )
+
     async def _close_plan_from_factual_position(self, plan, order) -> None:
+        """Close the plan at the factual zero boundary, then materialise.
+
+        STRICT semantics: failures PROPAGATE so the settlement stays ACCOUNTED
+        and is retried. Logging-and-returning would let COMPLETE claim a
+        convergence that never happened.
+        """
         close = getattr(self.trade_plans, "close_from_factual_position", None)
         if close is None:
             return
-        try:
-            closed = await close(
-                plan.trade_plan_id,
-                exit_decision_id=str((order.metadata_json or {}).get("decision_id") or ""),
-                reason=str(
-                    (order.metadata_json or {}).get("lifecycle_action") or "POSITION_CLOSED"
-                ),
-            )
-        except Exception:
-            logger.warning("plan close from factual position failed", exc_info=True)
-            return
-        build = getattr(self.trade_episodes, "build_for_closed_plan", None)
-        if build is not None and closed is not None:
-            try:
-                await build(closed.trade_plan_id)
-            except Exception:
-                logger.warning("episode materialisation failed", exc_info=True)
+        closed = await close(
+            plan.trade_plan_id,
+            exit_decision_id=str((order.metadata_json or {}).get("decision_id") or ""),
+            reason=str(
+                (order.metadata_json or {}).get("lifecycle_action") or "POSITION_CLOSED"
+            ),
+        )
+        if closed is not None:
+            await self._materialise_episode(closed.trade_plan_id)
 
     async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
         """Complete unfinished settlements. Bounded per pass, complete overall."""
@@ -2834,13 +2927,20 @@ class TradingEngine:
                     progressed += 1
                     completed += 1
             if progressed == 0:
-                # No forward progress: fail closed rather than spin forever.
+                # No forward progress on a full pass: this is a BLOCKER, not a
+                # state to tolerate. Raising keeps the caller from reporting
+                # success while the accounting is still incomplete.
+                from crypto_trader.order.settlement import SettlementRecoveryStalled
+
                 self.health.set(
                     "fill_settlement",
                     False,
                     f"unsettled fills remain: {fill_ids[:5]}",
                 )
-                break
+                raise SettlementRecoveryStalled(
+                    f"{len(fill_ids)} pending settlement(s) made no progress: "
+                    f"{fill_ids[:5]}"
+                )
         if completed:
             await self.audit.log(
                 "FILL_SETTLEMENT_RECOVERED",

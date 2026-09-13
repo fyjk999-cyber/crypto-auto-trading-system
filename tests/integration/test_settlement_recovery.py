@@ -285,3 +285,151 @@ async def test_startup_recovers_a_pending_settlement_without_event_replay(databa
             assert plan_row.state == "ACTIVE"
     finally:
         await restarted.stop()
+
+
+# ------------------------------------------- §3/§4 duplicate EVENT drives it
+
+
+@pytest.mark.asyncio
+async def test_duplicate_exchange_event_alone_completes_settlement(database):
+    """§4: the SAME fill event, redelivered, must finish an interrupted settlement.
+
+    Proven through the real event path (``process_exchange_event`` -> apply_fill),
+    NOT by calling the engine's private driver - the system must recover itself.
+    """
+    from crypto_trader.domain.enums import ExchangeEventType
+    from crypto_trader.domain.models import ExchangeEvent
+
+    engine = _engine(database)
+    await engine.start("run-p031-dup")
+    try:
+        await _open_entry(database, engine)
+        fills = await _await_fill(database)
+        fill = fills[0]
+        fill_id = fill.fill_id
+
+        # Interrupt it: durable fill, marker not complete, no ledger posting.
+        async with database.session_factory() as session:
+            marker = await ensure_fill_settlement_row(session, fill)
+            marker.state = STATE_PENDING
+            marker.completed_at = None
+            await session.delete(
+                (
+                    await session.execute(
+                        select(LedgerTransactionORM).where(
+                            LedgerTransactionORM.fill_id == fill_id
+                        )
+                    )
+                ).scalar_one()
+            )
+            await session.commit()
+
+        async with database.session_factory() as session:
+            assert await ledger_transaction_for_fill(session, fill_id) is None
+
+        # Redeliver the SAME factual fill as an exchange event.
+        order = await engine.order_manager.get(fill.order_id)
+        event = ExchangeEvent(
+            event_id="evt_dup_p031",
+            event_type=ExchangeEventType.ORDER_FILLED,
+            symbol=order.symbol,
+            timestamp=fill.timestamp,
+            payload={
+                "exchange_order_id": order.exchange_order_id,
+                "client_order_id": order.client_order_id,
+                "fill_id": fill_id,
+                "price": str(fill.price),
+                "quantity": str(fill.quantity),
+                "fee": str(fill.fee or 0),
+            },
+        )
+        await engine.process_exchange_event(event)
+
+        async with database.session_factory() as session:
+            marker = (
+                await session.execute(
+                    select(FillSettlementORM).where(FillSettlementORM.fill_id == fill_id)
+                )
+            ).scalar_one()
+            txn = await ledger_transaction_for_fill(session, fill_id)
+            fills_after = (await session.execute(select(FillORM))).scalars().all()
+        assert marker.state == STATE_COMPLETE, (
+            f"a duplicate event must complete the settlement, got {marker.state}"
+        )
+        assert txn is not None, "the ledger posting was not written"
+        assert len(list(fills_after)) == 1, "the duplicate event duplicated the fill"
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_execution_metric_counts_once_across_retries_and_restart(database):
+    """§8: the metric counts EXECUTIONS, not settlement attempts."""
+    calls = {"n": 0}
+
+    class _MI:
+        def record_execution(self):
+            calls["n"] += 1
+
+    engine = _engine(database)
+    engine.market_intelligence = _MI()
+    await engine.start("run-p031-metric")
+    fill_id = None
+    try:
+        await _open_entry(database, engine)
+        fills = await _await_fill(database)
+        fill_id = fills[0].fill_id
+        first = calls["n"]
+        assert first == 1, f"expected exactly one execution metric, got {first}"
+        for _ in range(3):
+            await engine._ensure_fill_settled(fill_id)
+    finally:
+        await engine.stop()
+
+    assert calls["n"] == 1, "settlement retries inflated the execution metric"
+
+    # Restart over the same database: recovery must not add another execution.
+    restarted = _engine(database)
+    restarted.market_intelligence = _MI()
+    await restarted.start("run-p031-metric-b")
+    try:
+        assert calls["n"] == 1, "restart recovery inflated the execution metric"
+    finally:
+        await restarted.stop()
+
+
+# ------------------------------------------- §16 COMPLETE without ledger
+
+
+@pytest.mark.asyncio
+async def test_COMPLETE_without_ledger_fails_closed(database):
+    """§16: COMPLETE is not a higher truth than the ledger."""
+    from crypto_trader.order.settlement import SettlementStateContradiction
+
+    engine = _engine(database)
+    await engine.start("run-p031-contradiction")
+    try:
+        await _open_entry(database, engine)
+        fills = await _await_fill(database)
+        fill = fills[0]
+        await engine._ensure_fill_settled(fill.fill_id)
+
+        # Corrupt the state: COMPLETE with no ledger posting.
+        async with database.session_factory() as session:
+            marker = await ensure_fill_settlement_row(session, fill)
+            marker.state = STATE_COMPLETE
+            await session.delete(
+                (
+                    await session.execute(
+                        select(LedgerTransactionORM).where(
+                            LedgerTransactionORM.fill_id == fill.fill_id
+                        )
+                    )
+                ).scalar_one()
+            )
+            await session.commit()
+
+        with pytest.raises(SettlementStateContradiction):
+            await engine._ensure_fill_settled(fill.fill_id)
+    finally:
+        await engine.stop()
