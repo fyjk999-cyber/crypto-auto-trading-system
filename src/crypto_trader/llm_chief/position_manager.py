@@ -187,6 +187,48 @@ class LiveLLMPositionManager:
         if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
             return None
 
+        # POSITION SIZING V2 PATCH §108/§136 — ADD is a RISK-INCREASING action
+        # and must never be handled by the reduction path below. It is refused
+        # here, explicitly and before any quantity logic, because ADD execution
+        # is not enabled in this build (default-off feature flag). Silently
+        # treating an ADD as a REDUCE would invert its intent and reduce a
+        # position the LLM asked to grow.
+        #
+        # §109 risk priority is preserved: when the factual maximum holding
+        # period has already been reached, REDUCE outranks ADD, so an ADD at
+        # that boundary falls through to the existing TIME_STOP safety
+        # fallback instead of being honoured.
+        if decision.action == OpenAction.ADD and not time_stop:
+            await self.audit.log(
+                "LIVE_LLM_POSITION_ADD_REFUSED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "reason": "ADD_EXECUTION_DISABLED_FEATURE_FLAG",
+                    "symbol": position.symbol,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "action": decision.action.value,
+                    "risk_increasing": True,
+                    "auto_scale_in_enabled": False,
+                    "reduce_substitution_blocked": True,
+                },
+            )
+            return None
+        if decision.action == OpenAction.ADD and time_stop:
+            await self.audit.log(
+                "LIVE_LLM_POSITION_ADD_OVERRIDDEN_BY_TIME_STOP",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "reason": "REDUCE_OUTRANKS_ADD_AT_MAX_HOLD",
+                    "symbol": position.symbol,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "max_holding_time_seconds": plan.max_holding_time_seconds,
+                },
+            )
+
         quantity = (
             abs(position.quantity)
             if decision.action == OpenAction.EXIT or time_stop

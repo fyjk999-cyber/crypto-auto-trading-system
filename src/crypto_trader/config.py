@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     liquidity_depth_levels: int = 5
     max_liquidity_participation: str = "0.15"
 
+    # POSITION SIZING V2 PATCH — future LLM automatic scale-in (ADD).
+    # The flag defaults to FALSE and nothing in the runtime reads it as
+    # permission to trade: ADD execution is not wired at all in this build.
+    enable_llm_automatic_scale_in: bool = False
+    max_scale_in_count: int = 2
+    scale_in_min_interval_seconds: float = 300.0
+    scale_in_order_ttl_seconds: float = 60.0
+
     # Full-market opportunity discovery (evidence-only; §8-§15). The scanner
     # nominates candidates for DeepSeek review; it never trades or gates.
     opportunity_scan_enabled: bool = True

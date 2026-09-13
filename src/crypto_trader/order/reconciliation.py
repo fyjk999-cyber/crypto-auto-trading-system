@@ -30,11 +30,13 @@ from crypto_trader.domain.enums import OrderStatus
 # ---------------------------------------------------------------- purposes
 
 ORDER_PURPOSE_ENTRY = "ENTRY"
+ORDER_PURPOSE_POSITION_ADD = "POSITION_ADD"
 ORDER_PURPOSE_POSITION_REDUCE = "POSITION_REDUCE"
 ORDER_PURPOSE_POSITION_EXIT = "POSITION_EXIT"
 ORDER_PURPOSE_OTHER = "OTHER"
 ORDER_PURPOSES = (
     ORDER_PURPOSE_ENTRY,
+    ORDER_PURPOSE_POSITION_ADD,
     ORDER_PURPOSE_POSITION_REDUCE,
     ORDER_PURPOSE_POSITION_EXIT,
     ORDER_PURPOSE_OTHER,
@@ -43,6 +45,11 @@ ORDER_PURPOSES = (
 # Position-management strategy ids. Purpose is NOT decided by string equality
 # alone - these are only one input to :func:`classify_order_purpose`.
 POSITION_STRATEGY_IDS = ("live_llm_position",)
+
+#: POSITION SIZING V2 PATCH §116 — a future scale-in order carries its own
+#: purpose so it can never be mistaken for a plain ENTRY (which would subject it
+#: to entry-only rules such as the 60s ENTRY TTL and the entry migration gate).
+ORDER_PURPOSE_POSITION_ADD_STRATEGY_IDS = ("live_llm_position_add",)
 
 # ------------------------------------------------------------------ states
 
@@ -93,12 +100,17 @@ def classify_order_purpose(
     reduce_only: bool | None = None,
     direction: str | None = None,
     trade_plan_state: str | None = None,
+    position_action: str | None = None,
 ) -> str:
     """Canonical purpose for an order, from intent rather than a string check.
 
     ``strategy_id`` alone was the previous (and only) discriminator, which is
     exactly why ``live_llm`` ENTRY orders fell outside the liveness pipeline.
     Intent signals are consulted first; the strategy id is the last resort.
+
+    §116 — an explicit ``ADD`` position action, or the dedicated scale-in
+    strategy id, resolves to ``POSITION_ADD`` and NEVER to ``ENTRY``. Every
+    other input keeps its previous result exactly.
     """
     if reduce_only is True:
         # A reduce-only order can only shrink an existing position.
@@ -107,6 +119,11 @@ def classify_order_purpose(
             if (direction or "").upper() == "EXIT"
             else ORDER_PURPOSE_POSITION_REDUCE
         )
+    if (position_action or "").upper() == "ADD" or (
+        strategy_id in ORDER_PURPOSE_POSITION_ADD_STRATEGY_IDS
+    ):
+        # Risk-increasing, but NOT an entry: keep it out of entry-only rules.
+        return ORDER_PURPOSE_POSITION_ADD
     if strategy_id in POSITION_STRATEGY_IDS:
         return (
             ORDER_PURPOSE_POSITION_EXIT

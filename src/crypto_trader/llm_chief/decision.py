@@ -24,6 +24,12 @@ class OpenAction(StrEnum):
     HOLD = "HOLD"
     REDUCE = "REDUCE"
     EXIT = "EXIT"
+    #: POSITION SIZING V2 PATCH §108 — ADD is an explicit RISK-INCREASING
+    #: action, so it is a declared contract value. It is NOT executable in this
+    #: build: the position manager refuses it (see
+    #: ``LiveLLMPositionManager`` and ``crypto_trader.scale_in``), because ADD
+    #: execution sits behind a default-off feature flag that stays off.
+    ADD = "ADD"
     FAIL_CLOSED = "FAIL_CLOSED"
 
 
@@ -82,6 +88,14 @@ class ChiefTraderDecision(BaseModel):
             )
         if self.action == OpenAction.REDUCE and self.position_size_request <= 0:
             raise ValueError("REDUCE requires a positive reduction quantity")
+        if self.action == OpenAction.ADD:
+            # §78/§96 — an ADD request must carry a usable stop and a thesis.
+            # Its quantity is ADVISORY ONLY and is never validated as an order
+            # quantity here; the ScaleInSizer owns the final ADD size.
+            if self.stop_loss is None or self.stop_loss <= 0:
+                raise ValueError("ADD requires a positive invalidation price")
+            if not self.thesis.strip():
+                raise ValueError("ADD requires an explicit thesis")
         if self.action in {FlatAction.LONG, FlatAction.SHORT}:
             if not self.thesis.strip():
                 raise ValueError("directional entry requires an explicit thesis")

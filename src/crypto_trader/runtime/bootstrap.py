@@ -62,6 +62,7 @@ from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskConfig, RiskEngine
 from crypto_trader.runtime.engine import TradingEngine
 from crypto_trader.runtime.lease import LeaseManager
+from crypto_trader.scale_in.policy import ScaleInPolicy
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
 from crypto_trader.sizing.policy import PositionSizingPolicy
@@ -312,6 +313,27 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             after=sizing_policy.to_evidence(),
         )
     sizer = LiveEntrySizingService(policy=sizing_policy)
+    # POSITION SIZING V2 PATCH — the scale-in policy is built and audited but
+    # deliberately NOT wired into any execution path: ADD execution stays
+    # disabled regardless of the flag, because the runtime reads the flag only
+    # to record it. No strategy, engine or order path consumes it in this build.
+    scale_in_policy = ScaleInPolicy(
+        enabled=settings.enable_llm_automatic_scale_in,
+        max_scale_in_count=settings.max_scale_in_count,
+        min_scale_in_interval_seconds=settings.scale_in_min_interval_seconds,
+        scale_in_order_ttl_seconds=settings.scale_in_order_ttl_seconds,
+    )
+    await audit.log(
+        "POSITION_SIZING_V2_SCALE_IN_POLICY",
+        target="scale_in_policy",
+        actor="bootstrap",
+        after={
+            **scale_in_policy.to_evidence(),
+            "auto_scale_in_execution_enabled": False,
+            "auto_scale_in_architecture_ready": True,
+            "execution_path_wired": False,
+        },
+    )
     live_llm = LiveLLMDecisionStrategy(
         evidence_engine=alpha,
         chief=chief,
