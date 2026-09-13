@@ -218,3 +218,41 @@ class GrowthReviewEvidenceLoader:
             if getattr(evidence, name) is MISSING:
                 evidence.missing_evidence.append(name.upper())
         return evidence
+
+
+class CausalEvidenceUnavailable(ValueError):
+    pass
+
+
+_REF_AVAILABILITY = {
+    "decision": "decision_availability",
+    "factor": "factor_snapshot_availability",
+    "factor_snapshot": "factor_snapshot_availability",
+    "sizing": "sizing_availability",
+    "risk": "risk_availability",
+    "order": "execution_availability",
+    "fill": "execution_availability",
+    "position": "position_lifecycle_availability",
+    "exit": "exit_availability",
+    "mfe": "mfe_mae_availability",
+    "mae": "mfe_mae_availability",
+    "slippage": "slippage_availability",
+    "accounting": "fees_availability",
+    "fees": "fees_availability",
+    "funding": "funding_availability",
+}
+
+
+def validate_causal_evidence_refs(
+    evidence: GrowthReviewEvidence, refs: list[str]
+) -> None:
+    """Reusable causal claims may cite only AVAILABLE canonical evidence."""
+    if not refs:
+        raise CausalEvidenceUnavailable("CAUSAL_CLAIM_REQUIRES_EVIDENCE_REFS")
+    for ref in refs:
+        prefix = str(ref).split(":", 1)[0].lower()
+        field = _REF_AVAILABILITY.get(prefix)
+        if field is None:
+            raise CausalEvidenceUnavailable(f"UNKNOWN_EVIDENCE_REF:{ref}")
+        if getattr(evidence, field) != EvidenceAvailability.AVAILABLE:
+            raise CausalEvidenceUnavailable(f"EVIDENCE_UNAVAILABLE:{ref}")
