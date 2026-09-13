@@ -172,7 +172,6 @@ def _episode_review_input(
     currency: str,
 ) -> EpisodeReviewInput:
     canonical_regime, regime_context = normalize_regime(episode.entry_market_regime)
-    missing = []
     market_changes = [
         {
             "entry_market_regime_raw": episode.entry_market_regime,
@@ -214,7 +213,31 @@ def _episode_review_input(
         risk_adjustments=[],
         position_actions=[],
         market_changes=market_changes,
-        missing_evidence=missing,
+        missing_evidence=[
+            "FACTOR_SNAPSHOT",
+            "SIZING_AUDIT",
+            "SLIPPAGE",
+            "MFE_MAE",
+        ],
+        review_evidence={
+            "episode_id": episode.episode_id,
+            "decision_id": episode.entry_decision_id,
+            "exit_decision_id": episode.exit_decision_id,
+            "exit_reason": episode.terminal_reason,
+            "order_ids": list(episode.order_ids or []),
+            "fill_ids": list(episode.fill_ids or []),
+            "holding_seconds": episode.holding_time_seconds,
+            "gross_pnl": str(episode.gross_pnl),
+            "fees": str(episode.fees),
+            "funding": str(episode.funding_pnl),
+            "net_pnl": str(episode.net_pnl),
+            "factor_snapshot": None,
+            "sizing": None,
+            "risk": None,
+            "slippage": None,
+            "mfe": None,
+            "mae": None,
+        },
     )
 
 

@@ -461,6 +461,7 @@ class GrowthCardDecisionTraceORM(GrowthBase):
     selected_count: Mapped[int] = mapped_column(Integer, default=0)
     retrieval_ms: Mapped[float] = mapped_column(Float, default=0.0)
     context_tokens_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    selected_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

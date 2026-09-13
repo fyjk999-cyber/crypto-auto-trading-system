@@ -78,6 +78,7 @@ class EpisodeReviewInput(BaseModel):
     position_actions: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
     market_changes: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
     missing_evidence: list[str] = Field(default_factory=list, max_length=32)
+    review_evidence: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("direction")
     @classmethod

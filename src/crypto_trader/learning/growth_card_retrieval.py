@@ -715,6 +715,9 @@ class CardDecisionTraceStore:
                 context_tokens_estimate=int(
                     result.metrics.get("context_tokens_estimate", 0)
                 ),
+                selected_evidence_json=list(
+                    trace_payload.get("selected_evidence_domain_provenance", [])
+                ),
             )
             session.add(row)
             await session.commit()
@@ -941,8 +944,10 @@ def register_experience_card_tool(
                 data_quality="TRACE_UNAVAILABLE",
                 source_refs=failure_refs,
             )
+        rendered_cards = _card_payload(selected)
         final_features = {
-            "cards": _card_payload(selected),
+            "cards": rendered_cards,
+            "domain_groups": render_experience_domains(rendered_cards),
             "card_evidence_available": bool(selected),
             "card_trace_id": trace.trace_id,
             "retrieval": metrics,
@@ -987,3 +992,41 @@ def register_experience_card_tool(
         ),
         version="v1",
     )
+
+
+def render_experience_domains(cards: list[dict]) -> str:
+    """Group final selected cards by evidence domain for Chief presentation."""
+    groups: dict[str, list[dict]] = {"PAPER": [], "LIVE": [], "BACKTEST": []}
+    for card in cards or []:
+        domain = str(card.get("source_evidence_domain") or "PAPER").upper()
+        groups.setdefault(domain, []).append(card)
+    lines: list[str] = []
+    runtime = [d for d in ("LIVE", "PAPER") if groups.get(d)]
+    if runtime:
+        lines.append("RUNTIME EXPERIENCE")
+        for domain in runtime:
+            lines.extend(["", f"{domain} EXPERIENCE", "-" * (len(domain) + 11)])
+            for card in groups[domain]:
+                lines.append(
+                    f"- {card.get('rule_id')} v{card.get('version')} "
+                    f"(internal_conf={card.get('confidence', 'UNKNOWN')}, "
+                    f"domain_weight={card.get('domain_weight')}, "
+                    f"effective_weight={card.get('effective_weight')})"
+                )
+    if groups.get("BACKTEST"):
+        lines.extend(
+            [
+                "",
+                "HISTORICAL BACKTEST RESEARCH",
+                "============================",
+                "BACKTEST_ONLY",
+                "NOT_RUNTIME_VALIDATED",
+            ]
+        )
+        for card in groups["BACKTEST"]:
+            lines.append(
+                f"- {card.get('rule_id')} v{card.get('version')} "
+                f"(domain_weight={card.get('domain_weight')}, "
+                f"effective_weight={card.get('effective_weight')})"
+            )
+    return "\n".join(lines)
