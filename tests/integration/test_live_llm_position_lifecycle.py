@@ -118,6 +118,33 @@ def _engine_ref():
     return None
 
 
+async def _await_position(engine, symbol, *, deadline_seconds=5.0):
+    """Bounded wait for the entry fill to be projected into a position.
+
+    ``wait_for_event_queue()`` is ``asyncio.Queue.join()``: it drains only what
+    was ALREADY queued, so a fill event the adapter enqueues immediately
+    afterwards is not covered and the position may not exist yet. This waits on
+    the observable condition instead of asserting immediately - the assertion is
+    unchanged, it just stops racing a projection that has not run.
+    """
+    import asyncio as _asyncio
+    import time as _time
+
+    deadline = _time.monotonic() + deadline_seconds
+    position = None
+    while True:
+        position = await engine.portfolio.get_position(symbol)
+        if position is not None and position.quantity != 0:
+            return position
+        if _time.monotonic() >= deadline:
+            raise AssertionError(
+                f"position {symbol} was not projected within {deadline_seconds}s "
+                f"(last={position})"
+            )
+        await engine.wait_for_event_queue()
+        await _asyncio.sleep(0.01)
+
+
 async def _plan_is_active(plans, trade_plan_id) -> bool:
     record = await plans.get(trade_plan_id)
     return record is not None and record.state == TradePlanState.ACTIVE
@@ -368,7 +395,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
     await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
-    opened = await engine.portfolio.get_position("BTCUSDT")
+    opened = await _await_position(engine, "BTCUSDT")
     assert opened is not None and opened.quantity == Decimal("-0.1")
     assert opened.instrument_type == "LINEAR_PERP"
     assert opened.leverage == Decimal("2")
