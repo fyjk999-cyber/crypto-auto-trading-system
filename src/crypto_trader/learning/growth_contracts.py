@@ -90,27 +90,33 @@ class EpisodeReviewInput(BaseModel):
 
     def derived_refs(self) -> set[str]:
         refs = {f"episode:{self.episode_id}"}
-        if self.entry_decision_id:
-            refs.add(f"decision:{self.entry_decision_id}")
-        if self.exit_decision_id:
-            refs.add(f"decision:{self.exit_decision_id}")
-        refs.update(f"order:{ref}" for ref in self.order_refs)
-        refs.update(f"fill:{ref}" for ref in self.fill_refs)
+        evidence = self.review_evidence or {}
+        if evidence.get("decision_availability") == "AVAILABLE":
+            decision_id = evidence.get("decision_id")
+            if decision_id:
+                refs.add(f"decision:{decision_id}")
+        if evidence.get("risk_availability") == "AVAILABLE":
+            refs.update(
+                f"risk:{rid}"
+                for rid in evidence.get("risk_decision_ids", [])
+                if rid
+            )
+        if evidence.get("execution_availability") == "AVAILABLE":
+            refs.update(
+                f"order:{oid}" for oid in evidence.get("order_ids", []) if oid
+            )
+            refs.update(
+                f"fill:{fid}" for fid in evidence.get("fill_ids", []) if fid
+            )
+        if evidence.get("exit_availability") == "AVAILABLE":
+            refs.add("exit:terminal")
+        if evidence.get("fees_availability") == "AVAILABLE":
+            refs.add("accounting:fees")
+        if evidence.get("funding_availability") == "AVAILABLE":
+            refs.add("accounting:funding")
         for tool in self.selected_tools:
             refs.update(tool.source_refs)
             refs.add(f"tool:{tool.tool_name}")
-        evidence = self.review_evidence or {}
-        availability = evidence.get("availability", {})
-        if availability.get("risk") == "AVAILABLE":
-            risk_ids = list(evidence.get("risk_decision_ids") or [])
-            primary = evidence.get("risk_decision_id")
-            if primary and primary not in risk_ids:
-                risk_ids.insert(0, primary)
-            refs.update(f"risk:{risk_id}" for risk_id in risk_ids if risk_id)
-        if availability.get("fees") == "AVAILABLE":
-            refs.add("accounting:fees")
-        if availability.get("funding") == "AVAILABLE":
-            refs.add("accounting:funding")
         return refs
 
 
