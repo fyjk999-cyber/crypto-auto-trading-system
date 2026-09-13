@@ -200,9 +200,12 @@ with no error, no alert and no audit record.
    impossible sentinel, so a degenerate normalizer cannot silently disable the
    guard). Two probes are used because one is not enough: the sentinel rejects a
    constant answer, and a second real-looking symbol (`ZZZUSDT`) rejects a
-   normalizer that collapses part of the symbol (measured: the `[-4:]`, `[3:]`,
-   `[-1:]`, `[-2:]` and fixed-slice families are all rejected by the second probe,
-   because a uniform truncation drags the probe along with it).
+   normalizer that collapses part of the symbol: the SUFFIX/truncation families
+   (`[-4:]`, `[3:]`, `[-1:]`, `[-2:]`, fixed suffixes, `removesuffix("USDT")`,
+   `replace("USDT", "")`, `split("-")[0]`) are rejected, because such a mapping
+   drags the probe along with it. PREFIX slices are NOT covered - `s[:3]`, `s[:4]`
+   and in particular `s[:1]` leave the probe distinct, are therefore trusted, and
+   `s[:1]` really does accept `BCHUSDT` for a `BTCUSDT` order.
 
    **The probes are a heuristic, not a proof of injectivity.** A non-uniform
    mapping in our OWN adapter — a hand-written alias table that merges two base
