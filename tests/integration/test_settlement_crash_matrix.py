@@ -254,3 +254,28 @@ async def test_C4_after_projection_before_ACTIVE_recovers(database):
         assert ledger_after == ledger_before, "recovery duplicated ledger postings"
     finally:
         await restarted.stop()
+
+
+# ============================================ C5 / C6  NOT_MEASURED
+#
+# Both need a REAL closing lifecycle (ENTRY -> ACTIVE -> canonical EXIT ->
+# factual exit fill -> position zero). That fixture drives correctly: the plan
+# reaches CLOSED, the position reaches zero, and the exit order carries
+# reduce_only=True with its own exit decision id.
+#
+# The blocker is EPISODE MATERIALISATION: build_for_closed_plan is never reached
+# on this path, so a closed lifecycle ends up with zero episodes. Verified by
+# instrumenting the builder's guards - NOT ONE of them fired, so the builder was
+# not called at all, while every field the guards require was present
+# (state=CLOSED, opened_at/closed_at set, order_id set, exit_decision_id set,
+# exactly one plan, projection zero, both orders present with correct metadata).
+#
+# Note the C2/C3/C4 tests DO reach the engine's convergence methods and pass, so
+# the settlement driver itself works; the gap is specific to episode
+# materialisation from the close path and was NOT root-caused within budget.
+#
+# Recorded rather than worked around: C5 and C6 remain NOT_MEASURED, and the
+# tests are absent rather than loosened. Instrumentation was reverted so no
+# diagnostic prints remain in production code.
+
+

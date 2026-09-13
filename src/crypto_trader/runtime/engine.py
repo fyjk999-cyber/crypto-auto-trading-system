@@ -2919,6 +2919,53 @@ class TradingEngine:
         if closed is not None:
             await self._materialise_episode(closed.trade_plan_id)
 
+    async def _materialise_missing_closed_episodes(self) -> int:
+        """Converge CLOSED plans that lack their episode.
+
+        A CLOSED plan without exactly one episode is a contradiction, but it is
+        also precisely the state an interruption at the close boundary leaves
+        behind - so recovery must first CLOSE the gap, and only then assert the
+        invariant. Asserting first would turn a recoverable state into a hard
+        startup failure, which is the opposite of converging from durable facts.
+        """
+        from crypto_trader.persistence.models import TradeEpisodeORM, TradePlanORM
+
+        build = getattr(self.trade_episodes, "build_for_closed_plan", None)
+        if build is None:
+            return 0
+        materialised = 0
+        async with self.database.session_factory() as session:
+            closed = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.state == "CLOSED")
+                )
+            ).scalars().all()
+        for plan in closed:
+            async with self.database.session_factory() as session:
+                existing = (
+                    await session.execute(
+                        select(TradeEpisodeORM).where(
+                            TradeEpisodeORM.trade_plan_id == plan.trade_plan_id
+                        )
+                    )
+                ).scalars().all()
+            if len(list(existing)) == 1:
+                continue
+            episode = await build(plan.trade_plan_id)
+            if episode is None:
+                # A CLOSED plan that cannot produce its episode stays a
+                # contradiction; the Layer A check below reports it.
+                continue
+            materialised += 1
+        if materialised:
+            await self.audit.log(
+                "CLOSED_EPISODE_MATERIALISED_ON_RECOVERY",
+                target=f"plans={materialised}",
+                run_id=self.run_id,
+                after={"materialised": materialised},
+            )
+        return materialised
+
     async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
         """Complete unfinished settlements. Bounded per pass, complete overall."""
         from crypto_trader.order.settlement import (
@@ -2928,13 +2975,17 @@ class TradingEngine:
             pending_settlements,
         )
 
+        await self._materialise_missing_closed_episodes()
         completed = 0
         while True:
             async with self.database.session_factory() as session:
-                # GLOBAL consistency FIRST. pending_settlements deliberately
-                # EXCLUDES COMPLETE rows, so a COMPLETE marker that contradicts
-                # the ledger or a closed lifecycle would otherwise be skipped
-                # forever and never detected.
+                # GLOBAL consistency. pending_settlements deliberately EXCLUDES
+                # COMPLETE rows, so a COMPLETE marker that contradicts the ledger
+                # or a closed lifecycle would otherwise be skipped forever and
+                # never detected. The closed-plan episode gap is CLOSED first (see
+                # _materialise_missing_closed_episodes) so this asserts an
+                # invariant that recovery has already had the chance to satisfy -
+                # otherwise a recoverable state would become a hard failure.
                 await assert_complete_settlements_consistent(session)
                 await assert_prefix_settlement_history(session)
                 rows = await pending_settlements(session, limit=batch_size)
