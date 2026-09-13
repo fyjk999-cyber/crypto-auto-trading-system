@@ -193,8 +193,27 @@ with no error, no alert and no audit record.
    `EXCHANGE_EVENT_ID_MISMATCH`) audit record instead of returning invisibly, and
    a payload that contradicts the order it resolved to (different symbol form or
    different client order) is refused and audited the same way. Symbol
-   comparison is canonical (the adapter's own `normalize_symbol`, with a
-   case-insensitive fallback), so a naming variant accepts rather than wedges.
+   comparison accepts a naming variant rather than wedging on one: it uses the
+   configured adapter's own `normalize_symbol`, and falls back to a
+   case-insensitive comparison whenever that normalizer cannot answer (missing,
+   raising, empty, or returning a constant - detected by probing it with an
+   impossible sentinel, so a degenerate normalizer cannot silently disable the
+   guard). The guard is therefore exactly as canonical as the configured
+   adapter. Measured accept/refuse matrix for a local `BTCUSDT`:
+
+   | payload | OKX | Simulator / Paper-Real-Market | Binance | Bybit |
+   |---|---|---|---|---|
+   | `btcusdt` | accept | accept | accept | refuse |
+   | `BTC-USDT-SWAP` | accept | refuse | refuse | refuse |
+   | `ETHUSDT` / `ethusdt` / `ETH-USDT-SWAP` | refuse | refuse | refuse | refuse |
+
+   The runtime adapter in this revision is the simulator (canonical uppercase
+   symbols), and OKX - the only hyphenating venue - normalizes correctly, so no
+   path reaches the refuse cell today. **Live-wiring precondition (must be
+   re-verified, not assumed):** a new adapter that hands the engine venue-form
+   symbols without a canonicalizing `normalize_symbol` will have its events
+   refused (loudly: audited and counted, never silent) rather than misapplied.
+   Re-run the matrix above when wiring one.
    Scope limit, stated honestly: an order event with **no** `exchange_order_id`
    at all still returns before this path — it is not silent *by design*, it is
    simply not routed here. `BinanceAdapter.dispatch_raw_event` is such a shape
@@ -261,11 +280,11 @@ reproducible with the command in parentheses.
 
 | measurement | result | command |
 |---|---|---|
-| root-cause test on the UNFIXED base | 20/20 and 10/10 **fail** | `pytest "tests/integration/test_position_lifecycle_determinism.py::test_L1_lifecycle_transition_is_deterministic_without_any_sleep"` in a worktree at the base SHA (assert the resolved `crypto_trader.runtime.engine.__file__` first) |
+| root-cause test on the UNFIXED base | 20/20 and 10/10 **fail** | create a worktree at the base SHA (the test file does not exist there, so copy it in first), then `pytest "tests/integration/test_position_lifecycle_determinism.py::test_L1_lifecycle_transition_is_deterministic_without_any_sleep"`. Assert the resolved `crypto_trader.runtime.engine.__file__` is the base tree before trusting the result: `pyproject.toml` sets `pythonpath = ["src", "."]`, which can silently point pytest at the wrong tree |
 | root-cause test on the fixed revision | 100/100 **pass** | same test, 100 iterations |
-| determinism suite (L1-L18) | 60/60 clean | full file, 60 iterations |
+| determinism suite (L1-L19, 20 tests) | 30/30 clean | full file, 30 iterations |
 | lifecycle file | 30/30 and 50/50 clean | `pytest tests/integration/test_live_llm_position_lifecycle.py` |
-| order-varied context | 20/20 clean | lifecycle file adjacent to `test_order_reconciliation.py`, both orders |
+| order-varied context | 15/15 clean | lifecycle file adjacent to `test_order_reconciliation.py`, both orders |
 | full suite | 1546 passed x3, then 1549 passed x3 | `pytest -q` (external OKX file included; it failed on the network in one earlier run and is classified separately) |
 
 Instrumentation of a passing run BEFORE the fix showed 23

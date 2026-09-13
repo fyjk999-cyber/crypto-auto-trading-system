@@ -2754,23 +2754,58 @@ class TradingEngine:
         await self._event_queue.join()
 
 
+#: Never a real instrument. Used only to detect a normalizer that returns a
+#: constant instead of answering - see ``_same_symbol``.
+_SYMBOL_SENTINEL = "\x00dsh-symbol-sentinel\x00"
+
+
+def _canonical_symbol(adapter, value: str) -> str:
+    """Return the adapter's canonical form, or "" when it cannot produce one.
+
+    "" is the explicit "no canonical answer" value, which keeps a degenerate or
+    failing normalizer from being mistaken for agreement.
+    """
+    normalize = getattr(adapter, "normalize_symbol", None)
+    if not callable(normalize):
+        return ""
+    try:
+        result = normalize(value)
+    except Exception:  # noqa: BLE001 - a normalizer must never break routing
+        return ""
+    if result is None:
+        return ""
+    return str(result).strip()
+
+
 def _same_symbol(adapter, payload_symbol: object, local_symbol: object) -> bool:
     """Compare a venue payload symbol with a local one, canonically.
 
     Venues and the local book use different naming forms (``btcusdt``,
     ``BTC-USDT-SWAP``, ``BTCUSDT``). Byte equality would refuse every event for
     an order whose venue form differs from the local one - which would wedge the
-    trade plan at APPROVED, the very symptom this fix removes. The adapter owns
-    normalization; a byte comparison is only the last-resort fallback.
+    trade plan at APPROVED, the very symptom this fix removes.
+
+    The adapter owns normalization, but only its answer for BOTH sides is
+    trusted: a normalizer that is missing, raises, or returns an empty/constant
+    value yields no canonical answer, and the comparison then falls back to a
+    case-insensitive one. That direction fails CLOSED - a genuinely different
+    symbol is still refused - whereas trusting a degenerate normalizer would
+    accept every pair and disable the guard.
     """
-    raw = str(payload_symbol)
-    local = str(local_symbol)
-    normalize = getattr(adapter, "normalize_symbol", None)
-    if callable(normalize):
-        try:
-            return str(normalize(raw)) == str(normalize(local))
-        except Exception:  # noqa: BLE001 - a normalizer must never break routing
-            pass
+    try:
+        raw = str(payload_symbol)
+        local = str(local_symbol)
+    except Exception:  # noqa: BLE001 - an unrenderable symbol is not a match
+        return False
+    canonical_payload = _canonical_symbol(adapter, raw)
+    canonical_local = _canonical_symbol(adapter, local)
+    if canonical_payload and canonical_local:
+        # Only trust the answer when the normalizer actually DISCRIMINATES: one
+        # that maps an impossible sentinel onto the local symbol is not
+        # answering, it is returning a constant, and trusting it would accept
+        # every pair and silently disable this guard.
+        if _canonical_symbol(adapter, _SYMBOL_SENTINEL) != canonical_local:
+            return canonical_payload == canonical_local
     return raw.upper() == local.upper()
 
 
