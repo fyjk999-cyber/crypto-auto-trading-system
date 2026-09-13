@@ -11,18 +11,17 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderEventType, OrderStatus
-
 from crypto_trader.domain.errors import OrderNotFound
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill
 from crypto_trader.order.recovery_classification import (
-
-logger = logging.getLogger(__name__)
     DISPOSITION_MISSING,
     DISPOSITION_REJECT,
     DISPOSITION_UNKNOWN,
     classify_recovery_lookup_outcome,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def event_type_for_exchange_status(status: OrderStatus) -> OrderEventType:
