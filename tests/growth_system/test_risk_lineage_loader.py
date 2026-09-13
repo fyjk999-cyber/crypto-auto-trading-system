@@ -18,7 +18,9 @@ class _Result:
 
 
 class _Session:
-    def __init__(self, queues): self._queues = list(queues); self.executed = 0
+    def __init__(self, queues):
+        self._queues = list(queues)
+        self.executed = 0
     async def __aenter__(self): return self
     async def __aexit__(self, *exc): return False
     async def get(self, model, key): return None
@@ -29,9 +31,13 @@ class _Session:
 
 
 class _Factory:
-    def __init__(self, queues): self._queues = queues; self.sessions = []
+    def __init__(self, queues):
+        self._queues = queues
+        self.sessions = []
     def __call__(self):
-        session = _Session(self._queues); self.sessions.append(session); return session
+        session = _Session(self._queues)
+        self.sessions.append(session)
+        return session
 
 
 def _episode(risk_ids):
