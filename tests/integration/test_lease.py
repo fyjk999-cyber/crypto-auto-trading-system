@@ -150,3 +150,82 @@ async def test_engine_lease_renew_failure_modes_fail_closed(
     audit = await engine.audit.list_recent(limit=20)
     assert any(row.action == "EXECUTION_LEASE_LOST" for row in audit)
     await engine.stop()
+
+
+async def test_runtime_source_sha_identity_and_run_metadata(database, monkeypatch):
+
+    from crypto_trader.persistence.models import EngineRunORM
+    from crypto_trader.runtime.source_identity import resolve_source_sha
+
+    monkeypatch.setenv("RUNNING_SHA", "c1-exact-checkout-sha")
+    assert resolve_source_sha() == "c1-exact-checkout-sha"
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    run_id = await engine.start("source-sha-run")
+    snapshot = engine.runtime_snapshot()
+    assert snapshot["source_sha"] == "c1-exact-checkout-sha"
+    assert snapshot["started_at"]
+    assert snapshot["single_writer"] is True
+
+    async with database.session_factory() as session:
+        row = await session.get(EngineRunORM, run_id)
+    assert row is not None
+    assert row.metadata_json["source_sha"] == "c1-exact-checkout-sha"
+    await engine.stop()
+
+
+async def test_clean_restart_single_writer_and_no_duplicate_tasks(database):
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import EngineRunORM
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("restart-one")
+    first_lease = engine.lease
+    first_names = sorted(task.get_name() for task in engine._tasks)
+    assert len(first_names) == len(set(first_names))
+
+    await engine.stop()
+    assert engine._tasks == []
+
+    await engine.start("restart-two")
+    second_lease = engine.lease
+    second_names = sorted(task.get_name() for task in engine._tasks)
+    assert second_names == first_names
+    assert second_lease is not None and first_lease is not None
+    assert second_lease.owner_id == "engine_restart-two"
+    assert second_lease.fence_generation > first_lease.fence_generation
+    assert engine.runtime_snapshot()["single_writer"] is True
+
+    async with database.session_factory() as session:
+        rows = (
+            await session.execute(select(EngineRunORM).order_by(EngineRunORM.run_id))
+        ).scalars().all()
+    active = [row for row in rows if row.ended_at is None]
+    assert [row.run_id for row in active] == ["restart-two"]
+    await engine.stop()
+
+
+async def test_second_engine_instance_is_rejected_without_duplicate_writer(database):
+    from sqlalchemy import select
+
+    from crypto_trader.domain.errors import LeaseNotHeld
+    from crypto_trader.persistence.models import EngineRunORM
+
+    first = make_paper_engine(database, engine_tick_seconds=3600)
+    second = make_paper_engine(database, engine_tick_seconds=3600)
+    await first.start("first-writer")
+    with pytest.raises(LeaseNotHeld):
+        await second.start("second-writer")
+    assert second.lease is None
+    assert second.runtime_snapshot()["single_writer"] is False
+
+    async with database.session_factory() as session:
+        rows = (
+            await session.execute(select(EngineRunORM).order_by(EngineRunORM.run_id))
+        ).scalars().all()
+    active = [row.run_id for row in rows if row.ended_at is None]
+    denied = next(row for row in rows if row.run_id == "second-writer")
+    assert active == ["first-writer"]
+    assert denied.state == "STOPPED"
+    await first.stop()

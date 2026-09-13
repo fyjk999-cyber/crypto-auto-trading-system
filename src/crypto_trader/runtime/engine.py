@@ -73,6 +73,7 @@ from crypto_trader.runtime.event_bus import EventBus
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.recovery import RecoveryService
+from crypto_trader.runtime.source_identity import resolve_source_sha
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
@@ -165,6 +166,8 @@ class TradingEngine:
         self.state_machine = RuntimeStateMachine()
 
         self.run_id: str | None = None
+        self.source_sha = resolve_source_sha()
+        self.started_at: datetime | None = None
         self.lease: Lease | None = None
         self._lease_valid = not require_lease
         self.reconciliation_halted = False
@@ -185,6 +188,8 @@ class TradingEngine:
         if self._running:
             return self.run_id
         self.run_id = run_id or new_id("run")
+        self.source_sha = resolve_source_sha()
+        self.started_at = datetime.now(UTC)
         self.state_machine.transition(RuntimeState.STARTING)
         await self._persist_run(RuntimeState.STARTING)
         await self.adapter.connect()
@@ -291,6 +296,7 @@ class TradingEngine:
                 await task
             except asyncio.CancelledError:
                 pass
+        self._tasks.clear()
         if self.lease is not None:
             await self.lease_manager.release(
                 self.lease_key,
@@ -318,11 +324,19 @@ class TradingEngine:
                         mode=self.settings.effective_mode().value,
                         strategy_id=",".join(s.name for s in self.strategies) or "none",
                         started_at=now,
-                        metadata_json={"lease_key": self.lease_key},
+                        metadata_json={
+                            "lease_key": self.lease_key,
+                            "source_sha": self.source_sha,
+                        },
                     )
                 )
             else:
                 row.state = state.value
+                row.metadata_json = {
+                    **(row.metadata_json or {}),
+                    "lease_key": self.lease_key,
+                    "source_sha": self.source_sha,
+                }
                 if state == RuntimeState.STOPPED:
                     row.ended_at = now
             await session.commit()
@@ -1908,8 +1922,13 @@ class TradingEngine:
         lease = self.lease
         return {
             "run_id": self.run_id,
+            "source_sha": self.source_sha,
+            "started_at": (
+                self.started_at.isoformat() if self.started_at is not None else None
+            ),
             "state": self.state_machine.state.value,
             "mode": self.settings.effective_mode().value,
+            "single_writer": self._lease_valid if self.require_lease else True,
             "lease_held": self._lease_valid,
             "execution_lease": {
                 "required": self.require_lease,

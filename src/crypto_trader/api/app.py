@@ -929,8 +929,10 @@ def create_app(state: AppState) -> FastAPI:
     async def version():
         import os
 
+        from crypto_trader.runtime.source_identity import resolve_source_sha
+
         return {
-            "git_sha": os.environ.get("RUNNING_SHA") or os.environ.get("GIT_SHA", "unknown"),
+            "git_sha": resolve_source_sha(),
             "api_version": "v1",
             "schema_version": "1",
             "deployment_id": os.environ.get("DEPLOYMENT_ID", "local"),

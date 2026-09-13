@@ -7,12 +7,12 @@ Each loop owns its own heartbeat and can be supervised/restarted independently.
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from crypto_trader.domain.enums import RuntimeState
 from crypto_trader.runtime.lease import LeaseManager
+from crypto_trader.runtime.source_identity import resolve_source_sha
 
 
 @dataclass
@@ -70,7 +70,7 @@ class TradingRuntimeSupervisor:
         self.market_data_callback = market_data_callback
         self.ai_position_callback = ai_position_callback
         self.ai_position_interval_seconds = ai_position_interval_seconds
-        self.status = RuntimeStatus(git_sha=os.environ.get("RUNNING_SHA", "unknown"))
+        self.status = RuntimeStatus(git_sha=resolve_source_sha())
         self._tasks: dict[str, asyncio.Task] = {}
         self._stopping = False
         self._lease = None
