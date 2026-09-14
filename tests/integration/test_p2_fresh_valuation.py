@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from crypto_trader.domain.models import Account, Instrument, Position
+from crypto_trader.domain.models import Account, Balance, Instrument, Position
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.valuation.service import ValuationService
@@ -160,3 +160,54 @@ async def test_missing_instrument_metadata_invalidates_batch(database):
     )
     assert batch.quality == "UNAVAILABLE"
     assert "INSTRUMENT_METADATA_UNAVAILABLE:ETHUSDT" in batch.reason_codes
+
+
+async def test_valuation_candidate_exposes_factual_available_margin(database):
+    portfolio = PortfolioService(database.session_factory)
+    ledger = LedgerService(database.session_factory)
+    service = ValuationService(portfolio=portfolio, ledger=ledger)
+    account = Account(
+        account_id="default",
+        equity=Decimal("1000"),
+        balances={
+            "USDT": Balance(
+                currency="USDT",
+                total=Decimal("1000"),
+                available=Decimal("750"),
+                frozen=Decimal("250"),
+            )
+        },
+    )
+    batch = await service.build(
+        account=account,
+        positions={},
+        market_prices={},
+    )
+    assert batch.quality == "HEALTHY"
+    assert batch.raw_mtm_equity == Decimal("1000")
+    assert batch.available_margin == Decimal("750")
+
+
+async def test_unavailable_valuation_does_not_expose_available_margin(database):
+    portfolio = PortfolioService(database.session_factory)
+    ledger = LedgerService(database.session_factory)
+    service = ValuationService(portfolio=portfolio, ledger=ledger)
+    account = Account(
+        account_id="default",
+        equity=Decimal("1000"),
+        balances={
+            "USDT": Balance(
+                currency="USDT",
+                total=Decimal("1000"),
+                available=Decimal("750"),
+                frozen=Decimal("250"),
+            )
+        },
+    )
+    batch = await service.build(
+        account=account,
+        positions={"BTCUSDT": _position("BTCUSDT")},
+        market_prices={},
+    )
+    assert batch.quality == "UNAVAILABLE"
+    assert batch.available_margin is None

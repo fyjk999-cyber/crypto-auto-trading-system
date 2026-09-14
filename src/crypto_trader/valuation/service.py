@@ -156,13 +156,23 @@ class ValuationService:
         if stale_marks:
             reasons.append("STALE_MARKS")
         reasons.extend(invalid_reasons)
+        # Available margin is a factual account-projection value, never a
+        # guess.  It is only exposed on a HEALTHY batch; an unavailable batch
+        # keeps it None so the Sizer fails closed.
+        available_margin = None
+        if quality == VALUATION_QUALITY_HEALTHY:
+            balance = account.balances.get(currency)
+            if balance is not None and balance.available is not None:
+                candidate = Decimal(balance.available)
+                if candidate.is_finite():
+                    available_margin = candidate
         return ValuationBatch(
             valuation_id=new_id("val"),
             account_id=account.account_id,
             currency=currency,
             quality=quality,
             raw_mtm_equity=raw_mtm_equity,
-            available_margin=None,
+            available_margin=available_margin,
             market_as_of=market_as_of,
             ledger_watermark=ledger_watermark,
             position_snapshot_ref=position_snapshot_ref,
