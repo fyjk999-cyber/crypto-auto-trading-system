@@ -333,6 +333,25 @@ def create_app(state: AppState) -> FastAPI:
             payload["available_models"] = control["available"]
         return payload
 
+    @app.get("/llm/prompt-cache")
+    async def llm_prompt_cache():
+        """DeepSeek provider prompt-cache metrics (separate from Growth/market)."""
+        provider = state.llm_runtime.provider_instance
+        diagnostics = getattr(provider, "diagnostics", None)
+        if not callable(diagnostics):
+            return {"status": "UNKNOWN", "reason": "PROVIDER_DIAGNOSTICS_UNAVAILABLE"}
+        payload = diagnostics()
+        return payload.get("prompt_cache") or {"status": "UNKNOWN", "reason": "NO_CALLS"}
+
+    @app.get("/growth/experience-metrics")
+    async def growth_experience_metrics():
+        """Growth card retrieval utilization, separate from provider/market caches."""
+        from crypto_trader.learning.growth_utilization_metrics import (
+            load_growth_utilization_metrics,
+        )
+
+        return await load_growth_utilization_metrics(state.database.session_factory)
+
     @app.get("/llm/models")
     async def llm_models():
         """Selectable LLM models + the operator's current selection."""

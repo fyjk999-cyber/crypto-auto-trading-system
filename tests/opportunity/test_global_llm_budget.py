@@ -186,3 +186,42 @@ def test_tool_selection_success_is_recorded_in_the_budget():
     # An ENTRY workflow's tool selection is charged to the entry purpose, not to
     # a research pool: the purpose is inherited from the workflow.
     assert budget.snapshot()["granted_by_priority"][P2_FINAL_ENTRY_DECISION] == 1
+
+
+def test_budget_records_prompt_cache_usage_and_separates_operations():
+    budget = GlobalLLMBudget(BudgetConfig(window_seconds=60, max_calls_per_window=5))
+    first = budget.try_acquire(P2_FINAL_ENTRY_DECISION, operation="trading_decision")
+    assert first.granted
+    first.complete(
+        token_usage={
+            "prompt_tokens": 100,
+            "prompt_cache_hit_tokens": 70,
+            "prompt_cache_miss_tokens": 30,
+        }
+    )
+    second = budget.try_acquire(P3_SELECTED_SYMBOL_RESEARCH, operation="tool_selection")
+    assert second.granted
+    second.complete(token_usage={"prompt_tokens": 50})
+    metrics = budget.snapshot()["prompt_cache"]
+    assert metrics["hit_tokens"] == 70
+    assert metrics["miss_tokens"] == 30
+    assert metrics["eligible_prompt_tokens"] == 100
+    assert metrics["hit_rate"] == 0.7
+    assert metrics["unknown_calls"] == 1
+    assert metrics["operations"]["trading_decision"]["hit_rate"] == 0.7
+    assert metrics["operations"]["tool_selection"]["hit_rate"] is None
+
+
+def test_budget_zero_denominator_cache_rate_is_unknown_not_zero():
+    budget = GlobalLLMBudget(BudgetConfig(window_seconds=60, max_calls_per_window=5))
+    ticket = budget.try_acquire(P1_POSITION_LIFECYCLE, operation="position_review")
+    assert ticket.granted
+    ticket.complete(
+        token_usage={
+            "prompt_cache_hit_tokens": 0,
+            "prompt_cache_miss_tokens": 0,
+        }
+    )
+    metrics = budget.snapshot()["prompt_cache"]
+    assert metrics["status"] == "UNKNOWN"
+    assert metrics["hit_rate"] is None

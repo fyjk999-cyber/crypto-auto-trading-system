@@ -149,6 +149,7 @@ class ChiefTraderEngine:
                 input_tokens=_token(usage, "prompt_tokens", "input_tokens"),
                 output_tokens=_token(usage, "completion_tokens", "output_tokens"),
                 detail=response.error,
+                token_usage=usage,
             )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
@@ -286,6 +287,7 @@ class ChiefTraderEngine:
                 input_tokens=_token(usage, "prompt_tokens", "input_tokens"),
                 output_tokens=_token(usage, "completion_tokens", "output_tokens"),
                 detail=getattr(response, "error", None),
+                token_usage=usage,
             )
         if response is not None and response.ok and response.parsed_json:
             try:
@@ -328,10 +330,11 @@ class ChiefTraderEngine:
             model=getattr(self.provider, "model", "unconfigured"),
         )
 
-    def render_prompt(self, ctx: ChiefTraderContext) -> str:
+    def _static_prompt_prefix(self, position_state: PositionState) -> str:
+        """Stable instruction prefix; identical across symbols/market snapshots."""
         allowed_actions = (
             "LONG,SHORT,NO_TRADE,WAIT"
-            if ctx.position_state == PositionState.FLAT
+            if position_state == PositionState.FLAT
             else "HOLD,REDUCE,EXIT"
         )
         action_contract = (
@@ -345,7 +348,7 @@ class ChiefTraderEngine:
             '"invalidation_conditions":["string"],'
             '"reduce_conditions":["string"],"exit_conditions":["string"],'
             '"reason_codes":["string"]}'
-            if ctx.position_state == PositionState.FLAT
+            if position_state == PositionState.FLAT
             else '{"action":"HOLD|REDUCE|EXIT","market_regime":"string",'
             '"thesis":"string","supporting_evidence":["string"],'
             '"contradicting_evidence":["string"],'
@@ -353,9 +356,19 @@ class ChiefTraderEngine:
         )
         return (
             "You are the Chief Trader of a crypto fund. Return JSON only.\n"
+            f"AllowedActions: {allowed_actions}\n"
+            f"OutputContract: {action_contract}\n"
+            "Do not add fields outside this contract. Numeric fields must be JSON numbers. "
+            "LONG/SHORT require a positive quantity or requested exposure, positive leverage, "
+            "and a positive stop_loss invalidation price. "
+            "The application creates decision_id and binds symbol.\n"
+        )
+
+    def _dynamic_prompt_payload(self, ctx: ChiefTraderContext) -> str:
+        """Per-call facts; always follows the stable static prefix."""
+        return (
             f"Symbol: {ctx.symbol}\nRegime: {ctx.regime}\n"
             f"PositionState: {ctx.position_state.value}\n"
-            f"AllowedActions: {allowed_actions}\n"
             f"Market: {ctx.market_snapshot}\nQuantEvidence: {ctx.quant_evidence}\n"
             f"Portfolio: {ctx.portfolio_state}\nRisk: {ctx.risk_summary}\n"
             f"OpenPosition: {ctx.position_context}\n"
@@ -367,11 +380,13 @@ class ChiefTraderEngine:
                 if ctx.opportunity_context
                 else ""
             )
-            + f"OutputContract: {action_contract}\n"
-            "Do not add fields outside this contract. Numeric fields must be JSON numbers. "
-            "LONG/SHORT require a positive quantity or requested exposure, positive leverage, "
-            "and a positive stop_loss invalidation price. "
-            "The application creates decision_id and binds symbol."
+        )
+
+    def render_prompt(self, ctx: ChiefTraderContext) -> str:
+        return (
+            self._static_prompt_prefix(ctx.position_state)
+            + "\n--- DYNAMIC CONTEXT ---\n"
+            + self._dynamic_prompt_payload(ctx)
         )
 
     def parse_decision(

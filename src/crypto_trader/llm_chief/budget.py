@@ -267,8 +267,11 @@ class BudgetTicket:
         output_tokens: int | None = None,
         latency_ms: int | None = None,
         detail: str | None = None,
+        token_usage: dict | None = None,
     ) -> None:
         if self._budget is not None and not self._completed:
+            if token_usage is not None:
+                self._budget.record_prompt_cache_usage(self.operation, token_usage)
             self._budget._record(
                 priority=self.priority,
                 operation=self.operation,
@@ -375,6 +378,12 @@ class GlobalLLMBudget:
         self.input_tokens_by_priority: dict[str, int] = {}
         self.output_tokens_by_priority: dict[str, int] = {}
         self._latency_by_priority: dict[str, list] = {}
+        # Provider prompt-cache accounting (observability only).
+        self._cache_hit_tokens = 0
+        self._cache_miss_tokens = 0
+        self._cache_known_calls = 0
+        self._cache_unknown_calls = 0
+        self._cache_by_operation: dict[str, dict[str, int]] = {}
 
     # ------------------------------------------------------------------ quota
     def _prune(self, now: float) -> None:
@@ -557,6 +566,65 @@ class GlobalLLMBudget:
                 }
             )
 
+    def record_prompt_cache_usage(self, operation: str, usage: dict | None) -> None:
+        """Record provider prompt-cache facts without coercing UNKNOWN to 0."""
+        raw = usage or {}
+        hit = raw.get("prompt_cache_hit_tokens")
+        miss = raw.get("prompt_cache_miss_tokens")
+        try:
+            hit_i = int(hit) if hit is not None and not isinstance(hit, bool) else None
+            miss_i = (
+                int(miss)
+                if miss is not None and not isinstance(miss, bool)
+                else None
+            )
+        except (TypeError, ValueError):
+            hit_i = miss_i = None
+        op = self._cache_by_operation.setdefault(
+            operation,
+            {"hit_tokens": 0, "miss_tokens": 0, "known_calls": 0, "unknown_calls": 0},
+        )
+        if hit_i is None or miss_i is None:
+            self._cache_unknown_calls += 1
+            op["unknown_calls"] += 1
+            return
+        self._cache_hit_tokens += hit_i
+        self._cache_miss_tokens += miss_i
+        self._cache_known_calls += 1
+        op["hit_tokens"] += hit_i
+        op["miss_tokens"] += miss_i
+        op["known_calls"] += 1
+
+    def prompt_cache_metrics(self) -> dict:
+        hit = self._cache_hit_tokens
+        miss = self._cache_miss_tokens
+        total = hit + miss
+        rate = (hit / total) if total > 0 else None
+        operations: dict[str, dict] = {}
+        for operation, values in self._cache_by_operation.items():
+            op_hit = int(values.get("hit_tokens", 0))
+            op_miss = int(values.get("miss_tokens", 0))
+            op_total = op_hit + op_miss
+            operations[operation] = {
+                "status": "KNOWN" if op_total > 0 else "UNKNOWN",
+                "hit_tokens": op_hit if values.get("known_calls") else None,
+                "miss_tokens": op_miss if values.get("known_calls") else None,
+                "eligible_prompt_tokens": op_total if values.get("known_calls") else None,
+                "hit_rate": (op_hit / op_total) if op_total > 0 else None,
+                "known_calls": int(values.get("known_calls", 0)),
+                "unknown_calls": int(values.get("unknown_calls", 0)),
+            }
+        return {
+            "status": "KNOWN" if total > 0 else "UNKNOWN",
+            "hit_tokens": hit if self._cache_known_calls else None,
+            "miss_tokens": miss if self._cache_known_calls else None,
+            "eligible_prompt_tokens": total if self._cache_known_calls else None,
+            "hit_rate": rate,
+            "known_calls": self._cache_known_calls,
+            "unknown_calls": self._cache_unknown_calls,
+            "operations": operations,
+        }
+
     # ------------------------------------------------------------- observability
     def snapshot(self) -> dict:
         now = self._clock()
@@ -600,6 +668,7 @@ class GlobalLLMBudget:
                 "reserved_fraction_for_higher": dict(
                     self.config.reserved_fraction_for_higher
                 ),
+                "prompt_cache": self.prompt_cache_metrics(),
                 "granted_by_priority": dict(self.granted_by_priority),
                 "skipped_by_priority": dict(self.skipped_by_priority),
                 "skipped_by_reason": dict(self.skipped_by_reason),

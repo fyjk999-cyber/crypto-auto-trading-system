@@ -5,7 +5,32 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
+
+
+def prompt_cache_hit_rate(
+    hit_tokens: int | None, miss_tokens: int | None
+) -> float | None:
+    """Official DeepSeek prompt-cache formula.
+
+    UNKNOWN (``None``) is returned when either provider field is missing or the
+    denominator is zero.  It is never coerced to 0.0.
+    """
+    if hit_tokens is None or miss_tokens is None:
+        return None
+    total = int(hit_tokens) + int(miss_tokens)
+    if total <= 0:
+        return None
+    return int(hit_tokens) / total
+
+
+def _usage_token(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -59,6 +84,13 @@ class DeepSeekProvider:
         self.last_token_usage: dict | None = None
         self.last_attempt_count: int | None = None
         self._operation_diagnostics: dict[str, dict] = {}
+        self._cache_totals: dict[str, int] = {
+            "hit_tokens": 0,
+            "miss_tokens": 0,
+            "known_calls": 0,
+            "unknown_calls": 0,
+        }
+        self._operation_cache: dict[str, dict[str, int]] = {}
 
     def healthy(self) -> bool:
         return bool(self.api_key)
@@ -218,6 +250,54 @@ class DeepSeekProvider:
         self, operation: str, response: LLMResponse, *, attempts: int
     ) -> None:
         previous = self._operation_diagnostics.get(operation, {})
+        usage = response.token_usage or {}
+        hit = _usage_token(usage.get("prompt_cache_hit_tokens"))
+        miss = _usage_token(usage.get("prompt_cache_miss_tokens"))
+        if hit is None or miss is None:
+            cache = {
+                "status": "UNKNOWN",
+                "reason": "PROVIDER_FIELDS_MISSING",
+                "hit_tokens": None,
+                "miss_tokens": None,
+                "eligible_prompt_tokens": None,
+                "hit_rate": None,
+            }
+            self._cache_totals["unknown_calls"] += 1
+            operation_cache = self._operation_cache.setdefault(
+                operation,
+                {
+                    "hit_tokens": 0,
+                    "miss_tokens": 0,
+                    "known_calls": 0,
+                    "unknown_calls": 0,
+                },
+            )
+            operation_cache["unknown_calls"] += 1
+        else:
+            rate = prompt_cache_hit_rate(hit, miss)
+            cache = {
+                "status": "KNOWN" if rate is not None else "UNKNOWN",
+                "reason": None if rate is not None else "ZERO_DENOMINATOR",
+                "hit_tokens": hit,
+                "miss_tokens": miss,
+                "eligible_prompt_tokens": hit + miss,
+                "hit_rate": rate,
+            }
+            self._cache_totals["hit_tokens"] += hit
+            self._cache_totals["miss_tokens"] += miss
+            self._cache_totals["known_calls"] += 1
+            operation_cache = self._operation_cache.setdefault(
+                operation,
+                {
+                    "hit_tokens": 0,
+                    "miss_tokens": 0,
+                    "known_calls": 0,
+                    "unknown_calls": 0,
+                },
+            )
+            operation_cache["hit_tokens"] += hit
+            operation_cache["miss_tokens"] += miss
+            operation_cache["known_calls"] += 1
         self._operation_diagnostics[operation] = {
             "last_success_ts": (
                 datetime.now(UTC).isoformat()
@@ -228,6 +308,7 @@ class DeepSeekProvider:
             "last_latency_ms": response.latency_ms,
             "last_token_usage": response.token_usage,
             "last_attempt_count": attempts,
+            "prompt_cache": cache,
         }
 
     def diagnostics(self) -> dict:
@@ -246,4 +327,36 @@ class DeepSeekProvider:
                 operation: dict(values)
                 for operation, values in self._operation_diagnostics.items()
             },
+            "prompt_cache": self._prompt_cache_snapshot(),
+        }
+
+    def _prompt_cache_snapshot(self) -> dict:
+        known = int(self._cache_totals.get("known_calls", 0))
+        hit = int(self._cache_totals.get("hit_tokens", 0))
+        miss = int(self._cache_totals.get("miss_tokens", 0))
+        overall_rate = prompt_cache_hit_rate(hit, miss) if known else None
+        operations: dict[str, dict] = {}
+        for operation, values in self._operation_cache.items():
+            op_known = int(values.get("known_calls", 0))
+            op_hit = int(values.get("hit_tokens", 0))
+            op_miss = int(values.get("miss_tokens", 0))
+            op_rate = prompt_cache_hit_rate(op_hit, op_miss) if op_known else None
+            operations[operation] = {
+                "status": "KNOWN" if op_rate is not None else "UNKNOWN",
+                "hit_tokens": op_hit if op_known else None,
+                "miss_tokens": op_miss if op_known else None,
+                "eligible_prompt_tokens": (op_hit + op_miss) if op_known else None,
+                "hit_rate": op_rate,
+                "known_calls": op_known,
+                "unknown_calls": int(values.get("unknown_calls", 0)),
+            }
+        return {
+            "status": "KNOWN" if overall_rate is not None else "UNKNOWN",
+            "hit_tokens": hit if known else None,
+            "miss_tokens": miss if known else None,
+            "eligible_prompt_tokens": (hit + miss) if known else None,
+            "hit_rate": overall_rate,
+            "known_calls": known,
+            "unknown_calls": int(self._cache_totals.get("unknown_calls", 0)),
+            "operations": operations,
         }

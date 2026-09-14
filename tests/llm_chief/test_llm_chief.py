@@ -7,7 +7,7 @@ from crypto_trader.api.deps import LLMRuntimeStatus
 from crypto_trader.llm_chief.coin_profile import CoinProfileStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.conviction import ConvictionEngine
-from crypto_trader.llm_chief.decision import ChiefTraderDecision
+from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.knowledge import KnowledgeBase, StrategyCard, ToolRecord
 from crypto_trader.llm_chief.memory import ExperienceMemory, MarketPattern, TradeEpisode
@@ -538,3 +538,156 @@ def test_conviction_engine_caps_leverage():
     )
     assert result.conviction_score > 0
     assert result.approved_leverage <= Decimal("5")
+
+
+def test_prompt_cache_hit_rate_formula():
+    from crypto_trader.llm_chief.provider import prompt_cache_hit_rate
+
+    assert prompt_cache_hit_rate(70, 30) == 0.7
+    assert prompt_cache_hit_rate(0, 100) == 0.0
+    assert prompt_cache_hit_rate(0, 0) is None
+    assert prompt_cache_hit_rate(None, 10) is None
+    assert prompt_cache_hit_rate(10, None) is None
+
+
+async def test_provider_reads_prompt_cache_hit_and_miss_tokens():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"action":"WAIT"}'}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 5,
+                    "prompt_cache_hit_tokens": 70,
+                    "prompt_cache_miss_tokens": 30,
+                },
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    await provider.complete_json(prompt="JSON", operation="trading_decision")
+    cache = provider.diagnostics()["prompt_cache"]
+    assert cache["status"] == "KNOWN"
+    assert cache["hit_tokens"] == 70
+    assert cache["miss_tokens"] == 30
+    assert cache["eligible_prompt_tokens"] == 100
+    assert cache["hit_rate"] == 0.7
+    assert cache["operations"]["trading_decision"]["hit_rate"] == 0.7
+
+
+async def test_missing_provider_cache_fields_are_unknown_not_zero():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"action":"WAIT"}'}}],
+                "usage": {"prompt_tokens": 55, "completion_tokens": 5},
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    await provider.complete_json(prompt="JSON", operation="tool_selection")
+    cache = provider.diagnostics()["prompt_cache"]
+    assert cache["status"] == "UNKNOWN"
+    assert cache["hit_tokens"] is None
+    assert cache["miss_tokens"] is None
+    assert cache["hit_rate"] is None
+    assert cache["unknown_calls"] == 1
+
+
+async def test_zero_denominator_is_unknown_not_zero():
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"action":"WAIT"}'}}],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "prompt_cache_hit_tokens": 0,
+                    "prompt_cache_miss_tokens": 0,
+                },
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    await provider.complete_json(prompt="JSON", operation="market_selection")
+    cache = provider.diagnostics()["prompt_cache"]
+    assert cache["status"] == "UNKNOWN"
+    assert cache["hit_rate"] is None
+    assert cache["operations"]["market_selection"]["hit_rate"] is None
+
+
+async def test_operation_cache_metrics_are_separate():
+    calls = {"count": 0}
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            usage = {
+                "prompt_cache_hit_tokens": 90,
+                "prompt_cache_miss_tokens": 10,
+            }
+        else:
+            usage = {
+                "prompt_cache_hit_tokens": 10,
+                "prompt_cache_miss_tokens": 90,
+            }
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": '{"action":"WAIT"}'}}],
+                "usage": usage,
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-secret", transport=httpx.MockTransport(handler)
+    )
+    await provider.complete_json(prompt="JSON", operation="trading_decision")
+    await provider.complete_json(prompt="JSON", operation="position_review")
+    operations = provider.diagnostics()["prompt_cache"]["operations"]
+    assert operations["trading_decision"]["hit_rate"] == 0.9
+    assert operations["position_review"]["hit_rate"] == 0.1
+
+
+def test_static_prefix_identical_across_symbols_and_market_snapshots():
+    engine = ChiefTraderEngine()
+    prefix = engine._static_prompt_prefix(PositionState.FLAT)
+    first = ChiefTraderContext(
+        symbol="BTCUSDT",
+        market_snapshot={"price": "100"},
+        regime="BULL",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
+    second = ChiefTraderContext(
+        symbol="ETHUSDT",
+        market_snapshot={"price": "2000"},
+        regime="RANGE",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
+    assert engine._static_prompt_prefix(PositionState.FLAT) == prefix
+    assert engine._dynamic_prompt_payload(first) != engine._dynamic_prompt_payload(second)
+    assert engine.render_prompt(first).startswith(prefix)
+    assert engine.render_prompt(second).startswith(prefix)
+
+
+def test_prompt_refactor_preserves_action_and_output_contract():
+    engine = ChiefTraderEngine()
+    flat_prefix = engine._static_prompt_prefix(PositionState.FLAT)
+    open_prefix = engine._static_prompt_prefix(PositionState.OPEN)
+    assert "AllowedActions: LONG,SHORT,NO_TRADE,WAIT" in flat_prefix
+    assert "AllowedActions: HOLD,REDUCE,EXIT" in open_prefix
+    assert "OutputContract:" in flat_prefix
+    assert "decision_id and binds symbol" in flat_prefix
