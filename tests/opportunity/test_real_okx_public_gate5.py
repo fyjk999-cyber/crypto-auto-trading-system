@@ -29,6 +29,63 @@ PUBLIC_BASE = "https://www.okx.com"
 TIMEOUT = 20.0
 
 
+# ---------------------------------------------------------------------------
+# Real-time snapshot consistency envelope (empirically calibrated)
+# ---------------------------------------------------------------------------
+# The broad and single open-interest calls are TWO INDEPENDENT live observations,
+# not one immutable exchange snapshot, so exact float equality between them is
+# not a valid real-time invariant: OKX open interest moves continuously.
+#
+# Calibration (100 paired live observations, 0 failures, 2026-09-14):
+#   relative |single-broad|/broad : p50=0.0  p95=5.06e-05  p99=3.65e-04  max=3.65e-04
+#   |single.ts - broad.ts| seconds: p50=0.488  p95=0.603  p99=0.785  max=0.806
+#
+# Envelope derived from the observed p99 (never guessed):
+#   OI tolerance   T = max(0.0005, 3 x p99_drift) = max(0.0005, 0.0010952) = 0.0010952
+#   Timestamp limit  = max(2.0, 3 x p99_delta)    = max(2.0, 2.3556)       = 2.3556 s
+# Hard ceilings (a larger gap means a real endpoint/source mismatch, and the
+# test MUST fail rather than widen the envelope):
+#   T <= 0.005 (0.5 %)      TIMESTAMP_LIMIT <= 10.0 s
+OI_RELATIVE_DRIFT_TOLERANCE = 0.0010952
+OI_TIMESTAMP_DELTA_LIMIT_SECONDS = 2.3556
+OI_RELATIVE_DRIFT_HARD_CEILING = 0.005
+OI_TIMESTAMP_DELTA_HARD_CEILING = 10.0
+
+# The envelope is only meaningful while it stays under the hard ceilings.  If a
+# future calibration pushes past them the comparison must be investigated, not
+# loosened further.
+assert OI_RELATIVE_DRIFT_TOLERANCE <= OI_RELATIVE_DRIFT_HARD_CEILING
+assert OI_TIMESTAMP_DELTA_LIMIT_SECONDS <= OI_TIMESTAMP_DELTA_HARD_CEILING
+
+
+def _finite_positive(value) -> bool:
+    """True only for a real, finite, strictly positive number."""
+    import math
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0
+
+
+def _finite_nonnegative(value) -> bool:
+    import math
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number >= 0
+
+
+def _parse_okx_ts(value) -> float:
+    """OKX millisecond epoch -> seconds.  Raises on anything unusable."""
+    millis = int(value)
+    assert millis > 0, f"provider timestamp must be positive, got {value}"
+    return millis / 1000.0
+
+
 def _network_available() -> bool:
     try:
         with socket.create_connection(("www.okx.com", 443), timeout=8):
@@ -119,10 +176,76 @@ def test_real_okx_broad_open_interest_contract():
     float(sample["oi"])
     float(sample["oiUsd"])
     assert int(sample["ts"]) > 0
-    # single-instrument retrieval stays consistent with the broad row
-    broad_btc = next(row for row in usdt if row["instId"] == "BTC-USDT-SWAP")
-    assert float(single["open_interest"]) == float(broad_btc["oi"])
+    # --- Cross-endpoint consistency over two INDEPENDENT live observations ---
+    # Same instrument, same canonical semantic fields, finite positive values,
+    # fresh source timestamps, snapshots taken close together in time, and an
+    # open-interest difference inside the calibrated real-time envelope.
+    broad_btc = next(
+        (row for row in usdt if row["instId"] == "BTC-USDT-SWAP"),
+        None,
+    )
+    assert broad_btc is not None, "BTC-USDT-SWAP absent from the broad OI response"
+
+    # Identity + canonical field presence on BOTH sides.
+    assert broad_btc["instId"] == "BTC-USDT-SWAP"
+    for field in ("oi", "oiCcy", "oiUsd", "ts"):
+        assert field in broad_btc, f"broad row missing provider field: {field}"
+    for field in (
+        "open_interest",
+        "open_interest_ccy",
+        "open_interest_usd",
+        "source_timestamp",
+    ):
+        assert field in single, f"single response missing canonical field: {field}"
+
+    # Numeric validity on BOTH sides (NaN / inf / non-positive are failures).
+    assert _finite_positive(broad_btc["oi"]), f"broad oi invalid: {broad_btc['oi']}"
+    assert _finite_positive(single["open_interest"]), (
+        f"single open_interest invalid: {single['open_interest']}"
+    )
+    assert _finite_nonnegative(broad_btc["oiCcy"]), (
+        f"broad oiCcy invalid: {broad_btc['oiCcy']}"
+    )
+    assert _finite_nonnegative(single["open_interest_ccy"]), (
+        f"single open_interest_ccy invalid: {single['open_interest_ccy']}"
+    )
+    assert _finite_nonnegative(broad_btc["oiUsd"]), (
+        f"broad oiUsd invalid: {broad_btc['oiUsd']}"
+    )
+    assert _finite_nonnegative(single["open_interest_usd"]), (
+        f"single open_interest_usd invalid: {single['open_interest_usd']}"
+    )
     assert single["open_interest_usd"] is not None
+
+    # Freshness on BOTH sides (timestamps parse and are positive).
+    broad_ts = _parse_okx_ts(broad_btc["ts"])
+    single_ts = _parse_okx_ts(single["source_timestamp"])
+
+    # Snapshot proximity: the two observations must describe the same moment
+    # closely enough that they are comparable at all.  No ordering is asserted
+    # because these are two independent endpoints with no documented order.
+    ts_delta = abs(single_ts - broad_ts)
+    assert ts_delta <= OI_TIMESTAMP_DELTA_LIMIT_SECONDS, (
+        f"broad/single open-interest snapshots are {ts_delta:.3f}s apart, beyond the "
+        f"calibrated real-time window of {OI_TIMESTAMP_DELTA_LIMIT_SECONDS:.3f}s"
+    )
+
+    # Relative consistency inside the empirically calibrated envelope.  A gap
+    # beyond the hard ceiling is a factual endpoint/source mismatch, not drift.
+    broad_oi = float(broad_btc["oi"])
+    single_oi = float(single["open_interest"])
+    relative_drift = abs(single_oi - broad_oi) / broad_oi
+    print(
+        f"OI_CONSISTENCY relative_drift={relative_drift:.8f} "
+        f"tolerance={OI_RELATIVE_DRIFT_TOLERANCE:.8f} "
+        f"ts_delta={ts_delta:.3f}s limit={OI_TIMESTAMP_DELTA_LIMIT_SECONDS:.3f}s"
+    )
+    assert relative_drift <= OI_RELATIVE_DRIFT_TOLERANCE, (
+        f"broad and single open interest differ by {relative_drift:.6%} "
+        f"(broad={broad_oi}, single={single_oi}), beyond the calibrated "
+        f"{OI_RELATIVE_DRIFT_TOLERANCE:.6%} real-time envelope; a difference this "
+        "large indicates an endpoint/source mismatch rather than natural drift"
+    )
 
 
 def test_real_okx_insttype_only_funding_request_is_rejected():
