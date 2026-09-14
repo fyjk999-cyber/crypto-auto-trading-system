@@ -66,3 +66,28 @@ async def test_execution_market_refresh_failure_marks_health_false():
     engine.adapter = BrokenAdapter()
     assert await engine._refresh_execution_market("BTCUSDT") is False
     assert engine.health.snapshot()["components"]["market_data"]["ok"] is False
+
+
+async def test_fill_settlement_health_clears_after_later_success(
+    database, monkeypatch
+):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-fill-settlement-health")
+    engine.health.set("fill_settlement", False, "transient")
+    calls = 0
+
+    async def flaky_recovery():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient settlement failure")
+        return 0
+
+    monkeypatch.setattr(engine, "_recover_fill_settlements", flaky_recovery)
+    assert await engine._recover_fill_settlements_with_health() is False
+    component = engine.health.snapshot()["components"]["fill_settlement"]
+    assert component["ok"] is False
+    assert await engine._recover_fill_settlements_with_health() is True
+    component = engine.health.snapshot()["components"]["fill_settlement"]
+    assert component["ok"] is True
+    await engine.stop()

@@ -775,13 +775,7 @@ class TradingEngine:
             await asyncio.sleep(self.settings.reconciliation_interval_seconds)
             # Bounded settlement recovery FIRST: comparing projections against the
             # exchange is meaningless while a durable fill is still unaccounted.
-            try:
-                await self._recover_fill_settlements()
-                _settlement_ok = True
-            except Exception as exc:
-                _settlement_ok = False
-                logger.warning('fill settlement recovery failed', exc_info=True)
-                self.health.set('fill_settlement', False, f'{type(exc).__name__}: {exc}')
+            _settlement_ok = await self._recover_fill_settlements_with_health()
             report = await self.reconciliation.reconcile(self.adapter)
             # A settlement blocker must never be overwritten by a clean
             # normal reconciliation result.
@@ -2993,6 +2987,23 @@ class TradingEngine:
                 after={"materialised": materialised},
             )
         return materialised
+
+    async def _recover_fill_settlements_with_health(self) -> bool:
+        """Run settlement recovery and keep its health flag factual.
+
+        A transient failure must not leave the component permanently false
+        after a later pass has actually converged.
+        """
+        try:
+            await self._recover_fill_settlements()
+            self.health.set("fill_settlement", True)
+            return True
+        except Exception as exc:
+            logger.warning("fill settlement recovery failed", exc_info=True)
+            self.health.set(
+                "fill_settlement", False, f"{type(exc).__name__}: {exc}"
+            )
+            return False
 
     async def _recover_fill_settlements(self, *, batch_size: int = 200) -> int:
         """Complete unfinished settlements. Bounded per pass, complete overall."""
