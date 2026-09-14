@@ -105,6 +105,26 @@ exclusion_reason_counts
 `experience_cards` tool.  If no eligible call exists, the API returns
 `status = UNKNOWN`, `reason = NO_ELIGIBLE_CALLS`, not `0%`.
 
+
+## 5a. Exact-proposition recall for natural recurrence
+
+`proposition_identity()` is deliberately unchanged.  To let independent
+factual episodes reinforce the same proposition, the structured review now
+receives a bounded `KNOWN_PROPOSITIONS` block containing only existing exact
+propositions for the same account/mode/symbol/regime/direction.
+
+Prompt rule (`growth-review-prompt-v2`):
+
+- if the current episode's own evidence supports exactly one known
+  proposition, reuse its statement exactly as written;
+- otherwise write a new testable statement;
+- a reused statement still requires this episode's `ALLOWED_REFS`, so recall
+  never weakens evidence validation, `min_pattern_samples`, quality gates or
+  card promotion.
+
+This changes recall context only.  No threshold, identity function,
+proposition key, risk, sizer or execution rule is modified.
+
 ## 6. Runtime acceptance
 
 Code-level acceptance requires:

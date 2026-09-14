@@ -22,6 +22,7 @@ from crypto_trader.governance.trade_episode import FactualTradeEpisode
 from crypto_trader.learning.growth_attribution import DailyCardLearner
 from crypto_trader.learning.growth_contracts import (
     EpisodeReviewInput,
+    KnownProposition,
     StructuredReview,
     TestableLesson,
 )
@@ -36,7 +37,11 @@ from crypto_trader.learning.growth_knowledge import (
     KnowledgeStore,
     contains_absolute_rule,
 )
-from crypto_trader.learning.growth_models import GrowthReviewAttemptORM
+from crypto_trader.learning.growth_models import (
+    GrowthLessonORM,
+    GrowthPatternORM,
+    GrowthReviewAttemptORM,
+)
 from crypto_trader.learning.growth_review import (
     STATUS_FAILED,
     STATUS_SUCCEEDED,
@@ -180,6 +185,7 @@ def _episode_review_input(
     mode: str,
     currency: str,
     review_evidence: GrowthReviewEvidence,
+    known_propositions: list[KnownProposition] | None = None,
 ) -> EpisodeReviewInput:
     canonical_regime, regime_context = normalize_regime(episode.entry_market_regime)
     market_changes = [
@@ -225,6 +231,7 @@ def _episode_review_input(
         market_changes=market_changes,
         missing_evidence=list(review_evidence.missing_evidence),
         review_evidence=review_evidence.as_payload(),
+        known_propositions=list(known_propositions or []),
     )
 
 
@@ -359,6 +366,91 @@ class GrowthRuntimeLearningService:
         self.card_store = AdaptiveCardStore(session_factory)
         self.card_learner = DailyCardLearner(session_factory)
 
+    async def _known_propositions_for(
+        self, episode: FactualTradeEpisode, *, limit: int = 32
+    ) -> list[KnownProposition]:
+        """Load exact same-scope propositions the reviewer may reinforce.
+
+        This is recall context only.  The reviewer must still cite factual
+        references from the current episode; reuse never bypasses the
+        publication evidence gates.
+        """
+        canonical_regime, _context = normalize_regime(episode.entry_market_regime)
+        if self.session_factory is None:
+            return []
+        try:
+            async with self.session_factory() as session:
+                patterns = (
+                    await session.execute(
+                        select(GrowthPatternORM)
+                        .where(
+                            GrowthPatternORM.account_id == self.account_id,
+                            GrowthPatternORM.mode == self.mode,
+                            GrowthPatternORM.symbol == episode.symbol,
+                            GrowthPatternORM.regime == canonical_regime,
+                            GrowthPatternORM.direction == episode.direction,
+                            GrowthPatternORM.revoked_at.is_(None),
+                        )
+                        .order_by(
+                            GrowthPatternORM.sample_count.desc(),
+                            GrowthPatternORM.created_at.desc(),
+                        )
+                        .limit(limit)
+                    )
+                ).scalars().all()
+                if not patterns:
+                    return []
+                lessons = (
+                    await session.execute(
+                        select(GrowthLessonORM)
+                        .where(
+                            GrowthLessonORM.account_id == self.account_id,
+                            GrowthLessonORM.mode == self.mode,
+                            GrowthLessonORM.symbol == episode.symbol,
+                            GrowthLessonORM.regime == canonical_regime,
+                            GrowthLessonORM.direction == episode.direction,
+                            GrowthLessonORM.revoked_at.is_(None),
+                        )
+                        .order_by(GrowthLessonORM.created_at.desc())
+                        .limit(256)
+                    )
+                ).scalars().all()
+        except Exception:
+            # Recall is best-effort; a failure must not block the factual
+            # review or fabricate a proposition.
+            return []
+        statements_by_key: dict[str, str] = {}
+        for lesson in lessons:
+            key = str((lesson.scope_json or {}).get("proposition_key") or "")
+            if key and key not in statements_by_key:
+                statements_by_key[key] = lesson.statement
+        out: list[KnownProposition] = []
+        seen: set[str] = set()
+        for pattern in patterns:
+            scope = pattern.scope_json or {}
+            features = pattern.features_json or {}
+            key = str(
+                scope.get("proposition_key")
+                or features.get("proposition_key")
+                or ""
+            )
+            statement = statements_by_key.get(key)
+            if not key or not statement or key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                KnownProposition(
+                    proposition_key=key,
+                    statement=statement,
+                    symbol=pattern.symbol,
+                    regime=pattern.regime,
+                    direction=pattern.direction,
+                    sample_count=int(pattern.sample_count or 0),
+                    status=str(pattern.status or "CANDIDATE"),
+                )
+            )
+        return out
+
     async def run(
         self,
         episodes: list[FactualTradeEpisode],
@@ -392,12 +484,14 @@ class GrowthRuntimeLearningService:
                     mode=self.mode,
                     now=now,
                 )
+                known_propositions = await self._known_propositions_for(episode)
                 payload = _episode_review_input(
                     episode,
                     account_id=self.account_id,
                     mode=self.mode,
                     currency=self.currency,
                     review_evidence=evidence,
+                    known_propositions=known_propositions,
                 )
                 binding = _binding(
                     episode,

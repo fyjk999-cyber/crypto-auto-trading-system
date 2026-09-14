@@ -22,7 +22,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-PROMPT_VERSION = "growth-review-prompt-v1"
+PROMPT_VERSION = "growth-review-prompt-v2"
 SCHEMA_VERSION = "growth-structured-review-v1"
 REVIEW_PROFILE_VERSION = "growth-review-profile-v1"
 MAX_TEXT = 2000
@@ -40,6 +40,21 @@ class ToolEvidenceInput(BaseModel):
     finding: dict[str, Any] = Field(default_factory=dict)
     data_quality: str = Field(default="UNKNOWN", max_length=32)
     timestamp: datetime | None = None
+
+
+class KnownProposition(BaseModel):
+    """One already-published exact proposition, offered to a new review
+    so the LLM can reinforce it verbatim when the factual evidence matches."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposition_key: str = Field(min_length=1, max_length=64)
+    statement: str = Field(min_length=1, max_length=MAX_TEXT)
+    symbol: str | None = Field(default=None, max_length=32)
+    regime: str | None = Field(default=None, max_length=64)
+    direction: str | None = Field(default=None, max_length=8)
+    sample_count: int = Field(default=0, ge=0)
+    status: str = Field(default="CANDIDATE", max_length=16)
 
 
 class EpisodeReviewInput(BaseModel):
@@ -79,6 +94,11 @@ class EpisodeReviewInput(BaseModel):
     market_changes: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
     missing_evidence: list[str] = Field(default_factory=list, max_length=32)
     review_evidence: dict[str, Any] = Field(default_factory=dict)
+    # Exact-proposition recall context.  It is not evidence: the review must
+    # still cite this episode's ALLOWED_REFS to support any reused statement.
+    known_propositions: list[KnownProposition] = Field(
+        default_factory=list, max_length=32
+    )
 
     @field_validator("direction")
     @classmethod

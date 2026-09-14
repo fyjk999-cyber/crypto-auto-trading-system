@@ -248,3 +248,87 @@ async def test_materialize_cards_is_idempotent(v2_db):
             )
         ).all()
     assert versions
+
+
+async def test_known_propositions_are_recalled_for_exact_same_scope(v2_db):
+    from crypto_trader.learning.growth_models import GrowthLessonORM
+
+    episode = _episode("ep_known")
+    pattern = _pattern()
+    lesson = GrowthLessonORM(
+        lesson_id="lesson_known",
+        version=1,
+        source_kind="EPISODE",
+        source_id="ep_known",
+        account_id="default",
+        mode="PAPER",
+        symbol="BTCUSDT",
+        direction="LONG",
+        regime="TRENDING",
+        statement="Momentum expansion continued in trend regime.",
+        observation_refs_json=["episode:ep_known"],
+        support_refs_json=["episode:ep_known"],
+        contrary_refs_json=[],
+        scope_json={"proposition_key": "prop_b1", "evidence_domain": "PAPER"},
+        status="CANDIDATE",
+        sample_count=1,
+        independent_sample_count=1,
+        known_at=DAY,
+        created_at=DAY,
+    )
+    async with v2_db.session_factory() as session:
+        session.add(pattern)
+        session.add(lesson)
+        await session.commit()
+
+    service = GrowthRuntimeLearningService(
+        v2_db.session_factory, provider=object()
+    )
+    known = await service._known_propositions_for(episode)
+    assert len(known) == 1
+    assert known[0].proposition_key == "prop_b1"
+    assert known[0].statement == "Momentum expansion continued in trend regime."
+    assert known[0].sample_count == 3
+
+
+def test_review_prompt_requires_verbatim_known_proposition_reuse():
+    from crypto_trader.learning.growth_contracts import (
+        EpisodeReviewInput,
+        KnownProposition,
+    )
+    from crypto_trader.learning.growth_review import StructuredReviewService
+
+    payload = EpisodeReviewInput(
+        episode_id="ep_prompt",
+        account_id="default",
+        mode="PAPER",
+        symbol="BTCUSDT",
+        direction="LONG",
+        entry_price=Decimal("100"),
+        exit_price=Decimal("101"),
+        quantity=Decimal("1"),
+        leverage=Decimal("1"),
+        fees=Decimal("0"),
+        gross_pnl=Decimal("1"),
+        net_pnl=Decimal("1"),
+        opened_at=DAY,
+        closed_at=DAY,
+        entry_market_regime="TRENDING",
+        terminal_reason="EXIT",
+        known_propositions=[
+            KnownProposition(
+                proposition_key="prop_b1",
+                statement="Momentum expansion continued in trend regime.",
+                symbol="BTCUSDT",
+                regime="TRENDING",
+                direction="LONG",
+                sample_count=3,
+                status="VALIDATED",
+            )
+        ],
+    )
+    service = StructuredReviewService(provider=None, session_factory=None)
+    prompt = service.build_prompt(payload, allowed_refs={"episode:ep_prompt"})
+    assert "KNOWN_PROPOSITIONS" in prompt
+    assert "Momentum expansion continued in trend regime." in prompt
+    assert "reuse its statement EXACTLY as written" in prompt
