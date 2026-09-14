@@ -22,6 +22,7 @@ from crypto_trader.governance.trade_episode import FactualTradeEpisode
 from crypto_trader.learning.growth_attribution import DailyCardLearner
 from crypto_trader.learning.growth_contracts import (
     EpisodeReviewInput,
+    StructuredReview,
     TestableLesson,
 )
 from crypto_trader.learning.growth_experience import (
@@ -35,6 +36,7 @@ from crypto_trader.learning.growth_knowledge import (
     KnowledgeStore,
     contains_absolute_rule,
 )
+from crypto_trader.learning.growth_models import GrowthReviewAttemptORM
 from crypto_trader.learning.growth_review import (
     STATUS_FAILED,
     STATUS_SUCCEEDED,
@@ -52,7 +54,7 @@ from crypto_trader.learning.growth_v2_contracts import (
     ContextSignature,
     TriggerSignature,
 )
-from crypto_trader.persistence.models import AITradeReviewORM
+from crypto_trader.persistence.models import AITradeReviewORM, LLMDecisionORM, TradeEpisodeORM
 
 Fence = Callable[[], Awaitable[bool]]
 
@@ -536,6 +538,114 @@ class GrowthRuntimeLearningService:
             ]
             await session.commit()
 
+    async def _load_pattern_review_attempts(
+        self, member_ids: set[str]
+    ) -> list[ReviewAttempt]:
+        """Load the latest succeeded structured review for each pattern member."""
+        if not member_ids:
+            return []
+        async with self.session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(GrowthReviewAttemptORM)
+                    .where(
+                        GrowthReviewAttemptORM.episode_id.in_(tuple(member_ids)),
+                        GrowthReviewAttemptORM.status == STATUS_SUCCEEDED,
+                        GrowthReviewAttemptORM.account_id == self.account_id,
+                        GrowthReviewAttemptORM.mode == self.mode,
+                    )
+                    .order_by(GrowthReviewAttemptORM.created_at.asc())
+                )
+            ).scalars().all()
+        latest: dict[str, ReviewAttempt] = {}
+        for row in rows:
+            if row.result_json is None:
+                continue
+            latest[row.episode_id] = ReviewAttempt(
+                status=STATUS_SUCCEEDED,
+                attempt_id=row.attempt_id,
+                review=StructuredReview.model_validate(row.result_json),
+                usage_status=row.usage_status,
+                idempotent=True,
+                account_id=row.account_id,
+                mode=row.mode,
+                symbol=row.symbol,
+                direction=row.direction,
+                review_date=row.review_date,
+                input_hash=row.input_hash,
+            )
+        return [latest[key] for key in sorted(latest)]
+
+    async def _factor_states_for_pattern(
+        self, member_ids: set[str], known_at: datetime
+    ) -> list[dict[str, Any]]:
+        """Recover factual factor states from the members' decision lineage.
+
+        ``triggered_factors_json`` contains only observed triggered factors;
+        state/definition_version/observed_at are used when the runtime stored
+        them.  Missing metadata is preserved as UNKNOWN and never inferred.
+        """
+        if not member_ids:
+            return []
+        async with self.session_factory() as session:
+            episodes = (
+                await session.execute(
+                    select(TradeEpisodeORM).where(
+                        TradeEpisodeORM.episode_id.in_(tuple(member_ids))
+                    )
+                )
+            ).scalars().all()
+            decision_ids: set[str] = set()
+            for episode in episodes:
+                if episode.entry_decision_id:
+                    decision_ids.add(episode.entry_decision_id)
+                if episode.exit_decision_id:
+                    decision_ids.add(episode.exit_decision_id)
+                decision_ids.update(
+                    str(item) for item in (episode.position_decision_ids_json or [])
+                )
+            if not decision_ids:
+                return []
+            decisions = (
+                await session.execute(
+                    select(LLMDecisionORM).where(
+                        LLMDecisionORM.decision_id.in_(tuple(decision_ids))
+                    )
+                )
+            ).scalars().all()
+        states: list[dict[str, Any]] = []
+        for decision in decisions:
+            for raw in decision.triggered_factors_json or []:
+                if not isinstance(raw, dict):
+                    continue
+                factor_id = raw.get("factor") or raw.get("factor_id")
+                if not factor_id:
+                    continue
+                raw_state = str(
+                    raw.get("status") or raw.get("state") or "TRIGGERED"
+                ).upper()
+                state = "UNKNOWN" if raw_state == "UNAVAILABLE" else raw_state
+                definition_version = (
+                    raw.get("detector_version")
+                    or raw.get("definition_version")
+                    or "UNKNOWN"
+                )
+                observed_at = raw.get("observed_at") or decision.created_at
+                if isinstance(observed_at, str):
+                    try:
+                        observed_at = datetime.fromisoformat(observed_at)
+                    except ValueError:
+                        observed_at = decision.created_at
+                states.append(
+                    {
+                        "factor_id": str(factor_id),
+                        "state": state,
+                        "definition_version": str(definition_version),
+                        "observed_at": observed_at,
+                    }
+                )
+        return states
+
     async def _materialize_cards(
         self,
         *,
@@ -560,7 +670,11 @@ class GrowthRuntimeLearningService:
             if not members.intersection(episode_ids):
                 continue
             considered += 1
-            trigger = TriggerSignature.from_factor_states([], as_of=known_at)
+            reviews = await self._load_pattern_review_attempts(members)
+            factor_states = await self._factor_states_for_pattern(members, known_at)
+            trigger = TriggerSignature.from_factor_states(
+                factor_states, as_of=known_at
+            )
             context = ContextSignature.from_market_state(
                 {
                     "regime": pattern.regime or "UNKNOWN",
@@ -574,7 +688,7 @@ class GrowthRuntimeLearningService:
             )
             proposal = await self.card_learner.propose_from_pattern(
                 pattern=pattern,
-                reviews=[],
+                reviews=reviews,
                 trigger=trigger,
                 context=context,
                 rationale="CANONICAL_PATTERN_TO_EXPERIENCE_CARD",

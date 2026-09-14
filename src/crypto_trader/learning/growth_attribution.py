@@ -435,27 +435,49 @@ class DailyCardLearner:
         contrary_ids = sorted(set(pattern.contrary_refs_json or []))
         if pattern.status not in {"VALIDATED", "CONTESTED"}:
             raise ValueError("only published patterns can seed a card")
+        evidence_quality, reviewed_count, causal_count = _pattern_evidence_quality(
+            pattern=pattern, reviews=reviews, policy=self.attribution.quality_policy
+        )
+        # A trigger built only from UNKNOWN/empty lineage is not a complete
+        # factual trigger.  Keeping it CANDIDATE is the safe default; real
+        # detector version/state/observed_at facts are supplied by the runtime
+        # lineage loader when they exist.
+        trigger_complete = bool(trigger.factors) and trigger.complete
         quality = assess_card_quality(
             knowledge_id=pattern.pattern_id,
             sample_count=pattern.sample_count,
             support_count=len(support_ids),
             contradiction_count=len(contrary_ids),
-            trigger_complete=trigger.complete,
+            trigger_complete=trigger_complete,
             regime_known=context.regime != UNKNOWN,
-            evidence_quality=1.0 if reviews else 0.0,
+            evidence_quality=evidence_quality,
             regime_consistency=1.0 if context.regime != UNKNOWN else 0.0,
             repeatability=len(support_ids) / max(1, len(source_ids)),
-            confidence_input=(
-                float(pattern.sample_count)
-                / max(1, pattern.sample_count + len(contrary_ids))
-            ),
+            # Confidence is causal-evidence completeness, never a win rate.
+            confidence_input=evidence_quality,
             now=now,
             policy=self.attribution.quality_policy,
         )
+        evidence_refs = [f"pattern:{pattern.pattern_id}:v{pattern.version}"]
+        evidence_refs.extend(
+            f"review:{attempt.attempt_id}"
+            for attempt in reviews
+            if getattr(attempt, "attempt_id", None)
+        )
+        causal_refs: set[str] = set()
+        for attempt in reviews:
+            review = getattr(attempt, "review", None)
+            if review is None:
+                continue
+            causal_refs.update(review.all_refs())
+        evidence_refs.extend(sorted(causal_refs)[:32])
         guidance = {
             "summary": pattern.status_reason or "pattern-derived experience",
             "effect": pattern.status,
             "sample_count": pattern.sample_count,
+            "reviewed_episode_count": reviewed_count,
+            "causal_review_count": causal_count,
+            "evidence_quality": evidence_quality,
             "prompt_semantics": "historical evidence, not a command",
         }
         proposal = CardUpdateProposal(
@@ -464,7 +486,7 @@ class DailyCardLearner:
             source_episode_ids=source_ids,
             supporting_episode_ids=support_ids,
             contradicting_episode_ids=contrary_ids,
-            evidence_refs=[f"pattern:{pattern.pattern_id}:v{pattern.version}"],
+            evidence_refs=sorted(set(evidence_refs)),
             proposed_trigger=trigger.to_json(),
             proposed_context=context.to_json(),
             proposed_guidance=guidance,
@@ -534,3 +556,52 @@ __all__ = [
     "DailyCardLearner",
     "LearnerReport",
 ]
+
+
+def _pattern_evidence_quality(
+    *,
+    pattern,
+    reviews: list[ReviewAttempt],
+    policy,
+) -> tuple[float, int, int]:
+    """Factual evidence quality for a pattern-derived card.
+
+    The pattern supplies independent-episode provenance; the structured review
+    attempts supply causal evidence and review provenance.  A missing review is
+    never treated as good evidence: no succeeded review means quality 0.0.
+    """
+    source_ids = set(pattern.success_refs_json or []) | set(
+        pattern.contrary_refs_json or []
+    )
+    if not source_ids:
+        return 0.0, 0, 0
+    reviewed: set[str] = set()
+    causal: set[str] = set()
+    for attempt in reviews:
+        review = getattr(attempt, "review", None)
+        if review is None:
+            continue
+        episode_id = getattr(review, "episode_id", None)
+        if episode_id not in source_ids:
+            continue
+        reviewed.add(episode_id)
+        if (
+            review.observation_facts
+            or review.testable_lessons
+            or review.success_factors
+            or review.failure_factors
+            or review.mistakes
+            or review.future_rules
+        ):
+            causal.add(episode_id)
+    if not reviewed:
+        return 0.0, 0, 0
+    sample_target = max(1, int(policy.min_samples_for_active))
+    sample_quality = min(1.0, float(pattern.sample_count or 0) / sample_target)
+    review_coverage = len(reviewed) / max(1, len(source_ids))
+    causal_coverage = len(causal) / max(1, len(source_ids))
+    evidence_quality = min(
+        1.0,
+        0.5 * sample_quality + 0.3 * review_coverage + 0.2 * causal_coverage,
+    )
+    return evidence_quality, len(reviewed), len(causal)

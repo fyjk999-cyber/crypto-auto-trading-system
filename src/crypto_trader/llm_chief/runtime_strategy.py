@@ -659,7 +659,14 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         return {
             "candidate_source": candidate.source,
             "triggered_factors": [
-                {"factor": o.factor, "strength": o.strength, "facts": o.facts}
+                {
+                    "factor": o.factor,
+                    "status": o.status,
+                    "strength": o.strength,
+                    "facts": o.facts,
+                    "observed_at": o.observed_at,
+                    "detector_version": o.detector_version,
+                }
                 for o in candidate.triggered
             ],
             "factor_evidence_present": candidate.factor_evidence_present,
