@@ -164,6 +164,27 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     glm_provider = GLMProvider() if os.environ.get("GLM_API_KEY") else None
     llm_provider = CoreLLMRouter(primary=DeepSeekProvider(), backup=glm_provider)
     chief = ChiefTraderEngine(provider=llm_provider)
+    # Phase 4A: real fresh-state provider. On DeepSeek failure the router
+    # rebuilds a CURRENT ChiefTraderContext from engine facts before GLM; a
+    # missing engine/context fails safe to LLM_OFFLINE_MODE.
+    runtime_holder: dict = {}
+
+    async def fresh_context_provider(symbol, strategy_ctx):
+        engine_ref = runtime_holder.get("engine")
+        strategy_ref = runtime_holder.get("strategy")
+        if engine_ref is None or strategy_ref is None:
+            return None
+        fresh_ctx = await engine_ref._strategy_context(symbol)
+        if fresh_ctx is None:
+            return None
+        candidate = (
+            strategy_ref.opportunity_board.candidate_for(symbol)
+            if strategy_ref.opportunity_board is not None
+            else None
+        )
+        chief_ctx, _ = await strategy_ref.build_chief_context(fresh_ctx, candidate=candidate)
+        return chief_ctx
+
     # Low-Risk V2 Phase 2: 25-model factual evidence layer over the canonical
     # bounded candle/market caches. Evidence only; never an order authority.
     expert_engine = None
@@ -173,10 +194,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         async def _expert_timeframes(symbol, _feed=feed):
             bars = ("4h", "1h", "15m", "5m", "1m")
             results = await asyncio.gather(
-                *(
-                    _feed.get_closed_candles(symbol, bar=bar, limit=300)
-                    for bar in bars
-                ),
+                *(_feed.get_closed_candles(symbol, bar=bar, limit=300) for bar in bars),
                 return_exceptions=True,
             )
             return {
@@ -210,6 +228,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         sizer=sizer,
         opportunity_board=opportunity_board,
         evidence_router=evidence_router,
+        fresh_context_provider=fresh_context_provider,
         expert_engine=expert_engine,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
@@ -223,6 +242,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             risk_summary=risk.config.model_dump(mode="json"),
             tool_chief=tool_chief,
             expert_engine=expert_engine,
+            fresh_context_provider=fresh_context_provider,
         )
         if settings.auto_start_runtime
         else None
@@ -260,6 +280,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         opportunity_service=opportunity_service,
         llm_router=llm_provider,
     )
+    runtime_holder["engine"] = engine
+    runtime_holder["strategy"] = live_llm
 
     app_state = AppState(
         settings=settings,

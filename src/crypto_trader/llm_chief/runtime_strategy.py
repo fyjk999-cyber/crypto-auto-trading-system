@@ -109,6 +109,56 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         }
         return self.opportunity_board.next_agenda_symbol(exclude=exclude)
 
+    async def build_chief_context(
+        self,
+        ctx: StrategyContext,
+        *,
+        evidence_engine=None,
+        candidate=None,
+    ) -> tuple[ChiefTraderContext, dict]:
+        resolved_engine = evidence_engine or self.evidence_engine
+        opportunity_context = None
+        if self.opportunity_board is not None:
+            opportunity_context = build_opportunity_context(
+                symbol=ctx.symbol,
+                candidate=candidate,
+                board=self.opportunity_board,
+                deepseek_selected=False,
+            )
+        evidence = (
+            resolved_engine.analyze_evidence(ctx)
+            if self.tool_chief is None
+            else {"regime": "UNKNOWN", "source_refs": []}
+        )
+        chief_ctx = ChiefTraderContext(
+            symbol=ctx.symbol,
+            market_snapshot=self._market_snapshot(ctx),
+            regime=self._regime(evidence),
+            quant_evidence=[evidence],
+            portfolio_state=self._portfolio_state(ctx),
+            risk_summary=self.risk_summary,
+            opportunity_context=opportunity_context,
+        )
+        if self.expert_engine is not None:
+            try:
+                package = await self.expert_engine.evaluate(symbol=ctx.symbol)
+            except Exception:
+                package = None
+            if package is not None:
+                chief_ctx.model_evidence = package.as_llm_context()
+        if self.context_loader is not None:
+            chief_ctx = await self.context_loader.enrich(chief_ctx)
+        chief_ctx.state_version = self._fresh_state_version(ctx)
+        return chief_ctx, evidence
+
+    @staticmethod
+    def _fresh_state_version(ctx: StrategyContext) -> str:
+        position_bits = ",".join(
+            f"{symbol}:{position.quantity}" for symbol, position in sorted(ctx.positions.items())
+        )
+        mark = str(ctx.mark_price if ctx.mark_price is not None else "")
+        return f"{ctx.clock_time.isoformat()}|{mark}|{position_bits or 'FLAT'}"
+
     async def on_market_data(self, ctx: StrategyContext):
         # OPEN-position management is a separate canonical LLM lifecycle.  New
         # directional entry authority must not pyramid through this entry path.
@@ -136,38 +186,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             if self.opportunity_board is not None
             else None
         )
-        opportunity_context = None
-        if self.opportunity_board is not None:
-            opportunity_context = build_opportunity_context(
-                symbol=ctx.symbol,
-                candidate=candidate,
-                board=self.opportunity_board,
-                deepseek_selected=False,
-            )
-
-        evidence = (
-            evidence_engine.analyze_evidence(ctx)
-            if self.tool_chief is None
-            else {"regime": "UNKNOWN", "source_refs": []}
+        chief_ctx, evidence = await self.build_chief_context(
+            ctx, evidence_engine=evidence_engine, candidate=candidate
         )
-        chief_ctx = ChiefTraderContext(
-            symbol=ctx.symbol,
-            market_snapshot=self._market_snapshot(ctx),
-            regime=self._regime(evidence),
-            quant_evidence=[evidence],
-            portfolio_state=self._portfolio_state(ctx),
-            risk_summary=self.risk_summary,
-            opportunity_context=opportunity_context,
-        )
-        if self.expert_engine is not None:
-            try:
-                package = await self.expert_engine.evaluate(symbol=ctx.symbol)
-            except Exception:
-                package = None
-            if package is not None:
-                chief_ctx.model_evidence = package.as_llm_context()
-        if self.context_loader is not None:
-            chief_ctx = await self.context_loader.enrich(chief_ctx)
         memory_refs = list(chief_ctx.memory_refs)
         research_refs = list(chief_ctx.research_refs)
         episode_refs = list(chief_ctx.episode_refs)

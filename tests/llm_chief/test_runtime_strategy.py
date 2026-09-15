@@ -37,9 +37,14 @@ class FakeChief:
         self.stop_loss = stop_loss
         self.decision_id = decision_id
         self.calls = 0
+        self.last_rebuild = "UNSET"
 
-    async def decide(self, ctx):
+    def render_prompt(self, ctx):
+        return f"PROMPT {ctx.symbol} {ctx.state_version}"
+
+    async def decide(self, ctx, *, rebuild_context=None):
         self.calls += 1
+        self.last_rebuild = rebuild_context
         return ChiefTraderDecision(
             decision_id=self.decision_id,
             symbol=ctx.symbol,
@@ -297,3 +302,33 @@ async def test_live_entry_rejects_stop_on_the_wrong_side_without_tradeplan(datab
         and event[2]["after"]["reason_codes"] == ["INVALID_DIRECTIONAL_STOP"]
         for event in events
     )
+
+
+async def test_fresh_context_provider_rebuilds_state_for_failover(database):
+    chief = FakeChief("WAIT")
+    holder = {}
+
+    async def provider(symbol, strategy_ctx):
+        fresh = make_ctx()
+        fresh.mark_price = Decimal("123.45")
+        chief_ctx, _ = await holder["strategy"].build_chief_context(fresh)
+        return chief_ctx
+
+    strategy = LiveLLMDecisionStrategy(
+        evidence_engine=FakeEvidenceEngine(),
+        chief=chief,
+        planner=FakePlanner([]),
+        decisions=LLMDecisionStore(database.session_factory),
+        audit=FakeAudit([]),
+        sizer=LiveEntrySizingService(),
+        fresh_context_provider=provider,
+    )
+    holder["strategy"] = strategy
+
+    signals = await strategy.on_market_data(make_ctx())
+    assert signals == []
+    assert chief.last_rebuild != "UNSET" and chief.last_rebuild is not None
+
+    prompt, state_version = await chief.last_rebuild()
+    assert "BTCUSDT" in prompt
+    assert state_version is not None and "123.45" in state_version
