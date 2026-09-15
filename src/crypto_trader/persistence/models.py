@@ -1017,3 +1017,28 @@ class PositionLegORM(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class DailyOpportunityTop10ORM(Base):
+    """Growth V2 daily frozen TOP-10 opportunities (migration 0027).
+
+    Selection happens only at freeze time from information available then;
+    rows are immutable once the day is frozen (no hindsight re-selection).
+    Learning/observability  never an order authority.
+    """
+
+    __tablename__ = "daily_opportunity_top10"
+    __table_args__ = (
+        UniqueConstraint("trading_day", "rank", name="uq_daily_top10_day_rank"),
+        UniqueConstraint("trading_day", "symbol", name="uq_daily_top10_day_symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trading_day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    candidate_source: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    factor_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    frozen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
