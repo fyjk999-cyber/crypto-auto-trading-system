@@ -121,3 +121,50 @@ def test_fill_larger_than_reservation_never_goes_below_zero() -> None:
     assert coordinator.legs["leg1"].factual_qty == Decimal("0")
     assert coordinator.reserved_qty("leg1") == Decimal("0")
     assert coordinator.snapshot("leg1")["invariant_holds"] is True
+
+
+def test_l2_survives_add_and_stays_latched_after_recovery() -> None:
+    from crypto_trader.risk.risk_levels import (
+        PositionRiskEpisode,
+        PositionRiskMonitor,
+        RiskLevel,
+    )
+
+    monitor = PositionRiskMonitor()
+    episode = PositionRiskEpisode(
+        leg_id="leg1", symbol="BTCUSDT", side="LONG", entry_price=Decimal("100")
+    )
+    assert monitor.evaluate(episode, mark_price=Decimal("97.0")).level == RiskLevel.L1
+
+    # An ADD is pending/executed while the warning is live.
+    episode.record_add(reason="LLM_ADD")
+    assert episode.add_count == 1
+
+    # Deeper collapse while the ADD exists must still force a hard exit.
+    l2 = monitor.evaluate(episode, mark_price=Decimal("93.0"))
+    assert l2.level == RiskLevel.L2
+    assert l2.force_close is True
+    assert episode.forced_close is True
+
+    # ADD did not reset the episode; L2 remains latched even after recovery.
+    recovered = monitor.evaluate(episode, mark_price=Decimal("105.0"))
+    assert recovered.level == RiskLevel.L2
+    assert recovered.force_close is True
+
+
+def test_hard_exit_reservation_revalidates_against_grown_position() -> None:
+    coordinator = _coordinator("1")
+    risk = _submit(coordinator, "1", ExitPriority.RISK_HARD_EXIT, "risk-grow")
+    assert risk.approved_qty == Decimal("1")
+
+    # The pending ADD fills while the hard exit is being executed.
+    coordinator.set_factual_qty("leg1", Decimal("1.5"))
+    snapshot = coordinator.snapshot("leg1")
+    assert snapshot["invariant_holds"] is True
+    assert coordinator.reserved_qty("leg1") == Decimal("1")
+    assert coordinator.available_qty("leg1") == Decimal("0.5")
+
+    # The additional factual quantity is usable by a later protection.
+    follow_up = _submit(coordinator, "0.5", ExitPriority.RISK_HARD_EXIT, "risk-grow-2")
+    assert follow_up.approved_qty == Decimal("0.5")
+    assert coordinator.snapshot("leg1")["invariant_holds"] is True
