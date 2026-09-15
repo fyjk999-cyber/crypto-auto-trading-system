@@ -122,3 +122,76 @@ async def test_engine_fill_settlement_emits_complete_lineage(database) -> None:
     assert "fill_ids" not in payload["missing"]
     assert payload["authority"] == "LINEAGE_ONLY"
     await engine.stop()
+
+
+def test_fill_lineage_issues_reports_missing_links() -> None:
+    from crypto_trader.runtime.lineage_audit import fill_lineage_issues
+
+    assert fill_lineage_issues(fill_id="f1", client_order_id="c1", exchange_order_id="e1") == []
+    assert fill_lineage_issues(fill_id="f1", client_order_id=None, exchange_order_id="") == [
+        "MISSING_CLIENT_ORDER_ID",
+        "MISSING_EXCHANGE_ORDER_ID",
+    ]
+
+
+async def test_lineage_audit_flags_untracked_factual_fill(database) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from crypto_trader.persistence.models import FillORM, OrderORM
+    from crypto_trader.runtime.lineage_audit import LineageCoverageAuditor
+
+    now = datetime.now(UTC)
+    async with database.session_factory() as session:
+        session.add(
+            OrderORM(
+                internal_order_id="ord-audit-1",
+                client_order_id="coid-audit-1",
+                symbol="BTCUSDT",
+                side="BUY",
+                order_type="LIMIT",
+                time_in_force="GTC",
+                quantity=Decimal("0.1"),
+                status="FILLED",
+                trading_mode="PAPER",
+                strategy_id="live_llm",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            FillORM(
+                fill_id="fill-audit-tracked",
+                order_id="ord-audit-1",
+                client_order_id="coid-audit-1",
+                exchange_order_id="ex-audit-1",
+                symbol="BTCUSDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("0.1"),
+                timestamp=now,
+            )
+        )
+        session.add(
+            FillORM(
+                fill_id="fill-audit-untracked",
+                order_id="ord-audit-1",
+                client_order_id=None,
+                exchange_order_id=None,
+                symbol="BTCUSDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("0.1"),
+                timestamp=now,
+            )
+        )
+        await session.commit()
+
+    report = await LineageCoverageAuditor(database.session_factory).audit()
+    assert report["fill_count"] == 2
+    assert report["untracked_count"] == 1
+    assert report["ok"] is False
+    assert report["flag"] == "UNTRACKED_FACTUAL_FILL"
+    assert report["untracked"][0]["fill_id"] == "fill-audit-untracked"
+    assert report["authority"] == "RECONCILIATION_ONLY"
+    assert report["is_order"] is False
