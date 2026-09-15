@@ -84,3 +84,40 @@ def test_fill_consumes_reservation_and_frees_remaining_capacity() -> None:
     remainder = _submit(coordinator, "0.5", ExitPriority.RISK_HARD_EXIT, "risk-2")
     assert remainder.approved_qty == Decimal("0.5")
     assert coordinator.snapshot("leg1")["invariant_holds"] is True
+
+
+def test_cancel_then_late_fill_does_not_change_factual_position() -> None:
+    coordinator = _coordinator("1")
+    base = _submit(coordinator, "0.5", ExitPriority.ACTIVE_BASE_EXIT, "base-cancel")
+    assert base.approved_qty == Decimal("0.5")
+
+    coordinator.cancel("base-cancel", reason="CANCEL_FILL_RACE")
+    assert coordinator.reserved_qty("leg1") == Decimal("0")
+
+    # The fill event arrives after the cancel: it must be ignored.
+    coordinator.confirm_fill("base-cancel", Decimal("0.5"))
+    assert coordinator.legs["leg1"].factual_qty == Decimal("1")
+    assert coordinator.snapshot("leg1")["invariant_holds"] is True
+
+
+def test_duplicate_ws_fill_is_counted_exactly_once() -> None:
+    coordinator = _coordinator("1")
+    risk = _submit(coordinator, "0.5", ExitPriority.RISK_HARD_EXIT, "risk-dup")
+    assert risk.approved_qty == Decimal("0.5")
+
+    coordinator.confirm_fill("risk-dup", Decimal("0.5"))
+    first = coordinator.legs["leg1"].factual_qty
+    assert first == Decimal("0.5")
+
+    coordinator.confirm_fill("risk-dup", Decimal("0.5"))  # duplicate WS event
+    assert coordinator.legs["leg1"].factual_qty == Decimal("0.5")
+    assert coordinator.snapshot("leg1")["invariant_holds"] is True
+
+
+def test_fill_larger_than_reservation_never_goes_below_zero() -> None:
+    coordinator = _coordinator("0.5")
+    risk = _submit(coordinator, "0.5", ExitPriority.RISK_HARD_EXIT, "risk-cap")
+    coordinator.confirm_fill("risk-cap", Decimal("5"))  # absurd exchange report
+    assert coordinator.legs["leg1"].factual_qty == Decimal("0")
+    assert coordinator.reserved_qty("leg1") == Decimal("0")
+    assert coordinator.snapshot("leg1")["invariant_holds"] is True
