@@ -9,9 +9,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
+
+from crypto_trader.domain.enums import OrderSide
+from crypto_trader.domain.models import SignalIntent
 
 from crypto_trader.domain.models import Account, Position
-from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
+from crypto_trader.llm_chief.decision import BaseExitPlan, ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.strategy.base import StrategyContext
@@ -66,10 +70,11 @@ class _Audit:
 
 
 class _Chief:
-    def __init__(self, action="HOLD"):
+    def __init__(self, action="HOLD", extra=None):
         self.calls = 0
         self.last_rebuild = None
         self.action = action
+        self.extra = extra or {}
 
     def render_prompt(self, ctx):
         return f"PROMPT {ctx.symbol}"
@@ -77,7 +82,7 @@ class _Chief:
     async def decide(self, ctx, *, rebuild_context=None):
         self.calls += 1
         self.last_rebuild = rebuild_context
-        return ChiefTraderDecision(
+        values = dict(
             decision_id=f"pos-{self.calls}",
             symbol=ctx.symbol,
             position_state=PositionState.OPEN,
@@ -89,6 +94,8 @@ class _Chief:
             model_provider="deepseek",
             model="deepseek-chat",
         )
+        values.update(self.extra)
+        return ChiefTraderDecision(**values)
 
 
 def _ctx() -> StrategyContext:
@@ -209,3 +216,102 @@ async def test_hedge_and_reverse_never_become_reduce_only_orders() -> None:
         signal = await manager.review(ctx, ctx.positions["BTCUSDT"])
         assert signal is None, f"{action} must not produce a reduce-only signal"
         assert "HEDGE_REVERSE_REQUIRES_CORE_NEW_RISK" in audit.events
+
+
+class _HedgePlanner:
+    def __init__(self):
+        self.calls = 0
+        self.contract = None
+
+    async def create_hedge_signal(
+        self,
+        decision,
+        *,
+        hedge_contract,
+        existing_legs,
+        current_position_side,
+        limit_price=None,
+        quantity=None,
+    ):
+        self.calls += 1
+        self.contract = hedge_contract
+        return (
+            SimpleNamespace(trade_plan_id="hedge-plan-1"),
+            SignalIntent(
+                signal_id="hedge-signal-1",
+                strategy_id="live_llm",
+                symbol=decision.symbol,
+                side=OrderSide.SELL,
+                quantity=Decimal("0.5"),
+                reason=decision.thesis,
+                metadata={
+                    "lifecycle_action": "HEDGE",
+                    "leg_id": hedge_contract.leg_id,
+                    "reduce_only": False,
+                },
+            ),
+        )
+
+
+_HEDGE_EXTRA = dict(
+    plan_contract_version=2,
+    capital_allocation_pct=10.0,
+    strategy="MEAN_REVERT",
+    thesis="independent mean-reversion short thesis",
+    base_exit=BaseExitPlan(type="PRICE", trigger="<=104", size_pct=100),
+    thesis_invalidation="acceptance above 105",
+    supporting_evidence=["model:mean_reversion"],
+    based_on_state_version="v1",
+    expected_edge_bps=40.0,
+    expected_cost_bps=8.0,
+)
+
+
+async def test_valid_hedge_uses_new_risk_planner_and_registers_leg() -> None:
+    chief = _Chief(action="HEDGE", extra=_HEDGE_EXTRA)
+    audit = _Audit()
+    planner = _HedgePlanner()
+    manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=_Evidence(),
+        decisions=_Decisions(),
+        plans=_Plans(),
+        audit=audit,
+        review_cooldown_seconds=30.0,
+        attempt_clock=lambda: NOW,
+        hedge_planner=planner,
+    )
+    ctx = _ctx()
+    signal = await manager.review(ctx, ctx.positions["BTCUSDT"])
+    assert signal is not None
+    assert signal.metadata["lifecycle_action"] == "HEDGE"
+    assert signal.metadata["reduce_only"] is False
+    assert planner.calls == 1
+    assert planner.contract is not None
+    assert planner.contract.side == "SHORT"  # opposite of the LONG position
+    assert "HEDGE_LEG_REGISTERED" in audit.events
+
+
+async def test_illegal_hedge_reason_never_reaches_the_planner() -> None:
+    chief = _Chief(
+        action="HEDGE",
+        extra={**_HEDGE_EXTRA, "thesis": "reduce loss on the original LONG"},
+    )
+    audit = _Audit()
+    planner = _HedgePlanner()
+    manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=_Evidence(),
+        decisions=_Decisions(),
+        plans=_Plans(),
+        audit=audit,
+        review_cooldown_seconds=30.0,
+        attempt_clock=lambda: NOW,
+        hedge_planner=planner,
+    )
+    ctx = _ctx()
+    signal = await manager.review(ctx, ctx.positions["BTCUSDT"])
+    assert signal is None
+    assert planner.calls == 0
+    assert "HEDGE_LEG_REJECTED" in audit.events
+    assert "HEDGE_REVERSE_REQUIRES_CORE_NEW_RISK" in audit.events

@@ -10,6 +10,7 @@ from typing import Any
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Position, SignalIntent
+from crypto_trader.execution.hedge_legs import HedgeLegContract, LegKind, validate_hedge_leg
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision import OpenAction, PositionState
@@ -43,6 +44,9 @@ class LiveLLMPositionManager:
         attempt_clock: Callable[[], datetime] | None = None,
         expert_engine=None,
         fresh_context_provider=None,
+        hedge_planner=None,
+        leg_service=None,
+        leg_registry=None,
     ) -> None:
         self.chief = chief
         self.evidence_engine = evidence_engine
@@ -57,7 +61,75 @@ class LiveLLMPositionManager:
         # Low-Risk V2 Phase 2: 25-model factual evidence package (evidence only).
         self.expert_engine = expert_engine
         self.fresh_context_provider = fresh_context_provider
+        # Low-Risk V2 Phase 4D: hedge/reverse legs are NEW RISK with their own
+        # independent contract, plan and durable leg row.
+        self.hedge_planner = hedge_planner
+        self.leg_service = leg_service
+        self.leg_registry = leg_registry
         self._last_review_attempt: dict[str, datetime] = {}
+
+    async def _hedge_leg_signal(self, decision, plan, position: Position, ctx: StrategyContext):
+        """Build the independent opposite leg through the canonical plan path."""
+        if self.hedge_planner is None:
+            return None
+        side = "SHORT" if position.quantity > 0 else "LONG"
+        contract = HedgeLegContract(
+            leg_id=new_id("leg"),
+            symbol=position.symbol,
+            side=side,
+            kind=LegKind.HEDGE if decision.action == OpenAction.HEDGE else LegKind.REVERSE,
+            strategy=decision.strategy
+            or (decision.strategy_selected[0] if decision.strategy_selected else "live_llm"),
+            thesis=decision.thesis or "",
+            base_exit=decision.base_exit.model_dump(mode="json") if decision.base_exit else None,
+            invalidation=decision.thesis_invalidation or None,
+            evidence_families=[str(ref) for ref in decision.supporting_evidence],
+            reason=decision.thesis or "",
+            reverse_of=plan.trade_plan_id,
+        )
+        existing = []
+        if self.leg_service is not None:
+            existing = await self.leg_service.list_for_symbol(position.symbol)
+        elif self.leg_registry is not None:
+            existing = self.leg_registry.legs_for(position.symbol)
+        validation = validate_hedge_leg(contract, existing)
+        if not validation.allowed:
+            await self.audit.log(
+                "HEDGE_LEG_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"leg_id": contract.leg_id, "violations": validation.violations},
+            )
+            return None
+        hedge_plan, signal = await self.hedge_planner.create_hedge_signal(
+            decision,
+            hedge_contract=contract,
+            existing_legs=existing,
+            current_position_side="LONG" if position.quantity > 0 else "SHORT",
+        )
+        if hedge_plan is None or signal is None:
+            return None
+        if self.leg_service is not None:
+            await self.leg_service.register(
+                contract,
+                trade_plan_id=hedge_plan.trade_plan_id,
+                decision_id=decision.decision_id,
+            )
+        elif self.leg_registry is not None:
+            self.leg_registry.register(contract)
+        await self.audit.log(
+            "HEDGE_LEG_REGISTERED",
+            target=contract.leg_id,
+            actor="live_llm",
+            run_id=ctx.run_id,
+            after={
+                "side": contract.side,
+                "kind": contract.kind.value,
+                "trade_plan_id": hedge_plan.trade_plan_id,
+            },
+        )
+        return signal
 
     def _rebuild_kwargs(self, position: Position, ctx: StrategyContext) -> dict:
         """Build the fresh-state rebuilder passed to the Core LLM on failover.
@@ -218,19 +290,21 @@ class LiveLLMPositionManager:
             # travel the Core-LLM -> TradePlan -> ExecutionAuthority path; it must
             # never be silently converted into a reduce-only order on the legacy
             # leg ("reduce the original loss" is not a legal hedge reason).
-            await self.audit.log(
-                "HEDGE_REVERSE_REQUIRES_CORE_NEW_RISK",
-                target=decision.decision_id,
-                actor="live_llm",
-                run_id=ctx.run_id,
-                after={
-                    "action": decision.action.value,
-                    "symbol": position.symbol,
-                    "trade_plan_id": plan.trade_plan_id,
-                    "required_path": "CORE_LLM_TRADEPLAN_EXECUTION",
-                },
-            )
-            return None
+            signal = await self._hedge_leg_signal(decision, plan, position, ctx)
+            if signal is None:
+                await self.audit.log(
+                    "HEDGE_REVERSE_REQUIRES_CORE_NEW_RISK",
+                    target=decision.decision_id,
+                    actor="live_llm",
+                    run_id=ctx.run_id,
+                    after={
+                        "action": decision.action.value,
+                        "symbol": position.symbol,
+                        "trade_plan_id": plan.trade_plan_id,
+                        "required_path": "CORE_LLM_TRADEPLAN_EXECUTION",
+                    },
+                )
+            return signal
 
         quantity = (
             abs(position.quantity)
