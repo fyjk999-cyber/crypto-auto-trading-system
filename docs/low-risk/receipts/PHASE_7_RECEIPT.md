@@ -310,3 +310,27 @@ pre-trade Risk coupling and Base-Exit-free entries.
   rule "Risk is not a pre-trade sizing gate; reject invalid contracts, never resize".
 - File header records this OLD/NEW/WHY; the Risk-resize test was renamed to
   `test_risk_scale_down_no_longer_resizes_v2_child` and asserts the LLM size is preserved.
+
+## Soak observations: more natural V2 entries + OFFLINE window with 5-minute recovery
+
+Window #4 (SHA 1ef721d6d491) continued, no restart:
+
+- Two additional natural V2 entries before the offline window:
+  - order `ord...` LITUSDT SELL 146 -> FILLED at 2026-09-15T22:22:07Z
+    (plan `plan_64bfd1ff6e6a4342ada1280d78f...`, v2 SHORT ACTIVE, Base Exit present);
+  - order `ord...` CRCLUSDT SELL 8.5 -> FILLED at 2026-09-15T22:22:43Z
+    (plan `plan_ab18912e6af145e3b0bd6dd58ea...`, v2 SHORT ACTIVE).
+- LLM_OFFLINE_MODE entered 2026-09-15T22:24:54Z (`reason=CORE_LLM_ROUTER_OFFLINE`;
+  DeepSeek call chain failed and GLM is not configured, which counts as backup failure).
+  Spec-compliant reactions observed in the DB:
+  - `OFFLINE_CANCEL_PENDING_NEW_RISK` x1: the resting AIUSDT SELL 226 order was
+    CANCELLED and its plan moved to CANCELLED;
+  - **zero fills after the offline timestamp** - no offline new-risk fill;
+  - deterministic protection evaluation continued (DETERMINISTIC_EXIT_LEG_KEY x52).
+- Recovery at the T+5m probe: `/runtime` shows `offline=false`, `last_reconcile_ok=true`,
+  probe completed before the manual check at 22:29:53Z; `/health` returned to OVERALL OK.
+  Audit `RECOVERY_RECONCILE` x1 recorded.
+- Positions at snapshot: LITUSDT -146 @ 4.08571 (uPnL -1.6921), CRCLUSDT -8.5 @ 84.49
+  (uPnL -2.890), MSTRUSDT flat 0; their Base Exits remain active.
+- Totals: 4 plans (1 CLOSED, 2 ACTIVE, 1 CANCELLED), 5 orders, 7 fills, 67 decisions,
+  1 natural TRADE_EPISODE; no duplicate client order ids, no oversell, no offline fill.
