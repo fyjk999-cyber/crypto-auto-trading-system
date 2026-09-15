@@ -1,11 +1,22 @@
-"""AI Long/Short decision engine. No direct execution."""
+"""AI Long/Short decision engine. No direct execution.
+
+Low-Risk V2 Phase 3: this layer is a RECOMMENDATION consumer. ``decide()``
+keeps its historical signature/behavior for existing callers; the new
+``recommend_from_evidence()`` builds an auditable recommendation from the
+25-model expert evidence package. Neither method can place an order.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from crypto_trader.ai_decision.conflict import resolve_conflict
 from crypto_trader.ai_decision.fusion import fuse
+from crypto_trader.ai_decision.recommendation import (
+    RecommendationEngine,
+    TradingRecommendation,
+)
 
 
 @dataclass
@@ -16,9 +27,36 @@ class DirectionDecision:
     quant_score: float
     ai_score: float
     final_score: float
+    # Additive Low-Risk V2 field: recommendation-only context (never authority).
+    recommendation: dict[str, Any] | None = None
+    authority: str = "RECOMMENDATION_ONLY"
 
 
 class AIDecisionEngine:
+    def __init__(self, recommendation_engine: RecommendationEngine | None = None) -> None:
+        self.recommendation_engine = recommendation_engine or RecommendationEngine()
+
+    def recommend_from_evidence(self, package: dict[str, Any]) -> TradingRecommendation:
+        """Build a recommendation from the 25-model package. Never executes."""
+        return self.recommendation_engine.build(package)
+
+    def decide_from_evidence(self, package: dict[str, Any]) -> DirectionDecision:
+        """Recommendation view compatible with the historical direction shape."""
+        recommendation = self.recommend_from_evidence(package)
+        return DirectionDecision(
+            symbol=recommendation.symbol,
+            decision=(
+                "NO_TRADE"
+                if recommendation.suggested_direction == "NEUTRAL"
+                else recommendation.suggested_direction
+            ),
+            confidence=recommendation.confidence,
+            quant_score=recommendation.raw_consensus_score,
+            ai_score=recommendation.correlation_adjusted_score,
+            final_score=recommendation.score,
+            recommendation=recommendation.as_dict(),
+        )
+
     def decide(
         self,
         *,

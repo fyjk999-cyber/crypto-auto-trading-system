@@ -13,7 +13,6 @@ from crypto_trader.exchange.symbol_mapper import SymbolMapper
 from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import DataHealth, MarketState, SourceStatus
 
-
 # OKX bar identifiers are case-sensitive: hourly bars require an uppercase H.
 OKX_BAR_MAP = {"1h": "1H", "2h": "2H", "4h": "4H", "6h": "6H", "12h": "12H"}
 
