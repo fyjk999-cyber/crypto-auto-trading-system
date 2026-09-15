@@ -168,3 +168,71 @@ def test_hard_exit_reservation_revalidates_against_grown_position() -> None:
     follow_up = _submit(coordinator, "0.5", ExitPriority.RISK_HARD_EXIT, "risk-grow-2")
     assert follow_up.approved_qty == Decimal("0.5")
     assert coordinator.snapshot("leg1")["invariant_holds"] is True
+
+
+def _exit_registry():
+    from datetime import UTC, datetime
+
+    from crypto_trader.execution.base_exit import BaseExitRegistry
+
+    base = datetime(2026, 9, 16, tzinfo=UTC)
+    registry = BaseExitRegistry()
+    v1 = registry.stage(
+        "leg1",
+        plan_version=1,
+        exit_type="PRICE",
+        trigger=">=105",
+        size_pct=100.0,
+        based_on_state_version="pos_v1",
+    )
+    registry.activate(v1.version_id, factual_state_version="pos_v1", now=base)
+    return registry, base
+
+
+def test_exit_v1_to_v2_race_rejects_resurrecting_old_version() -> None:
+    from crypto_trader.execution.base_exit import StaleBaseExitError
+
+    registry, base = _exit_registry()
+    old = registry.active("leg1")
+
+    # Position advanced: the LLM produces a fresh v2 exit based on pos_v2.
+    v2 = registry.stage(
+        "leg1",
+        plan_version=2,
+        exit_type="PRICE",
+        trigger=">=108",
+        size_pct=50.0,
+        based_on_state_version="pos_v2",
+    )
+    registry.activate(v2.version_id, factual_state_version="pos_v2", now=base)
+    assert registry.active("leg1").version_id == v2.version_id
+
+    # A delayed v1 activation (or replay) must be rejected as stale.
+    try:
+        registry.activate(old.version_id, factual_state_version="pos_v2", now=base)
+    except StaleBaseExitError as exc:
+        assert "STALE_DECISION" in str(exc)
+    else:
+        raise AssertionError("stale v1 exit version must be rejected")
+    assert registry.active("leg1").version_id == v2.version_id
+
+
+def test_exit_activation_after_factual_close_is_rejected() -> None:
+    from crypto_trader.execution.base_exit import StaleBaseExitError
+
+    registry, base = _exit_registry()
+    registry.mark_filled("leg1", now=base)
+    # Leg closed by the factual fill: no new exit may re-open it by accident.
+    v2 = registry.stage(
+        "leg1",
+        plan_version=2,
+        exit_type="PRICE",
+        trigger=">=108",
+        based_on_state_version="pos_v1",
+    )
+    try:
+        registry.activate(v2.version_id, factual_state_version="pos_v1", now=base)
+    except StaleBaseExitError as exc:
+        assert "STALE_DECISION" in str(exc)
+    else:
+        raise AssertionError("exit after factual close must be rejected")
