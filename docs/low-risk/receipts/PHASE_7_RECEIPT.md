@@ -60,3 +60,44 @@ None in the current net-position model (hedge execution is fail-closed).
    DeepSeek latency p50/p90/p95/p99, retries, GLM failover, offline windows/recovery,
    opportunities, decisions, orders, fills, Fast Profit, Risk, dedup, Growth Top-10,
    reconciliation, exceptions.
+
+## Round 55-56 update - runtime hardening + real PAPER soak started
+
+Commits:
+- `6e50870` fix: CoreLLMRouter no longer forwards `state_version` as a provider kwarg
+  (real DeepSeek/GLM `complete_json` signatures rejected it; runtime startup crashed with
+  TypeError). `state_version` is now popped and bound to the response metadata. Regression:
+  strict-signature provider test in `tests/low_risk/test_phase4_llm_failover.py` (12 passed).
+- `666c1a2` fix: `llm_offline_mode` health polarity.
+  OLD BEHAVIOR: online -> health ok=False; offline -> ok=True, so `/health` reported OVERALL
+  UNHEALTHY at all times and never surfaced the offline condition.
+  NEW BEHAVIOR: online -> ok=True (detail NORMAL); offline -> ok=False (detail
+  LLM_OFFLINE_MODE); actual state remains in `runtime_snapshot()["llm_offline_mode"]`.
+  WHY SUPERSEDED: the health registry reads ok=False as a failure, so the old polarity made
+  healthy runtimes look broken and could mask a real offline violation.
+  Test updated in `tests/low_risk/test_phase4_offline_mode.py` with this OLD/NEW/WHY note.
+
+Real PAPER soak (genuine, no fabricated evidence):
+- Runner: clean detached worktree `/tmp/lr2-soak` at commit `666c1a2418ac`, own SQLite DB at
+  alembic head `0028_opportunity_outcomes`.
+- Mode: `TRADING_MODE=PAPER`, `PAPER_MODE=PAPER_REAL_MARKET`, `LIVE_TRADING_ENABLED=false`,
+  `AUTO_START_RUNTIME=true`; real OKX public data; real DeepSeek key loaded from macOS
+  Keychain (never printed). Listener `127.0.0.1:8010`; log `data/low-risk-paper.log`.
+- Start time: 2026-09-16T05:12+08:00 (SHA `666c1a2418ac`).
+- Baseline factual evidence at 2026-09-16T05:22+08:00:
+  - `/health` OVERALL **OK**, all 9 components ok (adapter, restart recovery, recovery,
+    execution lease, llm_offline_mode, market_data, strategy:live_llm, engine_loop,
+    reconciliation).
+  - `/market/sources`: ticker + orderbook + mark_price `OKX_PUBLIC` HEALTHY (age 0s).
+  - `/llm/health`: provider deepseek configured + reachable, `last_success_ts`
+    2026-09-15T21:09Z.
+  - Real Core LLM decisions persisted: 12 by 05:22+08 (latest
+    `llm_6099b013c6574dc4` NO_TRADE); positions `{}` so no lifecycle has occurred yet.
+  - `data/low-risk-paper.log`: zero tracebacks/errors.
+- Soak observations continue via scheduled jobs `cron-40` (day-1, 2026-09-17 05:20 +08) and
+  `cron-41` (>=72h point, 2026-09-19 05:25 +08). FINAL_STATUS remains PARTIAL until a natural
+  complete lifecycle and the full soak window are observed.
+
+Hazard: the main implementation worktree carries the concurrent writer's uncommitted (and
+currently startup-breaking) `llm_chief` edits; the soak deliberately runs from the clean
+detached worktree at the pushed SHA.
