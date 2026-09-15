@@ -57,7 +57,7 @@ class LiveLLMPositionManager:
         self._last_review_attempt: dict[str, datetime] = {}
 
     async def review(
-        self, ctx: StrategyContext, position: Position
+        self, ctx: StrategyContext, position: Position, *, force: bool = False
     ) -> SignalIntent | None:
         if position.quantity == 0:
             return None
@@ -72,7 +72,8 @@ class LiveLLMPositionManager:
 
         now = ctx.clock_time.astimezone(UTC)
         last_attempt = self._last_review_attempt.get(position.symbol)
-        if last_attempt is not None and now - last_attempt < self.review_cooldown:
+        if not force and last_attempt is not None and now - last_attempt < self.review_cooldown:
+            # Ordinary cadence. A Risk L1 material wake bypasses this cooldown.
             return None
 
         evidence = (
@@ -243,9 +244,7 @@ def _regime(evidence: dict[str, Any]) -> str:
     return str(raw)
 
 
-def _market_snapshot(
-    ctx: StrategyContext, now: datetime, mark: Decimal
-) -> dict[str, Any]:
+def _market_snapshot(ctx: StrategyContext, now: datetime, mark: Decimal) -> dict[str, Any]:
     """Return the factual OKX state needed to reassess the entry thesis."""
 
     best_bid = ctx.book.best_bid()

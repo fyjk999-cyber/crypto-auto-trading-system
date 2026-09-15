@@ -495,7 +495,8 @@ class TradingEngine:
                 continue
             # Low-Risk V2 deterministic protection runs BEFORE any LLM review:
             # Risk hard exit > Fast Profit > Active Base Exit.
-            for signal, exit_request_id in await self._deterministic_exit_signals(ctx, position):
+            exit_signals, wake_required = await self._deterministic_exit_signals(ctx, position)
+            for signal, exit_request_id in exit_signals:
                 decision = await self.process_signal(signal)
                 if decision is not None:
                     decisions.append(decision)
@@ -507,7 +508,7 @@ class TradingEngine:
             if self.position_manager is None:
                 continue
             try:
-                signal = await self.position_manager.review(ctx, position)
+                signal = await self.position_manager.review(ctx, position, force=wake_required)
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.health.set("position_manager", False, type(exc).__name__)
@@ -532,16 +533,18 @@ class TradingEngine:
             ]
         )
 
-    async def _deterministic_exit_signals(self, ctx, position) -> list[tuple[SignalIntent, str]]:
+    async def _deterministic_exit_signals(
+        self, ctx, position
+    ) -> tuple[list[tuple[SignalIntent, str]], bool]:
         """Build canonical reduce-only signals for deterministic protections."""
         plan = await self.trade_plans.get_active_for_symbol(position.symbol)
         if plan is None or position.quantity == 0:
-            return []
+            return [], False
         side = "LONG" if position.quantity > 0 else "SHORT"
         entry = D(str(position.avg_entry_price or "0"))
         mark = ctx.mark_price or ctx.book.mid_price() or entry
         if mark is None or mark <= 0:
-            return []
+            return [], False
         state_version = self._position_state_version(position, plan)
         equity = ctx.account.equity if ctx.account is not None else Decimal("0")
         notional = (
@@ -580,6 +583,7 @@ class TradingEngine:
             atr_pct=atr_pct,
         )
         signals: list[tuple[SignalIntent, str]] = []
+        wake_required = any(item.requires_llm_reassessment for item in intents)
         for intent in intents:
             if intent.reservation_request_id is None:
                 continue
@@ -630,7 +634,7 @@ class TradingEngine:
                 after=intent.as_dict(),
             )
             signals.append((signal, intent.reservation_request_id))
-        return signals
+        return signals, wake_required
 
     async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
         symbol = symbol or (
