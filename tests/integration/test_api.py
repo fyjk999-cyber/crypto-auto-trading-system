@@ -281,3 +281,59 @@ def test_growth_daily_report_endpoint_reads_frozen_top10_and_outcomes(database):
     empty = client.get("/growth/daily-report", params={"trading_day": "1999-01-01"})
     assert empty.status_code == 200
     assert empty.json()["top10"] == []
+
+
+def test_lineage_coverage_endpoint_flags_untracked_fills(database):
+    import asyncio
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from crypto_trader.persistence.models import FillORM, OrderORM
+
+    client = TestClient(create_app(make_state(database)))
+    clean = client.get("/lineage/coverage")
+    assert clean.status_code == 200
+    assert clean.json()["ok"] is True
+    assert clean.json()["untracked_count"] == 0
+
+    now = datetime.now(UTC)
+
+    async def seed():
+        async with database.session_factory() as session:
+            session.add(
+                OrderORM(
+                    internal_order_id="ord-api-lineage",
+                    client_order_id="coid-api-lineage",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    time_in_force="GTC",
+                    quantity=Decimal("0.1"),
+                    status="FILLED",
+                    trading_mode="PAPER",
+                    strategy_id="live_llm",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                FillORM(
+                    fill_id="fill-api-untracked",
+                    order_id="ord-api-lineage",
+                    client_order_id=None,
+                    exchange_order_id=None,
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    price=Decimal("100"),
+                    quantity=Decimal("0.1"),
+                    timestamp=now,
+                )
+            )
+            await session.commit()
+
+    asyncio.run(seed())
+    flagged = client.get("/lineage/coverage").json()
+    assert flagged["ok"] is False
+    assert flagged["flag"] == "UNTRACKED_FACTUAL_FILL"
+    assert flagged["untracked"][0]["fill_id"] == "fill-api-untracked"
+    assert flagged["is_order"] is False

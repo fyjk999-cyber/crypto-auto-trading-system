@@ -281,6 +281,15 @@ def create_app(state: AppState) -> FastAPI:
                 "count": len(rows),
             }
 
+    @app.get("/lineage/coverage")
+    async def lineage_coverage(limit: int = 200):
+        from crypto_trader.runtime.lineage_audit import LineageCoverageAuditor
+
+        bounded = max(1, min(int(limit), 500))
+        return await LineageCoverageAuditor(state.database.session_factory).audit(
+            limit=bounded
+        )
+
     @app.get("/growth/daily-report")
     async def growth_daily_report(trading_day: str):
         from crypto_trader.learning.review_taxonomy import REQUIRED_REVIEW_TYPES
