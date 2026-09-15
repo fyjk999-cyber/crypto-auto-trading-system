@@ -73,6 +73,7 @@ from crypto_trader.runtime.exit_controller import DeterministicExitController
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.lineage import lineage_from_order, validate_lineage
+from crypto_trader.runtime.lineage_audit import LineageCoverageAuditor
 from crypto_trader.runtime.offline import OfflineMode
 from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
@@ -136,6 +137,7 @@ class TradingEngine:
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
         self.leg_service = leg_service
         self.leg_reconciler = leg_reconciler
+        self.lineage_auditor = LineageCoverageAuditor(database.session_factory)
         # Flip only when the portfolio tracks legs (not net) as source of truth.
         self.leg_execution_enabled = False
         self.position_manager = position_manager
@@ -280,7 +282,7 @@ class TradingEngine:
 
     async def _run_recovery(self, run_id: str | None) -> list[str]:
         """Run crash recovery, including orphan-position restoration."""
-        return await RecoveryService(
+        actions = await RecoveryService(
             self.order_manager,
             self.adapter,
             self.audit,
@@ -288,6 +290,20 @@ class TradingEngine:
             plans=self.trade_plans,
             ledger_state_provider=self._ledger_state,
         ).recover(run_id)
+        report = await self.lineage_auditor.audit()
+        self.health.set("factual_fill_lineage", bool(report["ok"]), report.get("flag") or "OK")
+        if not report["ok"]:
+            await self.audit.log(
+                "RECOVERY_LINEAGE_GAPS",
+                run_id=run_id,
+                after={
+                    "untracked_count": report["untracked_count"],
+                    "fill_count": report["fill_count"],
+                    "samples": report["untracked"][:5],
+                },
+            )
+            actions.append("RECOVERY_LINEAGE_GAPS")
+        return actions
 
     async def _ledger_state(self) -> tuple[dict, dict]:
         account = await self.portfolio.get_account(self.settings.effective_mode())

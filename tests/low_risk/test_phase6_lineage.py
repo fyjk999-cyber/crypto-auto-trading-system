@@ -195,3 +195,59 @@ async def test_lineage_audit_flags_untracked_factual_fill(database) -> None:
     assert report["untracked"][0]["fill_id"] == "fill-audit-untracked"
     assert report["authority"] == "RECONCILIATION_ONLY"
     assert report["is_order"] is False
+
+
+async def test_recovery_flags_untracked_factual_fill(database) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AuditEventORM, FillORM, OrderORM
+    from tests.conftest import make_paper_engine
+
+    now = datetime.now(UTC)
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-recovery-lineage")
+
+    async with database.session_factory() as session:
+        session.add(
+            OrderORM(
+                internal_order_id="ord-rec-1",
+                client_order_id="coid-rec-1",
+                symbol="BTCUSDT",
+                side="BUY",
+                order_type="LIMIT",
+                time_in_force="GTC",
+                quantity=Decimal("0.1"),
+                status="FILLED",
+                trading_mode="PAPER",
+                strategy_id="live_llm",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            FillORM(
+                fill_id="fill-rec-untracked",
+                order_id="ord-rec-1",
+                client_order_id=None,
+                exchange_order_id=None,
+                symbol="BTCUSDT",
+                side="BUY",
+                price=Decimal("100"),
+                quantity=Decimal("0.1"),
+                timestamp=now,
+            )
+        )
+        await session.commit()
+
+    actions = await engine._run_recovery("run-recovery-lineage")
+    assert "RECOVERY_LINEAGE_GAPS" in actions
+    assert engine.health.snapshot()["components"]["factual_fill_lineage"]["ok"] is False
+    async with database.session_factory() as session:
+        events = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "RECOVERY_LINEAGE_GAPS" in events
+    await engine.stop()
