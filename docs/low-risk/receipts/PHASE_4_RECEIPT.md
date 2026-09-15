@@ -313,8 +313,4 @@ Test evidence (`tests/low_risk/test_phase4_offline_mode.py`, 6):
 
 ## L1 wake bypass (COMPLETE, commit 26d480c)
 
-Risk L1 is a material event:  bypasses the ordinary review
-cooldown, and  passes  from the deterministic exit scan (wake intents
-marked ). Test  proves the immediate
-reassessment and the unchanged ordinary cadence. Chunk regression: 89 passed (spac/lifecycle/bootstrap/
-llm_chief/chaos/e2e); low_risk focused 13 passed.
+Risk L1 is a material event: the position manager review accepts force=True to bypass the ordinary review cooldown, and the engine passes force=wake_required from the deterministic exit scan. Test test_phase4_l1_wake.py proves the immediate reassessment and the unchanged ordinary cadence. Chunk regression: 89 passed; low_risk focused 13 passed.
