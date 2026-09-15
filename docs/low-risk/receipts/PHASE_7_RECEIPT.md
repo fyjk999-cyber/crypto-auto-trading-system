@@ -210,3 +210,20 @@ Growth review are observed and the >=72h soak completes.
   future windows; the running acceptance window keeps SHA `1ef721d6d491` untouched.
 - Previous window attempt #3 (5269cd6) verified the V2 prompt but produced no trades before
   being replaced for diagnostics.
+
+## Growth daily Top-10 freeze wired to the live runtime (46b9b245075a)
+
+- Added `scripts/freeze_daily_top10.py`: reads the live runtime's real
+  `/opportunity/candidates` (FACTOR_SCANNER decision-time candidates), maps
+  `score = factor_trigger_count + sum(triggered strength)/1000`, and persists the
+  first freeze for the trading day through the canonical `DailyOpportunityFreezer`
+  (idempotent, no hindsight; learning-only, never an order).
+- Executed against acceptance window #4 at 2026-09-16T06:08+08:
+  `trading_day=2026-09-16`, `frozen=true`, `already_frozen=false`,
+  `candidate_count=12`, 10 persisted rows; top ranks: CAPUSDT (3.0019),
+  CLUSDT (2.0018), PONSUSDT (2.0017), all `FACTOR_SCANNER`.
+- DB evidence: `daily_opportunity_top10` rows = 10 for `2026-09-16`.
+- The running acceptance process was not restarted; `/health` stayed OVERALL OK and
+  the natural position (MSTRUSDT -0.5) remained live.
+- Durable schedule `cron-48` runs the same command daily at 00:05 Asia/Shanghai and
+  verifies first-freeze immutability on re-run.
