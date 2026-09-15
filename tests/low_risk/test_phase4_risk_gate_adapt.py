@@ -95,7 +95,17 @@ def test_v2_entry_ignores_risk_scale_down() -> None:
     assert terms.risk_observation["mode"] == "V2_LLM_OWNS_SIZE_AND_LEVERAGE"
 
 
-def test_legacy_entry_keeps_risk_scale_down() -> None:
+def test_legacy_entry_now_uses_hard_contract_not_risk_resize() -> None:
+    """Real PAPER evidence forced this adaptation.
+
+    OLD BEHAVIOR: a legacy v1 entry returned ``order_contract=None``, bypassing
+    Base-Exit/allocation/leverage checks, and Risk could SCALE_DOWN its size.
+    NEW BEHAVIOR: legacy entries also carry the hard contract; Base Exit and
+    allocation are required and the LLM's requested size is preserved.
+    WHY SUPERSEDED: the soak executed order ``ord_208a5fde163148559b47b67189b80f05``
+    from plan_version=1 with ``base_exit=null`` (no Base Exit) - a P0 trade
+    without TradePlan Base Exit under the Low-Risk V2 constitution.
+    """
     terms = derive_execution_terms(
         is_entry=True,
         signal=_signal({"plan_version": 1, "requested_leverage": "10"}),
@@ -105,9 +115,24 @@ def test_legacy_entry_keeps_risk_scale_down() -> None:
             {"approved_quantity": "0.4", "approved_leverage": "3"},
         ),
     )
-    assert terms.quantity == Decimal("0.4")
-    assert terms.leverage == "3"
-    assert terms.order_contract is None
+    assert terms.quantity == Decimal("1")  # requested size preserved, no Risk resize
+    assert terms.leverage == "10"
+    assert terms.order_contract is not None
+    assert terms.order_contract.is_new_risk is True
+    assert terms.order_contract.base_exit_present is True
+
+    class _NoBaseExitPlan(_Plan):
+        base_exit = None
+
+    missing = derive_execution_terms(
+        is_entry=True,
+        signal=_signal({"plan_version": 1, "requested_leverage": "10"}),
+        plan=_NoBaseExitPlan(),
+        risk_decision=_risk_decision(ExecutionDecision.APPROVE, {}),
+    )
+    assert missing.order_contract is not None
+    assert missing.order_contract.base_exit_present is False  # authority must reject
+    assert terms.risk_observation["mode"] == "V2_HARD_CONTRACT_APPLIED_TO_LEGACY_PLAN"
     assert plan_contract_version({}) == 1
 
 

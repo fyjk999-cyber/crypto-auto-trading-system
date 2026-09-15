@@ -251,3 +251,62 @@ async def test_recovery_flags_untracked_factual_fill(database) -> None:
         ]
     assert "RECOVERY_LINEAGE_GAPS" in events
     await engine.stop()
+
+
+async def test_recovery_halts_on_fill_vs_portfolio_divergence(database) -> None:
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AuditEventORM, FillORM, OrderORM
+    from tests.conftest import make_paper_engine
+
+    now = datetime.now(UTC)
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-recovery-divergence")
+    assert engine.reconciliation_halted is False
+
+    async with database.session_factory() as session:
+        session.add(
+            OrderORM(
+                internal_order_id="ord-div-1",
+                client_order_id="coid-div-1",
+                exchange_order_id="ex-div-1",
+                symbol="CAPUSDT",
+                side="SELL",
+                order_type="LIMIT",
+                time_in_force="GTC",
+                quantity=Decimal("122"),
+                status="FILLED",
+                trading_mode="PAPER",
+                strategy_id="live_llm",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            FillORM(
+                fill_id="fill-div-1",
+                order_id="ord-div-1",
+                client_order_id="coid-div-1",
+                exchange_order_id="ex-div-1",
+                symbol="CAPUSDT",
+                side="SELL",
+                price=Decimal("0.05796"),
+                quantity=Decimal("122"),
+                timestamp=now,
+            )
+        )
+        await session.commit()
+
+    actions = await engine._run_recovery("run-recovery-divergence")
+    assert "RECOVERY_FACTUAL_DIVERGENCE" in actions
+    assert engine.reconciliation_halted is True
+    assert engine.health.snapshot()["components"]["recovery_factual_state"]["ok"] is False
+    async with database.session_factory() as session:
+        events = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "RECOVERY_FACTUAL_DIVERGENCE" in events
+    await engine.stop()

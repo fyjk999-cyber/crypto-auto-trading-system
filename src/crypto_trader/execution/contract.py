@@ -58,24 +58,29 @@ def derive_execution_terms(
     """Resolve executable quantity/leverage and the V2 contract (if any)."""
     metadata = signal.metadata or {}
     requested_leverage = str(metadata.get("requested_leverage", "1"))
-    v2 = is_entry and plan_contract_version(metadata) >= 2 and plan is not None
+    v2 = plan_contract_version(metadata) >= 2 and plan is not None
     if not v2:
-        quantity = signal.quantity
-        leverage = str(risk_decision.checks.get("approved_leverage", requested_leverage))
-        if risk_decision.decision == ExecutionDecision.SCALE_DOWN:
-            approved_quantity = _to_decimal(risk_decision.checks.get("approved_quantity"))
-            if approved_quantity is not None and approved_quantity > 0:
-                quantity = approved_quantity
-        return ExecutionTerms(
-            quantity=quantity,
-            leverage=leverage,
-            order_contract=None,
-            risk_observation={
-                "mode": "LEGACY_RISK_APPROVAL",
-                "risk_decision": risk_decision.decision.value,
-                "risk_reason": risk_decision.reason,
-            },
-        )
+        if not (is_entry and plan is not None):
+            # Reduces/exits on legacy plans keep the legacy observation path.
+            quantity = signal.quantity
+            leverage = str(risk_decision.checks.get("approved_leverage", requested_leverage))
+            if risk_decision.decision == ExecutionDecision.SCALE_DOWN:
+                approved_quantity = _to_decimal(risk_decision.checks.get("approved_quantity"))
+                if approved_quantity is not None and approved_quantity > 0:
+                    quantity = approved_quantity
+            return ExecutionTerms(
+                quantity=quantity,
+                leverage=leverage,
+                order_contract=None,
+                risk_observation={
+                    "mode": "LEGACY_RISK_APPROVAL",
+                    "risk_decision": risk_decision.decision.value,
+                    "risk_reason": risk_decision.reason,
+                },
+            )
+        # Constitution: a legacy-format Core LLM decision may still create new
+        # risk ONLY through the same hard contract. Missing Base Exit or
+        # missing/oversized allocation is rejected, never resized.
 
     base_exit_present = bool(plan.base_exit) or bool(metadata.get("base_exit"))
     contract = NewRiskOrderContract(
@@ -87,7 +92,11 @@ def derive_execution_terms(
         based_on_state_version=plan.based_on_state_version,
     )
     observation = {
-        "mode": "V2_LLM_OWNS_SIZE_AND_LEVERAGE",
+        "mode": (
+            "V2_LLM_OWNS_SIZE_AND_LEVERAGE"
+            if v2
+            else "V2_HARD_CONTRACT_APPLIED_TO_LEGACY_PLAN"
+        ),
         "risk_decision": risk_decision.decision.value,
         "risk_reason": risk_decision.reason,
         "requested_quantity": str(signal.quantity),

@@ -64,7 +64,7 @@ from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
 from crypto_trader.persistence.database import Database
-from crypto_trader.persistence.models import EngineRunORM, RiskDecisionORM
+from crypto_trader.persistence.models import EngineRunORM, FillORM, RiskDecisionORM
 from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
@@ -290,6 +290,21 @@ class TradingEngine:
             plans=self.trade_plans,
             ledger_state_provider=self._ledger_state,
         ).recover(run_id)
+        divergence = await self._factual_exposure_divergences()
+        if divergence:
+            # Local factual fills imply exposure the portfolio/exchange does not
+            # show (e.g. a PAPER simulator restart): halt new risk until a human
+            # or reconciliation resolves it. Fail closed, never guess.
+            self.reconciliation_halted = True
+            self.health.set("recovery_factual_state", False, "FACTUAL_EXPOSURE_DIVERGENCE")
+            await self.audit.log(
+                "RECOVERY_FACTUAL_DIVERGENCE",
+                run_id=run_id,
+                after={"divergences": divergence[:5]},
+            )
+            actions.append("RECOVERY_FACTUAL_DIVERGENCE")
+        else:
+            self.health.set("recovery_factual_state", True, "MATCHED")
         report = await self.lineage_auditor.audit()
         self.health.set("factual_fill_lineage", bool(report["ok"]), report.get("flag") or "OK")
         if not report["ok"]:
@@ -304,6 +319,43 @@ class TradingEngine:
             )
             actions.append("RECOVERY_LINEAGE_GAPS")
         return actions
+
+    async def _factual_exposure_divergences(self) -> list[dict]:
+        """Compare signed DB fill quantities with the live portfolio per symbol."""
+        async with self.database.session_factory() as session:
+            rows = (
+                await session.execute(select(FillORM.symbol, FillORM.side, FillORM.quantity))
+            ).all()
+        db_net: dict[str, Decimal] = {}
+        for symbol, side, quantity in rows:
+            sign = Decimal("1") if str(side).upper() == "BUY" else Decimal("-1")
+            db_net[symbol] = db_net.get(symbol, Decimal("0")) + sign * Decimal(str(quantity))
+        positions = await self.portfolio.get_positions()
+        if isinstance(positions, dict):
+            positions = list(positions.values())
+        portfolio_net: dict[str, Decimal] = {}
+        for item in positions:
+            if isinstance(item, dict):
+                symbol = item.get("symbol")
+                quantity = item.get("quantity")
+            else:
+                symbol = getattr(item, "symbol", None)
+                quantity = getattr(item, "quantity", None)
+            if symbol is not None and quantity is not None:
+                portfolio_net[symbol] = Decimal(str(quantity))
+        divergences = []
+        for symbol in sorted(set(db_net) | set(portfolio_net)):
+            expected = db_net.get(symbol, Decimal("0"))
+            actual = portfolio_net.get(symbol, Decimal("0"))
+            if abs(expected - actual) > Decimal("0.00000001"):
+                divergences.append(
+                    {
+                        "symbol": symbol,
+                        "db_fill_net": str(expected),
+                        "portfolio_qty": str(actual),
+                    }
+                )
+        return divergences
 
     async def _ledger_state(self) -> tuple[dict, dict]:
         account = await self.portfolio.get_account(self.settings.effective_mode())
