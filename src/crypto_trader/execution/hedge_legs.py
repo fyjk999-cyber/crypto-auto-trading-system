@@ -274,6 +274,34 @@ class PositionLegService:
             signed = -signed
         return await self.apply_fill(leg_id, signed)
 
+    async def open_legs_for_symbol(self, symbol: str) -> list[dict]:
+        """Factual open legs (remaining quantity > 0) for deterministic exits."""
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PositionLegORM).where(PositionLegORM.symbol == symbol)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "leg_id": row.leg_id,
+                "symbol": row.symbol,
+                "side": row.side,
+                "remaining_quantity": row.remaining_quantity,
+                "strategy": row.strategy,
+            }
+            for row in rows
+            if row.remaining_quantity is not None and row.remaining_quantity > 0
+        ]
+
     async def gross_exposure(self, symbol: str) -> dict:
         """Per-side factual leg exposure (dual-side LONG+SHORT tracking)."""
         from decimal import Decimal

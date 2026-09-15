@@ -580,8 +580,24 @@ class TradingEngine:
             * D(str(position.contract_size))
             * D(str(position.contract_multiplier))
         )
+        leg_key = plan.trade_plan_id
+        leg_key_mode = "SYNTHETIC"
+        if self.leg_service is not None:
+            open_legs = await self.leg_service.open_legs_for_symbol(position.symbol)
+            matching = [leg for leg in open_legs if leg["side"] == side]
+            if len(matching) == 1:
+                leg_key = matching[0]["leg_id"]
+                leg_key_mode = "PERSISTED_LEG"
+            elif len(matching) > 1:
+                leg_key_mode = "AMBIGUOUS_MULTI_LEG"
+            await self.audit.log(
+                "DETERMINISTIC_EXIT_LEG_KEY",
+                target=leg_key,
+                run_id=self.run_id,
+                after={"mode": leg_key_mode, "symbol": position.symbol, "side": side},
+            )
         self.exit_controller.ensure_leg(
-            leg_id=plan.trade_plan_id,
+            leg_id=leg_key,
             symbol=position.symbol,
             side=side,
             quantity=abs(position.quantity),
@@ -604,7 +620,7 @@ class TradingEngine:
                 market_state = None
         atr_pct = float(ctx.realized_volatility or 0.0)
         intents = self.exit_controller.evaluate(
-            plan.trade_plan_id,
+            leg_key,
             price=mark,
             state=market_state,
             atr_pct=atr_pct,
@@ -639,6 +655,7 @@ class TradingEngine:
                 reason=intent.reason_code,
                 metadata={
                     "trade_plan_id": plan.trade_plan_id,
+                    **({"leg_id": leg_key} if leg_key_mode == "PERSISTED_LEG" else {}),
                     "decision_id": f"det_{intent.reservation_request_id}",
                     "direction": plan.direction,
                     "lifecycle_action": intent.reason_code,

@@ -183,3 +183,51 @@ async def test_restart_keeps_leg_reconciliation_gate_fail_closed(database) -> No
         ]
     assert "HEDGE_EXECUTION_BLOCKED_LEG_DIVERGENCE" in actions
     await engine_b.stop()
+
+
+async def test_open_legs_for_symbol_exposes_only_unclosed_legs(database) -> None:
+    service = PositionLegService(database.session_factory)
+    await _seed(service, quantity=Decimal("1"))
+    open_legs = await service.open_legs_for_symbol("BTCUSDT")
+    assert [(leg["leg_id"], leg["side"]) for leg in open_legs] == [("leg-long", "LONG")]
+    assert open_legs[0]["remaining_quantity"] == Decimal("1")
+
+    # A fully closed leg disappears from the deterministic-exit resolver.
+    await service.apply_order_fill("leg-long", OrderSide.SELL, Decimal("1"))
+    assert await service.open_legs_for_symbol("BTCUSDT") == []
+
+
+async def test_deterministic_exit_resolves_persisted_leg_key(database) -> None:
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AuditEventORM
+    from tests.conftest import make_paper_engine
+    from tests.low_risk.test_phase4_runtime_deterministic_exit import _open_v2_position
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-det-exit-leg-key")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    await _open_v2_position(engine, database)
+    await engine.wait_for_event_queue()
+
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None and position.quantity > 0
+    service = PositionLegService(database.session_factory)
+    await service.register(LONG, trade_plan_id="plan-long", quantity=position.quantity)
+    engine.leg_service = service
+
+    ctx = await engine._strategy_context("BTCUSDT")
+    await engine._deterministic_exit_signals(ctx, position)
+
+    async with database.session_factory() as session:
+        rows = (await session.execute(select(AuditEventORM))).scalars().all()
+    keys = [row for row in rows if row.action == "DETERMINISTIC_EXIT_LEG_KEY"]
+    assert keys, "deterministic exit must record its leg-key resolution"
+    payload = keys[-1].after_json
+    if isinstance(payload, str):
+        import json
+
+        payload = json.loads(payload)
+    assert payload["mode"] == "PERSISTED_LEG"
+    assert keys[-1].target == "leg-long"
+    await engine.stop()
