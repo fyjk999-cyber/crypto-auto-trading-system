@@ -229,6 +229,39 @@ rejected with old exit still active; **Exit V1→V2 race** (V1 fills while V2 is
 as stale/closed, fresh episode reopens); trigger due/not-due; partial size; time trigger; evaluator injection;
 no order authority.
 
+## 4I/4C/4H runtime wiring — deterministic exits execute in the canonical engine
+
+`runtime/exit_controller.py` hosts the already-tested deterministic protections and returns ordered
+reduce-only intents: Risk Hard Exit (incl. escalated L1) > Fast Profit > Active Base Exit. Every reduce is
+reserved through the canonical `ExitCoordinator` before submission, so
+`TotalReduceQty <= CurrentFactualPositionQty` holds across mechanisms.
+
+`TradingEngine` changes:
+- new `self.exit_controller = DeterministicExitController()` (single source of truth for deterministic exits);
+- `tick()` now scans open positions for deterministic exits BEFORE any LLM position review, converts due
+  intents into canonical reduce-only `SignalIntent`s (`strategy_id="live_llm_position"`,
+  `deterministic_exit=True`, `exit_authority`, `exit_request_id`, `state_version`), submits them through the
+  existing `process_signal` path, and releases the reservation when submission is denied;
+- `process_signal` accepts the four deterministic exit authorities for reduce/close while keeping all
+  reduce-only/side/quantity/plan-ACTIVE checks; the LLM `latest_position_decision_id` binding is required for
+  LLM exits and replaced by the reservation lineage for deterministic exits;
+- a `DETERMINISTIC_EXIT_STALE` guard cancels any intent whose `state_version` changed before submission
+  (stale decision cannot execute);
+- `_settle_fill` consumes the reservation with the factual fill quantity.
+
+### Factual engine evidence (`test_engine_executes_active_base_exit_without_llm`)
+
+Real canonical path, no LLM position manager wired: V2 entry decision -> `LiveLLMTradePlanner` -> TradePlan
+-> `process_signal` -> PAPER fill -> ACTIVE plan -> `tick()` -> deterministic Base Exit reduce order
+(`exit_authority=ACTIVE_BASE_EXIT`, `reduce_only=True`) -> PAPER fill -> factual position 0; coordinator
+snapshot `invariant_holds=True`, `reserved_reduce_qty=0`; orders persisted with the plan lineage.
+
+Additional controller tests: Risk L2 outranks an already-due Base Exit and returns 100%; L1 returns a
+wake-LLM intent with quantity 0; duplicate evaluate with no capacity returns nothing (reservation cap
+enforced); SHORT exits use BUY.
+
+Full regression for this chunk: pytest tests -q -> **762 passed**, 1 warning in 75.18s.
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.

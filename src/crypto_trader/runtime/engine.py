@@ -69,6 +69,7 @@ from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.event_bus import EventBus
+from crypto_trader.runtime.exit_controller import DeterministicExitController
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
 from crypto_trader.runtime.recovery import RecoveryService
@@ -123,6 +124,8 @@ class TradingEngine:
         self.lease_key = lease_key
         self.require_lease = require_lease
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
+        # Low-Risk V2 deterministic protection layer (Risk/Base Exit/Fast Profit).
+        self.exit_controller = DeterministicExitController()
         self.position_manager = position_manager
         self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
         self.daily_review_scheduler = daily_review_scheduler
@@ -400,27 +403,151 @@ class TradingEngine:
                 decision = await self.process_signal(signal)
                 if decision is not None:
                     decisions.append(decision)
-        if self.position_manager is not None:
-            positions = await self.portfolio.get_positions()
-            for position in positions.values():
-                if position.quantity == 0:
-                    continue
-                ctx = await self._strategy_context(position.symbol)
-                if ctx is None:
-                    continue
-                try:
-                    signal = await self.position_manager.review(ctx, position)
-                except Exception as exc:
-                    self.consecutive_failures += 1
-                    self.health.set("position_manager", False, type(exc).__name__)
-                    continue
-                self.health.set("position_manager", True)
-                if signal is not None:
-                    decision = await self.process_signal(signal)
-                    if decision is not None:
-                        decisions.append(decision)
+        positions = await self.portfolio.get_positions()
+        for position in positions.values():
+            if position.quantity == 0:
+                continue
+            ctx = await self._strategy_context(position.symbol)
+            if ctx is None:
+                continue
+            # Low-Risk V2 deterministic protection runs BEFORE any LLM review:
+            # Risk hard exit > Fast Profit > Active Base Exit.
+            for signal, exit_request_id in await self._deterministic_exit_signals(ctx, position):
+                decision = await self.process_signal(signal)
+                if decision is not None:
+                    decisions.append(decision)
+                if decision is None or decision.decision not in {
+                    ExecutionDecision.APPROVE,
+                    ExecutionDecision.SCALE_DOWN,
+                }:
+                    self.exit_controller.cancel(exit_request_id, "DETERMINISTIC_EXIT_NOT_SUBMITTED")
+            if self.position_manager is None:
+                continue
+            try:
+                signal = await self.position_manager.review(ctx, position)
+            except Exception as exc:
+                self.consecutive_failures += 1
+                self.health.set("position_manager", False, type(exc).__name__)
+                continue
+            self.health.set("position_manager", True)
+            if signal is not None:
+                decision = await self.process_signal(signal)
+                if decision is not None:
+                    decisions.append(decision)
         self.health.set("engine_loop", True)
         return decisions
+
+    @staticmethod
+    def _position_state_version(position, plan) -> str:
+        updated = getattr(position, "updated_at", None)
+        return "|".join(
+            [
+                str(plan.trade_plan_id),
+                str(getattr(plan, "plan_version", 1)),
+                str(position.quantity),
+                updated.isoformat() if updated is not None else "none",
+            ]
+        )
+
+    async def _deterministic_exit_signals(self, ctx, position) -> list[tuple[SignalIntent, str]]:
+        """Build canonical reduce-only signals for deterministic protections."""
+        plan = await self.trade_plans.get_active_for_symbol(position.symbol)
+        if plan is None or position.quantity == 0:
+            return []
+        side = "LONG" if position.quantity > 0 else "SHORT"
+        entry = D(str(position.avg_entry_price or "0"))
+        mark = ctx.mark_price or ctx.book.mid_price() or entry
+        if mark is None or mark <= 0:
+            return []
+        state_version = self._position_state_version(position, plan)
+        equity = ctx.account.equity if ctx.account is not None else Decimal("0")
+        notional = (
+            abs(position.quantity)
+            * mark
+            * D(str(position.contract_size))
+            * D(str(position.contract_multiplier))
+        )
+        self.exit_controller.ensure_leg(
+            leg_id=plan.trade_plan_id,
+            symbol=position.symbol,
+            side=side,
+            quantity=abs(position.quantity),
+            entry_price=entry,
+            state_version=state_version,
+            plan_version=int(getattr(plan, "plan_version", 1) or 1),
+            base_exit=plan.base_exit,
+            exposure_usd=notional,
+            equity_usd=equity if equity > 0 else Decimal("1"),
+            leverage=D(str(plan.requested_leverage or "1")),
+            notional_usd=notional,
+            unrealized_pnl_pct=0.0,
+        )
+        market_state = None
+        get_market_state = getattr(self.adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                market_state = await get_market_state(position.symbol)
+            except Exception:
+                market_state = None
+        atr_pct = float(ctx.realized_volatility or 0.0)
+        intents = self.exit_controller.evaluate(
+            plan.trade_plan_id,
+            price=mark,
+            state=market_state,
+            atr_pct=atr_pct,
+        )
+        signals: list[tuple[SignalIntent, str]] = []
+        for intent in intents:
+            if intent.reservation_request_id is None:
+                continue
+            if not intent.quantity or intent.quantity <= 0:
+                # Wake-LLM intents are handled by the canonical position review.
+                continue
+            # Freshness guard: a factual change while building the intent makes
+            # the deterministic decision stale; the reservation is released.
+            if intent.state_version != self._position_state_version(position, plan):
+                self.exit_controller.cancel(
+                    intent.reservation_request_id, "STALE_DECISION_BEFORE_SUBMIT"
+                )
+                await self.audit.log(
+                    "DETERMINISTIC_EXIT_STALE",
+                    target=intent.reservation_request_id,
+                    run_id=self.run_id,
+                    after={"reason_code": intent.reason_code},
+                )
+                continue
+            signal = SignalIntent(
+                signal_id=new_id("detexit"),
+                strategy_id="live_llm_position",
+                symbol=position.symbol,
+                side=OrderSide.SELL if side == "LONG" else OrderSide.BUY,
+                quantity=intent.quantity,
+                reason=intent.reason_code,
+                metadata={
+                    "trade_plan_id": plan.trade_plan_id,
+                    "decision_id": f"det_{intent.reservation_request_id}",
+                    "direction": plan.direction,
+                    "lifecycle_action": intent.reason_code,
+                    "reduce_only": True,
+                    "deterministic_exit": True,
+                    "exit_authority": intent.authority,
+                    "exit_request_id": intent.reservation_request_id,
+                    "state_version": intent.state_version,
+                    "instrument_type": position.instrument_type,
+                    "contract_size": str(position.contract_size),
+                    "contract_multiplier": str(position.contract_multiplier),
+                    "requested_leverage": str(plan.requested_leverage or "1"),
+                },
+            )
+            await self.audit.log(
+                "DETERMINISTIC_EXIT_INTENT",
+                target=signal.signal_id,
+                run_id=self.run_id,
+                client_order_id=f"{signal.strategy_id}_{signal.signal_id}"[:60],
+                after=intent.as_dict(),
+            )
+            signals.append((signal, intent.reservation_request_id))
+        return signals
 
     async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
         symbol = symbol or (
@@ -606,12 +733,37 @@ class TradingEngine:
             expected_side = (
                 OrderSide.SELL if plan is not None and plan.direction == "LONG" else OrderSide.BUY
             )
+            deterministic_authority = signal.metadata.get("exit_authority")
+            deterministic_exit = (
+                signal.metadata.get("deterministic_exit") is True
+                and bool(signal.metadata.get("exit_request_id"))
+                and deterministic_authority
+                in {
+                    "RISK_HARD_EXIT",
+                    "OFFLINE_HARD_EXIT",
+                    "FAST_PROFIT_PROTECTION",
+                    "ACTIVE_BASE_EXIT",
+                }
+            )
+            decision_authorized = (
+                plan.latest_position_decision_id == signal.metadata.get("decision_id")
+                or deterministic_exit
+            )
             valid_reduction = (
                 plan is not None
                 and plan.symbol == signal.symbol
                 and plan.state == TradePlanState.ACTIVE
-                and plan.latest_position_decision_id == signal.metadata.get("decision_id")
-                and action in {"REDUCE", "EXIT", "TIME_STOP_SAFETY_FALLBACK"}
+                and decision_authorized
+                and action
+                in {
+                    "REDUCE",
+                    "EXIT",
+                    "TIME_STOP_SAFETY_FALLBACK",
+                    "BASE_EXIT",
+                    "FAST_PROFIT_PROTECTION",
+                    "RISK_HARD_EXIT",
+                    "OFFLINE_HARD_EXIT",
+                }
                 and signal.metadata.get("reduce_only") is True
                 and position is not None
                 and position.quantity != 0
@@ -1040,6 +1192,10 @@ class TradingEngine:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
             return
+        exit_request_id = order.metadata.get("exit_request_id")
+        if exit_request_id:
+            # Deterministic reduce/close reservation is consumed by the factual fill.
+            self.exit_controller.confirm_fill(str(exit_request_id), fill.quantity)
         position = await self.portfolio.get_position(fill.symbol)
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
             postings, metadata = build_derivative_trade_entries(
