@@ -1756,6 +1756,44 @@ class TradingEngine:
     # ------------------------------------------------------------------
     # Phase E0 execution observability (observation only)
     # ------------------------------------------------------------------
+    async def _sample_entry_series(
+        self, *, evidence_id: str, order_id: str, symbol: str, consume_side: str | None
+    ) -> None:
+        """Observe the book at the section-15 offsets while the ENTRY order rests.
+
+        Observation only: this never submits, cancels, re-prices or extends
+        anything. It reads the factual book and our own factual fill progress and
+        then stops - the order's own 60s TTL remains the only lifetime rule.
+        """
+        from crypto_trader.execution_observability.evidence import SAMPLE_OFFSETS_SECONDS
+
+        previous = 0
+        for offset in SAMPLE_OFFSETS_SECONDS:
+            delay = offset - previous
+            if delay > 0:
+                await asyncio.sleep(delay)
+            previous = offset
+            try:
+                book = self._entry_book(symbol)
+                progress = await self.execution_evidence.order_progress(order_id)
+                await self.execution_evidence.record_sample(
+                    evidence_id=evidence_id,
+                    symbol=symbol,
+                    offset_seconds=offset,
+                    book=book,
+                    consume_side=consume_side,
+                    our_limit_price=progress.get("order_price"),
+                    our_remaining_quantity=progress.get("remaining_quantity"),
+                    cumulative_fill_quantity=progress.get("cumulative_fill_quantity"),
+                    source="PAPER_SIMULATOR",
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                # One failed sample must not abort the remaining offsets, and must
+                # never surface into trading.
+                logger.warning("entry sample at offset failed", exc_info=False)
+
     def _capture_entry_evidence(
         self,
         *,
@@ -1789,12 +1827,24 @@ class TradingEngine:
                     trade_plan_id=trade_plan_id,
                     run_id=run_id,
                 )
-                await self.execution_evidence.record_entry_intent(
-                    evidence,
-                    book=book,
-                    # A BUY entry consumes the ASK side; a SELL consumes the BID.
-                    consume_side=self._consume_side(getattr(order, "side", None)),
-                )
+                evidence_id = await self.execution_evidence.record_entry_intent(
+                        evidence,
+                        book=book,
+                        # A BUY entry consumes the ASK side; a SELL consumes the BID.
+                        consume_side=self._consume_side(getattr(order, "side", None)),
+                    )
+                if evidence_id:
+                    # Post-submit sampling (§15). Scheduled separately so the resting
+                    # window is observed without the submit path waiting on it, and so
+                    # the order's own TTL is never extended by it.
+                    loop.create_task(
+                        self._sample_entry_series(
+                            evidence_id=evidence_id,
+                            order_id=getattr(order, "internal_order_id", "") or "",
+                            symbol=str(getattr(order, "symbol", "") or ""),
+                            consume_side=self._consume_side(getattr(order, "side", None)),
+                        )
+                    )
             except Exception:  # noqa: BLE001
                 # Evidence is never allowed to break trading or position safety.
                 logger.warning("entry evidence capture failed", exc_info=False)

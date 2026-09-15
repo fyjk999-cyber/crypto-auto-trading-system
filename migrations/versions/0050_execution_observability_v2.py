@@ -42,6 +42,16 @@ def upgrade() -> None:
     # --- extend the existing (writer-less) market_snapshots ------------------
     # Computed orderbook metrics live beside the raw levels the table already
     # stores. Nullable so pre-existing rows - there are none today - stay valid.
+    if "orders" in tables:
+        ocols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
+        for name in (
+            "cancel_confirmed_at",
+            "cancel_requested_at",
+            "last_fill_at",
+            "first_fill_at",
+        ):
+            if name in ocols:
+                op.drop_column("orders", name)
     if "market_snapshots" in tables:
         cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("market_snapshots")}
         if "metrics_json" not in cols:
@@ -49,6 +59,19 @@ def upgrade() -> None:
                 "market_snapshots",
                 sa.Column("metrics_json", sa.JSON(), nullable=True),
             )
+
+    # --- factual order lifecycle instants (§16) ------------------------------
+    # Recorded, never read on a decision path, so they cannot change behaviour.
+    if "orders" in tables:
+        ocols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
+        for column in (
+            sa.Column("first_fill_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("last_fill_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("cancel_requested_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("cancel_confirmed_at", sa.DateTime(timezone=True), nullable=True),
+        ):
+            if column.name not in ocols:
+                op.add_column("orders", column)
 
     # --- entry execution evidence: one row per ENTRY intent ------------------
     if "entry_execution_evidence" not in tables:
@@ -138,6 +161,18 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     tables = _tables()
+    # Drop the observability columns THIS migration added to pre-existing tables
+    # first, so a re-upgrade from 0049 applies them again cleanly.
+    if "orders" in tables:
+        ocols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("orders")}
+        for name in (
+            "cancel_confirmed_at",
+            "cancel_requested_at",
+            "last_fill_at",
+            "first_fill_at",
+        ):
+            if name in ocols:
+                op.drop_column("orders", name)
     if "entry_orderbook_samples" in tables:
         op.drop_table("entry_orderbook_samples")
     if "entry_execution_evidence" in tables:

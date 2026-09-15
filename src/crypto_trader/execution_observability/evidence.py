@@ -35,6 +35,7 @@ from crypto_trader.persistence.models import (
     EntryExecutionEvidenceORM,
     EntryOrderbookSampleORM,
     MarketSnapshotORM,
+    OrderORM,
 )
 
 logger = logging.getLogger(__name__)
@@ -280,6 +281,57 @@ class EntryEvidenceStore:
         except Exception as exc:  # noqa: BLE001
             self._degrade("record_sample", exc)
             return None
+
+    async def evidence_id_for_order(self, order_id: str) -> str | None:
+        """The evidence row recorded for this order, or None when there is none.
+
+        Read-only lookup. Returns None rather than raising so a caller sampling a
+        post-submit observation cannot be broken by a missing evidence row.
+        """
+        if not order_id:
+            return None
+        try:
+            async with self._session_factory() as session:
+                row = (
+                    await session.execute(
+                        select(EntryExecutionEvidenceORM.evidence_id)
+                        .where(EntryExecutionEvidenceORM.order_id == order_id)
+                        .order_by(EntryExecutionEvidenceORM.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            return str(row) if row else None
+        except Exception as exc:  # noqa: BLE001
+            self._degrade("evidence_id_for_order", exc)
+            return None
+
+    async def order_progress(self, order_id: str) -> dict:
+        """Factual fill progress for one order. Read-only.
+
+        Used to label each post-submit sample with what our own order was doing
+        at that instant. Missing values stay None - a sample taken while progress
+        cannot be read is not evidence that nothing filled.
+        """
+        out = {"order_price": None, "remaining_quantity": None,
+               "cumulative_fill_quantity": None, "status": None}
+        if not order_id:
+            return out
+        try:
+            async with self._session_factory() as session:
+                row = await session.get(OrderORM, order_id)
+            if row is None:
+                return out
+            filled = _dec(getattr(row, "filled_quantity", None))
+            total = _dec(getattr(row, "quantity", None))
+            out["order_price"] = _s(getattr(row, "price", None))
+            out["cumulative_fill_quantity"] = _s(filled)
+            out["remaining_quantity"] = (
+                _s(total - filled) if (total is not None and filled is not None) else None
+            )
+            out["status"] = _s(getattr(row, "status", None))
+        except Exception as exc:  # noqa: BLE001
+            self._degrade("order_progress", exc)
+        return out
 
     # -- internals ---------------------------------------------------------
     async def _persist_snapshot(

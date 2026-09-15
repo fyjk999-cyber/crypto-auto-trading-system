@@ -563,6 +563,18 @@ class OrderManager:
             row.status = status_after.value
             row.updated_at = now
             row.last_event_id = event_id
+            # Execution observability v2 (§16): factual cancel instants, written
+            # in the SAME transaction that already persists status/updated_at.
+            # Recorded only, never read on a decision path, so the diff is zero.
+            # "requested" and "confirmed" stay separate on purpose: a cancel that
+            # was asked for but never confirmed is NOT a cancelled order.
+            if event_type is OrderEventType.ORDER_CANCEL_PENDING:
+                if row.cancel_requested_at is None:
+                    row.cancel_requested_at = now
+            elif event_type is OrderEventType.ORDER_CANCELLED:
+                if row.cancel_requested_at is None:
+                    row.cancel_requested_at = now
+                row.cancel_confirmed_at = now
             if exchange_order_id:
                 row.exchange_order_id = exchange_order_id
             if rejection_reason:
@@ -742,6 +754,16 @@ class OrderManager:
             order_row.status = result.new_status.value
             order_row.updated_at = fill.timestamp
             order_row.last_event_id = new_id("evt")
+            # Execution observability v2 (§16): factual fill instants, written in
+            # the SAME transaction that already updates quantity/price/status.
+            # They record when a fact happened and are never read on a decision
+            # path, so they cannot change order behaviour. first_fill_at is what
+            # makes "did this fill immediately or rest it?" answerable later -
+            # 31/31 historical fills landed within 5s, which is why TTL is not
+            # the execution bottleneck.
+            if order_row.first_fill_at is None:
+                order_row.first_fill_at = fill.timestamp
+            order_row.last_fill_at = fill.timestamp
             if fill.exchange_order_id:
                 order_row.exchange_order_id = fill.exchange_order_id
             event_id = new_id("evt")

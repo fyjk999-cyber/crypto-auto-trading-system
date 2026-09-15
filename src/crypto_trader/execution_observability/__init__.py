@@ -13,10 +13,16 @@ from crypto_trader.execution_observability.orderbook_metrics import (
     OrderbookMetrics,
     compute_orderbook_metrics,
 )
+from crypto_trader.execution_observability.retention import (
+    RetentionPlan,
+    default_retention_plan,
+)
 
 __all__ = [
     "OrderbookMetrics",
     "compute_orderbook_metrics",
     "EntryEvidenceStore",
     "SAMPLE_OFFSETS_SECONDS",
+    "RetentionPlan",
+    "default_retention_plan",
 ]

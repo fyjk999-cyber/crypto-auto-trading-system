@@ -89,6 +89,14 @@ class OrderORM(Base):
     quantity: Mapped[Decimal] = mapped_column(ExactDecimal())
     filled_quantity: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     avg_fill_price: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    # Execution observability v2 (§16): factual lifecycle instants. Nullable and
+    # never written on a decision path - they only record when a fact happened,
+    # so they cannot change order behaviour. first_fill_at is what makes
+    # "did this fill immediately or rest?" answerable after the fact.
+    first_fill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_fill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(32), index=True)
     trading_mode: Mapped[str] = mapped_column(String(16))
     strategy_id: Mapped[str] = mapped_column(String(64))
