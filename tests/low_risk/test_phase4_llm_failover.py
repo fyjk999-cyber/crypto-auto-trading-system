@@ -287,3 +287,28 @@ async def test_router_state_version_is_metadata_not_provider_kwarg() -> None:
     assert response.error is not None
     assert response.state_version == "pos_v7"
     assert router.status.offline is True or router.status.offline is False  # no TypeError
+
+
+def test_core_llm_prompt_requires_v2_new_risk_contract() -> None:
+    """Natural PAPER entries need the LLM to emit plan_contract_version=2."""
+    from crypto_trader.llm_chief.context import ChiefTraderContext
+    from crypto_trader.llm_chief.decision import PositionState
+    from crypto_trader.llm_chief.engine import ChiefTraderEngine
+    from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+    engine = ChiefTraderEngine(provider=DeepSeekProvider(api_key=None))
+    ctx = ChiefTraderContext(
+        symbol="BTCUSDT",
+        position_state=PositionState.FLAT,
+        regime="UNKNOWN",
+        market_snapshot="{}",
+        quant_evidence="{}",
+        portfolio_state="{}",
+        risk_summary="{}",
+    )
+    prompt = engine.render_prompt(ctx)
+    assert '"plan_contract_version":2' in prompt
+    assert '"capital_allocation_pct":number' in prompt
+    assert '"base_exit"' in prompt
+    assert "plan_contract_version=2" in prompt
+    assert "rejected by execution" in prompt

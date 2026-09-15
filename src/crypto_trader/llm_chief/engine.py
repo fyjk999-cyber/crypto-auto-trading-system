@@ -117,11 +117,15 @@ class ChiefTraderEngine:
             else "HOLD,REDUCE,EXIT"
         )
         action_contract = (
-            '{"action":"LONG|SHORT|NO_TRADE|WAIT","market_regime":"string",'
+            '{"action":"LONG|SHORT|NO_TRADE|WAIT","plan_contract_version":2,'
+            '"market_regime":"string",'
             '"strategy_selected":["string"],"thesis":"string",'
             '"supporting_evidence":["string"],"contradicting_evidence":["string"],'
             '"position_size_request":number,"requested_exposure":number|null,'
-            '"leverage_request":number,"raw_llm_confidence":number,'
+            '"capital_allocation_pct":number,"leverage_request":number,'
+            '"base_exit":{"type":"PRICE|TIME|INDICATOR|EVENT","trigger":"string",'
+            '"size_pct":number,"reason_code":"string"},'
+            '"raw_llm_confidence":number,'
             '"stop_loss":number,"take_profit":number|null,'
             '"entry_plan":"string","expected_holding_period":"string",'
             '"invalidation_conditions":["string"],'
@@ -152,8 +156,12 @@ class ChiefTraderEngine:
             )
             + f"OutputContract: {action_contract}\n"
             "Do not add fields outside this contract. Numeric fields must be JSON numbers. "
-            "LONG/SHORT require a positive quantity or requested exposure, positive leverage, "
-            "and a positive stop_loss invalidation price. "
+            "Every LONG/SHORT new-risk decision MUST set plan_contract_version=2 with "
+            "capital_allocation_pct in (0,25] (percent of account equity for THIS child), "
+            "leverage_request in (0,20], and a concrete base_exit with trigger and size_pct "
+            "in (0,100]. A decision missing any of those fields is rejected by execution "
+            "and no order is placed. LONG/SHORT also require a positive quantity or "
+            "requested exposure and a positive stop_loss invalidation price. "
             "The application creates decision_id and binds symbol."
         )
 
