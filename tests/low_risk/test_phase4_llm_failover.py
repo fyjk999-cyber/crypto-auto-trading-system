@@ -311,4 +311,5 @@ def test_core_llm_prompt_requires_v2_new_risk_contract() -> None:
     assert '"capital_allocation_pct":number' in prompt
     assert '"base_exit"' in prompt
     assert "plan_contract_version=2" in prompt
+    assert "size_pct as a JSON number in (0,100]" in prompt
     assert "rejected by execution" in prompt
