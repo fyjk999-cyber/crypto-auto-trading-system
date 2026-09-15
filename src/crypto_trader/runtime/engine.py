@@ -108,6 +108,7 @@ class TradingEngine:
         enforce_llm_entry_authority: bool = False,
         opportunity_service=None,
         llm_router=None,
+        leg_service=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -130,6 +131,8 @@ class TradingEngine:
         self.exit_controller = DeterministicExitController()
         self.offline_mode = OfflineMode()
         self.llm_router = llm_router
+        # Phase 4D: per-leg fill attribution for hedge/reverse legs.
+        self.leg_service = leg_service
         self.position_manager = position_manager
         self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
         self.daily_review_scheduler = daily_review_scheduler
@@ -1292,6 +1295,27 @@ class TradingEngine:
         if exit_request_id:
             # Deterministic reduce/close reservation is consumed by the factual fill.
             self.exit_controller.confirm_fill(str(exit_request_id), fill.quantity)
+        leg_id = order.metadata.get("leg_id")
+        if leg_id and self.leg_service is not None:
+            # Hedge/reverse legs track their own factual quantity; a fill on one
+            # side must never silently net into the opposite leg of the symbol.
+            try:
+                remaining = await self.leg_service.apply_order_fill(
+                    str(leg_id), order.side, fill.quantity
+                )
+                await self.audit.log(
+                    "LEG_FILL_APPLIED",
+                    target=str(leg_id),
+                    run_id=self.run_id,
+                    order_id=order.internal_order_id,
+                    after={
+                        "side": order.side.value,
+                        "fill_quantity": str(fill.quantity),
+                        "remaining_quantity": str(remaining) if remaining is not None else None,
+                    },
+                )
+            except Exception:
+                logger.exception("LEG_FILL_APPLY_FAILED leg_id=%s", leg_id)
         position = await self.portfolio.get_position(fill.symbol)
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
             postings, metadata = build_derivative_trade_entries(

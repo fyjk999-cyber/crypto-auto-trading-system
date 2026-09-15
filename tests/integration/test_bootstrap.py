@@ -45,6 +45,7 @@ async def test_bootstrap_builds_and_starts_single_core(database):
     # Phase 4D: hedge/reverse legs must use the canonical planner + durable store.
     assert bundle.position_manager.hedge_planner is not None
     assert bundle.position_manager.leg_service is not None
+    assert bundle.engine.leg_service is bundle.position_manager.leg_service
     assert not hasattr(bundle, "ai_position_bridge")
     assert bundle.engine.enforce_llm_entry_authority is True
     run_id = await bundle.engine.start()

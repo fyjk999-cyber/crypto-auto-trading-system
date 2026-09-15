@@ -233,6 +233,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         expert_engine=expert_engine,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
+    leg_service = PositionLegService(database.session_factory)
     position_manager = (
         LiveLLMPositionManager(
             chief=chief,
@@ -248,7 +249,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 trade_plans,
                 max_holding_time_seconds=settings.max_holding_time_seconds,
             ),
-            leg_service=PositionLegService(database.session_factory),
+            leg_service=leg_service,
         )
         if settings.auto_start_runtime
         else None
@@ -285,6 +286,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         enforce_llm_entry_authority=settings.auto_start_runtime,
         opportunity_service=opportunity_service,
         llm_router=llm_provider,
+        leg_service=leg_service,
     )
     runtime_holder["engine"] = engine
     runtime_holder["strategy"] = live_llm
