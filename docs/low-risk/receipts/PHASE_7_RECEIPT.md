@@ -283,3 +283,30 @@ portfolio/dashboard panel). `NATURAL_PAPER` = ACHIEVED; `FINAL_STATUS` = PARTIAL
   post-close review derivation and reports NO_NEW_EPISODE honestly when no new close exists.
 - The running soak process was not restarted; `/health` stayed OVERALL OK and the natural
   lifecycle remains the acceptance evidence.
+
+## Full canonical regression on a clean HEAD worktree (ed88fd1dbd91)
+
+Method: detached worktree `/tmp/lr2-verify` at the exact committed SHA, canonical venv,
+keyless environment (`DEEPSEEK_API_KEY` unset so no test can call the real API),
+`PYTHONPATH=<worktree>/src TRADING_MODE=PAPER LIVE_TRADING_ENABLED=false pytest tests -q`.
+
+Result: **859 passed** (second run; 0 failures). One earlier run showed a single
+intermittent simulator fill-timing failure
+(`test_short_reduce_exit_is_factual_reduce_only_and_never_reverses`), which passed 3/3
+isolated runs and in the full rerun - same known load-dependent fill-timing flake class
+as previous rounds, not an order/authority defect.
+
+### Superseded legacy tests migrated to the V2 constitution (10 tests)
+
+`tests/integration/test_live_llm_position_lifecycle.py` previously encoded legacy
+pre-trade Risk coupling and Base-Exit-free entries.
+
+- OLD BEHAVIOR: legacy entries bypassed the hard contract; Risk SCALE_DOWN resized the
+  child (quantity 2 -> 1) and reduced leverage (10 -> 5); plans had no Base Exit.
+- NEW BEHAVIOR: every new-risk entry carries `plan_contract_version=2` +
+  `capital_allocation_pct` + `base_exit`; ExecutionAuthority rejects or executes the
+  LLM child unchanged; the LLM's leverage (10, <=20x) and size reach the order path.
+- WHY SUPERSEDED: round-60 real-PAPER P0 (legacy order without Base Exit) plus the SPEC
+  rule "Risk is not a pre-trade sizing gate; reject invalid contracts, never resize".
+- File header records this OLD/NEW/WHY; the Risk-resize test was renamed to
+  `test_risk_scale_down_no_longer_resizes_v2_child` and asserts the LLM size is preserved.
