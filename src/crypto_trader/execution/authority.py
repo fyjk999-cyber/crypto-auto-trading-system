@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from crypto_trader.domain.enums import ExecutionDecision, OrderStatus, TradingMode
 from crypto_trader.domain.models import Instrument, OrderIntent, RiskDecision
@@ -16,6 +17,24 @@ from crypto_trader.domain.money import D, floor_to_step, round_tick
 from crypto_trader.execution.rate_limiter import RateLimiter
 from crypto_trader.exposure.service import ExposureService, InstrumentExposureSpec
 from crypto_trader.risk.kill_switch import KillSwitch
+
+
+@dataclass
+class NewRiskOrderContract:
+    """V2 hard contract for a new-risk child order.
+
+    This is contract validation, not strategy risk sizing: an order that
+    violates it is REJECTED, never silently resized.
+    """
+
+    is_new_risk: bool = False
+    capital_allocation_pct: Decimal | None = None
+    leverage: Decimal | None = None
+    base_exit_present: bool = False
+    strategy: str = ""
+    based_on_state_version: str | None = None
+    max_child_allocation_pct: Decimal = Decimal("25")
+    max_leverage: Decimal = Decimal("20")
 
 
 @dataclass
@@ -35,6 +54,7 @@ class AuthorizationContext:
     exchange_connected: bool = False
     balance_fresh: bool = False
     risk_decision: RiskDecision | None = None
+    order_contract: NewRiskOrderContract | None = None
     instrument: Instrument | None = None
     duplicate_client_order: bool = False
     reconciliation_halted: bool = False
@@ -110,6 +130,21 @@ class ExecutionAuthority:
             ExecutionDecision.SCALE_DOWN,
         }:
             return reject("RISK_NOT_VALID")
+        # 11b. Low-Risk V2 constitutional order contract: reject, never resize.
+        if ctx.order_contract is not None and ctx.order_contract.is_new_risk:
+            contract = ctx.order_contract
+            if contract.capital_allocation_pct is None:
+                return reject("NEW_RISK_ALLOCATION_MISSING")
+            if contract.capital_allocation_pct > contract.max_child_allocation_pct:
+                return reject("NEW_RISK_CHILD_OVER_25PCT_EQUITY")
+            if contract.capital_allocation_pct <= 0:
+                return reject("NEW_RISK_ALLOCATION_INVALID")
+            if contract.leverage is None or contract.leverage <= 0:
+                return reject("NEW_RISK_LEVERAGE_MISSING")
+            if contract.leverage > contract.max_leverage:
+                return reject("LEVERAGE_OVER_20X")
+            if not contract.base_exit_present:
+                return reject("BASEEXIT_MISSING")
         # 12. precision, min quantity, min notional
         instrument = ctx.instrument
         if instrument is None:

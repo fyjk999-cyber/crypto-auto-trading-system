@@ -55,6 +55,24 @@ class LiveLLMTradePlanner:
             exit_conditions=decision.exit_conditions,
             expected_holding_period=decision.expected_holding_period,
             max_holding_time_seconds=self.max_holding_time_seconds,
+            plan_version=decision.plan_contract_version,
+            strategy=decision.strategy
+            or (decision.strategy_selected[0] if decision.strategy_selected else "live_llm"),
+            based_on_state_version=decision.based_on_state_version,
+            base_exit=(
+                decision.base_exit.model_dump(mode="json") if decision.base_exit else None
+            ),
+            exit_approach=decision.exit_approach,
+            adverse_trigger=decision.adverse_trigger,
+            thesis_invalidation=decision.thesis_invalidation,
+            reassessment_rules=decision.reassessment_rules,
+            next_reassessment=(
+                decision.next_reassessment.model_dump(mode="json")
+                if decision.next_reassessment
+                else None
+            ),
+            expected_edge_bps=decision.expected_edge_bps,
+            expected_cost_bps=decision.expected_cost_bps,
         )
         signal = SignalIntent(
             signal_id=decision.decision_id,
@@ -69,6 +87,18 @@ class LiveLLMTradePlanner:
                 "decision_id": decision.decision_id,
                 "direction": decision.action.value,
                 "requested_leverage": str(decision.leverage_request),
+                "capital_allocation_pct": (
+                    str(decision.capital_allocation_pct)
+                    if decision.capital_allocation_pct is not None
+                    else None
+                ),
+                "base_exit": (
+                    decision.base_exit.model_dump(mode="json")
+                    if decision.base_exit
+                    else None
+                ),
+                "plan_version": decision.plan_contract_version,
+                "based_on_state_version": decision.based_on_state_version,
                 "instrument_type": "LINEAR_PERP",
                 "contract_size": "1",
                 "contract_multiplier": "1",

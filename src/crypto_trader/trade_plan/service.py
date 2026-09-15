@@ -80,6 +80,18 @@ class TradePlan:
     opened_at: datetime | None
     closed_at: datetime | None
     terminal_reason: str | None
+    # --- Low-Risk V2 plan contract (migration 0024) ---
+    plan_version: int = 1
+    strategy: str = ""
+    based_on_state_version: str | None = None
+    base_exit: dict | None = None
+    exit_approach: str = ""
+    adverse_trigger: dict | None = None
+    thesis_invalidation: str = ""
+    reassessment_rules: list[str] = None  # type: ignore[assignment]
+    next_reassessment: dict | None = None
+    expected_edge_bps: float | None = None
+    expected_cost_bps: float | None = None
 
 
 class TradePlanService:
@@ -102,6 +114,17 @@ class TradePlanService:
         exit_conditions: list[str] | None = None,
         expected_holding_period: str = "",
         max_holding_time_seconds: float = 86400.0,
+        plan_version: int = 1,
+        strategy: str = "",
+        based_on_state_version: str | None = None,
+        base_exit: dict | None = None,
+        exit_approach: str = "",
+        adverse_trigger: dict | None = None,
+        thesis_invalidation: str = "",
+        reassessment_rules: list[str] | None = None,
+        next_reassessment: dict | None = None,
+        expected_edge_bps: float | None = None,
+        expected_cost_bps: float | None = None,
     ) -> TradePlan:
         if (
             direction not in {"LONG", "SHORT"}
@@ -109,6 +132,17 @@ class TradePlanService:
             or max_holding_time_seconds <= 0
         ):
             raise ValueError("TradePlan requires a directional positive-size proposal")
+        if plan_version >= 2:
+            if not isinstance(base_exit, dict) or not base_exit:
+                raise ValueError("V2 TradePlan requires a Base Exit contract")
+            if not strategy:
+                raise ValueError("V2 TradePlan requires a strategy")
+            if (
+                expected_edge_bps is not None
+                and expected_cost_bps is not None
+                and expected_edge_bps <= expected_cost_bps
+            ):
+                raise ValueError("V2 TradePlan expected edge must exceed estimated cost")
         entry_conditions = list(entry_conditions or [])
         invalidation_conditions = list(invalidation_conditions or [])
         reduce_conditions = list(reduce_conditions or [])
@@ -133,6 +167,17 @@ class TradePlanService:
                     "exit_conditions_json": exit_conditions,
                     "expected_holding_period": expected_holding_period,
                     "max_holding_time_seconds": max_holding_time_seconds,
+                    "plan_version": plan_version,
+                    "strategy": strategy,
+                    "based_on_state_version": based_on_state_version,
+                    "base_exit_json": base_exit,
+                    "exit_approach": exit_approach,
+                    "adverse_trigger_json": adverse_trigger,
+                    "thesis_invalidation": thesis_invalidation,
+                    "reassessment_rules_json": list(reassessment_rules or []),
+                    "next_reassessment_json": next_reassessment,
+                    "expected_edge_bps": expected_edge_bps,
+                    "expected_cost_bps": expected_cost_bps,
                 }
                 conflicts = [
                     field
@@ -160,6 +205,17 @@ class TradePlanService:
                 exit_conditions_json=exit_conditions,
                 expected_holding_period=expected_holding_period,
                 max_holding_time_seconds=max_holding_time_seconds,
+                plan_version=plan_version,
+                strategy=strategy,
+                based_on_state_version=based_on_state_version,
+                base_exit_json=base_exit,
+                exit_approach=exit_approach,
+                adverse_trigger_json=adverse_trigger,
+                thesis_invalidation=thesis_invalidation,
+                reassessment_rules_json=list(reassessment_rules or []),
+                next_reassessment_json=next_reassessment,
+                expected_edge_bps=expected_edge_bps,
+                expected_cost_bps=expected_cost_bps,
             )
             session.add(row)
             try:
@@ -347,4 +403,17 @@ class TradePlanService:
             opened_at=row.opened_at,
             closed_at=row.closed_at,
             terminal_reason=row.terminal_reason,
+            plan_version=row.plan_version,
+            strategy=row.strategy,
+            based_on_state_version=row.based_on_state_version,
+            base_exit=dict(row.base_exit_json) if row.base_exit_json else None,
+            exit_approach=row.exit_approach,
+            adverse_trigger=dict(row.adverse_trigger_json) if row.adverse_trigger_json else None,
+            thesis_invalidation=row.thesis_invalidation,
+            reassessment_rules=list(row.reassessment_rules_json or []),
+            next_reassessment=(
+                dict(row.next_reassessment_json) if row.next_reassessment_json else None
+            ),
+            expected_edge_bps=row.expected_edge_bps,
+            expected_cost_bps=row.expected_cost_bps,
         )

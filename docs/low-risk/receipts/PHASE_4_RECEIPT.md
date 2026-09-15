@@ -63,6 +63,44 @@ Deterministic assertions include: primary-success bypasses backup; failover pass
 
 The router is **not yet wired into `runtime/bootstrap.py`**: after a DeepSeek failure the authoritative fresh-state rebuilder must come from the evolved runtime context path (4A/4E), otherwise GLM would be skipped by design. Wiring lands with the 4A/4E integration chunk.
 
+## 4B/4C + 4H hard-contract gate (COMPLETE in this chunk)
+
+### Decision contract (`llm_chief/decision.py`)
+
+Additive fields (defaults keep legacy v1 valid): `plan_contract_version` (1 legacy / 2 V2), `should_trade`
+TRADE/WAIT/REJECT, `strategy`, `capital_allocation_pct`, `base_exit` (`BaseExitPlan`), `exit_approach`,
+`adverse_trigger`, `thesis_invalidation`, `reassessment_rules`, `next_reassessment` (`NextReassessment`:
+PRICE/TIME/INDICATOR/EVENT, AND/OR, NORMAL/HIGH/URGENT), `partial_entry`, `reentry_policy`,
+`position_plan_version`, `based_on_state_version`, `expected_edge_bps`, `expected_cost_bps`, `order_contract`.
+New `OpenAction` values: ADD/CLOSE/MODIFY_EXIT/HEDGE/REVERSE (existing HOLD/REDUCE/EXIT/FAIL_CLOSED preserved).
+V2 validation rejects allocation outside (0,25], leverage outside (0,20], missing Base Exit/thesis,
+edge <= cost, malformed NEXT_REASSESSMENT.
+
+### TradePlan versioning
+
+- `trade_plan/service.py` + `persistence/models.py` + migration `0024_trade_plan_v2_contract` (11 additive
+  nullable/defaulted columns; head verified on a fresh DB, temp DB removed).
+- `create(plan_version>=2)` requires Base Exit + strategy + edge>cost; idempotent conflict detection extended.
+- `LiveLLMTradePlanner` passes contract into plan + signal metadata; v1 decisions fabricate nothing.
+
+### ExecutionAuthority hard contract (reject, never resize)
+
+`NewRiskOrderContract` + `AuthorizationContext.order_contract`; rejections: >25% allocation
+(`NEW_RISK_CHILD_OVER_25PCT_EQUITY`), >20x (`LEVERAGE_OVER_20X`), missing Base Exit (`BASEEXIT_MISSING`),
+missing/invalid allocation or leverage. Legacy callers without contract keep the exact previous verdict.
+Removal of the `risk_decision` APPROVE/SCALE_DOWN coupling and Risk L1/L2 adaptation remain pending (4H).
+
+### Tests in this chunk
+
+```
+PYTHONPATH=$PWD/src .venv/bin/python -m pytest tests/low_risk -q
+→ 51 passed (7 phase1 + 12 phase2 + 7 phase3 + 9 phase4G + 16 phase4 contract)
+```
+
+New tests: V2 boundary accept (25%/20x); rejections (30%, 25x, no Base Exit, empty thesis, edge<=cost);
+legacy v1 compatibility; ADD + NEXT_REASSESSMENT AND/OR validation; TradePlan round-trip + idempotency;
+planner propagation and no-fabrication for v1; authority reject-not-resize; legacy authority path.
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.
