@@ -133,6 +133,8 @@ class TradingEngine:
         self.llm_router = llm_router
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
         self.leg_service = leg_service
+        # Flip only when the portfolio tracks legs (not net) as source of truth.
+        self.leg_execution_enabled = False
         self.position_manager = position_manager
         self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
         self.daily_review_scheduler = daily_review_scheduler
@@ -758,6 +760,28 @@ class TradingEngine:
         trade_plan_id = str(signal.metadata.get("trade_plan_id", ""))
         is_entry = signal.strategy_id == "live_llm"
         is_position_action = signal.strategy_id == "live_llm_position"
+        hedge_flag = signal.metadata.get("hedge") is True or str(
+            signal.metadata.get("lifecycle_action") or ""
+        ).upper() in {"HEDGE", "REVERSE"}
+        if is_entry and hedge_flag and not self.leg_execution_enabled:
+            # The canonical portfolio is currently NET per symbol: executing an
+            # opposite leg would silently close the original position while the
+            # leg ledger says a new independent leg opened -> accounting
+            # divergence / ghost position. Fail closed until leg-level position
+            # tracking is the source of truth.
+            await self.audit.log(
+                "HEDGE_EXECUTION_BLOCKED_NET_MODEL",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                after={
+                    "symbol": signal.symbol,
+                    "leg_id": signal.metadata.get("leg_id"),
+                    "lifecycle_action": signal.metadata.get("lifecycle_action"),
+                    "required": "LEG_LEVEL_POSITION_MODEL",
+                },
+            )
+            return None
         if (is_entry or is_position_action) and not trade_plan_id:
             await self.audit.log(
                 "TRADEPLAN_REQUIRED",

@@ -272,3 +272,41 @@ async def test_order_fills_are_attributed_per_leg_side(database) -> None:
     assert exposure["long"] == Decimal("0.5")
     assert exposure["short"] == Decimal("0")
     assert exposure["both_sides"] is False
+
+
+async def test_engine_fails_closed_on_hedge_until_leg_model_exists(database) -> None:
+    from sqlalchemy import select
+
+    from crypto_trader.domain.enums import OrderSide
+    from crypto_trader.domain.models import SignalIntent
+    from crypto_trader.persistence.models import AuditEventORM
+    from tests.conftest import make_paper_engine
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-hedge-guard")
+    signal = SignalIntent(
+        signal_id="hedge-guard-1",
+        strategy_id="live_llm",
+        symbol="BTCUSDT",
+        side=OrderSide.SELL,
+        quantity=Decimal("0.1"),
+        reason="independent hedge",
+        metadata={
+            "hedge": True,
+            "lifecycle_action": "HEDGE",
+            "leg_id": "leg-guard",
+            "trade_plan_id": "plan-guard",
+            "direction": "SHORT",
+        },
+    )
+    result = await engine.process_signal(signal)
+    assert result is None
+    orders = await engine.order_manager.list_all(limit=10)
+    assert all(order.metadata.get("leg_id") != "leg-guard" for order in orders)
+
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "HEDGE_EXECUTION_BLOCKED_NET_MODEL" in actions
+    await engine.stop()
