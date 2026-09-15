@@ -7,6 +7,7 @@ Test/API/CLI must not each assemble a different core. They should call
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -26,8 +27,9 @@ from crypto_trader.llm.tools.context import register_context_tools
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.failover import CoreLLMRouter
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
-from crypto_trader.llm_chief.provider import DeepSeekProvider
+from crypto_trader.llm_chief.provider import DeepSeekProvider, GLMProvider
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
@@ -155,7 +157,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     trade_episodes = TradeEpisodeStore(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)
     chief_context = ChiefContextLoader(database.session_factory)
-    llm_provider = DeepSeekProvider()
+    # Core LLM router: DeepSeek -> GLM (fresh factual state only) -> offline.
+    # Until the runtime supplies a fresh-state prompt rebuilder, the backup is
+    # deliberately skipped rather than replaying a stale prompt; the router then
+    # enters LLM_OFFLINE_MODE and the engine blocks new risk.
+    glm_provider = GLMProvider() if os.environ.get("GLM_API_KEY") else None
+    llm_provider = CoreLLMRouter(primary=DeepSeekProvider(), backup=glm_provider)
     chief = ChiefTraderEngine(provider=llm_provider)
     # Low-Risk V2 Phase 2: 25-model factual evidence layer over the canonical
     # bounded candle/market caches. Evidence only; never an order authority.
@@ -251,6 +258,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         ),
         enforce_llm_entry_authority=settings.auto_start_runtime,
         opportunity_service=opportunity_service,
+        llm_router=llm_provider,
     )
 
     app_state = AppState(

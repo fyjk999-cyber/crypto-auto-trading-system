@@ -262,6 +262,40 @@ enforced); SHORT exits use BUY.
 
 Full regression for this chunk: pytest tests -q -> **762 passed**, 1 warning in 75.18s.
 
+## Offline mode runtime guard (SPEC OFFLINE RULE)
+
+`runtime/offline.py` (`OfflineMode`): five-minute windows (T+5m, T+10m, ...), probe
+due/`probe_failed`, new-risk classification (OPEN/ENTRY/ADD/HEDGE/REVERSE/RE_ENTRY and any
+`strategy_id=live_llm` entry) vs protective (reduce_only / REDUCE / EXIT / CLOSE / BASE_EXIT /
+FAST_PROFIT_PROTECTION / RISK_HARD_EXIT / OFFLINE_HARD_EXIT), pending-new-risk order filtering, and
+recovery that only completes when factual reconciliation is coherent (`reconciled=True`); otherwise it
+stays offline and schedules the next window.
+
+`TradingEngine` wiring:
+- `offline_mode` guard in `process_signal`: an entry while offline is rejected + audited
+  (`OFFLINE_NEW_RISK_BLOCKED`), so no OPEN/ADD/HEDGE/REVERSE/RE-ENTRY can execute;
+- `enter_offline_mode(reason)`: audits `LLM_OFFLINE_MODE`, cancels pending new-risk orders through the
+  canonical `OrderManager`/adapter, then reconciles via `RecoveryService`;
+- `attempt_offline_recovery()`: runs factual reconciliation first and only then returns to NORMAL
+  (`LLM_RECOVERED_NORMAL`);
+- `tick()` syncs engine state from `llm_router.offline` (when wired), skips entry strategies while offline,
+  and still runs deterministic protective exits in the position scan.
+
+Bootstrap now constructs `CoreLLMRouter(primary=DeepSeekProvider(), backup=GLMProvider if GLM_API_KEY)`
+and passes it as the Chief provider and engine `llm_router`; until a fresh-state prompt rebuilder is wired
+(Phase 4A), GLM is deliberately skipped instead of replaying a stale prompt and the router fails safe into
+OFFLINE.
+
+Test evidence (`tests/low_risk/test_phase4_offline_mode.py`, 6):
+- offline blocks new risk, allows every protective authority, idempotent enter;
+- pending-new-risk filter excludes protective orders;
+- 299s not due / 300s due / failed probe extends to T+600s and windows=2;
+- recovery requires reconciliation: mismatch keeps OFFLINE and schedules next window; coherent recovery
+  returns NORMAL;
+- engine: with a factual PAPER position, entering offline blocks a new entry (audited) yet the Active Base
+  Exit still closes the position through the canonical path;
+- engine syncs OFFLINE/NORMAL from the router and updates `llm_offline_mode` health.
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.

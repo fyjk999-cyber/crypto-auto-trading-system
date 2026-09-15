@@ -72,6 +72,7 @@ from crypto_trader.runtime.event_bus import EventBus
 from crypto_trader.runtime.exit_controller import DeterministicExitController
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
+from crypto_trader.runtime.offline import OfflineMode
 from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
 from crypto_trader.strategy.base import StrategyContext, StrategyPlugin
@@ -106,6 +107,7 @@ class TradingEngine:
         daily_review_scheduler: DailyReviewScheduler | None = None,
         enforce_llm_entry_authority: bool = False,
         opportunity_service=None,
+        llm_router=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -126,6 +128,8 @@ class TradingEngine:
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
         # Low-Risk V2 deterministic protection layer (Risk/Base Exit/Fast Profit).
         self.exit_controller = DeterministicExitController()
+        self.offline_mode = OfflineMode()
+        self.llm_router = llm_router
         self.position_manager = position_manager
         self.trade_episodes = trade_episodes or TradeEpisodeStore(database.session_factory)
         self.daily_review_scheduler = daily_review_scheduler
@@ -377,10 +381,89 @@ class TradingEngine:
             self.reconciliation_halted = report.halt
             self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]))
 
+    # ------------------------------------------------------------- offline
+    async def enter_offline_mode(self, reason: str) -> bool:
+        """Enter LLM_OFFLINE_MODE: cancel pending new risk, reduce-only only."""
+        if not self.offline_mode.enter(reason):
+            return False
+        await self.audit.log(
+            "LLM_OFFLINE_MODE",
+            target=self.run_id or "offline",
+            run_id=self.run_id,
+            after={
+                "reason": reason,
+                "window_seconds": self.offline_mode.window_seconds,
+                "next_probe_at": self.offline_mode.snapshot()["next_probe_at"],
+            },
+        )
+        for order in self.offline_mode.pending_new_risk_orders(
+            await self.order_manager.list_open()
+        ):
+            try:
+                await self.order_manager.cancel_pending(
+                    order.internal_order_id, reason="LLM_OFFLINE_MODE"
+                )
+                if order.exchange_order_id:
+                    await self.adapter.cancel_order(order.symbol, order.exchange_order_id)
+                await self.audit.log(
+                    "OFFLINE_CANCEL_PENDING_NEW_RISK",
+                    target=order.client_order_id,
+                    run_id=self.run_id,
+                    client_order_id=order.client_order_id,
+                    order_id=order.internal_order_id,
+                )
+            except Exception:
+                logger.exception(
+                    "OFFLINE_CANCEL_NEW_RISK_FAILED order_id=%s", order.internal_order_id
+                )
+        try:
+            await self._run_recovery(self.run_id)
+        except Exception:
+            logger.exception("OFFLINE_RECONCILE_FAILED")
+        return True
+
+    async def attempt_offline_recovery(self) -> bool:
+        """Provider recovered: reconcile facts first, then return to NORMAL."""
+        if not self.offline_mode.is_offline:
+            return True
+        try:
+            await self._run_recovery(self.run_id)
+        except Exception:
+            self.offline_mode.probe_failed()
+            await self.audit.log(
+                "OFFLINE_RECOVERY_RECONCILE_FAILED", target=self.run_id or "offline"
+            )
+            return False
+        recovered = self.offline_mode.complete_recovery(reconciled=True)
+        if recovered:
+            await self.audit.log(
+                "LLM_RECOVERED_NORMAL",
+                target=self.run_id or "offline",
+                run_id=self.run_id,
+            )
+        return recovered
+
+    async def _sync_offline_mode(self) -> None:
+        router = self.llm_router
+        if router is None:
+            return
+        router_offline = bool(getattr(router, "offline", False))
+        if router_offline and not self.offline_mode.is_offline:
+            await self.enter_offline_mode("CORE_LLM_ROUTER_OFFLINE")
+        elif not router_offline and self.offline_mode.is_offline:
+            await self.attempt_offline_recovery()
+
     # ------------------------------------------------------------------ tick
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
-        for strategy in self.strategies:
+        await self._sync_offline_mode()
+        if self.offline_mode.is_offline:
+            self.health.set("llm_offline_mode", True)
+            strategies = []
+        else:
+            strategies = list(self.strategies)
+            self.health.set("llm_offline_mode", False)
+        for strategy in strategies:
             desired_symbol = None
             desired_getter = getattr(strategy, "desired_symbol", None)
             if callable(desired_getter):
@@ -677,6 +760,15 @@ class TradingEngine:
             )
             return None
         entry_plan = None
+        if is_entry and self.offline_mode.is_offline:
+            await self.audit.log(
+                "OFFLINE_NEW_RISK_BLOCKED",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                after={"reason": "LLM_OFFLINE_MODE", "strategy_id": signal.strategy_id},
+            )
+            return None
         if is_entry:
             plan = await self.trade_plans.get(trade_plan_id)
             entry_plan = plan
