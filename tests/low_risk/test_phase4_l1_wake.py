@@ -58,14 +58,18 @@ class _Decisions:
 
 
 class _Audit:
-    async def log(self, *args, **kwargs):
-        return None
+    def __init__(self):
+        self.events = []
+
+    async def log(self, action, *args, **kwargs):
+        self.events.append(action)
 
 
 class _Chief:
-    def __init__(self):
+    def __init__(self, action="HOLD"):
         self.calls = 0
         self.last_rebuild = None
+        self.action = action
 
     def render_prompt(self, ctx):
         return f"PROMPT {ctx.symbol}"
@@ -77,9 +81,11 @@ class _Chief:
             decision_id=f"pos-{self.calls}",
             symbol=ctx.symbol,
             position_state=PositionState.OPEN,
-            action="HOLD",
+            action=self.action,
             market_regime=ctx.regime,
-            thesis="hold",
+            thesis="reassess",
+            position_size_request=0.5,
+            leverage_request=2,
             model_provider="deepseek",
             model="deepseek-chat",
         )
@@ -184,3 +190,22 @@ async def test_fresh_provider_returning_none_fails_safe() -> None:
 
     with pytest.raises(RuntimeError, match="NO_FRESH_CONTEXT"):
         await chief.last_rebuild()
+
+
+async def test_hedge_and_reverse_never_become_reduce_only_orders() -> None:
+    for action in ("HEDGE", "REVERSE"):
+        chief = _Chief(action=action)
+        audit = _Audit()
+        manager = LiveLLMPositionManager(
+            chief=chief,
+            evidence_engine=_Evidence(),
+            decisions=_Decisions(),
+            plans=_Plans(),
+            audit=audit,
+            review_cooldown_seconds=30.0,
+            attempt_clock=lambda: NOW,
+        )
+        ctx = _ctx()
+        signal = await manager.review(ctx, ctx.positions["BTCUSDT"])
+        assert signal is None, f"{action} must not produce a reduce-only signal"
+        assert "HEDGE_REVERSE_REQUIRES_CORE_NEW_RISK" in audit.events

@@ -212,6 +212,25 @@ class LiveLLMPositionManager:
         )
         if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
             return None
+        if decision.action in {OpenAction.HEDGE, OpenAction.REVERSE} and not time_stop:
+            # Low-Risk V2: a hedge/reverse is NEW RISK with its own strategy,
+            # thesis, model-family evidence, Base Exit and invalidation. It must
+            # travel the Core-LLM -> TradePlan -> ExecutionAuthority path; it must
+            # never be silently converted into a reduce-only order on the legacy
+            # leg ("reduce the original loss" is not a legal hedge reason).
+            await self.audit.log(
+                "HEDGE_REVERSE_REQUIRES_CORE_NEW_RISK",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "action": decision.action.value,
+                    "symbol": position.symbol,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "required_path": "CORE_LLM_TRADEPLAN_EXECUTION",
+                },
+            )
+            return None
 
         quantity = (
             abs(position.quantity)
