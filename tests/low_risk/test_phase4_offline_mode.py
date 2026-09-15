@@ -215,3 +215,19 @@ async def test_engine_syncs_offline_state_from_router(database) -> None:
     assert engine.offline_mode.is_offline is False
     assert engine.health.snapshot()["components"]["llm_offline_mode"]["ok"] is False
     await engine.stop()
+
+
+async def test_runtime_snapshot_exposes_router_diagnostics_and_offline_state(database) -> None:
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    engine.llm_router = _FakeRouter(offline=True)
+    await engine.start("run-offline-observability")
+    await engine.tick()
+
+    snapshot = engine.runtime_snapshot()
+    assert snapshot["llm_router"]["router"] == "fake"
+    assert snapshot["llm_offline_mode"]["offline"] is True
+    assert snapshot["llm_offline_mode"]["windows"] == 1
+
+    engine.llm_router = None
+    assert engine.runtime_snapshot()["llm_router"] is None
+    await engine.stop()

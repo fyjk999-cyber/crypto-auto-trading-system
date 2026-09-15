@@ -1487,7 +1487,23 @@ class TradingEngine:
             "reconciliation_halted": self.reconciliation_halted,
             "health": self.health.snapshot(),
             "kill_switch": self.kill_switch_snapshot(),
+            # Low-Risk V2 soak observability: provider latency percentiles,
+            # failover/offline windows and the engine's offline guard state.
+            "llm_router": self._llm_router_diagnostics(),
+            "llm_offline_mode": self.offline_mode.snapshot(),
         }
+
+    def _llm_router_diagnostics(self) -> dict | None:
+        router = self.llm_router
+        if router is None:
+            return None
+        diagnostics = getattr(router, "diagnostics", None)
+        if not callable(diagnostics):
+            return None
+        try:
+            return diagnostics()
+        except Exception:
+            return {"error": "DIAGNOSTICS_UNAVAILABLE"}
 
     async def wait_for_event_queue(self) -> None:
         await self._event_queue.join()
