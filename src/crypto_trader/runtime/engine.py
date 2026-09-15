@@ -109,6 +109,7 @@ class TradingEngine:
         opportunity_service=None,
         llm_router=None,
         leg_service=None,
+        leg_reconciler=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -133,6 +134,7 @@ class TradingEngine:
         self.llm_router = llm_router
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
         self.leg_service = leg_service
+        self.leg_reconciler = leg_reconciler
         # Flip only when the portfolio tracks legs (not net) as source of truth.
         self.leg_execution_enabled = False
         self.position_manager = position_manager
@@ -782,6 +784,31 @@ class TradingEngine:
                 },
             )
             return None
+        if is_entry and hedge_flag and self.leg_execution_enabled:
+            if self.leg_reconciler is None:
+                await self.audit.log(
+                    "HEDGE_EXECUTION_BLOCKED_NO_RECONCILER",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"symbol": signal.symbol},
+                )
+                return None
+            position = await self.portfolio.get_position(signal.symbol)
+            reconciliation = await self.leg_reconciler.reconcile(
+                signal.symbol, position.quantity if position is not None else Decimal("0")
+            )
+            if not reconciliation.get("leg_execution_safe"):
+                await self.audit.log(
+                    "HEDGE_EXECUTION_BLOCKED_LEG_DIVERGENCE",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={
+                        "symbol": signal.symbol,
+                        "status": reconciliation.get("status"),
+                        "difference": str(reconciliation.get("difference")),
+                    },
+                )
+                return None
         if (is_entry or is_position_action) and not trade_plan_id:
             await self.audit.log(
                 "TRADEPLAN_REQUIRED",
