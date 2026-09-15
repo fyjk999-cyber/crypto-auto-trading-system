@@ -1,3 +1,16 @@
+"""Canonical PAPER position-lifecycle regression tests.
+
+Low-Risk V2 adaptation: every new-risk entry carries the Core-LLM hard contract
+(Base Exit + capital allocation + leverage), so Execution rejects or executes
+the LLM's request unchanged - Risk never resizes a child.
+
+OLD BEHAVIOR: Risk pre-trade coupling scaled leverage (10 -> 5) and quantity.
+NEW BEHAVIOR: the LLM's requested leverage/size reaches the canonical order path
+(leverage <= 20x, child allocation <= 25% verified by ExecutionAuthority).
+WHY SUPERSEDED: the SPEC constitution forbids Risk as a pre-trade sizing gate;
+the soak P0 also showed the legacy path bypassed Base-Exit checks.
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
@@ -7,12 +20,12 @@ import pytest
 from sqlalchemy import select
 
 from crypto_trader.domain.clock import Clock
-from crypto_trader.domain.enums import ExecutionDecision, OrderStatus
+from crypto_trader.domain.enums import OrderStatus
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
-from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
+from crypto_trader.llm_chief.decision import BaseExitPlan, ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
@@ -87,6 +100,11 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
         position_size_request=0.1,
         leverage_request=10,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -105,13 +123,13 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     assert active.risk_decision_id is not None
     entry_risk_decision_id = active.risk_decision_id
     assert position is not None and position.quantity == Decimal("0.1")
-    assert position.leverage == Decimal("5")
-    assert engine.adapter.positions["BTCUSDT"].leverage == Decimal("5")
+    assert position.leverage == Decimal("10")  # LLM leverage preserved (<=20x)
+    assert engine.adapter.positions["BTCUSDT"].leverage == Decimal("10")
     entry_order = list(engine.adapter.orders.values())[0]
     persisted_entry = await engine.order_manager.get_by_client(entry_order.client_order_id)
     assert persisted_entry is not None
     assert persisted_entry.metadata["requested_leverage"] == "10.0"
-    assert persisted_entry.metadata["approved_leverage"] == "5"
+    assert persisted_entry.metadata["approved_leverage"] == "10.0"
 
     chief = SequencedChief([("HOLD", "0"), ("REDUCE", "0.04"), ("EXIT", "0")])
     engine.position_manager = LiveLLMPositionManager(
@@ -135,12 +153,10 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
     await engine.wait_for_event_queue()
     reduced = await engine.portfolio.get_position("BTCUSDT")
     assert reduced is not None and reduced.quantity == Decimal("0.06")
-    assert reduced.leverage == Decimal("5")
+    assert reduced.leverage == Decimal("10")  # no Risk shrink on V2 contract
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     reduction_order = list(engine.adapter.orders.values())[-1]
-    persisted_reduction = await engine.order_manager.get_by_client(
-        reduction_order.client_order_id
-    )
+    persisted_reduction = await engine.order_manager.get_by_client(reduction_order.client_order_id)
     assert persisted_reduction is not None
     assert persisted_reduction.metadata["reduce_only"] is True
     assert persisted_reduction.metadata["risk_decision_id"] != entry_risk_decision_id
@@ -191,9 +207,9 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
 
     duplicate = await engine.trade_episodes.build_for_closed_plan(plan.trade_plan_id)
     assert duplicate is not None and duplicate.episode_id == episode.episode_id
-    review = await DailyReviewScheduler(
-        database.session_factory, canonical_only=True
-    ).run_once(episode.closed_at.date().isoformat())
+    review = await DailyReviewScheduler(database.session_factory, canonical_only=True).run_once(
+        episode.closed_at.date().isoformat()
+    )
     assert review["trade_count"] == 1
     duplicate_review = await DailyReviewScheduler(
         database.session_factory, canonical_only=True
@@ -213,13 +229,13 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
 
     loader = ChiefContextLoader(database.session_factory)
     chief_context = ChiefTraderContext(
-            symbol="BTCUSDT",
-            market_snapshot={},
-            regime="TREND",
-            quant_evidence=[],
-            portfolio_state={},
-            risk_summary={},
-        )
+        symbol="BTCUSDT",
+        market_snapshot={},
+        regime="TREND",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
     enriched = await loader.enrich(chief_context)
     assert enriched.episode_refs == [episode.episode_id]
     assert enriched.memory_refs == [f"review:{episode.episode_id}"]
@@ -261,6 +277,11 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
         position_size_request=0.1,
         leverage_request=2,
         stop_loss=105,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -331,6 +352,11 @@ async def test_partial_exit_fill_stays_active_until_factual_remaining_position_c
         position_size_request=0.1,
         leverage_request=2,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -407,6 +433,11 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
         position_size_request=0.1,
         leverage_request=2,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -473,6 +504,11 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
         position_size_request=0.1,
         leverage_request=1,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -530,6 +566,11 @@ async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database)
         position_size_request=0.1,
         leverage_request=1,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -586,15 +627,20 @@ async def test_expired_entry_is_terminal_before_order_creation(database):
         position_size_request=0.1,
         leverage_request=1,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
         entry, limit_price=Decimal("101")
     )
     assert plan is not None and signal is not None
-    signal = signal.model_copy(
-        update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)}
-    )
+    signal = signal.model_copy(update={"expires_at": datetime.now(UTC) - timedelta(seconds=1)})
     await engine.process_signal(signal)
     expired = await plans.get(plan.trade_plan_id)
     assert expired is not None and expired.state == TradePlanState.EXPIRED
@@ -618,6 +664,13 @@ async def test_cancelled_unfilled_entry_cancels_approved_trade_plan(database):
         position_size_request=0.1,
         leverage_request=1,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -651,6 +704,11 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
         position_size_request=0.1,
         leverage_request=2,
         stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -680,9 +738,9 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     report = await recovered.reconciliation.reconcile(recovered.adapter)
     assert report.ok is True
     assert report.halt is False
-    assert recovered.runtime_snapshot()["health"]["components"][
-        "paper_restart_recovery"
-    ]["ok"] is True
+    assert (
+        recovered.runtime_snapshot()["health"]["components"]["paper_restart_recovery"]["ok"] is True
+    )
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     await recovered.stop()
 
@@ -691,9 +749,20 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
     ("action", "expected_side", "stop_loss", "limit_price"),
     [("LONG", "BUY", 95, "101"), ("SHORT", "SELL", 105, "99")],
 )
-async def test_risk_scale_down_quantity_reaches_existing_order_path(
+async def test_risk_scale_down_no_longer_resizes_v2_child(
     database, action, expected_side, stop_loss, limit_price
 ):
+    """Adapted after the round-60/61 P0 fix.
+
+    OLD BEHAVIOR: Risk SCALE_DOWN resized a legacy new-risk child (2 -> 1) and the
+    resized order still reached the exchange.
+    NEW BEHAVIOR: new-risk children carry the Core-LLM hard contract; Risk may
+    still flag concerns but Execution never resizes the child. The LLM size (2)
+    reaches the canonical order path unchanged, and a legacy child without the
+    contract is rejected outright (covered by tests/low_risk).
+    WHY SUPERSEDED: the constitution requires REJECT instead of auto-resize, and
+    the soak P0 showed a legacy child could otherwise bypass Base Exit checks.
+    """
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     engine.risk_engine.config.max_order_notional = Decimal(limit_price)
     await engine.start("run-risk-scale-down")
@@ -709,6 +778,11 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
         position_size_request=2,
         leverage_request=2,
         stop_loss=stop_loss,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
         model_provider="deepseek",
         model="deepseek-v4-pro",
     )
@@ -722,13 +796,12 @@ async def test_risk_scale_down_quantity_reaches_existing_order_path(
     risk = await engine.process_signal(signal)
     await engine.wait_for_event_queue()
 
-    assert risk is not None and risk.decision == ExecutionDecision.SCALE_DOWN
+    assert risk is not None
     assert risk.side.value == expected_side
-    assert risk.checks["original_quantity"] == "2.0"
-    assert risk.checks["approved_quantity"] == "1"
     order = list(engine.adapter.orders.values())[-1]
     assert order.side.value == expected_side
-    assert order.quantity == Decimal("1")
+    # Core LLM size preserved: execution rejects or executes, never shrinks.
+    assert order.quantity == Decimal("2")
     assert order.metadata["trade_plan_id"] == plan.trade_plan_id
     assert order.metadata["decision_id"] == entry.decision_id
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
