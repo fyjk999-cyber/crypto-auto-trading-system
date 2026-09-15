@@ -31,6 +31,9 @@ class ChiefTraderContext:
     # under review (candidate source, triggered factors, nominated reason).
     # Evidence only — never a gate, never a direction.
     opportunity_context: dict | None = None
+    # Low-Risk V2 Phase 2: the 25-model expert evidence package (factual model
+    # outputs with support/counter/neutral evidence). Evidence only.
+    model_evidence: dict | None = None
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def estimate_tokens(self) -> int:
@@ -52,6 +55,7 @@ class ChiefTraderContext:
                         "coin": self.coin_profile,
                         "experience": self.compressed_experience,
                         "opportunity": self.opportunity_context or {},
+                        "model_evidence": self.model_evidence or {},
                     }
                 )
             )

@@ -138,6 +138,7 @@ class ChiefTraderEngine:
             f"PositionState: {ctx.position_state.value}\n"
             f"AllowedActions: {allowed_actions}\n"
             f"Market: {ctx.market_snapshot}\nQuantEvidence: {ctx.quant_evidence}\n"
+            f"ExpertEvidence25: {ctx.model_evidence or 'UNAVAILABLE'}\n"
             f"Portfolio: {ctx.portfolio_state}\nRisk: {ctx.risk_summary}\n"
             f"OpenPosition: {ctx.position_context}\n"
             f"Knowledge: {ctx.knowledge}\nSimilarEpisodes: {ctx.similar_episodes}\n"

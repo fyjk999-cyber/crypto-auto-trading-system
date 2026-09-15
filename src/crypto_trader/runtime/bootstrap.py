@@ -6,6 +6,7 @@ Test/API/CLI must not each assemble a different core. They should call
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -16,6 +17,7 @@ from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.factors.expert.engine import ExpertEvidenceEngine
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
@@ -155,6 +157,30 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     chief_context = ChiefContextLoader(database.session_factory)
     llm_provider = DeepSeekProvider()
     chief = ChiefTraderEngine(provider=llm_provider)
+    # Low-Risk V2 Phase 2: 25-model factual evidence layer over the canonical
+    # bounded candle/market caches. Evidence only; never an order authority.
+    expert_engine = None
+    if getattr(adapter, "feed", None) is not None:
+        feed = adapter.feed
+
+        async def _expert_timeframes(symbol, _feed=feed):
+            bars = ("4h", "1h", "15m", "5m", "1m")
+            results = await asyncio.gather(
+                *(
+                    _feed.get_closed_candles(symbol, bar=bar, limit=300)
+                    for bar in bars
+                ),
+                return_exceptions=True,
+            )
+            return {
+                bar: ([] if isinstance(result, BaseException) else result)
+                for bar, result in zip(bars, results, strict=False)
+            }
+
+        expert_engine = ExpertEvidenceEngine(
+            timeframe_provider=_expert_timeframes,
+            state_provider=lambda symbol, _feed=feed: _feed.states.get(symbol),
+        )
     tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)
     tool_chief = ToolDrivenChiefTrader(chief, tools)
@@ -177,6 +203,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         sizer=sizer,
         opportunity_board=opportunity_board,
         evidence_router=evidence_router,
+        expert_engine=expert_engine,
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     position_manager = (
@@ -188,6 +215,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             audit=audit,
             risk_summary=risk.config.model_dump(mode="json"),
             tool_chief=tool_chief,
+            expert_engine=expert_engine,
         )
         if settings.auto_start_runtime
         else None

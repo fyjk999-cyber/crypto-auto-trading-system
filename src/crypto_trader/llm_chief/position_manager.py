@@ -40,6 +40,7 @@ class LiveLLMPositionManager:
         tool_chief: ToolDrivenChiefTrader | None = None,
         context_loader: ChiefContextLoader | None = None,
         attempt_clock: Callable[[], datetime] | None = None,
+        expert_engine=None,
     ) -> None:
         self.chief = chief
         self.evidence_engine = evidence_engine
@@ -51,6 +52,8 @@ class LiveLLMPositionManager:
         self.tool_chief = tool_chief
         self.context_loader = context_loader
         self.attempt_clock = attempt_clock or (lambda: datetime.now(UTC))
+        # Low-Risk V2 Phase 2: 25-model factual evidence package (evidence only).
+        self.expert_engine = expert_engine
         self._last_review_attempt: dict[str, datetime] = {}
 
     async def review(
@@ -122,6 +125,13 @@ class LiveLLMPositionManager:
         )
         if self.context_loader is not None:
             chief_ctx = await self.context_loader.enrich(chief_ctx)
+        if self.expert_engine is not None:
+            try:
+                package = await self.expert_engine.evaluate(symbol=position.symbol)
+            except Exception:
+                package = None
+            if package is not None:
+                chief_ctx.model_evidence = package.as_llm_context()
         memory_refs = list(chief_ctx.memory_refs)
         research_refs = list(chief_ctx.research_refs)
         episode_refs = list(chief_ctx.episode_refs)

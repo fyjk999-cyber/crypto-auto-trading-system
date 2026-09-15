@@ -59,6 +59,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         attempt_clock: Callable[[], datetime] | None = None,
         opportunity_board: OpportunityBoard | None = None,
         evidence_router: PerSymbolEvidenceRouter | None = None,
+        expert_engine=None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
@@ -77,6 +78,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         # cooldown replaces the single-symbol clock (same semantics).
         self.opportunity_board = opportunity_board
         self.evidence_router = evidence_router
+        # Low-Risk V2 Phase 2: 25-model factual evidence package. Evidence only;
+        # an unavailable package never gates or alters authority semantics.
+        self.expert_engine = expert_engine
         self._last_attempt_by_symbol: dict[str, datetime] = {}
         self._skip_until: dict[str, datetime] = {}
         # This is an attempt cooldown, not an entry cooldown.  Every provider
@@ -152,6 +156,13 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             risk_summary=self.risk_summary,
             opportunity_context=opportunity_context,
         )
+        if self.expert_engine is not None:
+            try:
+                package = await self.expert_engine.evaluate(symbol=ctx.symbol)
+            except Exception:
+                package = None
+            if package is not None:
+                chief_ctx.model_evidence = package.as_llm_context()
         if self.context_loader is not None:
             chief_ctx = await self.context_loader.enrich(chief_ctx)
         memory_refs = list(chief_ctx.memory_refs)

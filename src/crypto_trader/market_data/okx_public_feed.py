@@ -14,6 +14,10 @@ from crypto_trader.market_data.orderbook import OrderBook
 from crypto_trader.market_data.state import DataHealth, MarketState, SourceStatus
 
 
+# OKX bar identifiers are case-sensitive: hourly bars require an uppercase H.
+OKX_BAR_MAP = {"1h": "1H", "2h": "2H", "4h": "4H", "6h": "6H", "12h": "12H"}
+
+
 class OKXPublicMarketFeed:
     """Bounded per-symbol REST polling; failed fields stay explicitly unavailable."""
 
@@ -36,6 +40,7 @@ class OKXPublicMarketFeed:
         self._oi_previous: dict[str, Decimal] = {}
         self._price_history: dict[str, deque[Decimal]] = {}
         self._trades: dict[str, deque[tuple[int, str, str, Decimal, Decimal]]] = {}
+        self._candle_cache: dict[tuple[str, str, int], tuple[float, list]] = {}
         self._last_access: dict[str, float] = {}
         self.max_cached_symbols = max(1, int(max_cached_symbols))
         self.trades_limit = max(1, int(trades_limit))
@@ -64,6 +69,8 @@ class OKXPublicMarketFeed:
             self._oi_previous.pop(oldest, None)
             self._price_history.pop(oldest, None)
             self._last_access.pop(oldest, None)
+            for cache_key in [item for item in self._candle_cache if item[0] == oldest]:
+                self._candle_cache.pop(cache_key, None)
 
     def _state(self, symbol: str) -> MarketState:
         if symbol not in self.states:
@@ -371,6 +378,66 @@ class OKXPublicMarketFeed:
             state.trades_window_seconds = 0.0
             state.last_trade_price = None
             self._status(state, "trades", now, DataHealth.UNAVAILABLE, exc)
+
+    async def get_closed_candles(
+        self,
+        symbol: str,
+        *,
+        bar: str = "1m",
+        limit: int = 300,
+        max_age_seconds: float = 60.0,
+    ):
+        """Bounded per-symbol cache of factual CLOSED candles (keyless public API).
+
+        Only rows with OKX's closed flag (``confirm == "1"``) are returned; live
+        candles are never mixed into model history. Failures return the last
+        cached factual history (explicitly stale) or an empty list — never a
+        synthetic substitute.
+        """
+        from crypto_trader.market_data.opportunity.factors import Candle
+
+        cache = self._candle_cache
+        key = (symbol, OKX_BAR_MAP.get(bar, bar), int(limit))
+        now_ts = datetime.now(UTC).timestamp()
+        entry = cache.get(key)
+        if entry is not None and (now_ts - entry[0]) <= max_age_seconds:
+            return list(entry[1])
+        provider_bar = OKX_BAR_MAP.get(bar, bar)
+        try:
+            rows = await self.client.get_candles(
+                self.provider_symbol(symbol), provider_bar, limit
+            )
+        except Exception:
+            if entry is not None:
+                return list(entry[1])
+            return []
+        candles: list[Candle] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 9 or str(row[8]) != "1":
+                continue
+            try:
+                candles.append(
+                    Candle(
+                        ts_ms=int(row[0]),
+                        open=float(row[1]),
+                        high=float(row[2]),
+                        low=float(row[3]),
+                        close=float(row[4]),
+                        volume=float(row[5]),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        candles.sort(key=lambda item: item.ts_ms)
+        if candles:
+            if len(cache) >= self.max_cached_symbols and key not in cache:
+                oldest_keys = sorted(cache, key=lambda item: cache[item][0])
+                for victim in oldest_keys:
+                    if victim[0] != self.symbol:
+                        cache.pop(victim, None)
+                        break
+            cache[key] = (now_ts, candles)
+        return list(candles)
 
     async def close(self) -> None:
         await self.client.disconnect()
