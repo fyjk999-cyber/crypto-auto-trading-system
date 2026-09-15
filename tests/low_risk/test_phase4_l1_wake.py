@@ -12,9 +12,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from crypto_trader.domain.enums import OrderSide
-from crypto_trader.domain.models import SignalIntent
-
-from crypto_trader.domain.models import Account, Position
+from crypto_trader.domain.models import Account, Position, SignalIntent
 from crypto_trader.llm_chief.decision import BaseExitPlan, ChiefTraderDecision, PositionState
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
 from crypto_trader.market_data.orderbook import OrderBook
