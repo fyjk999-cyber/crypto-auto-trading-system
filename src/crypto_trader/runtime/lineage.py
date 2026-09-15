@@ -82,3 +82,33 @@ def validate_lineage(chain: LineageChain) -> dict:
         "authority": "LINEAGE_ONLY",
         "is_order": False,
     }
+
+
+def lineage_from_order(
+    *,
+    metadata: dict | None,
+    client_order_id: str | None,
+    exchange_order_id: str | None = None,
+    fill_id: str | None = None,
+) -> LineageChain:
+    """Assemble the factual lineage of an order/fill from canonical metadata.
+
+    Fallbacks keep the chain traceable even for legacy orders: intent_id falls
+    back to the client order id and execution linkage to the exchange order id.
+    """
+    meta = metadata or {}
+    fill_ids = list(meta.get("fill_ids") or [])
+    if fill_id:
+        fill_ids.append(fill_id)
+    return build_lineage(
+        opportunity_id=meta.get("opportunity_id") or meta.get("candidate_source"),
+        decision_id=meta.get("decision_id") or meta.get("entry_decision_id"),
+        position_episode_id=meta.get("position_episode_id") or meta.get("trade_episode_id"),
+        leg_id=meta.get("leg_id"),
+        trade_plan_version=meta.get("plan_version") or meta.get("plan_contract_version"),
+        intent_id=meta.get("intent_id") or client_order_id,
+        execution_id=meta.get("execution_id") or exchange_order_id,
+        client_order_id=client_order_id,
+        exchange_order_id=exchange_order_id,
+        fill_ids=fill_ids,
+    )

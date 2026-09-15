@@ -72,6 +72,7 @@ from crypto_trader.runtime.event_bus import EventBus
 from crypto_trader.runtime.exit_controller import DeterministicExitController
 from crypto_trader.runtime.health import HealthRegistry
 from crypto_trader.runtime.lease import Lease, LeaseManager
+from crypto_trader.runtime.lineage import lineage_from_order, validate_lineage
 from crypto_trader.runtime.offline import OfflineMode
 from crypto_trader.runtime.recovery import RecoveryService
 from crypto_trader.runtime.state_machine import RuntimeStateMachine
@@ -1346,6 +1347,19 @@ class TradingEngine:
         if exit_request_id:
             # Deterministic reduce/close reservation is consumed by the factual fill.
             self.exit_controller.confirm_fill(str(exit_request_id), fill.quantity)
+        lineage = lineage_from_order(
+            metadata=order.metadata,
+            client_order_id=order.client_order_id,
+            exchange_order_id=order.exchange_order_id,
+            fill_id=fill.fill_id,
+        )
+        await self.audit.log(
+            "FILL_LINEAGE",
+            target=fill.fill_id,
+            run_id=self.run_id,
+            order_id=order.internal_order_id,
+            after=validate_lineage(lineage),
+        )
         leg_id = order.metadata.get("leg_id")
         if leg_id and self.leg_service is not None:
             # Hedge/reverse legs track their own factual quantity; a fill on one

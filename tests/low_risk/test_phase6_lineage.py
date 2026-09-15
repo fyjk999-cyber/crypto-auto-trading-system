@@ -63,3 +63,62 @@ def test_unexpected_keys_are_surfaced_without_breaking_the_chain() -> None:
     result = validate_lineage(build_lineage(**values))
     assert result["unexpected"] == ["rogue_field"]
     assert result["trade_complete"] is True
+
+
+def test_lineage_from_order_maps_metadata_with_fallbacks() -> None:
+    from crypto_trader.runtime.lineage import lineage_from_order
+
+    chain = lineage_from_order(
+        metadata={
+            "decision_id": "dec-1",
+            "entry_decision_id": "entry-1",
+            "leg_id": "leg-1",
+            "plan_version": 2,
+            "candidate_source": "market_observer",
+        },
+        client_order_id="coid-1",
+        exchange_order_id="ex-1",
+        fill_id="fill-1",
+    )
+    values = chain.values
+    assert values["decision_id"] == "dec-1"
+    assert values["opportunity_id"] == "market_observer"
+    assert values["leg_id"] == "leg-1"
+    assert values["trade_plan_version"] == 2
+    assert values["intent_id"] == "coid-1"  # fallback
+    assert values["execution_id"] == "ex-1"  # fallback
+    assert values["fill_ids"] == ["fill-1"]
+    assert chain.trade_complete() is True
+
+
+async def test_engine_fill_settlement_emits_complete_lineage(database) -> None:
+    """A factual PAPER fill must persist a complete FILL_LINEAGE audit chain."""
+    import json
+
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AuditEventORM
+    from tests.conftest import make_paper_engine
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    engine.audit.log = engine.audit.log  # keep canonical service
+    await engine.start("run-lineage-fill")
+    assert await engine._strategy_context("BTCUSDT") is not None
+
+    from tests.low_risk.test_phase4_runtime_deterministic_exit import _open_v2_position
+
+    await _open_v2_position(engine, database)
+    await engine.wait_for_event_queue()
+
+    async with database.session_factory() as session:
+        rows = (await session.execute(select(AuditEventORM))).scalars().all()
+    lineage_rows = [row for row in rows if row.action == "FILL_LINEAGE"]
+    assert lineage_rows, "canonical fill settlement must audit FILL_LINEAGE"
+    payload = lineage_rows[-1].after_json
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    assert payload["trade_complete"] is True
+    assert "client_order_id" not in payload["missing"]
+    assert "fill_ids" not in payload["missing"]
+    assert payload["authority"] == "LINEAGE_ONLY"
+    await engine.stop()
