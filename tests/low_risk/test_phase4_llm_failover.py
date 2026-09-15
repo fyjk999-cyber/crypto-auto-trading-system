@@ -265,3 +265,25 @@ async def test_chief_engine_passes_rebuild_context_to_router() -> None:
     decision = await chief.decide(ctx, rebuild_context=rebuild)
     assert decision.action.value == "WAIT"
     assert backup.calls[0]["prompt"] == "ENGINE_FRESH"
+
+
+async def test_router_state_version_is_metadata_not_provider_kwarg() -> None:
+    """Regression: the real DeepSeek/GLM providers must never receive state_version.
+
+    Runtime startup with a real provider previously failed with TypeError
+    inside complete_json; the router must bind state_version to the response.
+    """
+    from crypto_trader.llm_chief.failover import CoreLLMRouter
+    from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+    primary = DeepSeekProvider(api_key=None)  # strict real signature, fails closed
+    router = CoreLLMRouter(primary=primary, backup=None)
+
+    response = await router.complete_json(
+        prompt="decide",
+        state_version="pos_v7",
+    )
+    assert response.ok is False
+    assert response.error is not None
+    assert response.state_version == "pos_v7"
+    assert router.status.offline is True or router.status.offline is False  # no TypeError

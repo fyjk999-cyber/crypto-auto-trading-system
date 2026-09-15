@@ -221,7 +221,9 @@ class CoreLLMRouter:
     async def _attempt_chain(self, **kwargs) -> LLMResponse:
         rebuilder = kwargs.pop("rebuilder", self.prompt_rebuilder)
         operation = kwargs.get("operation", "completion")
-        state_version = kwargs.get("state_version")
+        # state_version is response metadata bound by the router, not a provider
+        # kwarg: popping it keeps real DeepSeek/GLM signatures intact.
+        state_version = kwargs.pop("state_version", None)
         primary_response = await self.primary.complete_json(**kwargs)
         primary_attempts = int(getattr(self.primary, "last_attempt_count", None) or 1)
         primary_response.attempts = primary_attempts
