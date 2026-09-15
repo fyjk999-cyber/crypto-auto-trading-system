@@ -466,11 +466,14 @@ class TradingEngine:
         decisions: list[RiskDecision] = []
         await self._sync_offline_mode()
         if self.offline_mode.is_offline:
-            self.health.set("llm_offline_mode", True)
+            # ok=False means the offline flag is active (unhealthy condition).
+            self.health.set("llm_offline_mode", False, "LLM_OFFLINE_MODE")
             strategies = []
         else:
             strategies = list(self.strategies)
-            self.health.set("llm_offline_mode", False)
+            # ok=True means normal online operation; the actual offline state is
+            # also exposed verbatim in runtime_snapshot()["llm_offline_mode"].
+            self.health.set("llm_offline_mode", True, "NORMAL")
         for strategy in strategies:
             desired_symbol = None
             desired_getter = getattr(strategy, "desired_symbol", None)

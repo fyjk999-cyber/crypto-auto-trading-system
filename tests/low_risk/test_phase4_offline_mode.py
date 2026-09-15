@@ -210,10 +210,16 @@ async def test_engine_syncs_offline_state_from_router(database) -> None:
     await engine.tick()
     assert engine.offline_mode.is_offline is True
 
+    assert engine.health.snapshot()["components"]["llm_offline_mode"]["ok"] is False
+
     engine.llm_router.offline = False
     await engine.tick()
     assert engine.offline_mode.is_offline is False
-    assert engine.health.snapshot()["components"]["llm_offline_mode"]["ok"] is False
+    # OLD BEHAVIOR: online set ok=False -> overall health permanently UNHEALTHY.
+    # NEW BEHAVIOR: ok=True when normal, ok=False only while offline-mode active.
+    # WHY SUPERSEDED: the health registry reads ok=False as a failure, so the
+    # previous polarity made every online runtime report UNHEALTHY.
+    assert engine.health.snapshot()["components"]["llm_offline_mode"]["ok"] is True
     await engine.stop()
 
 
