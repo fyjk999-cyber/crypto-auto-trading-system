@@ -173,3 +173,40 @@ detached worktree at the pushed SHA.
 could not be performed offline, so the legs panel was not modified without a way to run
 `frontend-verify.sh`/tests. The backend `/position-legs` API (contracts + lineage, authority
 `NEW_REQUIRES_CORE_LLM`, `not_an_order`) remains available for the UI to consume.
+
+## NATURAL PAPER LIFECYCLE OBSERVED (window attempt #4, SHA 1ef721d6d491)
+
+Started 2026-09-16T05:57+08 in `/tmp/lr2-soak2` (clean DB at alembic head 0028, real OKX public
+data, real DeepSeek key, PAPER only, LIVE disabled, port 8010).
+
+Factual chain observed (no forcing, no fabrication):
+
+1. Real Core LLM decisions -> natural V2 TradePlans (`plan_version=2`, real Base Exit):
+   - `plan_443020240b35479780c814f12963ad18` MSTRUSDT SHORT, state ACTIVE,
+     base_exit = {"type":"PRICE","trigger":"128.5","size_pct":100.0,"reason_code":"STOP_LOSS"}.
+   - `plan_b04336a683844daeaf290227e80b51ba` AIUSDT SHORT, state APPROVED, V2 Base Exit
+     (trigger 0.02072, size_pct 100.0).
+2. Canonical PAPER execution:
+   - `ord_e528edf81f4f4fbebf2da14e74375a22` MSTRUSDT SELL 0.5 -> FILLED.
+   - natural fill `fill_205b343e5f6b47b6b3a72e6425c749a7` @ 128.09 (2026-09-15T21:59:30Z),
+     persisted `FILL_SETTLED` + `FILL_LINEAGE` (trade_complete chain).
+   - `ord_6a48ea30717444c9922a91d4e560f9ce` AIUSDT SELL 226 remains OPEN at snapshot.
+3. Canonical position (GET /positions): MSTRUSDT quantity -0.5, avg_entry 128.09,
+   leverage 1, instrument LINEAR_PERP, mark 128.30, unrealized_pnl -0.105.
+4. Position management: `LIVE_LLM_POSITION_DECISION` audit entries present (Core LLM
+   reassessing the live position); latest decision HOLD with
+   reason codes NO_INVALIDATION / TREND_REMAINS_BEARISH / PLAN_CONDITIONS_NOT_MET.
+5. `DETERMINISTIC_EXIT_LEG_KEY` audits show the active Base Exit registered for both plans.
+
+Exit leg (deterministic Base Exit fill -> Growth review) is still pending at snapshot time, so
+the lifecycle is IN PROGRESS, not complete. FINAL_STATUS remains PARTIAL until the exit and
+Growth review are observed and the >=72h soak completes.
+
+### Diagnostics added this window
+
+- `INVALID_LLM_OUTPUT` now carries the exact validation detail and raw keys (commit `1ef721d`).
+  First observed cause: `base_exit.size_pct` returned as 0 (must be >0). Committed prompt
+  clarification `ab83a42` ("size_pct ... (0,100], use 100 for full exit; 0 is invalid") for
+  future windows; the running acceptance window keeps SHA `1ef721d6d491` untouched.
+- Previous window attempt #3 (5269cd6) verified the V2 prompt but produced no trades before
+  being replaced for diagnostics.
