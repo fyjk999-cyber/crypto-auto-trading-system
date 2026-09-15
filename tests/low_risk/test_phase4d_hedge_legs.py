@@ -242,3 +242,33 @@ async def test_per_leg_quantities_track_dual_side_exposure(database) -> None:
     stored = await service.get("leg-long")
     assert stored is not None  # contract remains readable for review
     assert (await service.gross_exposure("BTCUSDT"))["long"] == Decimal("0")
+
+
+async def test_order_fills_are_attributed_per_leg_side(database) -> None:
+    from crypto_trader.domain.enums import OrderSide
+    from crypto_trader.execution.hedge_legs import PositionLegService
+
+    service = PositionLegService(database.session_factory)
+    assert (await service.register(LONG, trade_plan_id="p-long", quantity=Decimal("1"))).allowed
+    assert (
+        await service.register(_short(), trade_plan_id="p-short", quantity=Decimal("0.4"))
+    ).allowed
+
+    # LONG: BUY increases, SELL decreases.
+    assert await service.apply_order_fill("leg-long", OrderSide.BUY, Decimal("0.5")) == Decimal(
+        "1.5"
+    )
+    assert await service.apply_order_fill("leg-long", OrderSide.SELL, Decimal("1")) == Decimal(
+        "0.5"
+    )
+
+    # SHORT: SELL increases, BUY  never nets into the LONG leg.
+    assert await service.apply_order_fill("leg-short", OrderSide.SELL, Decimal("0.2")) == Decimal(
+        "0.6"
+    )
+    assert await service.apply_order_fill("leg-short", OrderSide.BUY, Decimal("6")) == Decimal("0")
+
+    exposure = await service.gross_exposure("BTCUSDT")
+    assert exposure["long"] == Decimal("0.5")
+    assert exposure["short"] == Decimal("0")
+    assert exposure["both_sides"] is False

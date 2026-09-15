@@ -252,6 +252,27 @@ class PositionLegService:
             await session.commit()
             return row.remaining_quantity
 
+    async def apply_order_fill(self, leg_id: str, order_side, quantity):
+        """Attribute a factual order fill to its leg with the correct sign.
+
+        LONG leg: BUY increases, SELL decreases. SHORT leg: SELL increases,
+        BUY decreases. This keeps one leg's fills from silently netting into
+        the other side of the same symbol.
+        """
+        from decimal import Decimal
+
+        contract = await self.get(leg_id)
+        if contract is None:
+            return None
+        side = str(getattr(order_side, "value", order_side)).upper()
+        signed = Decimal(str(quantity))
+        if contract.side == "LONG":
+            if side != "BUY":
+                signed = -signed
+        elif side != "SELL":
+            signed = -signed
+        return await self.apply_fill(leg_id, signed)
+
     async def gross_exposure(self, symbol: str) -> dict:
         """Per-side factual leg exposure (dual-side LONG+SHORT tracking)."""
         from decimal import Decimal
