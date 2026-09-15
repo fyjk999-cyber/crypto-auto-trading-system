@@ -21,6 +21,7 @@ from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.fresh_context import build_rebuild_kwargs
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.market_data.opportunity.board import OpportunityBoard
@@ -60,9 +61,11 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         opportunity_board: OpportunityBoard | None = None,
         evidence_router: PerSymbolEvidenceRouter | None = None,
         expert_engine=None,
+        fresh_context_provider=None,
     ) -> None:
         self.evidence_engine = evidence_engine
         self.chief = chief
+        self.fresh_context_provider = fresh_context_provider
         self.planner = planner
         self.decisions = decisions
         self.audit = audit
@@ -170,12 +173,24 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         episode_refs = list(chief_ctx.episode_refs)
         try:
             if self.tool_chief is None:
-                decision = await self.chief.decide(chief_ctx)
+                rebuild_kwargs = build_rebuild_kwargs(
+                    chief=self.chief,
+                    provider=self.fresh_context_provider,
+                    symbol=ctx.symbol,
+                    strategy_ctx=ctx,
+                )
+                decision = await self.chief.decide(chief_ctx, **rebuild_kwargs)
             else:
                 decision, package = await self.tool_chief.decide(
                     chief_ctx,
                     tool_context={"strategy_context": ctx},
                     now=now,
+                    **build_rebuild_kwargs(
+                        chief=self.chief,
+                        provider=self.fresh_context_provider,
+                        symbol=ctx.symbol,
+                        strategy_ctx=ctx,
+                    ),
                 )
                 if package is not None:
                     evidence = {
@@ -252,9 +267,9 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             )
             return []
         stop_price = Decimal(str(decision.stop_loss))
-        stop_is_directional = (
-            decision.action == "LONG" and stop_price < mid
-        ) or (decision.action == "SHORT" and stop_price > mid)
+        stop_is_directional = (decision.action == "LONG" and stop_price < mid) or (
+            decision.action == "SHORT" and stop_price > mid
+        )
         if not stop_is_directional:
             await self.audit.log(
                 "LIVE_LLM_SIZING_REJECTED",
@@ -267,12 +282,16 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
         volatility = ctx.realized_volatility or Decimal("0")
         best_bid = ctx.book.best_bid()
         best_ask = ctx.book.best_ask()
-        liquidity = Decimal("1") if (
-            best_bid is not None
-            and best_ask is not None
-            and best_bid.quantity > 0
-            and best_ask.quantity > 0
-        ) else Decimal("0")
+        liquidity = (
+            Decimal("1")
+            if (
+                best_bid is not None
+                and best_ask is not None
+                and best_bid.quantity > 0
+                and best_ask.quantity > 0
+            )
+            else Decimal("0")
+        )
         sized = self.sizer.size(
             side=decision.action.value,
             requested_quantity=Decimal(str(decision.position_size_request)),
@@ -336,9 +355,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
                     "volatility": str(volatility),
                     "liquidity": str(liquidity),
                     "max_loss_estimate": str(sized.max_loss_estimate),
-                    "portfolio_exposure_after_trade": str(
-                        sized.portfolio_exposure_after_trade
-                    ),
+                    "portfolio_exposure_after_trade": str(sized.portfolio_exposure_after_trade),
                     "sizing_reason_codes": list(sized.sizing_reason_codes),
                 },
             )
@@ -409,9 +426,7 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             "open_interest": str(ctx.oi) if ctx.oi is not None else None,
             "basis": str(ctx.basis) if ctx.basis is not None else None,
             "realized_volatility": (
-                str(ctx.realized_volatility)
-                if ctx.realized_volatility is not None
-                else None
+                str(ctx.realized_volatility) if ctx.realized_volatility is not None else None
             ),
             "source": "OKX_PUBLIC",
             "instrument": (

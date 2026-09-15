@@ -15,6 +15,7 @@ from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision import OpenAction, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
+from crypto_trader.llm_chief.fresh_context import build_rebuild_kwargs
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.strategy.base import StrategyContext
@@ -65,16 +66,12 @@ class LiveLLMPositionManager:
         evidence; returning None raises so the router fails safe instead of
         replaying the stale prompt.
         """
-        if self.fresh_context_provider is None:
-            return {}
-
-        async def rebuild_context():
-            fresh = await self.fresh_context_provider(position.symbol, ctx)
-            if fresh is None:
-                raise RuntimeError("NO_FRESH_CONTEXT")
-            return self.chief.render_prompt(fresh), getattr(fresh, "state_version", None)
-
-        return {"rebuild_context": rebuild_context}
+        return build_rebuild_kwargs(
+            chief=self.chief,
+            provider=self.fresh_context_provider,
+            symbol=position.symbol,
+            strategy_ctx=ctx,
+        )
 
     async def review(
         self, ctx: StrategyContext, position: Position, *, force: bool = False
