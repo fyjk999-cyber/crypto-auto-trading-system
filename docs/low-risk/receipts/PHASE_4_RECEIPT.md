@@ -310,3 +310,11 @@ Test evidence (`tests/low_risk/test_phase4_offline_mode.py`, 6):
 
 - P0: none (router cannot place orders; DeepSeek path unchanged).
 - P1: router not yet wired; latency tracker in-process only (not persisted).
+
+## L1 wake bypass (COMPLETE, commit 26d480c)
+
+Risk L1 is a material event:  bypasses the ordinary review
+cooldown, and  passes  from the deterministic exit scan (wake intents
+marked ). Test  proves the immediate
+reassessment and the unchanged ordinary cadence. Chunk regression: 89 passed (spac/lifecycle/bootstrap/
+llm_chief/chaos/e2e); low_risk focused 13 passed.
