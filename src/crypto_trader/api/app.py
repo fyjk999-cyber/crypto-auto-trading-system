@@ -32,6 +32,7 @@ from crypto_trader.perpetual.domain import PerpetualContract, PositionSide
 from crypto_trader.perpetual.engine import PerpetualPaperEngine
 from crypto_trader.persistence.models import (
     LLMDecisionORM,
+    PositionLegORM,
     TradeEpisodeORM,
     TradePlanORM,
 )
@@ -278,6 +279,46 @@ def create_app(state: AppState) -> FastAPI:
                     for r in rows
                 ],
                 "count": len(rows),
+            }
+
+    @app.get("/position-legs")
+    async def position_legs(symbol: str | None = None, limit: int = 100):
+        async with state.database.session_factory() as session:
+            stmt = (
+                select(PositionLegORM)
+                .order_by(PositionLegORM.created_at.desc())
+                .limit(max(1, min(limit, 500)))
+            )
+            if symbol:
+                stmt = stmt.where(PositionLegORM.symbol == symbol)
+            rows = (await session.execute(stmt)).scalars().all()
+            return {
+                "position_legs": [
+                    {
+                        "leg_id": r.leg_id,
+                        "symbol": r.symbol,
+                        "side": r.side,
+                        "kind": r.kind,
+                        "strategy": r.strategy,
+                        "thesis": r.thesis,
+                        "base_exit": r.base_exit_json,
+                        "invalidation": r.invalidation,
+                        "evidence_families": r.evidence_families_json or [],
+                        "reason": r.reason,
+                        "reverse_of": r.reverse_of,
+                        "trade_plan_id": r.trade_plan_id,
+                        "decision_id": r.decision_id,
+                        "state_version": r.state_version,
+                        "state": r.state,
+                        "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                        "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    }
+                    for r in rows
+                ],
+                "count": len(rows),
+                "authority": "NEW_RISK_REQUIRES_CORE_LLM",
+                "not_an_order": True,
             }
 
     @app.get("/trade-episodes")

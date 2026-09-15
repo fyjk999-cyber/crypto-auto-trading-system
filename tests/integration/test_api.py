@@ -190,3 +190,48 @@ async def test_api_read_only_trade_plan_episode_and_decision_detail_endpoints(da
     assert detail.status_code == 200
     assert detail.json()["tool_refs"] == ["funding", "orderbook"]
     assert detail.json()["model_provider"] == "deepseek"
+
+
+def test_position_legs_endpoint_exposes_independence_contract(database):
+    import asyncio
+
+    from crypto_trader.execution.hedge_legs import (
+        HedgeLegContract,
+        LegKind,
+        PositionLegService,
+    )
+
+    service = PositionLegService(database.session_factory)
+    contract = HedgeLegContract(
+        leg_id="leg-api-1",
+        symbol="BTCUSDT",
+        side="SHORT",
+        kind=LegKind.HEDGE,
+        strategy="MEAN_REVERT",
+        thesis="independent mean-reversion short thesis",
+        base_exit={"type": "PRICE", "trigger": "<=104", "size_pct": 100},
+        invalidation="acceptance above 105",
+        evidence_families=["model:mean_reversion"],
+        reason="independent reversal thesis",
+    )
+    asyncio.run(
+        service.register(
+            contract,
+            trade_plan_id="plan-hedge",
+            decision_id="d-hedge",
+            state_version="v1",
+        )
+    )
+
+    response = TestClient(create_app(make_state(database))).get(
+        "/position-legs", params={"symbol": "BTCUSDT"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["not_an_order"] is True
+    leg = body["position_legs"][0]
+    assert leg["leg_id"] == "leg-api-1"
+    assert leg["kind"] == "HEDGE"
+    assert leg["base_exit"]["trigger"] == "<=104"
+    assert leg["evidence_families"] == ["model:mean_reversion"]
