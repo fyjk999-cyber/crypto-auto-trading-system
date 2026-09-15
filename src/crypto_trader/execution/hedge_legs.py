@@ -12,6 +12,7 @@ pass the canonical TradePlan + ExecutionAuthority path.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 
 from sqlalchemy import select
@@ -323,3 +324,44 @@ class PositionLegService:
             reason=row.reason,
             reverse_of=row.reverse_of,
         )
+
+
+class LegPositionReconciler:
+    """Compare leg-level facts with the canonical net position.
+
+    Until this reports MATCHED the portfolio cannot treat legs as the source of
+    truth, so hedge execution must stay fail-closed. This is read-only
+    book-keeping and never submits an order.
+    """
+
+    authority = "RECONCILIATION_ONLY"
+    is_order = False
+
+    def __init__(self, leg_service: PositionLegService, tolerance=Decimal("0.00000001")) -> None:
+        self.leg_service = leg_service
+        self.tolerance = Decimal(str(tolerance))
+
+    async def reconcile(self, symbol: str, net_quantity) -> dict:
+        exposure = await self.leg_service.gross_exposure(symbol)
+        computed_net = (exposure["long"] - exposure["short"]).quantize(self.tolerance)
+        net = Decimal(str(net_quantity or 0))
+        diff = net - computed_net
+        if abs(diff) <= self.tolerance:
+            status = "MATCHED"
+        elif computed_net == 0 and net != 0:
+            status = "UNTRACKED_NET_POSITION"
+        else:
+            status = "DIVERGED"
+        return {
+            "symbol": symbol,
+            "net_quantity": net,
+            "leg_long": exposure["long"],
+            "leg_short": exposure["short"],
+            "computed_net": computed_net,
+            "difference": diff,
+            "status": status,
+            "leg_count": exposure["leg_count"],
+            "leg_execution_safe": status == "MATCHED",
+            "authority": self.authority,
+            "is_order": False,
+        }
