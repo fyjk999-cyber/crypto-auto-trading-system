@@ -314,3 +314,7 @@ Test evidence (`tests/low_risk/test_phase4_offline_mode.py`, 6):
 ## L1 wake bypass (COMPLETE, commit 26d480c)
 
 Risk L1 is a material event: the position manager review accepts force=True to bypass the ordinary review cooldown, and the engine passes force=wake_required from the deterministic exit scan. Test test_phase4_l1_wake.py proves the immediate reassessment and the unchanged ordinary cadence. Chunk regression: 89 passed; low_risk focused 13 passed.
+
+## Phase 4A progress (commits 1eb647f, 3f3ad2b, this)
+
+Fresh-state failover seam: CoreLLMRouter.complete_json accepts a per-call prompt_rebuilder; ChiefTraderEngine.decide forwards rebuild_context; ToolDrivenChiefTrader forwards it through the tool path; LiveLLMPositionManager accepts an injected fresh_context_provider and builds the rebuild callable (fresh context must carry state_version, else RouterError NO_FRESH_CONTEXT); ChiefTraderContext gains an optional state_version field. Tests: 4 new across test_phase4_llm_failover.py, test_phase4a_tool_rebuild.py, test_phase4_l1_wake.py. Remaining 4A: supply the provider from bootstrap/TradingEngine with real portfolio/plan/order/market facts and do the same wiring in LiveLLMDecisionStrategy.

@@ -24,6 +24,9 @@ class ChiefTraderContext:
     compressed_experience: list[dict] = field(default_factory=list)
     failure_warnings: list[str] = field(default_factory=list)
     memory_refs: list[str] = field(default_factory=list)
+    # Low-Risk V2: factual state version this context was built from; a
+    # failover rebuild must carry the newest version or be rejected as stale.
+    state_version: str | None = None
     research_refs: list[str] = field(default_factory=list)
     episode_refs: list[str] = field(default_factory=list)
     pattern_refs: list[str] = field(default_factory=list)

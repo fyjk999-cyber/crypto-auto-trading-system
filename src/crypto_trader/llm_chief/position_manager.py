@@ -41,6 +41,7 @@ class LiveLLMPositionManager:
         context_loader: ChiefContextLoader | None = None,
         attempt_clock: Callable[[], datetime] | None = None,
         expert_engine=None,
+        fresh_context_provider=None,
     ) -> None:
         self.chief = chief
         self.evidence_engine = evidence_engine
@@ -54,7 +55,26 @@ class LiveLLMPositionManager:
         self.attempt_clock = attempt_clock or (lambda: datetime.now(UTC))
         # Low-Risk V2 Phase 2: 25-model factual evidence package (evidence only).
         self.expert_engine = expert_engine
+        self.fresh_context_provider = fresh_context_provider
         self._last_review_attempt: dict[str, datetime] = {}
+
+    def _rebuild_kwargs(self, position: Position, ctx: StrategyContext) -> dict:
+        """Build the fresh-state rebuilder passed to the Core LLM on failover.
+
+        The provider must re-fetch current position/fills/pending/plan/price/
+        evidence; returning None raises so the router fails safe instead of
+        replaying the stale prompt.
+        """
+        if self.fresh_context_provider is None:
+            return {}
+
+        async def rebuild_context():
+            fresh = await self.fresh_context_provider(position.symbol, ctx)
+            if fresh is None:
+                raise RuntimeError("NO_FRESH_CONTEXT")
+            return self.chief.render_prompt(fresh), getattr(fresh, "state_version", None)
+
+        return {"rebuild_context": rebuild_context}
 
     async def review(
         self, ctx: StrategyContext, position: Position, *, force: bool = False
@@ -138,12 +158,13 @@ class LiveLLMPositionManager:
         episode_refs = list(chief_ctx.episode_refs)
         try:
             if self.tool_chief is None:
-                decision = await self.chief.decide(chief_ctx)
+                decision = await self.chief.decide(chief_ctx, **self._rebuild_kwargs(position, ctx))
             else:
                 decision, package = await self.tool_chief.decide(
                     chief_ctx,
                     tool_context={"strategy_context": ctx},
                     now=now,
+                    **self._rebuild_kwargs(position, ctx),
                 )
                 if package is not None:
                     evidence = {

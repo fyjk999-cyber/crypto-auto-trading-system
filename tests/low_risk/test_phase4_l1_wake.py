@@ -65,9 +65,14 @@ class _Audit:
 class _Chief:
     def __init__(self):
         self.calls = 0
+        self.last_rebuild = None
 
-    async def decide(self, ctx):
+    def render_prompt(self, ctx):
+        return f"PROMPT {ctx.symbol}"
+
+    async def decide(self, ctx, *, rebuild_context=None):
         self.calls += 1
+        self.last_rebuild = rebuild_context
         return ChiefTraderDecision(
             decision_id=f"pos-{self.calls}",
             symbol=ctx.symbol,
@@ -127,3 +132,55 @@ async def test_risk_l1_force_bypasses_review_cooldown() -> None:
     assert await manager.review(ctx, position, force=True) is None
     assert chief.calls == 2
     assert decisions.saved == 2
+
+
+async def test_position_review_passes_fresh_context_rebuilder() -> None:
+    chief = _Chief()
+    decisions = _Decisions()
+
+    async def fresh_provider(symbol, ctx):
+        fresh = _ctx()
+        fresh.state_version = "v42"
+        return fresh
+
+    manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=_Evidence(),
+        decisions=decisions,
+        plans=_Plans(),
+        audit=_Audit(),
+        review_cooldown_seconds=30.0,
+        attempt_clock=lambda: NOW,
+        fresh_context_provider=fresh_provider,
+    )
+    ctx = _ctx()
+    await manager.review(ctx, ctx.positions["BTCUSDT"])
+
+    assert chief.last_rebuild is not None
+    prompt, version = await chief.last_rebuild()
+    assert version == "v42"
+    assert "BTCUSDT" in prompt
+
+
+async def test_fresh_provider_returning_none_fails_safe() -> None:
+    chief = _Chief()
+
+    async def fresh_provider(symbol, ctx):
+        return None
+
+    manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=_Evidence(),
+        decisions=_Decisions(),
+        plans=_Plans(),
+        audit=_Audit(),
+        review_cooldown_seconds=30.0,
+        attempt_clock=lambda: NOW,
+        fresh_context_provider=fresh_provider,
+    )
+    ctx = _ctx()
+    await manager.review(ctx, ctx.positions["BTCUSDT"])
+    import pytest
+
+    with pytest.raises(RuntimeError, match="NO_FRESH_CONTEXT"):
+        await chief.last_rebuild()
