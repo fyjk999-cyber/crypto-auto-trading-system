@@ -18,6 +18,11 @@ class LLMResponse:
     ok: bool = True
     error: str | None = None
     token_usage: dict | None = None
+    # Low-Risk V2 Phase 4: factual state binding so a stale model answer can
+    # never be executed after fills/exits changed the position.
+    state_version: str | None = None
+    attempts: int | None = None
+    served_by: str | None = None
 
 
 class LLMProvider(Protocol):
@@ -233,6 +238,192 @@ class DeepSeekProvider:
     def diagnostics(self) -> dict:
         """Return non-secret operational state for health reporting."""
 
+        return {
+            "provider": self.name,
+            "model": self.model,
+            "configured": self.healthy(),
+            "last_success_ts": self.last_success_ts,
+            "last_error": self.last_error,
+            "last_latency_ms": self.last_latency_ms,
+            "last_token_usage": self.last_token_usage,
+            "last_attempt_count": self.last_attempt_count,
+            "operations": {
+                operation: dict(values)
+                for operation, values in self._operation_diagnostics.items()
+            },
+        }
+
+
+class GLMProvider:
+    """Backup Core LLM provider (Zhipu GLM, OpenAI-compatible endpoint).
+
+    Same ``LLMProvider`` Protocol as DeepSeek: one bounded immediate retry and
+    fail-closed JSON handling. Callers must pass Freshest factual state; this
+    provider itself never replays a stale prompt.
+    """
+
+    name = "glm"
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        transport=None,
+    ) -> None:
+        self.api_key = api_key or os.environ.get("GLM_API_KEY")
+        self.model = model or os.environ.get("GLM_MODEL", "glm-4-flash")
+        self.base_url = base_url or os.environ.get(
+            "GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
+        )
+        self._transport = transport
+        self.last_success_ts: str | None = None
+        self.last_error: str | None = None
+        self.last_latency_ms: float | None = None
+        self.last_token_usage: dict | None = None
+        self.last_attempt_count: int | None = None
+        self._operation_diagnostics: dict[str, dict] = {}
+
+    def healthy(self) -> bool:
+        return bool(self.api_key)
+
+    async def complete_json(
+        self,
+        *,
+        prompt: str,
+        temperature: float = 0.2,
+        timeout_seconds: float = 30.0,
+        retries: int = 1,
+        max_tokens: int = 1200,
+        thinking: bool = True,
+        reasoning_effort: str = "low",
+        operation: str = "completion",
+    ) -> LLMResponse:
+        import json
+        import time
+
+        del thinking, reasoning_effort  # GLM endpoint takes a single JSON contract
+        if not self.api_key:
+            result = LLMResponse(
+                text="",
+                provider=self.name,
+                model=self.model,
+                latency_ms=0,
+                ok=False,
+                error="NO_API_KEY",
+            )
+            self._record_operation(operation, result, attempts=0)
+            return result
+        import httpx
+
+        start = time.monotonic()
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=timeout_seconds,
+            transport=self._transport,
+        ) as client:
+            last_invalid: LLMResponse | None = None
+            for attempt in range(retries + 1):
+                self.last_attempt_count = attempt + 1
+                try:
+                    response = await client.post(
+                        "/chat/completions",
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        json={
+                            "model": self.model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "temperature": temperature,
+                            "max_tokens": max_tokens,
+                            "response_format": {"type": "json_object"},
+                        },
+                    )
+                    if response.status_code != 200:
+                        self.last_error = f"HTTP_{response.status_code}"
+                        if response.status_code != 429 and response.status_code < 500:
+                            break
+                        continue
+                    try:
+                        payload = response.json()
+                        content = payload["choices"][0]["message"]["content"]
+                        if not isinstance(content, str):
+                            raise TypeError("content is not text")
+                    except (ValueError, KeyError, IndexError, TypeError):
+                        self.last_error = "MALFORMED_PROVIDER_RESPONSE"
+                        break
+                    latency_ms = (time.monotonic() - start) * 1000
+                    usage = payload.get("usage")
+                    try:
+                        parsed = json.loads(content)
+                    except json.JSONDecodeError:
+                        self.last_error = "INVALID_JSON"
+                        self.last_latency_ms = latency_ms
+                        self.last_token_usage = usage
+                        last_invalid = LLMResponse(
+                            text=content,
+                            provider=self.name,
+                            model=self.model,
+                            latency_ms=latency_ms,
+                            ok=False,
+                            error=self.last_error,
+                            token_usage=usage,
+                        )
+                        if attempt < retries:
+                            continue
+                        self._record_operation(operation, last_invalid, attempts=attempt + 1)
+                        return last_invalid
+                    if not isinstance(parsed, dict):
+                        self.last_error = "INVALID_JSON_OBJECT"
+                        break
+                    result = LLMResponse(
+                        text=content,
+                        provider=self.name,
+                        model=self.model,
+                        latency_ms=latency_ms,
+                        parsed_json=parsed,
+                        ok=True,
+                        token_usage=usage,
+                    )
+                    self.last_success_ts = datetime.now(UTC).isoformat()
+                    self.last_error = None
+                    self.last_latency_ms = latency_ms
+                    self.last_token_usage = usage
+                    self._record_operation(operation, result, attempts=attempt + 1)
+                    return result
+                except httpx.TimeoutException:
+                    self.last_error = "LLM_TIMEOUT"
+                    continue
+                except httpx.HTTPError:
+                    self.last_error = "LLM_TRANSPORT_ERROR"
+                    continue
+            if last_invalid is not None:
+                return last_invalid
+            result = LLMResponse(
+                text="",
+                provider=self.name,
+                model=self.model,
+                latency_ms=(time.monotonic() - start) * 1000,
+                ok=False,
+                error=self.last_error or "LLM_PROVIDER_ERROR",
+            )
+            self.last_latency_ms = result.latency_ms
+            self._record_operation(
+                operation, result, attempts=self.last_attempt_count or retries + 1
+            )
+            return result
+
+    def _record_operation(self, operation: str, response: LLMResponse, *, attempts: int) -> None:
+        previous = self._operation_diagnostics.get(operation, {})
+        self._operation_diagnostics[operation] = {
+            "last_success_ts": (
+                datetime.now(UTC).isoformat() if response.ok else previous.get("last_success_ts")
+            ),
+            "last_error": response.error,
+            "last_latency_ms": response.latency_ms,
+            "last_token_usage": response.token_usage,
+            "last_attempt_count": attempts,
+        }
+
+    def diagnostics(self) -> dict:
         return {
             "provider": self.name,
             "model": self.model,
