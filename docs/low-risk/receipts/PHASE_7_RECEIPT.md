@@ -101,3 +101,49 @@ Real PAPER soak (genuine, no fabricated evidence):
 Hazard: the main implementation worktree carries the concurrent writer's uncommitted (and
 currently startup-breaking) `llm_chief` edits; the soak deliberately runs from the clean
 detached worktree at the pushed SHA.
+
+## P0 FOUND IN REAL PAPER SOAK + FIX (round 60) - f392074e4817
+
+### Factual evidence (first soak window, SHA 666c1a2418ac, DB preserved)
+
+- Real Core LLM decision `llm_ae03aa89b02e4197ac86b0751d58fe2a` (CAPUSDT SHORT, 2026-09-15T21:18:16Z).
+- TradePlan `plan_487c03568218493698f8f687a3aba429`: `plan_version=1`,
+  `base_exit_json=null`, `based_on_state_version=null`.
+- Order `ord_208a5fde163148559b47b67189b80f05` (SELL 122 CAPUSDT) -> 6 partial fills
+  (`fill_57190f...` ... `fill_62682a...`) -> FILLED; plan stayed ACTIVE, no exit order.
+- Soak restart then lost the in-memory PAPER simulator position; the DB still held the
+  factual fills, and recovery did not detect the divergence.
+
+### P0 classification
+
+1. **Trade without Base Exit**: `derive_execution_terms` returned `order_contract=None`
+   for legacy (plan_version<2) entries, bypassing the execution hard contract, so a real
+   PAPER entry without any Base Exit was submitted. This is on the SPEC P0 list.
+2. **Untracked factual exposure after restart**: local factual fills implied a short
+   position the portfolio/exchange did not show; recovery neither halted nor flagged it.
+
+### Fix (commit `f392074e4817`, tests 214 passed low_risk+bootstrap+api)
+
+- `execution/contract.py`: legacy entries no longer bypass the contract. Every new-risk
+  child builds `NewRiskOrderContract` with `base_exit_present` (plan or metadata), the
+  Core-LLM allocation and leverage; missing Base Exit -> `BASEEXIT_MISSING`, missing
+  allocation -> `NEW_RISK_ALLOCATION_MISSING`, >25% -> `NEW_RISK_CHILD_OVER_25PCT_EQUITY`,
+  >20x -> `LEVERAGE_OVER_20X`; rejection never resizes. New observation mode
+  `V2_HARD_CONTRACT_APPLIED_TO_LEGACY_PLAN`. Reduces/exits keep the legacy path.
+- `tests/low_risk/test_phase4_risk_gate_adapt.py` updated with
+  OLD BEHAVIOR / NEW BEHAVIOR / WHY SUPERSEDED (real P0 order id cited).
+- `runtime/engine.py`: `_run_recovery` compares signed DB fill exposure per symbol with the
+  live portfolio; divergence -> audit `RECOVERY_FACTUAL_DIVERGENCE`,
+  `reconciliation_halted=True` (existing authority rejects new risk),
+  health `recovery_factual_state=False`; matching state -> ok=True.
+- `tests/low_risk/test_phase6_lineage.py`: seeded CAPUSDT SELL 122 fill with no portfolio
+  position -> recovery returns the divergence flag, halts and audits it.
+
+### Soak consequence
+
+- First window stopped on detection and its DB kept as evidence at
+  `/tmp/lr2-soak/data/crypto_trader.db` (order/plan/decision ids above).
+- New clean window started 2026-09-16T05:42+08 from `/tmp/lr2-soak2` at `f392074e4817`
+  (fresh DB, real OKX public data, real DeepSeek, PAPER only, LIVE disabled);
+  `/health` OVERALL OK at start. Scheduled checks `cron-42` (day 1) and `cron-43` (>=72h).
+- FINAL_STATUS stays PARTIAL: the prior window cannot count toward the 72h gate.
