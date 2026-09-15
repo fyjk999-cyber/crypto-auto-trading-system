@@ -116,3 +116,43 @@ def test_registry_tracks_both_sides_and_rejects_illegal_hedge() -> None:
     assert snapshot["both_sides"] is True
     assert snapshot["not_an_order"] is True
     assert len(snapshot["legs"]) == 2
+
+
+async def test_position_leg_service_persists_only_legal_legs(database) -> None:
+    from crypto_trader.execution.hedge_legs import PositionLegService
+
+    service = PositionLegService(database.session_factory)
+    first = await service.register(
+        LONG, trade_plan_id="plan-1", decision_id="d1", state_version="v1"
+    )
+    assert first.allowed is True
+
+    illegal = await service.register(
+        _short(reason="reduce loss on the original LONG"),
+        trade_plan_id="plan-2",
+        decision_id="d2",
+        state_version="v1",
+    )
+    assert illegal.allowed is False
+
+    stored = await service.list_for_symbol("BTCUSDT")
+    assert len(stored) == 1
+    assert stored[0].leg_id == "leg-long"
+
+    independent = await service.register(
+        _short(), trade_plan_id="plan-3", decision_id="d3", state_version="v2"
+    )
+    assert independent.allowed is True
+    reloaded = await service.get("leg-short")
+    assert reloaded is not None
+    assert reloaded.kind == LegKind.HEDGE
+    assert reloaded.base_exit == {"type": "PRICE", "trigger": "<=104"}
+    assert reloaded.evidence_families == ["mean_reversion", "orderbook"]
+
+
+async def test_migration_0025_creates_position_legs_table(database) -> None:
+    from sqlalchemy import inspect
+
+    async with database.engine.begin() as conn:
+        names = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names())
+    assert "position_legs" in names

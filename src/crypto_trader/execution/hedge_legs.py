@@ -81,9 +81,7 @@ def validate_hedge_leg(
         violations.append("MISSING_EVIDENCE_FAMILIES")
 
     opposite = [
-        leg
-        for leg in existing
-        if leg.symbol == contract.symbol and leg.side != contract.side
+        leg for leg in existing if leg.symbol == contract.symbol and leg.side != contract.side
     ]
     needs_independence = contract.kind in {LegKind.HEDGE, LegKind.REVERSE} or bool(opposite)
     if needs_independence:
@@ -119,9 +117,7 @@ class HedgeLegRegistry:
         return any(leg.symbol == symbol and leg.side != side for leg in self._legs.values())
 
     def snapshot(self, symbol: str | None = None) -> dict:
-        legs = (
-            self.legs_for(symbol) if symbol is not None else list(self._legs.values())
-        )
+        legs = self.legs_for(symbol) if symbol is not None else list(self._legs.values())
         return {
             "legs": [
                 {
@@ -136,9 +132,112 @@ class HedgeLegRegistry:
                 }
                 for leg in legs
             ],
-            "both_sides": (
-                {leg.side for leg in legs} == {"LONG", "SHORT"} if legs else False
-            ),
+            "both_sides": ({leg.side for leg in legs} == {"LONG", "SHORT"} if legs else False),
             "authority": "NEW_RISK_REQUIRES_CORE_LLM",
             "not_an_order": True,
         }
+
+
+class PositionLegService:
+    """Durable leg storage + independent-hedge validation (Phase 4D).
+
+    Legs are persisted in the canonical `position_legs` table. Registration of
+    an illegal hedge is rejected and never stored, so the DB cannot become a
+    second source of truth for a loss-mitigation "hedge".
+    """
+
+    def __init__(self, session_factory) -> None:
+        self._session_factory = session_factory
+
+    async def save(
+        self,
+        contract: HedgeLegContract,
+        *,
+        trade_plan_id: str | None = None,
+        decision_id: str | None = None,
+        state_version: str | None = None,
+        state: str = "OPEN",
+        opened_at=None,
+    ) -> None:
+        from crypto_trader.persistence.models import PositionLegORM  # local: avoid cycles
+
+        async with self._session_factory() as session:
+            row = await session.get(PositionLegORM, contract.leg_id)
+            if row is None:
+                row = PositionLegORM(leg_id=contract.leg_id)
+                session.add(row)
+            row.symbol = contract.symbol
+            row.side = contract.side
+            row.kind = contract.kind.value
+            row.strategy = contract.strategy
+            row.thesis = contract.thesis
+            row.base_exit_json = contract.base_exit
+            row.invalidation = contract.invalidation or ""
+            row.evidence_families_json = list(contract.evidence_families)
+            row.reason = contract.reason
+            row.reverse_of = contract.reverse_of
+            row.trade_plan_id = trade_plan_id
+            row.decision_id = decision_id
+            row.state_version = state_version
+            row.state = state
+            row.opened_at = opened_at
+            await session.commit()
+
+    async def get(self, leg_id: str) -> HedgeLegContract | None:
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            row = await session.get(PositionLegORM, leg_id)
+            return self._to_contract(row) if row is not None else None
+
+    async def list_for_symbol(self, symbol: str) -> list[HedgeLegContract]:
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PositionLegORM).where(PositionLegORM.symbol == symbol)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [self._to_contract(row) for row in rows]
+
+    async def register(
+        self,
+        contract: HedgeLegContract,
+        *,
+        trade_plan_id: str | None = None,
+        decision_id: str | None = None,
+        state_version: str | None = None,
+    ) -> LegValidation:
+        existing = await self.list_for_symbol(contract.symbol)
+        validation = validate_hedge_leg(contract, existing)
+        if validation.allowed:
+            await self.save(
+                contract,
+                trade_plan_id=trade_plan_id,
+                decision_id=decision_id,
+                state_version=state_version,
+            )
+        return validation
+
+    @staticmethod
+    def _to_contract(row) -> HedgeLegContract:
+        return HedgeLegContract(
+            leg_id=row.leg_id,
+            symbol=row.symbol,
+            side=row.side,
+            kind=LegKind(row.kind),
+            strategy=row.strategy,
+            thesis=row.thesis,
+            base_exit=row.base_exit_json,
+            invalidation=row.invalidation,
+            evidence_families=list(row.evidence_families_json or []),
+            reason=row.reason,
+            reverse_of=row.reverse_of,
+        )

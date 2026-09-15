@@ -981,3 +981,37 @@ class ResearchOptimizationORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     strategy_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PositionLegORM(Base):
+    """Low-Risk V2 position leg (Phase 4D): LONG/SHORT legs on one symbol.
+
+    The contract JSON fields let a hedge/reverse leg prove its independence
+    (strategy, thesis, Base Exit, invalidation, model-family evidence) and the
+    lineage columns bind the leg to Plan/Decision/state version.
+    """
+
+    __tablename__ = "position_legs"
+    __table_args__ = (UniqueConstraint("leg_id", name="uq_position_legs_leg_id"),)
+
+    leg_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="ENTRY")
+    strategy: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    thesis: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    base_exit_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    invalidation: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    evidence_families_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    reverse_of: Mapped[str | None] = mapped_column(String(64))
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    decision_id: Mapped[str | None] = mapped_column(String(64))
+    state_version: Mapped[str | None] = mapped_column(String(128))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="OPEN")
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
