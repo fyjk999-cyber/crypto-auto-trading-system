@@ -140,3 +140,46 @@ async def test_enabled_hedge_passes_gate_when_reconciled(database) -> None:
     # The hedge gate itself passed; any later rejection is plan validation.
     assert any("PLAN" in action for action in actions)
     await engine.stop()
+
+
+async def test_restart_keeps_leg_reconciliation_gate_fail_closed(database) -> None:
+    """After a process restart the hedge gate must still trust factual reconciliation."""
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AuditEventORM
+    from tests.conftest import make_paper_engine
+    from tests.low_risk.test_phase4_runtime_deterministic_exit import _open_v2_position
+
+    engine_a = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine_a.start("run-restart-a")
+    assert await engine_a._strategy_context("BTCUSDT") is not None
+    await _open_v2_position(engine_a, database)
+    await engine_a.wait_for_event_queue()
+    factual_position = await engine_a.portfolio.get_position("BTCUSDT")
+    assert factual_position is not None and factual_position.quantity > 0
+    await engine_a.stop()
+
+    # New process: same DB, same canonical services, fresh in-memory state.
+    engine_b = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine_b.start("run-restart-b")
+    restored = await engine_b.portfolio.get_position("BTCUSDT")
+    assert restored is not None and restored.quantity == factual_position.quantity
+    service = PositionLegService(database.session_factory)
+    engine_b.leg_service = service
+    engine_b.leg_reconciler = LegPositionReconciler(service)
+
+    # The deterministic deposit has no leg rows, so legs cannot yet be the
+    # source of truth: the gate reports the net position as untracked.
+    reconciliation = await engine_b.leg_reconciler.reconcile("BTCUSDT", restored.quantity)
+    assert reconciliation["leg_execution_safe"] is False
+
+    # Even with leg execution switched on, hedge submission stays blocked.
+    engine_b.leg_execution_enabled = True
+    signal = await _hedge_signal()
+    assert await engine_b.process_signal(signal) is None
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "HEDGE_EXECUTION_BLOCKED_LEG_DIVERGENCE" in actions
+    await engine_b.stop()
