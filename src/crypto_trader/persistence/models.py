@@ -438,6 +438,108 @@ class MarketSnapshotORM(Base):
     status: Mapped[str] = mapped_column(String(16))
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     exchange: Mapped[str] = mapped_column(String(16), default="SIM")
+    # Computed orderbook metrics (spread, depth, microprice, imbalance). Added for
+    # execution observability v2; this table had no writers before that, so the
+    # extra nullable column cannot change any behaviour.
+    metrics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class EntryExecutionEvidenceORM(Base):
+    """One row per ENTRY intent: what was wanted vs what the market allowed.
+
+    Phase E0 evidence only - appended for later analysis and never read on a
+    decision path, so recording it cannot change trading behaviour.
+    """
+
+    __tablename__ = "entry_execution_evidence"
+
+    evidence_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    order_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(64))
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[str | None] = mapped_column(String(8))
+    chief_direction: Mapped[str | None] = mapped_column(String(16))
+
+    # Three distinct exposures that must never be conflated.
+    target_quantity: Mapped[str | None] = mapped_column(String(64))
+    target_notional: Mapped[str | None] = mapped_column(String(64))
+    risk_approved_max_quantity: Mapped[str | None] = mapped_column(String(64))
+    risk_approved_max_notional: Mapped[str | None] = mapped_column(String(64))
+    requested_order_quantity: Mapped[str | None] = mapped_column(String(64))
+    requested_order_notional: Mapped[str | None] = mapped_column(String(64))
+    actual_opened_quantity: Mapped[str | None] = mapped_column(String(64))
+    actual_opened_notional: Mapped[str | None] = mapped_column(String(64))
+
+    exposure_realization_ratio: Mapped[str | None] = mapped_column(String(64))
+    leverage: Mapped[str | None] = mapped_column(String(32))
+    limit_price: Mapped[str | None] = mapped_column(String(64))
+
+    pre_submit_snapshot_id: Mapped[int | None] = mapped_column(Integer)
+    pre_submit_metrics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # Depth on the side this entry would CONSUME, recorded beside the metrics so
+    # executability can later be studied without re-reading a stale book.
+    executable_side: Mapped[str | None] = mapped_column(String(8))
+    executable_depth_l1: Mapped[str | None] = mapped_column(String(64))
+    executable_depth_l5: Mapped[str | None] = mapped_column(String(64))
+    executable_depth_l10: Mapped[str | None] = mapped_column(String(64))
+
+    quality: Mapped[str] = mapped_column(String(16), default="OK")
+    reason_codes_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EntryOrderbookSampleORM(Base):
+    """Post-submit orderbook sampling for one ENTRY evidence row.
+
+    Unique on (evidence_id, offset_seconds) so a retried write is idempotent and
+    cannot duplicate a sample at the same scheduled offset.
+    """
+
+    __tablename__ = "entry_orderbook_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "evidence_id",
+            "offset_seconds",
+            name="uq_entry_orderbook_samples_evidence_offset",
+        ),
+    )
+
+    sample_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    evidence_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    offset_seconds: Mapped[int] = mapped_column(Integer)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(String(32))
+    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    quality: Mapped[str] = mapped_column(String(16), default="OK")
+
+    best_bid: Mapped[str | None] = mapped_column(String(64))
+    best_ask: Mapped[str | None] = mapped_column(String(64))
+    mid: Mapped[str | None] = mapped_column(String(64))
+    spread_bps: Mapped[str | None] = mapped_column(String(32))
+    bids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    asks_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    bid_depth_l1: Mapped[str | None] = mapped_column(String(64))
+    ask_depth_l1: Mapped[str | None] = mapped_column(String(64))
+    bid_depth_l5: Mapped[str | None] = mapped_column(String(64))
+    ask_depth_l5: Mapped[str | None] = mapped_column(String(64))
+    bid_depth_l10: Mapped[str | None] = mapped_column(String(64))
+    ask_depth_l10: Mapped[str | None] = mapped_column(String(64))
+    microprice: Mapped[str | None] = mapped_column(String(64))
+    orderbook_imbalance: Mapped[str | None] = mapped_column(String(32))
+    executable_side: Mapped[str | None] = mapped_column(String(8))
+    executable_depth_l1: Mapped[str | None] = mapped_column(String(64))
+    executable_depth_l5: Mapped[str | None] = mapped_column(String(64))
+    executable_depth_l10: Mapped[str | None] = mapped_column(String(64))
+
+    our_limit_price: Mapped[str | None] = mapped_column(String(64))
+    our_remaining_quantity: Mapped[str | None] = mapped_column(String(64))
+    cumulative_fill_quantity: Mapped[str | None] = mapped_column(String(64))
+    market_traded_volume: Mapped[str | None] = mapped_column(String(64))
+    queue_ahead: Mapped[str | None] = mapped_column(String(64))
+    queue_ahead_quality: Mapped[str | None] = mapped_column(String(16))
 
 
 class ReconciliationRunORM(Base):

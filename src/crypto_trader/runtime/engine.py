@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -127,8 +127,13 @@ class TradingEngine:
         market_intelligence=None,
         market_selection_service=None,
         market_selection_interval_seconds: float = 30.0,
+        # Phase E0 execution observability. Optional and default-None so every
+        # existing caller keeps byte-identical behaviour: with no store injected
+        # the capture is a no-op, so the behavioural trading diff stays zero.
+        execution_evidence=None,
     ) -> None:
         self.settings = settings
+        self.execution_evidence = execution_evidence
         # Market-Intelligence observability sink (counters only, no authority).
         self.market_intelligence = market_intelligence
         # ChiefTrader active market selection runs as its OWN independent loop
@@ -1748,6 +1753,130 @@ class TradingEngine:
             )
             raise
 
+    # ------------------------------------------------------------------
+    # Phase E0 execution observability (observation only)
+    # ------------------------------------------------------------------
+    def _capture_entry_evidence(
+        self,
+        *,
+        order,
+        signal,
+        intent,
+        risk_decision,
+        trade_plan_id: str | None,
+        run_id: str | None,
+    ) -> None:
+        """Schedule an ENTRY evidence capture WITHOUT waiting on it.
+
+        Deliberately fire-and-forget: the submit path must not be slowed by
+        telemetry, and the store degrades internally instead of raising, so this
+        can never turn an entry into a failure. Every field is read defensively -
+        a missing attribute records UNKNOWN rather than inventing a value.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _run() -> None:
+            try:
+                book = self._entry_book(str(getattr(order, "symbol", "")))
+                evidence = self._entry_intent_evidence(
+                    order=order,
+                    signal=signal,
+                    intent=intent,
+                    risk_decision=risk_decision,
+                    trade_plan_id=trade_plan_id,
+                    run_id=run_id,
+                )
+                await self.execution_evidence.record_entry_intent(
+                    evidence,
+                    book=book,
+                    # A BUY entry consumes the ASK side; a SELL consumes the BID.
+                    consume_side=self._consume_side(getattr(order, "side", None)),
+                )
+            except Exception:  # noqa: BLE001
+                # Evidence is never allowed to break trading or position safety.
+                logger.warning("entry evidence capture failed", exc_info=False)
+
+        loop.create_task(_run())
+
+    @staticmethod
+    def _consume_side(side) -> str | None:
+        """The book side an order CONSUMES - ASK for a buy, BID for a sell."""
+        text = str(getattr(side, "value", side) or "").upper()
+        if text in ("BUY", "LONG"):
+            return "ASK"
+        if text in ("SELL", "SHORT"):
+            return "BID"
+        return None
+
+    def _entry_book(self, symbol: str):
+        """Best-effort factual book for this symbol, or None (recorded UNKNOWN)."""
+        if not symbol:
+            return None
+        try:
+            return self.market_data.get_orderbook(symbol)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _entry_intent_evidence(
+        self,
+        *,
+        order,
+        signal,
+        intent,
+        risk_decision,
+        trade_plan_id: str | None,
+        run_id: str | None,
+    ):
+        """Map the intent/risk/order facts onto the evidence record.
+
+        ``target`` is what the Sizer wanted, ``requested`` is what the order
+        actually asked the venue for, and ``actual`` is left empty here - it can
+        only be known from factual fills later. Keeping them distinct is the
+        whole point: the measured gap between them was ~2.6%.
+        """
+        from crypto_trader.execution_observability.evidence import EntryIntentEvidence
+
+        quantity = getattr(intent, "quantity", None) or getattr(order, "quantity", None)
+        price = getattr(intent, "price", None) or getattr(order, "price", None)
+        metadata = getattr(intent, "metadata", None) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        target_quantity = metadata.get("target_quantity") or quantity
+        target_notional = metadata.get("target_notional")
+        if target_notional is None:
+            target_notional = _safe_product(target_quantity, price)
+
+        requested_notional = _safe_product(quantity, price)
+
+        max_quantity = getattr(risk_decision, "approved_quantity", None)
+        max_notional = _safe_product(max_quantity, price)
+
+        return EntryIntentEvidence(
+            symbol=str(getattr(order, "symbol", "") or ""),
+            side=str(getattr(getattr(order, "side", None), "value", "") or "") or None,
+            chief_direction=metadata.get("chief_direction"),
+            decision_id=metadata.get("decision_id"),
+            trade_plan_id=trade_plan_id,
+            order_id=getattr(order, "internal_order_id", None),
+            run_id=run_id or getattr(order, "run_id", None),
+            target_quantity=target_quantity,
+            target_notional=target_notional,
+            risk_approved_max_quantity=max_quantity,
+            risk_approved_max_notional=max_notional,
+            requested_order_quantity=quantity,
+            requested_order_notional=requested_notional,
+            # NOT recorded here: only factual fills can establish actual exposure.
+            actual_opened_quantity=None,
+            actual_opened_notional=None,
+            leverage=metadata.get("leverage"),
+            limit_price=price,
+            reason_codes=list(getattr(risk_decision, "reason_codes", None) or []),
+        )
+
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
         run_id = self.run_id
         symbol = signal.symbol
@@ -2226,6 +2355,19 @@ class TradingEngine:
         if trade_plan_id and is_entry:
             await self.trade_plans.link(trade_plan_id, order_id=order.internal_order_id)
             await self.trade_plans.transition(trade_plan_id, TradePlanState.APPROVED)
+        if self.execution_evidence is not None and is_entry:
+            # Observation only. Scheduled as a task so the submit path never
+            # waits on it, and the capture degrades internally rather than
+            # raising - evidence collection must never block an entry or, more
+            # importantly, position protection.
+            self._capture_entry_evidence(
+                order=order,
+                signal=signal,
+                intent=intent,
+                risk_decision=risk_decision,
+                trade_plan_id=trade_plan_id,
+                run_id=run_id,
+            )
         await self.order_manager.validate(order.internal_order_id)
         await self.order_manager.submitting(order.internal_order_id)
         await self.order_manager.submitted(order.internal_order_id)
@@ -3330,3 +3472,16 @@ def _raise_missing_contract_spec(symbol: str):
     raise ValueError(
         f"LINEAR_PERP fill missing proven contract spec for {symbol}"
     )
+
+def _safe_product(quantity, price):
+    """quantity * price as Decimal, or None when either side is unknown.
+
+    Returns None - never 0 - because "we could not compute a notional" and
+    "the notional was zero" are different facts.
+    """
+    if quantity is None or price is None:
+        return None
+    try:
+        return Decimal(str(quantity)) * Decimal(str(price))
+    except (InvalidOperation, ValueError, TypeError):
+        return None

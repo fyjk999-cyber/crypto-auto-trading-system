@@ -16,6 +16,7 @@ from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.execution_observability import EntryEvidenceStore
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
@@ -466,6 +467,10 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         market_intelligence=opportunity_board,
         market_selection_service=market_selection_service,
         market_selection_interval_seconds=settings.market_selection_loop_interval_seconds,
+        # Phase E0: execution observability. Observation only - the store is
+        # written to but never read by any decision, sizing, Risk or order path,
+        # so wiring it here cannot change trading behaviour.
+        execution_evidence=EntryEvidenceStore(database.session_factory),
     )
 
     app_state = AppState(
