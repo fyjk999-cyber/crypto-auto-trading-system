@@ -124,6 +124,44 @@ Tests: `tests/low_risk/test_phase4_fast_profit.py` — 10 tests (long trigger, s
 not-net-profitable, lone large trade, fast move without reversal, price rejection, fragment economics,
 configurable fractions, determinism, no new-risk/execution path).
 
+## 4E/4F/4I — dynamic invocation, NEXT_REASSESSMENT, exit coordination (COMPLETE core)
+
+### 4E `llm_chief/invocation.py`
+
+- `MaterialEvent` with kinds LARGE_TRADE/VOLUME_SURGE/PRICE_VELOCITY/ACTIVITY_SURGE/CVD_REVERSAL/
+  ORDERBOOK_DISLOCATION/OI_CHANGE/FUNDING_BASIS_ANOMALY/MAJOR_NEWS/RISK_L1/LLM_REQUESTED_REASSESSMENT.
+- Position-aware sensitivity = f(cumulative exposure/equity, leverage, |PnL|, event severity/novelty/urgency);
+  priority NORMAL/HIGH/URGENT. Material events with sufficient severity+novelty bypass ordinary dedup.
+- Same-zone oscillation (e.g. 104.01/103.99/104.02/103.98) is deduped by a bps zone anchor.
+- One active reassessment per leg: a newer material event is queued as the latest pending state and started
+  immediately on completion.
+- No order authority (static test); it only gates Core-LLM wakeups.
+
+### 4F `llm_chief/reassessment.py`
+
+- Evaluates the V2 `NextReassessment` contract: PRICE (operator-first/bare touch), TIME (absolute ISO or
+  `+Ns` relative to anchor), INDICATOR (e.g. `rsi14>=70`), EVENT (kind within lookback).
+- AND/OR logic, priority escalation (URGENT > HIGH > NORMAL), malformed conditions reported not crashed.
+- `authority="WAKE_LLM_ONLY"`, `is_order=False` — never an order/stop.
+
+### 4I `execution/exit_coordinator.py`
+
+- Priorities 1 Risk hard exit, 2 Offline hard exit, 3 Fast Profit, 4 Active Base Exit, 5 LLM reduce/close,
+  6 LLM new risk (recorded only; never reserves reduce capacity).
+- Hard invariant `reserved_reduce_qty <= factual_qty` enforced on every submit/fill/cancel path.
+- Higher priority preempts only pending/submitted/partial *unfilled reservations*; confirmed fills are never
+  clawed back. Full close releases all other reservations. Reduce-side mismatch/invalid quantity rejected.
+- `cancel_all(priorities=...)` supports offline cancellation of LLM reduce/new-risk requests.
+
+### Tests in this chunk
+
+```
+PYTHONPATH=$PWD/src .venv/bin/python -m pytest tests/low_risk -q
+→ 71 passed (+10 exit coordinator, +10 event invocation)
+PYTHONPATH=$PWD/src .venv/bin/python -m pytest tests -q
+→ 734 passed, 1 warning in 78.48s
+```
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.
@@ -133,7 +171,6 @@ configurable fractions, determinism, no new-risk/execution path).
 - 4E — event-driven invocation (dedup, material-information gate, position-aware priority, one active reassessment).
 - 4F — NEXT_REASSESSMENT PRICE/TIME/INDICATOR/EVENT AND/OR + priority.
 - 4H — Risk L1/L2 adaptation + execution contract validation (≤20x, ≤25% child reject-not-resize) + risk episodes.
-- 4I — offline exits.
 
 ## P0 / P1
 
