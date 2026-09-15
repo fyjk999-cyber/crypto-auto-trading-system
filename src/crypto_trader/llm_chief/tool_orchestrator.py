@@ -25,6 +25,7 @@ class ToolDrivenChiefTrader:
         *,
         tool_context: dict[str, Any],
         now: datetime,
+        rebuild_context=None,
     ) -> tuple[ChiefTraderDecision, DynamicEvidencePackage | None]:
         selected, error = await self.chief.select_tools(ctx, self.tools.available())
         if selected is None:
@@ -42,4 +43,8 @@ class ToolDrivenChiefTrader:
             ctx,
             quant_evidence=[package.model_dump(mode="json")],
         )
+        # Phase 4A seam: forward the fresh-state rebuilder so a Core LLM
+        # failover never replays the pre-tool stale prompt.
+        if rebuild_context is not None:
+            return await self.chief.decide(enriched, rebuild_context=rebuild_context), package
         return await self.chief.decide(enriched), package
