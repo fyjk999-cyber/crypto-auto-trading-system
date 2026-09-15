@@ -13,12 +13,13 @@ action rather than to a background job that starts running by itself.
 What is retained unconditionally:
   * ``entry_execution_evidence`` - one row per ENTRY. Tiny, and the anchor that
     makes everything else interpretable.
-  * The T+0 sample of every entry - the pre-submit to first-observation link.
+  * The first sample (elapsed 0s) of every entry - the link between the
+    pre-submit book and the first post-submit observation.
   * Any entry whose outcome is still unresolved.
 
 What is a candidate for pruning once it is old:
-  * The dense intermediate offsets (T+1, T+2, T+5) of entries older than the
-    retention window. These are the bulk of the volume and the least
+  * The dense intermediate offsets (elapsed 1s, 2s and 5s) of entries older
+    than the retention window. These are the bulk of the volume and the least
     informative once an entry is closed and its outcome is known.
 """
 
@@ -61,8 +62,9 @@ def default_retention_plan(days: int = DEFAULT_RETENTION_DAYS) -> RetentionPlan:
         anchor_offsets=ANCHOR_OFFSETS,
         rationale=(
             "Keep every entry evidence row and the sparse anchor samples "
-            "(T+0/15/30/60) indefinitely; only the dense intermediate offsets "
-            "(T+1/2/5) of entries older than the window are prune candidates. "
+            "(elapsed 0s, 15s, 30s and 60s) indefinitely; only the dense "
+            "intermediate offsets (elapsed 1s, 2s, 5s) of entries older than "
+            "the window are prune candidates. "
             "This module computes the plan but never deletes: removing historical "
             "market facts is irreversible and requires an explicit operator action."
         ),
