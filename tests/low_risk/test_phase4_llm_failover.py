@@ -215,3 +215,53 @@ def test_router_has_no_order_authority() -> None:
     ):
         assert forbidden not in source
     assert failover_module.OFFLINE_WINDOW_SECONDS == 300.0
+
+
+async def test_router_accepts_per_call_fresh_state_rebuilder() -> None:
+    primary = FakeProvider("deepseek", [{"ok": False, "error": "LLM_TIMEOUT"}])
+    backup = FakeProvider("glm", [{"ok": True, "parsed": {"action": "HOLD"}}])
+
+    async def rebuild():
+        return ("PER_CALL_FRESH", "v9")
+
+    router = CoreLLMRouter(primary=primary, backup=backup)  # no constructor rebuilder
+    response = await router.complete_json(
+        prompt="STALE", state_version="v1", prompt_rebuilder=rebuild
+    )
+    assert response.ok is True
+    assert response.served_by == "glm"
+    assert backup.calls[0]["prompt"] == "PER_CALL_FRESH"
+    assert response.state_version == "v9"
+
+
+async def test_chief_engine_passes_rebuild_context_to_router() -> None:
+    from crypto_trader.llm_chief.context import ChiefTraderContext
+    from crypto_trader.llm_chief.engine import ChiefTraderEngine
+
+    decision_json = {
+        "decision_id": "d1",
+        "symbol": "BTCUSDT",
+        "action": "WAIT",
+        "market_regime": "RANGE",
+        "position_state": "FLAT",
+        "thesis": "wait for clarity",
+    }
+    primary = FakeProvider("deepseek", [{"ok": False, "error": "LLM_TIMEOUT"}])
+    backup = FakeProvider("glm", [{"ok": True, "parsed": decision_json}])
+
+    async def rebuild():
+        return ("ENGINE_FRESH", "v10")
+
+    router = CoreLLMRouter(primary=primary, backup=backup)
+    chief = ChiefTraderEngine(provider=router)
+    ctx = ChiefTraderContext(
+        symbol="BTCUSDT",
+        market_snapshot={"last": "100"},
+        regime="RANGE",
+        quant_evidence=[],
+        portfolio_state={},
+        risk_summary={},
+    )
+    decision = await chief.decide(ctx, rebuild_context=rebuild)
+    assert decision.action.value == "WAIT"
+    assert backup.calls[0]["prompt"] == "ENGINE_FRESH"

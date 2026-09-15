@@ -155,9 +155,7 @@ class CoreLLMRouter:
         return {
             "router": self.name,
             "primary": getattr(self.primary, "diagnostics", lambda: {})(),
-            "backup": (
-                getattr(self.backup, "diagnostics", lambda: {})() if self.backup else None
-            ),
+            "backup": (getattr(self.backup, "diagnostics", lambda: {})() if self.backup else None),
             "offline": self.status.as_dict(now=self._now()),
             "latency": self.tracker.snapshot(),
             "events": list(self.events[-50:]),
@@ -176,6 +174,7 @@ class CoreLLMRouter:
         reasoning_effort: str = "low",
         operation: str = "completion",
         state_version: str | None = None,
+        prompt_rebuilder=None,
     ) -> LLMResponse:
         now = self._now()
         if self.status.offline and self.status.next_probe_at is not None:
@@ -195,6 +194,7 @@ class CoreLLMRouter:
                 reasoning_effort=reasoning_effort,
                 operation=operation,
                 state_version=state_version,
+                rebuilder=prompt_rebuilder or self.prompt_rebuilder,
             )
             if response.ok:
                 self._recover(now, response)
@@ -212,12 +212,14 @@ class CoreLLMRouter:
             reasoning_effort=reasoning_effort,
             operation=operation,
             state_version=state_version,
+            rebuilder=prompt_rebuilder or self.prompt_rebuilder,
         )
         if not response.ok:
             self._enter_offline(now, response.error or "ALL_PROVIDERS_FAILED")
         return response
 
     async def _attempt_chain(self, **kwargs) -> LLMResponse:
+        rebuilder = kwargs.pop("rebuilder", self.prompt_rebuilder)
         operation = kwargs.get("operation", "completion")
         state_version = kwargs.get("state_version")
         primary_response = await self.primary.complete_json(**kwargs)
@@ -238,14 +240,13 @@ class CoreLLMRouter:
         if self.backup is None or not self.backup.healthy():
             return self._fail(str(primary_response.error or "PRIMARY_FAILED"), state_version)
 
-        fresh_prompt = await self._fresh_prompt()
+        fresh_prompt = await self._fresh_prompt(rebuilder)
         if fresh_prompt is None:
             # Constitutional rule: never replay a stale prompt to the backup.
             self.status.backup_skipped_no_fresh_context += 1
             self._record_event("BACKUP_SKIPPED_STALE_CONTEXT", self._now())
             return self._fail(
-                f"{primary_response.error or 'PRIMARY_FAILED'};"
-                "BACKUP_SKIPPED_NO_FRESH_CONTEXT",
+                f"{primary_response.error or 'PRIMARY_FAILED'};BACKUP_SKIPPED_NO_FRESH_CONTEXT",
                 state_version,
             )
         prompt, fresh_version = fresh_prompt
@@ -271,11 +272,12 @@ class CoreLLMRouter:
             state_version,
         )
 
-    async def _fresh_prompt(self) -> tuple[str, str | None] | None:
-        if self.prompt_rebuilder is None:
+    async def _fresh_prompt(self, rebuilder=None) -> tuple[str, str | None] | None:
+        rebuilder = rebuilder or self.prompt_rebuilder
+        if rebuilder is None:
             return None
         try:
-            rebuilt = await self.prompt_rebuilder()
+            rebuilt = await rebuilder()
         except Exception:
             return None
         if isinstance(rebuilt, tuple) and len(rebuilt) == 2:
@@ -344,6 +346,4 @@ class CoreLLMRouter:
         self.status.reason = None
 
     def _record_event(self, event: str, now: datetime, extra: dict | None = None) -> None:
-        self.events.append(
-            {"event": event, "at": now.isoformat(), **(extra or {})}
-        )
+        self.events.append({"event": event, "at": now.isoformat(), **(extra or {})})

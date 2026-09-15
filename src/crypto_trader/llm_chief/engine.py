@@ -39,7 +39,7 @@ class ChiefTraderEngine:
         prompt = (
             "You are the same Chief Trader that will make the final decision. "
             "Select only the factual read-only tools needed for this context. "
-            "Return JSON only as {\"tools\":[...]}.\n"
+            'Return JSON only as {"tools":[...]}.\n'
             f"Symbol: {ctx.symbol}\nPositionState: {ctx.position_state.value}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
@@ -64,22 +64,23 @@ class ChiefTraderEngine:
             return None, "UNKNOWN_TOOL_SELECTED"
         return selection.tools, None
 
-    async def decide(self, ctx: ChiefTraderContext) -> ChiefTraderDecision:
+    async def decide(self, ctx: ChiefTraderContext, *, rebuild_context=None) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)
-        response = (
-            await self.provider.complete_json(
-                prompt=prompt,
-                temperature=0.2,
-                timeout_seconds=30.0,
-                retries=1,
-                max_tokens=2400,
-                thinking=True,
-                reasoning_effort="low",
-                operation="trading_decision",
-            )
-            if self.provider
-            else None
+        provider_kwargs = dict(
+            prompt=prompt,
+            temperature=0.2,
+            timeout_seconds=30.0,
+            retries=1,
+            max_tokens=2400,
+            thinking=True,
+            reasoning_effort="low",
+            operation="trading_decision",
         )
+        # Phase 4A seam: a Core LLM router may use a per-call fresh-state
+        # rebuilder so the GLM backup never receives a stale prompt.
+        if rebuild_context is not None and hasattr(self.provider, "prompt_rebuilder"):
+            provider_kwargs["prompt_rebuilder"] = rebuild_context
+        response = await self.provider.complete_json(**provider_kwargs) if self.provider else None
         if response is not None and response.ok and response.parsed_json:
             try:
                 return self.parse_decision(
