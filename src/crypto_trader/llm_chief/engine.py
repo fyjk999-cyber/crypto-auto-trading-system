@@ -89,8 +89,12 @@ class ChiefTraderEngine:
                     provider=response.provider,
                     model=response.model,
                 )
-            except (TypeError, ValueError, ValidationError):
-                return self.fail_closed(ctx, "INVALID_LLM_OUTPUT")
+            except (TypeError, ValueError, ValidationError) as exc:
+                # Keep the factual rejection detail for Growth/ops diagnostics;
+                # never execute a partially parsed decision.
+                detail = str(exc).replace("\n", " ")[:240]
+                keys = ",".join(sorted(str(key) for key in response.parsed_json))
+                return self.fail_closed(ctx, f"INVALID_LLM_OUTPUT:{detail}|keys={keys[:120]}")
         return self.fail_closed(ctx, response.error if response is not None else "LLM_UNAVAILABLE")
 
     def fail_closed(self, ctx: ChiefTraderContext, reason: str | None) -> ChiefTraderDecision:
@@ -138,7 +142,8 @@ class ChiefTraderEngine:
             '"position_size_request":number,"reason_codes":["string"]}'
         )
         return (
-            "You are the Chief Trader of a crypto fund. Return JSON only.\n"
+            "You are the Chief Trader of a crypto fund. Return exactly one JSON "
+            "object: no markdown, no code fences, no commentary before or after.\n"
             f"Symbol: {ctx.symbol}\nRegime: {ctx.regime}\n"
             f"PositionState: {ctx.position_state.value}\n"
             f"AllowedActions: {allowed_actions}\n"

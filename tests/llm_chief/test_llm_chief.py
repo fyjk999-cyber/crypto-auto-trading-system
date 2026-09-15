@@ -358,7 +358,8 @@ async def test_chief_trader_missing_action_is_durable_fail_closed_input():
     )
     decision = await ChiefTraderEngine(MissingActionProvider()).decide(ctx)
     assert decision.action == "FAIL_CLOSED"
-    assert decision.reason_codes == ["INVALID_LLM_OUTPUT"]
+    assert decision.reason_codes
+    assert decision.reason_codes[0].startswith("INVALID_LLM_OUTPUT")
 
 
 def test_knowledge_base_retrieval_versioned():
