@@ -147,3 +147,29 @@ detached worktree at the pushed SHA.
   (fresh DB, real OKX public data, real DeepSeek, PAPER only, LIVE disabled);
   `/health` OVERALL OK at start. Scheduled checks `cron-42` (day 1) and `cron-43` (>=72h).
 - FINAL_STATUS stays PARTIAL: the prior window cannot count toward the 72h gate.
+
+## Soak window attempt #3 - V2 prompt verified against real DeepSeek (5269cd63d2fe)
+
+- Window started 2026-09-16T05:49+08 in `/tmp/lr2-soak2` (detached worktree at `5269cd63d2fe`,
+  fresh DB at alembic head `0028`, real OKX public data, real DeepSeek key from macOS Keychain,
+  `TRADING_MODE=PAPER` / `LIVE_TRADING_ENABLED=false`, port 8010).
+- Factual evidence at 2026-09-16T05:52+08 (uptime 02:45, `/health` OVERALL OK, no error lines):
+  - 5 real Core LLM decisions persisted; 0 trade plans, 0 orders, 0 fills (no fabricated trade).
+  - Latest real decision payload (audit `LIVE_LLM_DECISION`):
+    `action=NO_TRADE`, `plan_contract_version=2`, `capital_allocation_pct=0.0`,
+    `leverage_request=0.0`, `base_exit=null` - i.e. the new prompt contract is being
+    followed by the real provider; NO_TRADE correctly carries no Base Exit obligation.
+  - Earlier `FAIL_CLOSED` decisions show `plan_contract_version=1` (internally constructed
+    fail-closed objects, never submitted).
+- Interpretation: the round-61 prompt fix works against the real DeepSeek API. A natural
+  lifecycle requires the LLM to choose LONG/SHORT with a Base Exit and allocation during the
+  soak window; until then FINAL_STATUS stays PARTIAL (no fabrication).
+- Scheduled durable checks: `cron-44` (day 1, 2026-09-17 06:05 +08) and `cron-45`
+  (>=72h, 2026-09-19 06:10 +08); harvester `scripts/low_risk_soak_report.py` is read-only.
+
+## P1 note - dashboard legs panel
+
+`frontend/` has no `node_modules` in this environment and dependency installation/verification
+could not be performed offline, so the legs panel was not modified without a way to run
+`frontend-verify.sh`/tests. The backend `/position-legs` API (contracts + lineage, authority
+`NEW_REQUIRES_CORE_LLM`, `not_an_order`) remains available for the UI to consume.
