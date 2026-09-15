@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.models import SignalIntent
-from crypto_trader.llm_chief.decision import ChiefTraderDecision
+from crypto_trader.execution.hedge_legs import validate_hedge_leg
+from crypto_trader.llm_chief.decision import ChiefTraderDecision, FlatAction
 from crypto_trader.trade_plan.service import TradePlan, TradePlanService
 
 
@@ -59,9 +60,7 @@ class LiveLLMTradePlanner:
             strategy=decision.strategy
             or (decision.strategy_selected[0] if decision.strategy_selected else "live_llm"),
             based_on_state_version=decision.based_on_state_version,
-            base_exit=(
-                decision.base_exit.model_dump(mode="json") if decision.base_exit else None
-            ),
+            base_exit=(decision.base_exit.model_dump(mode="json") if decision.base_exit else None),
             exit_approach=decision.exit_approach,
             adverse_trigger=decision.adverse_trigger,
             thesis_invalidation=decision.thesis_invalidation,
@@ -93,9 +92,7 @@ class LiveLLMTradePlanner:
                     else None
                 ),
                 "base_exit": (
-                    decision.base_exit.model_dump(mode="json")
-                    if decision.base_exit
-                    else None
+                    decision.base_exit.model_dump(mode="json") if decision.base_exit else None
                 ),
                 "plan_version": decision.plan_contract_version,
                 "based_on_state_version": decision.based_on_state_version,
@@ -107,3 +104,46 @@ class LiveLLMTradePlanner:
         )
         await self.plans.link(plan.trade_plan_id, signal_id=signal.signal_id)
         return plan, signal
+
+    async def create_hedge_signal(
+        self,
+        decision: ChiefTraderDecision,
+        *,
+        hedge_contract,
+        existing_legs,
+        current_position_side: str,
+        limit_price: Decimal | None = None,
+        quantity: Decimal | None = None,
+    ) -> tuple[TradePlan | None, SignalIntent | None]:
+        """Create an independent opposite-direction hedge/reverse TradePlan.
+
+        The opposite leg is NEW RISK: it needs its own v2 contract (Base Exit,
+        thesis, invalidation, evidence families) and passes the canonical
+        TradePlan + ExecutionAuthority path. An illegal loss-mitigation "hedge"
+        is rejected here and never becomes an order.
+        """
+        if decision.action not in {"HEDGE", "REVERSE"}:
+            return None, None
+        if decision.plan_contract_version < 2 or decision.base_exit is None:
+            return None, None
+        validation = validate_hedge_leg(hedge_contract, list(existing_legs))
+        if not validation.allowed:
+            return None, None
+        direction = "SHORT" if current_position_side.upper() == "LONG" else "LONG"
+        plan, signal = await self.create_entry_signal(
+            decision.model_copy(update={"action": FlatAction(direction)}),
+            limit_price=limit_price,
+            quantity=quantity,
+        )
+        if signal is None:
+            return plan, None
+        metadata = dict(signal.metadata)
+        metadata.update(
+            {
+                "lifecycle_action": decision.action.value,
+                "leg_id": hedge_contract.leg_id,
+                "hedge": decision.action.value == "HEDGE",
+                "reverse_of": hedge_contract.reverse_of,
+            }
+        )
+        return plan, signal.model_copy(update={"metadata": metadata})
