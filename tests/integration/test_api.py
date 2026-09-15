@@ -153,7 +153,6 @@ async def test_api_killswitch_route(database):
     assert state.risk.kill_switch.enabled is True
 
 
-
 async def test_api_read_only_trade_plan_episode_and_decision_detail_endpoints(database):
     state = make_state(database)
     client = TestClient(create_app(state))
@@ -235,3 +234,50 @@ def test_position_legs_endpoint_exposes_independence_contract(database):
     assert leg["kind"] == "HEDGE"
     assert leg["base_exit"]["trigger"] == "<=104"
     assert leg["evidence_families"] == ["model:mean_reversion"]
+
+
+def test_growth_daily_report_endpoint_reads_frozen_top10_and_outcomes(database):
+    import asyncio
+
+    from crypto_trader.market_data.opportunity.daily_freeze import DailyOpportunityFreezer
+    from crypto_trader.market_data.opportunity.outcomes import (
+        OpportunityOutcomeRecorder,
+        evaluate_opportunity,
+    )
+
+    freezer = DailyOpportunityFreezer(database.session_factory)
+    recorder = OpportunityOutcomeRecorder(database.session_factory)
+    asyncio.run(
+        freezer.freeze(
+            "2026-09-16",
+            [{"symbol": "BTCUSDT", "score": 90.0, "candidate_source": "market_observer"}],
+        )
+    )
+    asyncio.run(
+        recorder.record(
+            trading_day="2026-09-16",
+            symbol="BTCUSDT",
+            outcomes=evaluate_opportunity(
+                frozen_price=100.0,
+                expected_direction="LONG",
+                traded=True,
+                window_prices={"1h": 101.0},
+            ),
+        )
+    )
+
+    client = TestClient(create_app(make_state(database)))
+    response = client.get("/growth/daily-report", params={"trading_day": "2026-09-16"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trading_day"] == "2026-09-16"
+    assert body["top10"][0]["symbol"] == "BTCUSDT"
+    assert body["outcomes"]["labels"]["TRADED_CORRECT"] == 1
+    assert len(body["required_reviews"]) == 7
+    assert body["authority"] == "LEARNING_ONLY"
+    assert body["is_order"] is False
+    assert body["can_modify_core"] is False
+
+    empty = client.get("/growth/daily-report", params={"trading_day": "1999-01-01"})
+    assert empty.status_code == 200
+    assert empty.json()["top10"] == []

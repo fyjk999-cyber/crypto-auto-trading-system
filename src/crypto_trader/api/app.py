@@ -281,6 +281,24 @@ def create_app(state: AppState) -> FastAPI:
                 "count": len(rows),
             }
 
+    @app.get("/growth/daily-report")
+    async def growth_daily_report(trading_day: str):
+        from crypto_trader.learning.review_taxonomy import REQUIRED_REVIEW_TYPES
+        from crypto_trader.market_data.opportunity.daily_freeze import DailyOpportunityFreezer
+        from crypto_trader.market_data.opportunity.outcomes import OpportunityOutcomeRecorder
+
+        freezer = DailyOpportunityFreezer(state.database.session_factory)
+        recorder = OpportunityOutcomeRecorder(state.database.session_factory)
+        return {
+            "trading_day": trading_day,
+            "top10": await freezer.get(trading_day),
+            "outcomes": await recorder.summary(trading_day),
+            "required_reviews": list(REQUIRED_REVIEW_TYPES),
+            "authority": "LEARNING_ONLY",
+            "is_order": False,
+            "can_modify_core": False,
+        }
+
     @app.get("/position-legs")
     async def position_legs(symbol: str | None = None, limit: int = 100):
         async with state.database.session_factory() as session:
