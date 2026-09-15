@@ -264,3 +264,22 @@ Integrity at snapshot: `orders=3`, `fills=3`, `FILL_SETTLED=3`, `FILL_LINEAGE=3`
 Remaining before PASS: the >=72h soak window (started 2026-09-16T05:57+08; durable checks
 `cron-46`/`cron-47`) and P1 items (Growth seven-review write-through scheduling, leg-level
 portfolio/dashboard panel). `NATURAL_PAPER` = ACHIEVED; `FINAL_STATUS` = PARTIAL pending soak.
+
+## Growth review materialised from the natural episode (49a88b0f7b5e)
+
+- Added `scripts/growth_lifecycle_review.py`: reads the canonical DB only, derives entry/exit
+  VWAP from the persisted fills of the closed plan, counts Core-LLM position decisions, and
+  writes the applicable review taxonomy entries through `GrowthPersistence` into the existing
+  `ai_trade_reviews` table. Learning-only; every finding cites persisted ids.
+- Executed against acceptance window #4 (real data, no fabrication):
+  - episode `episode_plan_443020240b35479780c814f12963ad18`, MSTRUSDT SHORT,
+    entry_vwap 128.09 / exit_vwap 128.1236 over 3 fills -> net_bps = -2.6232.
+  - written 2 reviews: `EXIT_MODIFICATION_REVIEW` and `LLM_INVOCATION_REVIEW`, both
+    verdict DEFECT (factual small loss), persisted with lesson
+    `... defect with outcome_bps=-2.623155593723163` and future_rule
+    `<REVIEW>:DEFECT`. Other taxonomy types (ADD/HEDGE/FAST_PROFIT/REENTRY/RISK) were not
+    applicable to this lifecycle and were not fabricated.
+- Durable daily job `cron-49` (00:10 Asia/Shanghai) runs the Top-10 freeze plus this
+  post-close review derivation and reports NO_NEW_EPISODE honestly when no new close exists.
+- The running soak process was not restarted; `/health` stayed OVERALL OK and the natural
+  lifecycle remains the acceptance evidence.
