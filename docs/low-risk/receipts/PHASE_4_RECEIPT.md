@@ -101,6 +101,29 @@ New tests: V2 boundary accept (25%/20x); rejections (30%, 25x, no Base Exit, emp
 legacy v1 compatibility; ADD + NEXT_REASSESSMENT AND/OR validation; TradePlan round-trip + idempotency;
 planner propagation and no-fabrication for v1; authority reject-not-resize; legacy authority path.
 
+## 4J — Fast Profit Protection (COMPLETE in this chunk)
+
+`risk/fast_profit.py` (deterministic, online or offline):
+
+- Trigger requires ALL THREE: estimated NET profit after unified all-in costs; rapid expansion
+  `net_profit_pct >= max(min_net_profit_pct, expansion_atr_multiple * ATR%)`; reversal score >= threshold
+  from material evidence.
+- Evidence weights: CVD reversal against the leg (1.0), order-book deterioration (0.7), volume climax with
+  RVOL (0.5), price rejection (0.8), large opposite trade only when CVD is also against (0.5). A lone large
+  trade (0.5) or lone volume climax (0.5) cannot reach the default 0.8 threshold — a single random large
+  trade is structurally insufficient.
+- Exit fractions: base 25% / strong 50% / severe 100%, configurable; 1..100% bound; severe also on
+  expansion_ratio >= 3. Fragment protection: an uneconomic partial is upgraded to a full factual exit when
+  the whole leg is meaningful, otherwise no exit (`EXIT_FRAGMENT_UNECONOMIC`).
+- LONG/SHORT mirrored; `authority="FAST_PROFIT_PROTECTION"`, `is_new_risk=False`, and
+  `requires_llm_reassessment=True` (caller must trigger a fresh Core LLM reassessment afterwards).
+- No execution/order imports; this module returns a decision; the canonical exit path remains responsible
+  for any order.
+
+Tests: `tests/low_risk/test_phase4_fast_profit.py` — 10 tests (long trigger, short mirror,
+not-net-profitable, lone large trade, fast move without reversal, price rejection, fragment economics,
+configurable fractions, determinism, no new-risk/execution path).
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.
@@ -110,7 +133,7 @@ planner propagation and no-fabrication for v1; authority reject-not-resize; lega
 - 4E — event-driven invocation (dedup, material-information gate, position-aware priority, one active reassessment).
 - 4F — NEXT_REASSESSMENT PRICE/TIME/INDICATOR/EVENT AND/OR + priority.
 - 4H — Risk L1/L2 adaptation + execution contract validation (≤20x, ≤25% child reject-not-resize) + risk episodes.
-- 4I — offline exits; 4J — Fast Profit Protection.
+- 4I — offline exits.
 
 ## P0 / P1
 
