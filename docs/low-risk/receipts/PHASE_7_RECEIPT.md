@@ -227,3 +227,40 @@ Growth review are observed and the >=72h soak completes.
   the natural position (MSTRUSDT -0.5) remained live.
 - Durable schedule `cron-48` runs the same command daily at 00:05 Asia/Shanghai and
   verifies first-freeze immutability on re-run.
+
+## NATURAL PAPER LIFECYCLE COMPLETE (window #4, SHA 1ef721d6d491) - 2026-09-16T06:08+08
+
+One fully natural lifecycle occurred with no forcing and no fabricated evidence:
+
+1. Real OKX public market -> factual factor/evidence context (live scanner candidates,
+   fee/freshness checks) -> real DeepSeek Core LLM.
+2. Natural V2 decision and TradePlan: `plan_443020240b35479780c814f12963ad18` MSTRUSDT SHORT,
+   `plan_version=2`, Base Exit `{"type":"PRICE","trigger":"128.5","size_pct":100.0,
+   "reason_code":"STOP_LOSS"}`, state CLOSED. Entry decision
+   `llm_a63bc93866134df490c6f7aa6483b567`.
+3. Canonical PAPER entry order `ord_e528edf81f4f4fbebf2da14e74375a22` SELL 0.5 -> FILLED;
+   natural fill `fill_205b343e5f6b47b6b3a72e6425c749a7` @ 128.09
+   (2026-09-15T21:59:30.848107Z), persisted `FILL_SETTLED` + `FILL_LINEAGE`.
+4. Position management by Core LLM: 8 `LIVE_LLM_POSITION_DECISION` audits (HOLD/reassessments)
+   while the position was live (GET /positions: MSTRUSDT -0.5 @ 128.09, leverage 1,
+   LINEAR_PERP, mark 127.95, unrealized +0.070).
+5. Natural exit by Core LLM: decision `llm_b2a7f455d45d43f1b5a0d9fd377e661d` action=EXIT at
+   2026-09-15T22:08:31.704547Z -> reduce-only order
+   `ord_...` MSTRUSDT BUY 0.5, metadata `{lifecycle_action: EXIT, reduce_only: true,
+   trade_plan_id: plan_443...}` -> FILLED in two natural fills
+   `fill_44a9efaeafeb4fa5866b5...` @128.12 (0.32) and `fill_b084157e59ff4ec2a5d12...` @128.13
+   (0.18); position returned to 0 and the plan closed.
+6. Growth: `TRADE_EPISODE_CREATED` audit and persisted episode
+   `episode_plan_443020240b35479780c814f12963ad18` (direction SHORT,
+   entry_decision_id `llm_a63bc938...`, exit_decision_id `llm_b2a7f455...`,
+   created_at/closed_at 2026-09-15T22:08:34Z).
+7. Growth daily Top-10 frozen for `2026-09-16` (10 rows, real FACTOR_SCANNER candidates,
+   first-freeze immutable; `cron-48` repeats daily at 00:05 Asia/Shanghai).
+
+Integrity at snapshot: `orders=3`, `fills=3`, `FILL_SETTLED=3`, `FILL_LINEAGE=3`,
+`ORDER_SUBMITTED=3`; no duplicate client order ids, no oversell, no ghost position
+(second plan AIUSDT remains APPROVED with a resting SELL 226, untouched).
+
+Remaining before PASS: the >=72h soak window (started 2026-09-16T05:57+08; durable checks
+`cron-46`/`cron-47`) and P1 items (Growth seven-review write-through scheduling, leg-level
+portfolio/dashboard panel). `NATURAL_PAPER` = ACHIEVED; `FINAL_STATUS` = PARTIAL pending soak.
