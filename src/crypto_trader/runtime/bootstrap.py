@@ -18,6 +18,7 @@ from crypto_trader.alpha.evidence_router import PerSymbolEvidenceRouter
 from crypto_trader.api.deps import AppState, LLMRuntimeStatus
 from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
+from crypto_trader.execution.hedge_legs import PositionLegService
 from crypto_trader.factors.expert.engine import ExpertEvidenceEngine
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
@@ -243,6 +244,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             tool_chief=tool_chief,
             expert_engine=expert_engine,
             fresh_context_provider=fresh_context_provider,
+            hedge_planner=LiveLLMTradePlanner(
+                trade_plans,
+                max_holding_time_seconds=settings.max_holding_time_seconds,
+            ),
+            leg_service=PositionLegService(database.session_factory),
         )
         if settings.auto_start_runtime
         else None

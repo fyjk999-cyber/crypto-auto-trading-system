@@ -42,6 +42,9 @@ async def test_bootstrap_builds_and_starts_single_core(database):
         "factor_intelligence",
     }.issubset(bundle.position_manager.tool_chief.tools.available())
     assert bundle.position_manager.__class__.__name__ == "LiveLLMPositionManager"
+    # Phase 4D: hedge/reverse legs must use the canonical planner + durable store.
+    assert bundle.position_manager.hedge_planner is not None
+    assert bundle.position_manager.leg_service is not None
     assert not hasattr(bundle, "ai_position_bridge")
     assert bundle.engine.enforce_llm_entry_authority is True
     run_id = await bundle.engine.start()
