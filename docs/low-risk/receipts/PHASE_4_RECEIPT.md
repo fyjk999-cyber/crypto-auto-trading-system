@@ -210,6 +210,25 @@ SCALE_DOWN observation, and `audit_events` contains `RISK_OBSERVATION_V2_NO_RESI
   protection layer, not a pre-trade strategy sizing gate; the Core LLM owns size/leverage.
 - Legacy tests asserting `RISK_NOT_VALID` without a contract still pass unchanged.
 
+## 4C — atomic Base Exit activation + stale-plan race safety (COMPLETE core)
+
+`execution/base_exit.py`:
+
+- `stage()` adds a versioned exit proposal without touching the active exit; `activate()` atomically replaces it
+  and marks the previous version superseded.
+- Activation bound to a stale `based_on_state_version` raises `StaleBaseExitError` (`STALE_DECISION`) and the
+  old exit stays active. A leg already closed by a factual exit fill cannot be re-activated
+  (`already closed`), and `reopen_leg()` starts a new episode for re-entry.
+- `evaluate()` returns a due/not-due `BaseExitDecision` (`authority="ACTIVE_BASE_EXIT"`, `is_new_risk=False`,
+  size 1..100%). PRICE (`>=`, `<=`, `==`, `>`, `<`, bare touch), TIME (absolute ISO or `+Ns`), and injected
+  INDICATOR/EVENT evaluation are supported; without an evaluator those conditions explicitly do not fire.
+- `mark_filled()` records the factual fill and latches the leg closed.
+
+Tests (`tests/low_risk/test_phase4_base_exit.py`, 9): staging does not replace; atomic replacement; stale plan
+rejected with old exit still active; **Exit V1→V2 race** (V1 fills while V2 is staged → V2 activation rejected
+as stale/closed, fresh episode reopens); trigger due/not-due; partial size; time trigger; evaluator injection;
+no order authority.
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.
