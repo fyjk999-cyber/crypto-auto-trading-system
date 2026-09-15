@@ -406,6 +406,22 @@ class OKXAdapter(ExchangeAdapter):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX instruments response is invalid")
         return rows
 
+    async def get_trades(self, inst_id: str, limit: int = 100) -> list[dict]:
+        """Fetch recent public trades (keyless). Facts only; never an order path."""
+        data = await self._public_request(
+            "GET",
+            "/api/v5/market/trades",
+            params={"instId": inst_id, "limit": limit},
+        )
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX trades response is incomplete")
+        if not all(isinstance(row, dict) for row in rows):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX trades response contains invalid rows"
+            )
+        return rows
+
     async def get_candles(self, inst_id: str, bar: str, limit: int = 500) -> list[list[str]]:
         """Fetch public OKX candles; no credentials or demo headers are used."""
         data = await self._public_request(

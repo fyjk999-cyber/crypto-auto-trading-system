@@ -79,6 +79,18 @@ class SymbolFacts:
     oi_samples: int = 0
     cohort_median_turnover_usd: float | None = None
     observed_at: datetime | None = None
+    # Phase 1 V2 factual evidence extension (optional; evidence only).
+    taker_buy_volume: float | None = None
+    taker_sell_volume: float | None = None
+    cvd: float | None = None
+    trade_count: int | None = None
+    trade_notional_window_usd: float | None = None
+    large_trade_count: int | None = None
+    book_imbalance_l5: float | None = None
+    microprice: float | None = None
+    spread_bps: float | None = None
+    evidence_quality: str | None = None
+    evidence_degraded_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

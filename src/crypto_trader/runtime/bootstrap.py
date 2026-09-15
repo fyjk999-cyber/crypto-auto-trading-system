@@ -143,6 +143,11 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             scan_interval_seconds=settings.opportunity_scan_interval_seconds,
             active_set_size=settings.opportunity_active_set_size,
             rotation_size=settings.opportunity_rotation_size,
+            state_provider=(
+                (lambda sym: adapter.feed.states.get(sym))
+                if getattr(adapter, "feed", None) is not None
+                else None
+            ),
         )
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)

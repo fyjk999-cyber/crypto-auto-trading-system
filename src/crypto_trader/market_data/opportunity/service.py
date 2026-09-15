@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import statistics
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from crypto_trader.market_data.opportunity.board import OpportunityBoard
 from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
@@ -31,6 +32,7 @@ from crypto_trader.market_data.opportunity.factors import (
 )
 from crypto_trader.market_data.opportunity.scanner import FactorScanner, RotationScheduler
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
+from crypto_trader.market_data.state import MarketState
 
 _OI_HISTORY_MAX = 8
 
@@ -51,6 +53,7 @@ class OpportunityScannerService:
         candle_bar: str = "1m",
         max_cycles: int | None = None,  # test hook
         sleep=None,
+        state_provider=None,
     ) -> None:
         self.universe = universe
         self.client = okx_client
@@ -66,8 +69,20 @@ class OpportunityScannerService:
         self._sleep = sleep or asyncio.sleep
         self._rotation = RotationScheduler()
         self._oi_history: dict[str, list[float]] = {}
+        # Optional factual microstructure/taker-flow source (e.g. the canonical
+        # OKXPublicMarketFeed.states mapping). Evidence only, never authority.
+        self.state_provider = state_provider
         self.last_error: str | None = None
         self.cycles_completed = 0
+
+    def _state_for(self, symbol: str) -> MarketState | None:
+        if self.state_provider is None:
+            return None
+        try:
+            state = self.state_provider(symbol)
+        except Exception:
+            return None
+        return state if isinstance(state, MarketState) else None
 
     # ------------------------------------------------------------------- loop
     async def run_forever(self) -> None:
@@ -145,6 +160,16 @@ class OpportunityScannerService:
         # ---- eligibility (operational only; never direction) ---------------
         eligible: list[dict] = []
         for row in facts_rows:
+            state = self._state_for(row["symbol"])
+            depth_usd_l5 = None
+            trade_notional = None
+            if state is not None:
+                depth_l5 = state.depth_bid_5 + state.depth_ask_5
+                mid = (state.best_bid + state.best_ask) / Decimal("2")
+                if depth_l5 > 0 and mid > 0:
+                    depth_usd_l5 = float(depth_l5 * mid)
+                if state.trade_notional is not None:
+                    trade_notional = float(state.trade_notional)
             result = self.eligibility.evaluate(
                 row["symbol"],
                 last_price=row["last"],
@@ -153,9 +178,13 @@ class OpportunityScannerService:
                 volume_24h_usd=row["vol_usd_24h"],
                 ticker_age_seconds=row["ticker_age_seconds"],
                 candle_count=self.candle_limit,  # history presence checked at fetch
+                book_spread_bps=float(state.spread_bps) if state is not None else None,
+                depth_usd_l5=depth_usd_l5,
+                trade_notional_window_usd=trade_notional,
             )
             row["eligible"] = result.eligible
             row["excluded_reasons"] = result.reasons
+            row["evidence_quality"] = state.evidence_quality.value if state is not None else None
             if result.eligible:
                 eligible.append(row)
         self._rotation.sync([r["symbol"] for r in eligible])
@@ -186,6 +215,7 @@ class OpportunityScannerService:
                 candle_fetch_errors += 1
                 candles = []
             oi_change, oi_samples = self._record_oi(row["symbol"], row["open_interest"])
+            state = self._state_for(row["symbol"])
             facts_by_symbol[row["symbol"]] = SymbolFacts(
                 symbol=row["symbol"],
                 candles=candles,
@@ -200,6 +230,19 @@ class OpportunityScannerService:
                 oi_samples=oi_samples,
                 cohort_median_turnover_usd=cohort_median,
                 observed_at=now,
+                taker_buy_volume=_fd(state.taker_buy_volume) if state else None,
+                taker_sell_volume=_fd(state.taker_sell_volume) if state else None,
+                cvd=_fd(state.cvd) if state else None,
+                trade_count=state.trade_count if state else None,
+                trade_notional_window_usd=_fd(state.trade_notional) if state else None,
+                large_trade_count=state.large_trade_count if state else None,
+                book_imbalance_l5=float(state.imbalance_l5) if state else None,
+                microprice=_fd(state.microprice) if state else None,
+                spread_bps=float(state.spread_bps) if state else None,
+                evidence_quality=state.evidence_quality.value if state else None,
+                evidence_degraded_reasons=list(state.evidence_degraded_reasons)
+                if state
+                else [],
             )
 
         candidates = self.scanner.scan(facts_by_symbol)
@@ -307,3 +350,10 @@ def _f(value) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _fd(value) -> float | None:
+    """Decimal/None → factual float fact; None stays None (never fabricated)."""
+    if value is None:
+        return None
+    return _f(value)

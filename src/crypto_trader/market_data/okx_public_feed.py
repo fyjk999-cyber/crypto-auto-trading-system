@@ -25,12 +25,22 @@ class OKXPublicMarketFeed:
         *,
         client: OKXAdapter | None = None,
         min_refresh_interval_seconds: float = 1.0,
+        max_cached_symbols: int = 128,
+        trades_limit: int = 100,
+        trades_max_window_seconds: float = 300.0,
+        large_trade_notional_usd: Decimal = Decimal("100000"),
     ) -> None:
         self.symbol = symbol
         self.client = client or OKXAdapter(demo=False)
         self.states: dict[str, MarketState] = {}
         self._oi_previous: dict[str, Decimal] = {}
         self._price_history: dict[str, deque[Decimal]] = {}
+        self._trades: dict[str, deque[tuple[int, str, str, Decimal, Decimal]]] = {}
+        self._last_access: dict[str, float] = {}
+        self.max_cached_symbols = max(1, int(max_cached_symbols))
+        self.trades_limit = max(1, int(trades_limit))
+        self.trades_max_window_seconds = max(1.0, float(trades_max_window_seconds))
+        self.large_trade_notional_usd = Decimal(large_trade_notional_usd)
         self.warmup_status = "NOT_ATTEMPTED"
         self.warmup_loaded = 0
         self.warmup_error: str | None = None
@@ -41,7 +51,24 @@ class OKXPublicMarketFeed:
     def provider_symbol(self, symbol: str) -> str:
         return SymbolMapper().to_okx(symbol)
 
+    def _evict_if_needed(self, protected: str | None = None) -> None:
+        """Bound the multi-symbol cache; never evict the pinned execution symbol."""
+        pinned = {self.symbol, protected} - {None}
+        while len(self.states) >= self.max_cached_symbols:
+            candidates = [s for s in self.states if s not in pinned]
+            if not candidates:
+                return
+            oldest = min(candidates, key=lambda s: self._last_access.get(s, 0.0))
+            self.states.pop(oldest, None)
+            self._trades.pop(oldest, None)
+            self._oi_previous.pop(oldest, None)
+            self._price_history.pop(oldest, None)
+            self._last_access.pop(oldest, None)
+
     def _state(self, symbol: str) -> MarketState:
+        if symbol not in self.states:
+            self._evict_if_needed(protected=symbol)
+        self._last_access[symbol] = datetime.now(UTC).timestamp()
         return self.states.setdefault(
             symbol,
             MarketState(
@@ -143,6 +170,7 @@ class OKXPublicMarketFeed:
         await self._refresh_index(state, provider_symbol, now)
         await self._refresh_funding(state, provider_symbol, now)
         await self._refresh_oi(state, provider_symbol, now)
+        await self._refresh_trades(state, provider_symbol, now)
 
         state.received_timestamp = now
         state.timestamp = now
@@ -222,12 +250,20 @@ class OKXPublicMarketFeed:
             state.depth = sum((level.quantity for level in book.bids.values()), Decimal("0")) + sum(
                 (level.quantity for level in book.asks.values()), Decimal("0")
             )
+            _apply_book_microstructure(state, book)
             self._status(state, "orderbook", now, DataHealth.HEALTHY)
         except Exception as exc:
             state.best_bid = Decimal("0")
             state.best_ask = Decimal("0")
             state.spread = Decimal("0")
             state.depth = Decimal("0")
+            state.depth_bid_5 = Decimal("0")
+            state.depth_ask_5 = Decimal("0")
+            state.depth_bid_10 = Decimal("0")
+            state.depth_ask_10 = Decimal("0")
+            state.imbalance_l5 = Decimal("0")
+            state.microprice = Decimal("0")
+            state.spread_bps = Decimal("0")
             self._status(state, "orderbook", now, DataHealth.UNAVAILABLE, exc)
 
     async def _refresh_mark(self, state: MarketState, symbol: str, now: datetime) -> None:
@@ -273,8 +309,98 @@ class OKXPublicMarketFeed:
             state.open_interest_change = None
             self._status(state, "open_interest", now, DataHealth.UNAVAILABLE, exc)
 
+    async def _refresh_trades(self, state: MarketState, symbol: str, now: datetime) -> None:
+        """Bounded factual public-trade window → taker flow / CVD facts."""
+        try:
+            rows = await self.client.get_trades(symbol, self.trades_limit)
+            window = self._trades.setdefault(state.symbol, deque(maxlen=self.trades_limit))
+            known = {entry[1] for entry in window}
+            parsed: list[tuple[int, str, str, Decimal, Decimal]] = []
+            for raw in rows:
+                trade_id = str(raw.get("tradeId") or "")
+                if not trade_id or trade_id in known:
+                    continue
+                side = str(raw.get("side") or "").lower()
+                if side not in ("buy", "sell"):
+                    continue
+                try:
+                    price = D(raw.get("px"))
+                    size = D(raw.get("sz"))
+                    ts_ms = int(raw.get("ts") or 0)
+                except Exception:
+                    continue
+                if price <= 0 or size <= 0 or ts_ms <= 0:
+                    continue
+                parsed.append((ts_ms, trade_id, side, price, size))
+            # Newest first from the provider; keep window ascending by time.
+            parsed.sort(key=lambda entry: entry[0])
+            for entry in parsed:
+                window.append(entry)
+            cutoff_ms = int(now.timestamp() * 1000) - int(
+                self.trades_max_window_seconds * 1000
+            )
+            live = [entry for entry in window if entry[0] >= cutoff_ms]
+            if not live:
+                raise ValueError("no factual trades inside the bounded window")
+            buy_volume = sum((e[4] for e in live if e[2] == "buy"), Decimal("0"))
+            sell_volume = sum((e[4] for e in live if e[2] == "sell"), Decimal("0"))
+            notionals = [e[3] * e[4] for e in live]
+            largest = max(notionals)
+            state.taker_buy_volume = buy_volume
+            state.taker_sell_volume = sell_volume
+            state.cvd = buy_volume - sell_volume
+            state.trade_count = len(live)
+            state.trade_notional = sum(notionals, Decimal("0"))
+            state.large_trade_count = sum(
+                1 for value in notionals if value >= self.large_trade_notional_usd
+            )
+            state.largest_trade_notional = largest
+            state.trades_window_seconds = max(
+                0.0, (live[-1][0] - live[0][0]) / 1000.0
+            )
+            state.last_trade_price = live[-1][3]
+            self._status(state, "trades", now, DataHealth.HEALTHY)
+        except Exception as exc:
+            state.taker_buy_volume = None
+            state.taker_sell_volume = None
+            state.cvd = None
+            state.trade_count = 0
+            state.trade_notional = None
+            state.large_trade_count = 0
+            state.largest_trade_notional = None
+            state.trades_window_seconds = 0.0
+            state.last_trade_price = None
+            self._status(state, "trades", now, DataHealth.UNAVAILABLE, exc)
+
     async def close(self) -> None:
         await self.client.disconnect()
+
+
+def _apply_book_microstructure(state: MarketState, book: OrderBook) -> None:
+    """Derive L5/L10 depth, imbalance, microprice and spread bps facts only."""
+    bid_levels = sorted(book.bids.values(), key=lambda level: level.price, reverse=True)
+    ask_levels = sorted(book.asks.values(), key=lambda level: level.price)
+    state.depth_bid_5 = sum((level.quantity for level in bid_levels[:5]), Decimal("0"))
+    state.depth_ask_5 = sum((level.quantity for level in ask_levels[:5]), Decimal("0"))
+    state.depth_bid_10 = sum((level.quantity for level in bid_levels[:10]), Decimal("0"))
+    state.depth_ask_10 = sum((level.quantity for level in ask_levels[:10]), Decimal("0"))
+    total_5 = state.depth_bid_5 + state.depth_ask_5
+    state.imbalance_l5 = (
+        (state.depth_bid_5 - state.depth_ask_5) / total_5 if total_5 > 0 else Decimal("0")
+    )
+    if bid_levels and ask_levels:
+        best_bid, best_ask = bid_levels[0], ask_levels[0]
+        top = best_bid.quantity + best_ask.quantity
+        if top > 0:
+            state.microprice = (
+                best_ask.price * best_bid.quantity + best_bid.price * best_ask.quantity
+            ) / top
+    mid = (state.best_bid + state.best_ask) / Decimal("2")
+    state.spread_bps = (
+        (state.best_ask - state.best_bid) / mid * Decimal("10000")
+        if mid > 0
+        else Decimal("0")
+    )
 
 
 def _positive(value, field: str) -> Decimal:
