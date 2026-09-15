@@ -49,6 +49,7 @@ from crypto_trader.domain.models import (
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.base import ExchangeAdapter
 from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
+from crypto_trader.execution.contract import derive_execution_terms
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
@@ -285,13 +286,17 @@ class TradingEngine:
             return []
         async with self.database.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(EngineRunORM).where(
-                        EngineRunORM.run_id != self.run_id,
-                        EngineRunORM.ended_at.is_(None),
+                (
+                    await session.execute(
+                        select(EngineRunORM).where(
+                            EngineRunORM.run_id != self.run_id,
+                            EngineRunORM.ended_at.is_(None),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             now = datetime.now(UTC)
             for row in rows:
                 row.state = RuntimeState.STOPPED.value
@@ -387,9 +392,7 @@ class TradingEngine:
                 signals = await strategy.on_market_data(ctx)
             except Exception as exc:
                 self.consecutive_failures += 1
-                self.health.set(
-                    f"strategy:{strategy.name}", False, type(exc).__name__
-                )
+                self.health.set(f"strategy:{strategy.name}", False, type(exc).__name__)
                 continue
             self.consecutive_failures = 0
             self.health.set(f"strategy:{strategy.name}", True)
@@ -421,9 +424,7 @@ class TradingEngine:
 
     async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
         symbol = symbol or (
-            getattr(self.strategies[0], "symbol", "BTCUSDT")
-            if self.strategies
-            else "BTCUSDT"
+            getattr(self.strategies[0], "symbol", "BTCUSDT") if self.strategies else "BTCUSDT"
         )
         book = self.market_data.books.get(symbol)
         market_state = None
@@ -443,12 +444,8 @@ class TradingEngine:
             else:
                 fetched = await self.adapter.get_orderbook(symbol)
                 sequence = fetched.sequence
-                bids = [
-                    (level.price, level.quantity) for level in fetched.bids.values()
-                ]
-                asks = [
-                    (level.price, level.quantity) for level in fetched.asks.values()
-                ]
+                bids = [(level.price, level.quantity) for level in fetched.bids.values()]
+                asks = [(level.price, level.quantity) for level in fetched.asks.values()]
             await self.market_data.ingest_snapshot(
                 symbol,
                 sequence,
@@ -477,9 +474,7 @@ class TradingEngine:
             funding=market_state.funding_rate if market_state else None,
             oi=market_state.open_interest if market_state else None,
             basis=market_state.basis if market_state else None,
-            realized_volatility=(
-                market_state.realized_volatility if market_state else None
-            ),
+            realized_volatility=(market_state.realized_volatility if market_state else None),
             instrument=self._instruments.get(symbol),
         )
 
@@ -497,9 +492,7 @@ class TradingEngine:
                 entry_order.internal_order_id,
                 reason="POSITION_ACTION_ENTRY_UNSETTLED",
             )
-            await self.adapter.cancel_order(
-                entry_order.symbol, entry_order.exchange_order_id
-            )
+            await self.adapter.cancel_order(entry_order.symbol, entry_order.exchange_order_id)
             await self.audit.log(
                 "POSITION_ACTION_CANCEL_ENTRY",
                 target=entry_order.client_order_id,
@@ -556,8 +549,10 @@ class TradingEngine:
                 after={"reason": "Live LLM entry has no durable TradePlan"},
             )
             return None
+        entry_plan = None
         if is_entry:
             plan = await self.trade_plans.get(trade_plan_id)
+            entry_plan = plan
             expected_direction = "LONG" if signal.side == OrderSide.BUY else "SHORT"
             valid_plan = (
                 plan is not None
@@ -667,9 +662,7 @@ class TradingEngine:
                     )
                     self.health.set("market_data", True)
             except Exception:
-                self.health.set(
-                    "market_data", False, f"{symbol} pre-submit refresh failed"
-                )
+                self.health.set("market_data", False, f"{symbol} pre-submit refresh failed")
 
         account = await self.portfolio.get_account(self.settings.effective_mode())
         book = self.market_data.books.get(symbol)
@@ -720,20 +713,31 @@ class TradingEngine:
             self.health.set("risk", True)
             return risk_decision
 
+        terms = derive_execution_terms(
+            is_entry=is_entry,
+            signal=signal,
+            plan=entry_plan,
+            risk_decision=risk_decision,
+        )
         approved_metadata = {
             **signal.metadata,
             "risk_decision_id": risk_decision.risk_decision_id,
-            "approved_leverage": str(
-                risk_decision.checks.get(
-                    "approved_leverage", signal.metadata.get("requested_leverage", "1")
-                )
-            ),
+            "approved_leverage": terms.leverage,
+            "risk_observation": terms.risk_observation,
         }
-        executable_signal = signal.model_copy(update={"metadata": approved_metadata})
-        if risk_decision.decision == ExecutionDecision.SCALE_DOWN:
-            approved_quantity = D(str(risk_decision.checks["approved_quantity"]))
-            executable_signal = executable_signal.model_copy(
-                update={"quantity": approved_quantity}
+        executable_signal = signal.model_copy(
+            update={"metadata": approved_metadata, "quantity": terms.quantity}
+        )
+        if (
+            terms.order_contract is not None
+            and risk_decision.decision == ExecutionDecision.SCALE_DOWN
+        ):
+            await self.audit.log(
+                "RISK_OBSERVATION_V2_NO_RESIZE",
+                target=client_order_id,
+                run_id=run_id,
+                client_order_id=client_order_id,
+                after=terms.risk_observation,
             )
 
         instrument = self._instruments.get(symbol)
@@ -782,6 +786,7 @@ class TradingEngine:
             exchange_connected=self.adapter.connected,
             balance_fresh=self.portfolio is not None,
             risk_decision=risk_decision,
+            order_contract=terms.order_contract,
             instrument=instrument,
             duplicate_client_order=existing is not None,
             reconciliation_halted=self.reconciliation_halted,
@@ -977,9 +982,7 @@ class TradingEngine:
             await self.order_manager.apply_fill(fill)
         elif event.event_type == ExchangeEventType.ORDER_CANCELLED:
             await self.order_manager.cancel_confirm(local.internal_order_id, event_id=event_id)
-            await self._sync_terminal_entry_plan(
-                local, TradePlanState.CANCELLED, "ORDER_CANCELLED"
-            )
+            await self._sync_terminal_entry_plan(local, TradePlanState.CANCELLED, "ORDER_CANCELLED")
         elif event.event_type == ExchangeEventType.ORDER_REJECTED:
             await self.order_manager.reject(
                 local.internal_order_id,
@@ -1115,9 +1118,7 @@ class TradingEngine:
                     exit_decision_id=exit_decision_id,
                     reason=str(order.metadata.get("lifecycle_action") or "POSITION_CLOSED"),
                 )
-                episode = await self.trade_episodes.build_for_closed_plan(
-                    closed_plan.trade_plan_id
-                )
+                episode = await self.trade_episodes.build_for_closed_plan(closed_plan.trade_plan_id)
                 if episode is None:
                     self.health.set(
                         "trade_episode", False, "closed lifecycle lacks factual lineage"
@@ -1148,9 +1149,7 @@ class TradingEngine:
             after={"transaction_id": fill.fill_id},
         )
 
-    async def _sync_terminal_entry_plan(
-        self, order, state: TradePlanState, reason: str
-    ) -> None:
+    async def _sync_terminal_entry_plan(self, order, state: TradePlanState, reason: str) -> None:
         if order.strategy_id != "live_llm":
             return
         plan = await self.trade_plans.get_by_order(order.internal_order_id)
@@ -1234,9 +1233,7 @@ class TradingEngine:
                 "held": self._lease_valid,
                 "lease_key": self.lease_key if self.require_lease else None,
                 "owner_id": lease.owner_id if lease is not None else None,
-                "fence_generation": (
-                    lease.fence_generation if lease is not None else None
-                ),
+                "fence_generation": (lease.fence_generation if lease is not None else None),
                 "single_writer": self._lease_valid if self.require_lease else True,
             },
             "reconciliation_halted": self.reconciliation_halted,

@@ -162,6 +162,54 @@ PYTHONPATH=$PWD/src .venv/bin/python -m pytest tests -q
 → 734 passed, 1 warning in 78.48s
 ```
 
+## 4H — Risk levels + pre-trade coupling adaptation (COMPLETE core)
+
+### `risk/risk_levels.py`
+
+- `RiskLevelConfig` (L1/L2 position-loss and account-drawdown thresholds) explicitly labelled
+  `ENGINEERING_CANDIDATE_NOT_FROZEN_STRATEGY_LAW`.
+- `PositionRiskEpisode` per leg: `l1_hits`, `l2_hits`, `add_count`, sticky `latched_level`, `forced_close`,
+  full history. `record_add()` increments adds without resetting L1/L2 history.
+- `PositionRiskMonitor.evaluate()` → L1 warning + LLM reassessment, or L2 forced hard exit (deterministic).
+  L2 latches: a favourable recovery never clears a hit episode.
+- `escalate_l1_to_force_close()` implements the SPEC rule: L1 + DeepSeek/GLM chain failure → immediate
+  forced close, no five-minute wait.
+- No sizing/execution authority (static test).
+
+### Pre-trade coupling ADAPT
+
+- `execution/contract.py::derive_execution_terms()`: for V2 entries (plan_version >= 2) the LLM's quantity
+  and leverage pass through unchanged; Risk observations are recorded (`scaled_by_risk=False`) but never
+  resize. Legacy entries and reduce/close actions keep historical APPROVE/SCALE_DOWN behavior.
+- `TradingEngine.process_signal` now uses the derived terms, passes `order_contract` into
+  `AuthorizationContext`, and audits `RISK_OBSERVATION_V2_NO_RESIZE` whenever Risk returned SCALE_DOWN on a
+  V2 entry without an actual resize.
+- `ExecutionAuthority` gate 11: new-risk orders carrying a V2 contract no longer require a pre-trade
+  `RiskDecision`; the constitutional contract gate (>25% / >20x / Base Exit) validates them instead. Legacy
+  orders without a contract keep the exact previous `RISK_NOT_VALID` behavior.
+
+### Tests and factual evidence
+
+```
+PYTHONPATH=$PWD/src .venv/bin/python -m pytest tests/low_risk -q
+→ 79 passed (+8 risk levels, +6 risk-gate adaptation incl. engine integration)
+PYTHONPATH=$PWD/src .venv/bin/python -m pytest tests -q
+→ 748 passed, 1 warning in 76.33s
+```
+
+Engine integration proof (`test_engine_v2_entry_is_not_resized_by_risk_and_is_audited`): `RiskEngine`
+configured with `max_order_notional=50` returns `SCALE_DOWN` with `approved_quantity=0.4`; the V2 order is
+persisted through `OrderManager` with the LLM's factual quantity `1`, `RiskDecisionORM` records the
+SCALE_DOWN observation, and `audit_events` contains `RISK_OBSERVATION_V2_NO_RESIZE`.
+
+### OLD BEHAVIOR / NEW BEHAVIOR / WHY SUPERSEDED
+
+- OLD: Risk must APPROVE/SCALE_DOWN before any order; SCALE_DOWN silently shrank quantity and clamped
+  leverage. NEW: for V2 contract orders, Risk observation only; execution contract validation rejects
+  invalid >25%/>20x orders instead of resizing. WHY: SPEC §4H/ExecutionAuthority migration — Risk is a
+  protection layer, not a pre-trade strategy sizing gate; the Core LLM owns size/leverage.
+- Legacy tests asserting `RISK_NOT_VALID` without a contract still pass unchanged.
+
 ## Remaining Phase 4 sub-phases
 
 - 4A — Core LLM evidence package: Market + 25 models + News + Growth + account/economics.

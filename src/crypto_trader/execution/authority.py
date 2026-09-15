@@ -124,12 +124,16 @@ class ExecutionAuthority:
         # 10. duplicate client order id
         if ctx.duplicate_client_order:
             return hold("DUPLICATE_CLIENT_ORDER_ID")
-        # 11. risk must still be valid
-        if ctx.risk_decision is None or ctx.risk_decision.decision not in {
-            ExecutionDecision.APPROVE,
-            ExecutionDecision.SCALE_DOWN,
-        }:
-            return reject("RISK_NOT_VALID")
+        # 11. legacy pre-trade risk approval OR V2 constitutional contract.
+        # V2: Risk is a protection layer, not a strategy sizing gate; the LLM's
+        # size/leverage is validated below by the hard contract instead.
+        new_risk_contract = ctx.order_contract is not None and ctx.order_contract.is_new_risk
+        if not new_risk_contract:
+            if ctx.risk_decision is None or ctx.risk_decision.decision not in {
+                ExecutionDecision.APPROVE,
+                ExecutionDecision.SCALE_DOWN,
+            }:
+                return reject("RISK_NOT_VALID")
         # 11b. Low-Risk V2 constitutional order contract: reject, never resize.
         if ctx.order_contract is not None and ctx.order_contract.is_new_risk:
             contract = ctx.order_contract
