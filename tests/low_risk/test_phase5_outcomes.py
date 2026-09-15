@@ -74,3 +74,40 @@ def test_mfe_mae_from_path_and_horizon_filtering() -> None:
     assert outcomes[0].label == "NOT_TRADED_MISSED"
     assert outcomes[0].authority == "LEARNING_ONLY"
     assert outcomes[0].is_order is False
+
+
+async def test_outcome_recorder_persists_and_summarizes(database) -> None:
+    from crypto_trader.market_data.opportunity.outcomes import (
+        OpportunityOutcomeRecorder,
+        evaluate_opportunity,
+    )
+
+    recorder = OpportunityOutcomeRecorder(database.session_factory)
+    outcomes = evaluate_opportunity(
+        frozen_price=100.0,
+        expected_direction="LONG",
+        traded=True,
+        window_prices={"30m": 101.0, "4h": 99.0},
+    )
+    assert await recorder.record(trading_day="2026-09-16", symbol="BTCUSDT", outcomes=outcomes) == 2
+
+    # Idempotent re-record: same day/symbol/horizon updates instead of duplicating.
+    await recorder.record(trading_day="2026-09-16", symbol="BTCUSDT", outcomes=outcomes)
+    rows = await recorder.list_for_day("2026-09-16")
+    assert len(rows) == 2
+    assert {row["horizon"] for row in rows} == {"30m", "4h"}
+    assert {row["label"] for row in rows} == {"TRADED_CORRECT", "TRADED_WRONG"}
+
+    summary = await recorder.summary("2026-09-16")
+    assert summary["rows"] == 2
+    assert summary["labels"]["TRADED_CORRECT"] == 1
+    assert summary["labels"]["TRADED_WRONG"] == 1
+    assert summary["not_an_order"] is True
+
+
+async def test_migration_0028_creates_opportunity_outcomes(database) -> None:
+    from sqlalchemy import inspect
+
+    async with database.engine.begin() as conn:
+        names = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names())
+    assert "opportunity_outcomes" in names

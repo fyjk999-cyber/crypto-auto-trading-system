@@ -1042,3 +1042,32 @@ class DailyOpportunityTop10ORM(Base):
     factor_evidence_json: Mapped[list[Any] | None] = mapped_column(JSON)
     frozen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OpportunityOutcomeORM(Base):
+    """Growth V2 post-freeze opportunity evaluations (migration 0028).
+
+    One row per frozen opportunity/horizon with the decision-time-frozen entry
+    and the later outcome label, net return and MFE/MAE. Learning only.
+    """
+
+    __tablename__ = "opportunity_outcomes"
+    __table_args__ = (
+        UniqueConstraint(
+            "trading_day", "symbol", "horizon", name="uq_opportunity_outcomes_day_symbol_horizon"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trading_day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    horizon: Mapped[str] = mapped_column(String(8), nullable=False)
+    expected_direction: Mapped[str] = mapped_column(String(8), nullable=False)
+    traded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    return_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    net_return_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    mfe_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    mae_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    label: Mapped[str] = mapped_column(String(32), nullable=False)
+    authority: Mapped[str] = mapped_column(String(32), nullable=False, default="LEARNING_ONLY")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
