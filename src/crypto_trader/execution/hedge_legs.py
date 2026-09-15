@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from sqlalchemy import select
+
 
 class LegKind(StrEnum):
     ENTRY = "ENTRY"
@@ -158,6 +160,7 @@ class PositionLegService:
         state_version: str | None = None,
         state: str = "OPEN",
         opened_at=None,
+        quantity=None,
     ) -> None:
         from crypto_trader.persistence.models import PositionLegORM  # local: avoid cycles
 
@@ -181,6 +184,9 @@ class PositionLegService:
             row.state_version = state_version
             row.state = state
             row.opened_at = opened_at
+            if quantity is not None:
+                row.quantity = quantity
+                row.remaining_quantity = quantity
             await session.commit()
 
     async def get(self, leg_id: str) -> HedgeLegContract | None:
@@ -214,6 +220,7 @@ class PositionLegService:
         trade_plan_id: str | None = None,
         decision_id: str | None = None,
         state_version: str | None = None,
+        quantity=None,
     ) -> LegValidation:
         existing = await self.list_for_symbol(contract.symbol)
         validation = validate_hedge_leg(contract, existing)
@@ -223,8 +230,62 @@ class PositionLegService:
                 trade_plan_id=trade_plan_id,
                 decision_id=decision_id,
                 state_version=state_version,
+                quantity=quantity,
             )
         return validation
+
+    async def apply_fill(self, leg_id: str, signed_quantity):
+        """Apply a factual fill to one leg without ever going negative."""
+        from decimal import Decimal
+
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            row = await session.get(PositionLegORM, leg_id)
+            if row is None:
+                return None
+            current = Decimal(str(row.remaining_quantity or 0))
+            remaining = current + Decimal(str(signed_quantity))
+            row.remaining_quantity = remaining if remaining > 0 else Decimal("0")
+            if row.remaining_quantity == 0:
+                row.state = "CLOSED"
+            await session.commit()
+            return row.remaining_quantity
+
+    async def gross_exposure(self, symbol: str) -> dict:
+        """Per-side factual leg exposure (dual-side LONG+SHORT tracking)."""
+        from decimal import Decimal
+
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PositionLegORM).where(PositionLegORM.symbol == symbol)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        long_total = sum(
+            (Decimal(str(row.remaining_quantity or 0)) for row in rows if row.side == "LONG"),
+            Decimal("0"),
+        )
+        short_total = sum(
+            (Decimal(str(row.remaining_quantity or 0)) for row in rows if row.side == "SHORT"),
+            Decimal("0"),
+        )
+        return {
+            "symbol": symbol,
+            "long": long_total,
+            "short": short_total,
+            "net": long_total - short_total,
+            "gross": long_total + short_total,
+            "leg_count": len(rows),
+            "both_sides": long_total > 0 and short_total > 0,
+            "not_an_order": True,
+        }
 
     @staticmethod
     def _to_contract(row) -> HedgeLegContract:

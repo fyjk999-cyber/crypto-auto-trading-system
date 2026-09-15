@@ -215,3 +215,30 @@ async def test_create_hedge_signal_rejects_illegal_hedge(database) -> None:
         limit_price=Decimal("100"),
     )
     assert plan is None and signal is None
+
+
+async def test_per_leg_quantities_track_dual_side_exposure(database) -> None:
+    from crypto_trader.execution.hedge_legs import PositionLegService
+
+    service = PositionLegService(database.session_factory)
+    assert (
+        await service.register(LONG, trade_plan_id="plan-long", quantity=Decimal("0.5"))
+    ).allowed
+    assert (
+        await service.register(_short(), trade_plan_id="plan-short", quantity=Decimal("0.2"))
+    ).allowed
+
+    remaining = await service.apply_fill("leg-long", Decimal("-0.3"))
+    assert remaining == Decimal("0.2")
+
+    exposure = await service.gross_exposure("BTCUSDT")
+    assert exposure["long"] == Decimal("0.2")
+    assert exposure["short"] == Decimal("0.2")
+    assert exposure["both_sides"] is True
+    assert exposure["not_an_order"] is True
+
+    # A leg can never go negative; an over-fill clamps to zero and closes.
+    assert await service.apply_fill("leg-long", Decimal("-5")) == Decimal("0")
+    stored = await service.get("leg-long")
+    assert stored is not None  # contract remains readable for review
+    assert (await service.gross_exposure("BTCUSDT"))["long"] == Decimal("0")

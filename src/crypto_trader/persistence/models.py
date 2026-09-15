@@ -1009,6 +1009,8 @@ class PositionLegORM(Base):
     decision_id: Mapped[str | None] = mapped_column(String(64))
     state_version: Mapped[str | None] = mapped_column(String(128))
     state: Mapped[str] = mapped_column(String(16), nullable=False, default="OPEN")
+    quantity: Mapped[Decimal | None] = mapped_column(ExactDecimal())
+    remaining_quantity: Mapped[Decimal | None] = mapped_column(ExactDecimal())
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
