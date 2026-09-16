@@ -349,6 +349,7 @@ class NewsPipeline:
                 self.metrics.duplicates_near += 1
             else:
                 self.metrics.duplicates_syndicated += 1
+            self.metrics.reassessment_suppressed += 0
             return ProcessResult(
                 created=False,
                 raw_item_id=raw.raw_item_id,

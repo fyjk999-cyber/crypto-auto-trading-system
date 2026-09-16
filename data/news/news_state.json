@@ -1,0 +1,41 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "cycles_completed": 1,
+  "cycles_started": 1,
+  "is_order": false,
+  "last_error": null,
+  "last_metrics": {
+    "corrections": 0,
+    "dropped_or_deferred": 0,
+    "duplicates_exact": 0,
+    "duplicates_near": 0,
+    "duplicates_syndicated": 0,
+    "event_updates": 0,
+    "events_created": 0,
+    "evidence_created": 0,
+    "independent_corroborations": 0,
+    "items_ingested": 20,
+    "items_seen": 20,
+    "material_events": 0,
+    "parse_errors": 0,
+    "provider_errors": 1,
+    "provider_health": {
+      "okx_announcements": "HEALTHY",
+      "rss_cointelegraph": "NETWORK_ERROR"
+    },
+    "provider_state": {
+      "okx_announcements": "HEALTHY",
+      "rss_cointelegraph": "NETWORK_ERROR"
+    },
+    "providers_polled": 2,
+    "reassessment_requests": 0,
+    "reassessment_suppressed": 0,
+    "retractions": 0,
+    "stale_discoveries": 0
+  },
+  "last_progress_at": "2026-09-16T14:49:32.999954+00:00",
+  "runtime_sha": "smoke",
+  "stage": "CYCLE_COMPLETE",
+  "state": "RUNNING",
+  "updated_at": "2026-09-16T14:49:36.129779+00:00"
+}

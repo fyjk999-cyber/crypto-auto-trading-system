@@ -1,0 +1,11 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "cycles_completed": 1,
+  "cycles_started": 1,
+  "is_order": false,
+  "last_error": null,
+  "last_progress_at": "2026-09-16T14:50:14.813447+00:00",
+  "runtime_sha": "smoke2",
+  "stage": "CYCLE_COMPLETE",
+  "updated_at": "2026-09-16T14:50:17.876685+00:00"
+}

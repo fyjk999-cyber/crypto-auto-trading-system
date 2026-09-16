@@ -60,6 +60,7 @@ class NewsWorker:
     async def run_once(self) -> dict:
         self.cycles_started += 1
         self._set_stage("CYCLE_START")
+        self.pipeline.metrics = NewsCycleMetrics()
         metrics = NewsCycleMetrics()
         provider_states: dict[str, str] = {}
         now = self._clock()
@@ -107,6 +108,7 @@ class NewsWorker:
             await self._record_provider_success(provider, state, result, processed, now)
             provider_states[provider.provider_id] = ProviderHealth.HEALTHY.value
             metrics.provider_health[provider.provider_id] = ProviderHealth.HEALTHY.value
+        _merge_pipeline_metrics(metrics, self.pipeline.metrics)
         self.cycles_completed += 1
         self.last_progress_at = now
         self.last_error = None
@@ -229,6 +231,28 @@ def _item_priority(item) -> tuple[int, float]:
     source_rank = 0 if item.source_class.value.endswith("OFFICIAL") else 1
     timestamp = item.published_at.timestamp() if item.published_at else 0.0
     return (source_rank, -timestamp)
+
+
+def _merge_pipeline_metrics(metrics: NewsCycleMetrics, pipeline_metrics: NewsCycleMetrics) -> None:
+    for name in (
+        "items_ingested",
+        "duplicates_exact",
+        "duplicates_near",
+        "duplicates_syndicated",
+        "independent_corroborations",
+        "events_created",
+        "event_updates",
+        "corrections",
+        "retractions",
+        "evidence_created",
+        "material_events",
+        "reassessment_requests",
+        "reassessment_suppressed",
+        "stale_discoveries",
+        "parse_errors",
+    ):
+        setattr(metrics, name, getattr(pipeline_metrics, name))
+    metrics.dropped_or_deferred += pipeline_metrics.dropped_or_deferred
 
 
 def _aware(value: datetime | None) -> datetime:
