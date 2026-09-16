@@ -41,6 +41,8 @@ from crypto_trader.market_data.opportunity.scanner import FactorScanner
 from crypto_trader.market_data.opportunity.service import OpportunityScannerService
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
+from crypto_trader.news.config import NewsConfig
+from crypto_trader.news.retrieval import NewsRetriever
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
 from crypto_trader.persistence.database import Database
@@ -157,7 +159,22 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
     llm_decisions = LLMDecisionStore(database.session_factory)
-    chief_context = ChiefContextLoader(database.session_factory)
+    news_enabled = _news_context_enabled()
+    news_retriever = None
+    if news_enabled:
+        news_config = NewsConfig.from_env()
+        news_retriever = NewsRetriever(
+            database.session_factory,
+            top_k=news_config.context_top_k,
+            token_budget=news_config.context_token_budget,
+            include_broad=news_config.context_include_broad,
+        )
+    chief_context = ChiefContextLoader(
+        database.session_factory,
+        news_retriever=news_retriever,
+        token_budget=(news_retriever.token_budget if news_retriever is not None else None),
+    )
+    runtime_context_loader = chief_context if news_enabled else None
     # Core LLM router: DeepSeek -> GLM (fresh factual state only) -> offline.
     # Until the runtime supplies a fresh-state prompt rebuilder, the backup is
     # deliberately skipped rather than replaying a stale prompt; the router then
@@ -229,6 +246,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         sizer=sizer,
         opportunity_board=opportunity_board,
         evidence_router=evidence_router,
+        context_loader=runtime_context_loader,
         fresh_context_provider=fresh_context_provider,
         expert_engine=expert_engine,
     )
@@ -243,6 +261,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             audit=audit,
             risk_summary=risk.config.model_dump(mode="json"),
             tool_chief=tool_chief,
+            context_loader=runtime_context_loader,
             expert_engine=expert_engine,
             fresh_context_provider=fresh_context_provider,
             hedge_planner=LiveLLMTradePlanner(
@@ -324,6 +343,10 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         position_manager=position_manager,
         app_state=app_state,
     )
+
+
+def _news_context_enabled() -> bool:
+    return os.environ.get("NEWS_ENABLED", "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 async def _verify_migrations(database: Database) -> None:

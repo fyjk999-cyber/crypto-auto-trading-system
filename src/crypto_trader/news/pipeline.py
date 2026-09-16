@@ -457,7 +457,7 @@ class NewsPipeline:
             correction_of_version=candidate.event_version if (correction or retraction) else None,
             trigger=eligible,
             canonical_title=raw.title or candidate.canonical_title,
-            factual_summary=raw.summary_snippet or candidate.factual_summary,
+            factual_summary=(raw.summary_snippet or raw.title or candidate.factual_summary),
             earliest_published_at=min_filter(candidate.earliest_published_at, raw.published_at) or candidate.first_seen_at,
             latest_update_at=max_filter(candidate.latest_update_at, raw.published_at, now),
             primary_source_item_id=raw.raw_item_id,

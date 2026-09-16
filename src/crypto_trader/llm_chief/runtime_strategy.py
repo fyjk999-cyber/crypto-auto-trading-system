@@ -247,6 +247,8 @@ class LiveLLMDecisionStrategy(StrategyPlugin):
             research_refs=research_refs,
             episode_refs=episode_refs,
             opportunity_lineage=lineage,
+            news_context=chief_ctx.news_context,
+            state_version=chief_ctx.state_version,
         )
         if self.opportunity_board is not None:
             self.opportunity_board.record_decision(

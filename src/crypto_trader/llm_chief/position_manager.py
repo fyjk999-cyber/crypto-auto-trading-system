@@ -256,6 +256,8 @@ class LiveLLMPositionManager:
             episode_refs=episode_refs,
             parent_decision_id=plan.decision_id,
             position_context=position_context,
+            news_context=chief_ctx.news_context,
+            state_version=chief_ctx.state_version,
         )
         await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
         max_hold_reached = (

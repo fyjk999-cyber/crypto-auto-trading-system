@@ -24,9 +24,18 @@ from crypto_trader.persistence.models import (
 class ChiefContextLoader:
     """Read-only retrieval; retrieved records never become an execution gate."""
 
-    def __init__(self, session_factory, *, limit: int = 5) -> None:
+    def __init__(
+        self,
+        session_factory,
+        *,
+        limit: int = 5,
+        news_retriever=None,
+        token_budget: int | None = None,
+    ) -> None:
         self.session_factory = session_factory
         self.limit = limit
+        self.news_retriever = news_retriever
+        self.token_budget = token_budget
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
         async with self.session_factory() as session:
@@ -106,7 +115,7 @@ class ChiefContextLoader:
                 .all()
             )
 
-        return replace(
+        enriched = replace(
             context,
             knowledge=[
                 {
@@ -163,6 +172,9 @@ class ChiefContextLoader:
             episode_refs=episode_ids,
             pattern_refs=[row.pattern_id for row in patterns],
         )
+        if self.news_retriever is not None:
+            enriched = replace(enriched, news_context=await self._news_context(enriched))
+        return enriched
 
     async def _growth_retrieval_evidence(self, context: ChiefTraderContext):
         """Canonical as-of Growth retrieval for Chief context (read-only)."""
@@ -199,6 +211,7 @@ class ChiefContextLoader:
             "coin_profile": self._coin_profile_evidence,
             "factor_intelligence": self._pattern_evidence,
             "growth_memory": self._growth_retrieval_evidence,
+            "news_context": self._news_evidence,
         }
         loader = loaders.get(name)
         if loader is None:
@@ -214,6 +227,44 @@ class ChiefContextLoader:
             confidence_of_measurement=1.0 if finding else 0.0,
             data_quality="FACTUAL_REVIEWED" if finding else "NO_MATCHES",
             source_refs=refs,
+        )
+
+    async def _news_context(self, context: ChiefTraderContext) -> dict:
+        retriever = self.news_retriever
+        if retriever is None:
+            return _news_unavailable("NEWS_RETRIEVER_NOT_CONFIGURED")
+        try:
+            return await retriever.get_news_context(
+                symbol=context.symbol,
+                as_of=_parse_as_of(getattr(context, "prepared_at", None)),
+                position_state={
+                    "symbol": context.symbol,
+                    "position_state": context.position_state.value,
+                    **dict(context.position_context or {}),
+                },
+                max_items=self.limit,
+                token_budget=self.token_budget,
+            )
+        except Exception as exc:  # fail explicit: unavailable, never fabricated
+            return _news_unavailable(f"NEWS_CONTEXT_UNAVAILABLE:{type(exc).__name__}")
+
+    async def _news_evidence(self, context: ChiefTraderContext):
+        news_context = getattr(context, "news_context", None)
+        if news_context is None:
+            news_context = await self._news_context(context)
+        events = list(news_context.get("events") or [])
+        supporting: list[str] = []
+        contrary: list[str] = []
+        for event in events:
+            label = str(event.get("event_id") or "")
+            supporting.extend(f"{label}: {point}" for point in event.get("support_points") or [])
+            contrary.extend(f"{label}: {point}" for point in event.get("counter_points") or [])
+        available = bool(events)
+        finding = news_context if available else {}
+        return (
+            finding,
+            list(news_context.get("news_evidence_refs") or []),
+            _parse_as_of(news_context.get("as_of")),
         )
 
     async def _episode_evidence(self, context: ChiefTraderContext):
@@ -404,6 +455,32 @@ class ChiefContextLoader:
             else {}
         )
         return finding, [f"pattern:{row.pattern_id}" for row in rows], _latest(rows, "created_at")
+
+
+def _parse_as_of(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        except ValueError:
+            return None
+    return None
+
+
+def _news_unavailable(reason: str) -> dict:
+    return {
+        "as_of": datetime.now(UTC).isoformat(),
+        "health": "NO_NEWS_AVAILABLE",
+        "unavailable": True,
+        "events": [],
+        "news_evidence_refs": [],
+        "context_hash": "",
+        "authority": "EVIDENCE_ONLY",
+        "is_order": False,
+        "reason": reason,
+    }
 
 
 def _latest(rows, field: str):
