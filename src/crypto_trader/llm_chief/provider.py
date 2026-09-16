@@ -77,7 +77,7 @@ class DeepSeekProvider:
         retries: int = 1,
         max_tokens: int = 1200,
         thinking: bool = True,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse:
         import json
@@ -296,7 +296,7 @@ class GLMProvider:
         retries: int = 1,
         max_tokens: int = 1200,
         thinking: bool = True,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse:
         import json
