@@ -486,3 +486,48 @@ While this job was finishing, the acceptance runtime was killed by a concurrent 
 At the clean boundary (`16:29:09Z`): 7 plans (2 CLOSED, 4 ACTIVE, 1 CANCELLED), 12 orders, 19
 fills, 444 decisions, 2 trade_episodes, 4 ai_trade_reviews, 20 daily_opportunity_top10 rows; no
 oversell, no offline fill, no duplicate client order id observed in this job's checks.
+
+### Final state - the acceptance window is SUPERSEDED; the lease guard correctly refused us
+
+Because port 8010 went free again (the foreign `f319ecb` process also stopped cleanly at
+`16:31:24.768686Z`), this job attempted one more restart of the pinned acceptance SHA, per the
+task's "restart only if dead" rule.
+
+- Launch `00:32:48 +08` (log marker `SOAK RESTART 2026-09-17T00:32:48+0800 sha=1ef721d6d491`).
+- It **refused to start**, and the refusal is the correct behaviour:
+  ```
+  await state.engine.start()
+    File "/tmp/lr2-soak2/src/crypto_trader/runtime/engine.py", line 195, in start
+      raise LeaseNotHeld("another engine instance holds the execution lease")
+  crypto_trader.domain.errors.LeaseNotHeld: another engine instance holds the execution lease
+  ERROR:    Application startup failed. Exiting.
+  ```
+- The concurrent session had already re-taken the runtime: pid `73228` from
+  `/Users/huhongjie/lowrisk-provider-durability`, `/health` OVERALL OK, and
+  `execution_lease = {required: true, held: true, lease_key: "crypto_engine_execution",
+  owner_id: "engine_run_ee802de2d81942369eecaf2fb13ce5a8", fence_generation: 5,
+  single_writer: true}`.
+- No further attempt was made to seize the port, the lease or the DB.
+
+This is **positive evidence for the SPEC single-writer requirement**: the execution lease plus
+fence generation did exactly its job - it stopped a second engine from double-writing the shared
+acceptance DB, even across two different SHAs and two different venvs. It also settles the
+ownership question: the live acceptance runtime is now `f319ecb`
+(`/Users/huhongjie/lowrisk-provider-durability`), not `1ef721d6d491`.
+
+Revision to the accounting table: segment 3 is the foreign `f319ecb` window and it now owns the
+lease (`fence_generation=5`). The `1ef721d6d491` acceptance window ends at
+`2026-09-16T16:29:09Z` and **must not be extended**; its total is 4h33m24s, non-contiguous.
+The earlier `00:24:13` restart contributed 4m44s of that and is already inside the contaminated
+region only from `16:29:09Z` onward - the two job outputs (`16:26:20Z`, `16:26:48Z`) precede it
+and remain clean.
+
+### FINAL_STATUS for this job
+
+- `cron-49` step 1 (daily Top-10 freeze): **PASS** - 10 rows for `2026-09-17`, re-run
+  `already_frozen=true`, first-freeze immutable, outputs written before the contamination boundary.
+- `cron-49` step 2 (Growth lifecycle review): **PASS** - `written=2`, verdicts `[DEFECT, DEFECT]`
+  matching a factual `net_bps=-26.53927813163482` loss, all findings citing real persisted ids.
+- Phase 7 `>=72h` soak: **NOT MET** (4h33m24s non-contiguous; window superseded). Stays **PARTIAL**.
+- New defects recorded: `ai_trade_reviews` decimal round-trip (P1), missing `trade_episode` on
+  terminal deterministic exits (P1), shared acceptance DB across two SHAs (P0 integrity).
