@@ -1028,12 +1028,16 @@ class DailyOpportunityTop10ORM(Base):
     __tablename__ = "daily_opportunity_top10"
     __table_args__ = (
         UniqueConstraint("trading_day", "rank", name="uq_daily_top10_day_rank"),
-        UniqueConstraint("trading_day", "symbol", name="uq_daily_top10_day_symbol"),
+        UniqueConstraint("trading_day", "observation_id", name="uq_daily_top10_day_observation"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     trading_day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
     rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    observation_id: Mapped[str | None] = mapped_column(String(64))
+    snapshot_hash: Mapped[str | None] = mapped_column(String(64))
+    snapshot_version: Mapped[str] = mapped_column(String(16), default="scan-snapshot-v1")
+    evidence_package_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     symbol: Mapped[str] = mapped_column(String(64), nullable=False)
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     candidate_source: Mapped[str] = mapped_column(String(64), nullable=False, default="")
@@ -1097,6 +1101,9 @@ class ScanSnapshotORM(Base):
     snapshot_id: Mapped[str] = mapped_column(String(64), nullable=False)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     cycle_id: Mapped[str] = mapped_column(String(64), index=True)
+    trading_day: Mapped[str | None] = mapped_column(String(10), index=True)
+    snapshot_version: Mapped[str] = mapped_column(String(16), default="scan-snapshot-v1")
+    snapshot_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     symbol: Mapped[str] = mapped_column(String(32), index=True)
     candidate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     control: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

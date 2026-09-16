@@ -13,8 +13,11 @@ Derived/learning only: LEARNING_ONLY, is_order=False, no runtime authority.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import random
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -22,6 +25,7 @@ from crypto_trader.domain.identifiers import new_id
 from crypto_trader.persistence.models import ScanSnapshotORM
 
 SCAN_FEATURE_VERSION = "scan-features-v1"
+SCAN_SNAPSHOT_VERSION = "scan-snapshot-v1"
 CONTROL_SAMPLING_METHOD = "STRATIFIED_RANDOM"
 
 
@@ -119,9 +123,16 @@ def build_scan_snapshot(
     selection_probability: float | None = None,
     market_regime: str | None = None,
 ) -> dict:
+    captured = captured_at or datetime.now(UTC)
+    if captured.tzinfo is None:
+        captured = captured.replace(tzinfo=UTC)
+    canonical = json.dumps(features, sort_keys=True, default=str).encode()
     return {
         "snapshot_id": new_id("scan"),
-        "captured_at": captured_at or datetime.now(UTC),
+        "captured_at": captured,
+        "trading_day": captured.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat(),
+        "snapshot_version": SCAN_SNAPSHOT_VERSION,
+        "snapshot_hash": hashlib.sha256(canonical).hexdigest(),
         "cycle_id": cycle_id or new_id("cycle"),
         "symbol": symbol,
         "candidate": bool(candidate),
