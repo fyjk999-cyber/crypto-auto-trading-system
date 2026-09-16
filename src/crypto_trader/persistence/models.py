@@ -1222,3 +1222,45 @@ class GrowthMemorySpeedORM(Base):
     can_modify_core: Mapped[bool] = mapped_column(Boolean, default=False)
     authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GrowthEventReviewORM(Base):
+    """Event-level factual lifecycle counterfactual review (LEARNING_ONLY)."""
+
+    __tablename__ = "growth_event_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "episode_id", "source_event_id", "review_type", "review_version",
+            name="uq_growth_event_reviews_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    episode_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_id: Mapped[str | None] = mapped_column(String(64))
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64))
+    review_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    review_version: Mapped[str] = mapped_column(String(16), default="review-v1")
+    status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
+    actual_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    counterfactual_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    actual_net_bps: Mapped[float | None] = mapped_column(Float)
+    counterfactual_net_bps: Mapped[float | None] = mapped_column(Float)
+    delta_bps: Mapped[float | None] = mapped_column(Float)
+    mfe_bps: Mapped[float | None] = mapped_column(Float)
+    mae_bps: Mapped[float | None] = mapped_column(Float)
+    cost_bps: Mapped[float | None] = mapped_column(Float)
+    fees: Mapped[float | None] = mapped_column(Float)
+    slippage_bps: Mapped[float | None] = mapped_column(Float)
+    funding_bps: Mapped[float | None] = mapped_column(Float)
+    maturity_horizon: Mapped[str | None] = mapped_column(String(16))
+    matured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verdict: Mapped[str | None] = mapped_column(String(32))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    source_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
+    is_order: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
