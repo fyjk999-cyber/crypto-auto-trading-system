@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from crypto_trader.learning.memory_speed_store import MemorySpeedStore
 from crypto_trader.learning.memory_speeds import MemoryRecord, apply_observation
@@ -18,6 +18,7 @@ from crypto_trader.market_data.opportunity import ledger_freeze, outcome_maturer
 from crypto_trader.persistence.models import (
     AIMarketPatternORM,
     GrowthEventReviewORM,
+    GrowthMemoryVersionORM,
     OpportunityOutcomeMaturationORM,
     ScanSnapshotORM,
 )
@@ -384,6 +385,7 @@ class GrowthWorker:
             "due_work_items": 0,
             "memory_updates": 0,
             "pattern_profile": {},
+            "retrieval_versions": 0,
             "errors": [],
         }
         self._heartbeat_stage("SCAN_INGEST")
@@ -422,6 +424,16 @@ class GrowthWorker:
             )
         except Exception as exc:
             summary["errors"].append(f"pattern_profile:{type(exc).__name__}")
+        self._heartbeat_stage("RETRIEVAL_REFRESH")
+        try:
+            async with self._session_factory() as session:
+                summary["retrieval_versions"] = int(
+                    await session.scalar(select(func.count()).select_from(GrowthMemoryVersionORM))
+                    or 0
+                )
+            self.metrics["retrieval_versions"] = summary["retrieval_versions"]
+        except Exception as exc:
+            summary["errors"].append(f"retrieval_refresh:{type(exc).__name__}")
         self.metrics["top10_frozen"] = int(self.metrics.get("top10_frozen", 0)) + (
             1 if summary["top10"] == "FROZEN" else 0
         )

@@ -346,7 +346,9 @@ async def test_run_once_wires_outcome_batch_and_stage_truth(database, tmp_path, 
     assert calls["max_work_items"] == 7
     assert result["due_work_items"] <= 7
     assert stages[:2] == ["CYCLE_START", "SCAN_INGEST"]
-    assert "OUTCOME_MATURATION" in stages and stages[-1] == "CYCLE_COMPLETE"
+    assert "OUTCOME_MATURATION" in stages
+    assert stages.index("RETRIEVAL_REFRESH") < stages.index("CYCLE_COMPLETE")
+    assert stages[-1] == "CYCLE_COMPLETE"
     assert internal[0][0] == "SCAN_INGEST"
     assert internal[0][1] == 1 and internal[0][2] == 0
     heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
