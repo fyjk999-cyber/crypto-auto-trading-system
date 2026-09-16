@@ -305,6 +305,36 @@ class TradingEngine:
             actions.append("RECOVERY_FACTUAL_DIVERGENCE")
         else:
             self.health.set("recovery_factual_state", True, "MATCHED")
+        if self.leg_service is not None and self.leg_reconciler is not None:
+            open_legs = await self.leg_service.open_legs_all()
+            for symbol in sorted({str(leg["symbol"]) for leg in open_legs}):
+                position = await self.portfolio.get_position(symbol)
+                quantity = position.quantity if position is not None else Decimal("0")
+                leg_report = await self.leg_reconciler.reconcile(
+                    symbol,
+                    quantity,
+                    broker_quantity=quantity,
+                    after_restart=True,
+                )
+                if not leg_report["leg_execution_safe"]:
+                    self.reconciliation_halted = True
+                    self.health.set("leg_reconciliation", False, str(leg_report["status"]))
+                    await self.audit.log(
+                        "LEG_RECONCILIATION_HALTED",
+                        target=symbol,
+                        run_id=run_id,
+                        after={
+                            "status": leg_report["status"],
+                            "legacy_status": leg_report["legacy_status"],
+                            "checks": leg_report["checks"],
+                            "leg_quantity_issues": leg_report["leg_quantity_issues"][:3],
+                            "orphan_fills": leg_report["orphan_fills"][:3],
+                            "unknown_orders": leg_report["unknown_orders"][:3],
+                        },
+                    )
+                    actions.append("LEG_RECONCILIATION_HALTED")
+                else:
+                    self.health.set("leg_reconciliation", True, str(leg_report["status"]))
         report = await self.lineage_auditor.audit()
         self.health.set("factual_fill_lineage", bool(report["ok"]), report.get("flag") or "OK")
         if not report["ok"]:

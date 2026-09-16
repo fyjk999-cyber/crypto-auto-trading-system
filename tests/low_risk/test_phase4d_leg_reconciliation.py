@@ -33,7 +33,9 @@ async def _seed(service: PositionLegService, *, quantity: Decimal) -> None:
 async def test_no_leg_activity_with_flat_net_is_matched(database) -> None:
     service = PositionLegService(database.session_factory)
     result = await LegPositionReconciler(service).reconcile("BTCUSDT", Decimal("0"))
-    assert result["status"] == "MATCHED"
+    # H4 canonical status; legacy_status keeps the pre-closure name.
+    assert result["status"] == "MATCH"
+    assert result["legacy_status"] == "MATCHED"
     assert result["leg_execution_safe"] is True
     assert result["is_order"] is False
     assert result["authority"] == "RECONCILIATION_ONLY"
@@ -42,7 +44,9 @@ async def test_no_leg_activity_with_flat_net_is_matched(database) -> None:
 async def test_untracked_net_position_is_flagged(database) -> None:
     service = PositionLegService(database.session_factory)
     result = await LegPositionReconciler(service).reconcile("BTCUSDT", Decimal("0.5"))
-    assert result["status"] == "UNTRACKED_NET_POSITION"
+    # OLD status name: UNTRACKED_NET_POSITION. NEW canonical: AGGREGATE_MISMATCH.
+    assert result["status"] == "AGGREGATE_MISMATCH"
+    assert result["legacy_status"] == "UNTRACKED_NET_POSITION"
     assert result["leg_execution_safe"] is False
 
 
@@ -50,7 +54,9 @@ async def test_divergence_between_legs_and_net_is_flagged(database) -> None:
     service = PositionLegService(database.session_factory)
     await _seed(service, quantity=Decimal("1"))
     result = await LegPositionReconciler(service).reconcile("BTCUSDT", Decimal("0.4"))
-    assert result["status"] == "DIVERGED"
+    # OLD status name: DIVERGED. NEW canonical: AGGREGATE_MISMATCH.
+    assert result["status"] == "AGGREGATE_MISMATCH"
+    assert result["legacy_status"] == "DIVERGED"
     assert result["computed_net"] == Decimal("1.00000000")
     assert result["difference"] == Decimal("-0.60000000")
 
@@ -60,7 +66,7 @@ async def test_matching_legs_and_net_are_safe_for_hedge_execution(database) -> N
     await _seed(service, quantity=Decimal("1"))
     await service.apply_order_fill("leg-long", OrderSide.SELL, Decimal("0.25"))
     result = await LegPositionReconciler(service).reconcile("BTCUSDT", Decimal("0.75"))
-    assert result["status"] == "MATCHED"
+    assert result["status"] == "MATCH"
     assert result["leg_execution_safe"] is True
 
 

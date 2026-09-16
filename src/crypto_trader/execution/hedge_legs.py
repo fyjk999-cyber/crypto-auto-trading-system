@@ -668,6 +668,38 @@ class PositionLegService:
             if row.remaining_quantity is not None and row.remaining_quantity > 0
         ]
 
+    async def all_legs_for_symbol(self, symbol: str) -> list[dict]:
+        """Every persisted leg for a symbol, including CLOSED (for restart truth)."""
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PositionLegORM).where(PositionLegORM.symbol == symbol)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        out = []
+        for row in rows:
+            item = self._open_leg_dict(row)
+            item.update(
+                {
+                    "state": row.state,
+                    "closed_at": row.closed_at,
+                    "terminal_reason": row.terminal_reason,
+                    "realized_pnl": row.realized_pnl,
+                    "fees": row.fees,
+                    "funding": row.funding,
+                }
+            )
+            out.append(item)
+        return out
+
     async def open_legs_all(self) -> list[dict]:
         """Every factual open leg across symbols (independent of net view)."""
         from sqlalchemy import select
@@ -735,11 +767,14 @@ class PositionLegService:
 
 
 class LegPositionReconciler:
-    """Compare leg-level facts with the canonical net position.
+    """Reconcile independent leg truth against orders, fills and aggregate views.
 
-    Until this reports MATCHED the portfolio cannot treat legs as the source of
-    truth, so hedge execution must stay fail-closed. This is read-only
-    book-keeping and never submits an order.
+    The reconciler is read-only. ``status`` follows the HEDGE final-closure
+    contract (MATCH / PENDING_ORDER / PARTIAL_FILL / UNKNOWN / ORPHAN_FILL /
+    LEG_QUANTITY_MISMATCH / AGGREGATE_MISMATCH / CLOSED / RECOVERED);
+    ``legacy_status`` keeps the earlier MATCHED / UNTRACKED_NET_POSITION /
+    DIVERGED names for older callers. Only MATCH / CLOSED / RECOVERED set
+    ``leg_execution_safe``; every unresolved uncertainty fails safe.
     """
 
     authority = "RECONCILIATION_ONLY"
@@ -749,27 +784,198 @@ class LegPositionReconciler:
         self.leg_service = leg_service
         self.tolerance = Decimal(str(tolerance))
 
-    async def reconcile(self, symbol: str, net_quantity) -> dict:
+    async def _orders_for_legs(self, leg_ids: list[str]) -> list[dict]:
+        if not leg_ids:
+            return []
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import OrderORM, PositionLegOrderORM
+
+        async with self.leg_service._session_factory() as session:
+            allocations = (
+                (
+                    await session.execute(
+                        select(PositionLegOrderORM).where(PositionLegOrderORM.leg_id.in_(leg_ids))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_client = {row.client_order_id: row for row in allocations}
+            if not by_client:
+                return []
+            orders = (
+                (
+                    await session.execute(
+                        select(OrderORM).where(OrderORM.client_order_id.in_(list(by_client)))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        out = []
+        for order in orders:
+            allocation = by_client.get(order.client_order_id)
+            out.append(
+                {
+                    "client_order_id": order.client_order_id,
+                    "internal_order_id": order.internal_order_id,
+                    "leg_id": allocation.leg_id if allocation else None,
+                    "status": str(order.status),
+                    "reduce_only": bool(allocation.reduce_only) if allocation else False,
+                    "intended_quantity": allocation.intended_quantity if allocation else None,
+                    "source_action": allocation.source_action if allocation else "",
+                }
+            )
+        return out
+
+    async def _orphan_fills(self, symbol: str, allocated_clients: set[str]) -> list[dict]:
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import FillORM
+
+        async with self.leg_service._session_factory() as session:
+            fills = (
+                (await session.execute(select(FillORM).where(FillORM.symbol == symbol)))
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "fill_id": fill.fill_id,
+                "client_order_id": fill.client_order_id,
+                "quantity": fill.quantity,
+                "side": fill.side,
+            }
+            for fill in fills
+            if str(fill.client_order_id or "") not in allocated_clients
+        ]
+
+    async def reconcile(
+        self,
+        symbol: str,
+        net_quantity,
+        *,
+        broker_quantity=None,
+        after_restart: bool = False,
+    ) -> dict:
         exposure = await self.leg_service.gross_exposure(symbol)
+        legs = await self.leg_service.all_legs_for_symbol(symbol)
+        open_legs = [
+            leg
+            for leg in legs
+            if leg.get("state") == "OPEN" and Decimal(str(leg.get("remaining_quantity") or 0)) > 0
+        ]
         computed_net = (exposure["long"] - exposure["short"]).quantize(self.tolerance)
-        net = Decimal(str(net_quantity or 0))
-        diff = net - computed_net
-        if abs(diff) <= self.tolerance:
-            status = "MATCHED"
-        elif computed_net == 0 and net != 0:
-            status = "UNTRACKED_NET_POSITION"
+        aggregate_source = broker_quantity if broker_quantity is not None else net_quantity
+        net = Decimal(str(aggregate_source or 0))
+        difference = (net - computed_net).quantize(self.tolerance)
+        aggregate_ok = abs(difference) <= self.tolerance
+
+        leg_quantity_issues: list[dict] = []
+        for leg in legs:
+            fills = await self.leg_service.leg_fills(str(leg["leg_id"]))
+            if not fills:
+                continue
+            signed = Decimal("0")
+            opened_sum = Decimal("0")
+            for fill in fills:
+                quantity = Decimal(str(fill["quantity"]))
+                side = str(fill["side"]).upper()
+                if leg["side"] == "LONG":
+                    adds = side == "BUY"
+                else:
+                    adds = side == "SELL"
+                if adds:
+                    opened_sum += quantity
+                    signed += quantity
+                else:
+                    signed -= quantity
+            opened = Decimal(str(leg.get("quantity") or 0))
+            remaining = Decimal(str(leg.get("remaining_quantity") or 0))
+            if (
+                abs(signed - remaining) > self.tolerance
+                or abs(opened_sum - opened) > self.tolerance
+            ):
+                leg_quantity_issues.append(
+                    {
+                        "leg_id": leg["leg_id"],
+                        "opened_quantity": str(opened),
+                        "open_allocations": str(opened_sum),
+                        "allocated_signed": str(signed),
+                        "remaining_quantity": str(remaining),
+                    }
+                )
+
+        orders = await self._orders_for_legs([str(leg["leg_id"]) for leg in legs])
+        unknown_orders = [order for order in orders if order["status"] == "UNKNOWN"]
+        partial_orders = [order for order in orders if order["status"] == "PARTIALLY_FILLED"]
+        pending_orders = [
+            order for order in orders if order["status"] in {"NEW", "SUBMITTED", "OPEN", "PENDING"}
+        ]
+
+        orphan_fills: list[dict] = []
+        if legs:
+            allocated_clients: set[str] = set()
+            for leg in legs:
+                allocated_clients.update(
+                    str(fill["client_order_id"] or "")
+                    for fill in await self.leg_service.leg_fills(str(leg["leg_id"]))
+                )
+            orphan_fills = await self._orphan_fills(symbol, allocated_clients)
+
+        if not legs and net != 0:
+            legacy_status = "UNTRACKED_NET_POSITION"
+        elif aggregate_ok:
+            legacy_status = "MATCHED"
         else:
-            status = "DIVERGED"
+            legacy_status = "DIVERGED"
+
+        if unknown_orders:
+            status = "UNKNOWN"
+        elif orphan_fills:
+            status = "ORPHAN_FILL"
+        elif leg_quantity_issues:
+            status = "LEG_QUANTITY_MISMATCH"
+        elif partial_orders:
+            status = "PARTIAL_FILL"
+        elif pending_orders:
+            status = "PENDING_ORDER"
+        elif not aggregate_ok:
+            status = "AGGREGATE_MISMATCH"
+        elif legs and not open_legs:
+            status = "CLOSED"
+        elif after_restart and legacy_status == "MATCHED":
+            status = "RECOVERED"
+        else:
+            status = "MATCH"
+
+        safe = status in {"MATCH", "CLOSED", "RECOVERED"}
         return {
             "symbol": symbol,
             "net_quantity": net,
+            "computed_net": computed_net,
+            "difference": difference,
             "leg_long": exposure["long"],
             "leg_short": exposure["short"],
-            "computed_net": computed_net,
-            "difference": diff,
-            "status": status,
+            "gross": exposure["gross"],
+            "open_leg_count": len(open_legs),
             "leg_count": exposure["leg_count"],
-            "leg_execution_safe": status == "MATCHED",
+            "closed_leg_count": len(legs) - len(open_legs),
+            "both_sides": exposure["both_sides"],
+            "status": status,
+            "legacy_status": legacy_status,
+            "leg_execution_safe": safe,
+            "checks": {
+                "aggregate_ok": aggregate_ok,
+                "leg_quantity_ok": not leg_quantity_issues,
+                "no_unknown_orders": not unknown_orders,
+                "no_orphan_fills": not orphan_fills,
+            },
+            "unknown_orders": unknown_orders[:10],
+            "pending_orders": (pending_orders + partial_orders)[:10],
+            "leg_quantity_issues": leg_quantity_issues[:10],
+            "orphan_fills": orphan_fills[:10],
             "authority": self.authority,
             "is_order": False,
         }
