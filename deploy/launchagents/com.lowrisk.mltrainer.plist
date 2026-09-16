@@ -19,6 +19,8 @@
   <string>__REPO__/data/ml/logs/mltrainer.err.log</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>ML_PYTHON</key>
+    <string>__PYTHON__</string>
     <key>RUNNING_SHA</key>
     <string>__SHA__</string>
   </dict>
