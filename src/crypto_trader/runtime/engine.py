@@ -898,6 +898,27 @@ class TradingEngine:
                     },
                 )
                 return None
+        lifecycle_action = str(signal.metadata.get("lifecycle_action") or "").upper()
+        if lifecycle_action in {"HEDGE", "REVERSE", "ADD"}:
+            target_leg_id = str(signal.metadata.get("leg_id") or "")
+            if not target_leg_id:
+                await self.audit.log(
+                    "LEG_TARGET_REQUIRED",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"lifecycle_action": lifecycle_action, "symbol": signal.symbol},
+                )
+                return None
+            if self.leg_service is not None:
+                unknowns = await self.leg_service.unresolved_unknowns(target_leg_id)
+                if unknowns:
+                    await self.audit.log(
+                        "LEG_ORDER_UNKNOWN_BLOCKS_REPLACEMENT",
+                        target=target_leg_id,
+                        run_id=run_id,
+                        after={"unknown_orders": unknowns[:5]},
+                    )
+                    return None
         if (is_entry or is_position_action) and not trade_plan_id:
             await self.audit.log(
                 "TRADEPLAN_REQUIRED",
@@ -1306,6 +1327,18 @@ class TradingEngine:
             before={"status": OrderStatus.SUBMITTED.value},
             after={"status": exchange_order.status.value},
         )
+        if order.metadata.get("leg_id") and self.leg_service is not None:
+            await self.leg_service.record_leg_order(
+                leg_id=str(order.metadata["leg_id"]),
+                client_order_id=order.client_order_id,
+                side=order.side.value,
+                intended_quantity=order.quantity,
+                trade_plan_id=order.metadata.get("trade_plan_id"),
+                decision_id=order.metadata.get("decision_id"),
+                reduce_only=bool(order.metadata.get("reduce_only")),
+                source_action=str(order.metadata.get("lifecycle_action") or ""),
+                internal_order_id=order.internal_order_id,
+            )
         self.health.set("submission", True)
         return risk_decision
 
@@ -1450,11 +1483,19 @@ class TradingEngine:
         )
         leg_id = order.metadata.get("leg_id")
         if leg_id and self.leg_service is not None:
-            # Hedge/reverse legs track their own factual quantity; a fill on one
-            # side must never silently net into the opposite leg of the symbol.
+            # Every leg fill is allocated to exactly one leg and is idempotent
+            # by fill_id; duplicate WS/REST delivery cannot double-apply.
             try:
-                remaining = await self.leg_service.apply_order_fill(
-                    str(leg_id), order.side, fill.quantity
+                allocation = await self.leg_service.allocate_fill(
+                    fill_id=str(fill.fill_id),
+                    leg_id=str(leg_id),
+                    side=order.side,
+                    price=fill.price,
+                    quantity=fill.quantity,
+                    fee=getattr(fill, "fee", None),
+                    client_order_id=order.client_order_id,
+                    order_id=order.internal_order_id,
+                    terminal_reason=("EXIT" if order.metadata.get("reduce_only") is True else None),
                 )
                 await self.audit.log(
                     "LEG_FILL_APPLIED",
@@ -1463,10 +1504,20 @@ class TradingEngine:
                     order_id=order.internal_order_id,
                     after={
                         "side": order.side.value,
+                        "fill_id": str(fill.fill_id),
                         "fill_quantity": str(fill.quantity),
-                        "remaining_quantity": str(remaining) if remaining is not None else None,
+                        "price": str(fill.price),
+                        "duplicate": allocation.get("duplicate"),
+                        "remaining_quantity": str(allocation.get("remaining_quantity")),
                     },
                 )
+                if allocation.get("duplicate"):
+                    await self.audit.log(
+                        "LEG_FILL_DUPLICATE_IGNORED",
+                        target=str(leg_id),
+                        run_id=self.run_id,
+                        after={"fill_id": str(fill.fill_id)},
+                    )
             except Exception:
                 logger.exception("LEG_FILL_APPLY_FAILED leg_id=%s", leg_id)
         position = await self.portfolio.get_position(fill.symbol)

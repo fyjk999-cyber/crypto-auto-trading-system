@@ -412,6 +412,220 @@ class PositionLegService:
                 "is_order": False,
             }
 
+    async def record_leg_order(
+        self,
+        *,
+        leg_id: str,
+        client_order_id: str,
+        side: str,
+        intended_quantity,
+        trade_plan_id: str | None = None,
+        decision_id: str | None = None,
+        reduce_only: bool = False,
+        source_action: str = "",
+        internal_order_id: str | None = None,
+    ) -> bool:
+        """Persist the intended leg allocation for one client order id.
+
+        Duplicate client_order_id is a no-op so a repeated submission attempt
+        cannot create a second allocation row.
+        """
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegOrderORM
+
+        async with self._session_factory() as session:
+            existing = (
+                await session.execute(
+                    select(PositionLegOrderORM).where(
+                        PositionLegOrderORM.client_order_id == client_order_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return False
+            session.add(
+                PositionLegOrderORM(
+                    leg_id=leg_id,
+                    client_order_id=client_order_id,
+                    internal_order_id=internal_order_id,
+                    trade_plan_id=trade_plan_id,
+                    decision_id=decision_id,
+                    side=str(side).upper(),
+                    intended_quantity=Decimal(str(intended_quantity)),
+                    reduce_only=bool(reduce_only),
+                    source_action=source_action,
+                    state="INTENDED",
+                )
+            )
+            await session.commit()
+            return True
+
+    async def allocate_fill(
+        self,
+        *,
+        fill_id: str,
+        leg_id: str,
+        side,
+        price,
+        quantity,
+        fee=None,
+        client_order_id: str | None = None,
+        order_id: str | None = None,
+        terminal_reason: str | None = None,
+    ) -> dict:
+        """Deterministically allocate one factual fill to exactly one leg.
+
+        The fill id is unique: a duplicate WS/REST delivery returns
+        ``duplicate=True`` and never changes leg accounting.
+        """
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegFillORM
+
+        side_str = str(getattr(side, "value", side)).upper()
+        async with self._session_factory() as session:
+            existing = (
+                await session.execute(
+                    select(PositionLegFillORM).where(PositionLegFillORM.fill_id == str(fill_id))
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return {
+                    "applied": False,
+                    "duplicate": True,
+                    "leg_id": existing.leg_id,
+                    "fill_id": str(fill_id),
+                }
+            session.add(
+                PositionLegFillORM(
+                    fill_id=str(fill_id),
+                    leg_id=leg_id,
+                    client_order_id=client_order_id,
+                    order_id=order_id,
+                    side=side_str,
+                    price=Decimal(str(price)),
+                    quantity=Decimal(str(quantity)),
+                    fee=Decimal(str(fee or 0)),
+                )
+            )
+            await session.commit()
+        remaining = await self.apply_order_fill(
+            leg_id,
+            side_str,
+            quantity,
+            price=price,
+            fee=fee,
+            fill_id=fill_id,
+            terminal_reason=terminal_reason,
+        )
+        return {
+            "applied": True,
+            "duplicate": False,
+            "leg_id": leg_id,
+            "fill_id": str(fill_id),
+            "remaining_quantity": remaining,
+        }
+
+    async def leg_orders(self, leg_id: str) -> list[dict]:
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegOrderORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PositionLegOrderORM)
+                        .where(PositionLegOrderORM.leg_id == leg_id)
+                        .order_by(PositionLegOrderORM.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "client_order_id": row.client_order_id,
+                "internal_order_id": row.internal_order_id,
+                "trade_plan_id": row.trade_plan_id,
+                "decision_id": row.decision_id,
+                "side": row.side,
+                "intended_quantity": row.intended_quantity,
+                "reduce_only": row.reduce_only,
+                "source_action": row.source_action,
+                "state": row.state,
+            }
+            for row in rows
+        ]
+
+    async def leg_fills(self, leg_id: str) -> list[dict]:
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegFillORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PositionLegFillORM)
+                        .where(PositionLegFillORM.leg_id == leg_id)
+                        .order_by(PositionLegFillORM.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "fill_id": row.fill_id,
+                "client_order_id": row.client_order_id,
+                "order_id": row.order_id,
+                "side": row.side,
+                "price": row.price,
+                "quantity": row.quantity,
+                "fee": row.fee,
+            }
+            for row in rows
+        ]
+
+    async def unresolved_unknowns(self, leg_id: str) -> list[dict]:
+        """Canonical orders for this leg still in UNKNOWN state.
+
+        New-risk replacement must wait until reconciliation resolves these.
+        """
+        import json
+
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import OrderORM
+
+        async with self._session_factory() as session:
+            rows = (
+                (await session.execute(select(OrderORM).where(OrderORM.status == "UNKNOWN")))
+                .scalars()
+                .all()
+            )
+        out = []
+        for row in rows:
+            raw = row.metadata_json
+            if isinstance(raw, dict):
+                metadata = raw
+            else:
+                try:
+                    metadata = json.loads(raw or "{}")
+                except (TypeError, ValueError):
+                    metadata = {}
+            if str(metadata.get("leg_id") or "") == leg_id:
+                out.append(
+                    {
+                        "internal_order_id": row.internal_order_id,
+                        "client_order_id": row.client_order_id,
+                        "status": row.status,
+                    }
+                )
+        return out
+
     async def open_legs_for_symbol(self, symbol: str) -> list[dict]:
         """Factual open legs (remaining quantity > 0) for deterministic exits."""
         from sqlalchemy import select

@@ -1025,6 +1025,42 @@ class PositionLegORM(Base):
     )
 
 
+class PositionLegOrderORM(Base):
+    """Durable intended leg allocation for one canonical client order id."""
+
+    __tablename__ = "position_leg_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    leg_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    client_order_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    internal_order_id: Mapped[str | None] = mapped_column(String(64))
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64))
+    decision_id: Mapped[str | None] = mapped_column(String(64))
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    intended_quantity: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    reduce_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_action: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default="INTENDED")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PositionLegFillORM(Base):
+    """A fill applied to exactly one leg; fill_id unique for idempotency."""
+
+    __tablename__ = "position_leg_fills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fill_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    leg_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    client_order_id: Mapped[str | None] = mapped_column(String(64))
+    order_id: Mapped[str | None] = mapped_column(String(64))
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    price: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(ExactDecimal(), nullable=False)
+    fee: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class DailyOpportunityTop10ORM(Base):
     """Growth V2 daily frozen TOP-10 opportunities (migration 0027).
 
