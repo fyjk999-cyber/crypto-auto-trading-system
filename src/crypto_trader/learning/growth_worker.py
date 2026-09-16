@@ -334,6 +334,26 @@ class GrowthWorker:
         metrics["reviews_created"] = int(metrics.get("reviews_created", 0)) + created
         return {"status": "OK", "seen": len(rows), "created": created}
 
+    async def _mature_due_reviews(self, limit: int = 100) -> dict:
+        engine = LifecycleReviewEngine(self._session_factory)
+        pending = await engine.pending(limit=limit)
+        matured = inconclusive = 0
+        for review in pending:
+            event = (review.get("actual_json") or {}).get("event") or {}
+            facts = event.get("maturity_facts")
+            if not isinstance(facts, dict) or not facts:
+                continue  # remains PENDING until factual inputs exist
+            result = await engine.resolve_maturity(review["review_id"], facts)
+            if result and result.get("status") == "MATURE":
+                matured += 1
+            elif result and result.get("status") == "INCONCLUSIVE":
+                inconclusive += 1
+        self.metrics["reviews_matured"] = int(self.metrics.get("reviews_matured", 0)) + matured
+        self.metrics["reviews_inconclusive"] = (
+            int(self.metrics.get("reviews_inconclusive", 0)) + inconclusive
+        )
+        return {"matured": matured, "inconclusive": inconclusive}
+
     async def _apply_reviewed_patterns(self, limit: int = 100) -> dict:
         cursor = int(self.state.get("last_applied_review_id", 0))
         async with self._session_factory() as session:
@@ -465,6 +485,7 @@ class GrowthWorker:
         self._heartbeat_stage("LIFECYCLE_REVIEW")
         try:
             summary["lifecycle"] = await self._ingest_trading_lifecycle(batch=self.review_batch)
+            summary["review_maturity"] = await self._mature_due_reviews(limit=self.review_batch)
         except Exception as exc:
             summary["errors"].append(f"lifecycle:{type(exc).__name__}")
         self._heartbeat_stage("MEMORY_UPDATE")

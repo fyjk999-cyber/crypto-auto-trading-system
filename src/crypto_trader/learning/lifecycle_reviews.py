@@ -212,6 +212,29 @@ class LifecycleReviewEngine:
                 await session.commit()
             return self._as_dict(row)
 
+    async def resolve_maturity(self, review_id: str, facts: dict) -> dict | None:
+        """Mature only with explicit factual inputs; otherwise INCONCLUSIVE."""
+        actual = facts.get("actual_net_bps")
+        counter = facts.get("counterfactual_net_bps")
+        if actual is None or counter is None:
+            return await self.mark_inconclusive(review_id, "INSUFFICIENT_FACTUAL_INPUTS")
+        delta = float(actual) - float(counter)
+        verdict = "HELPFUL" if delta > 0 else ("HARMFUL" if delta < 0 else "NEUTRAL")
+        return await self.mature(
+            review_id,
+            actual_net_bps=float(actual),
+            counterfactual_net_bps=float(counter),
+            verdict=verdict,
+            confidence=float(facts.get("confidence", 0.5)),
+            mfe_bps=facts.get("mfe_bps"),
+            mae_bps=facts.get("mae_bps"),
+            cost_bps=facts.get("cost_bps"),
+            fees=facts.get("fees"),
+            slippage_bps=facts.get("slippage_bps"),
+            funding_bps=facts.get("funding_bps"),
+            maturity_horizon=facts.get("maturity_horizon"),
+        )
+
     async def list_reviews(
         self, *, episode_id: str | None = None, status: str | None = None, limit: int = 200
     ) -> list[dict]:
