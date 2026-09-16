@@ -1067,3 +1067,50 @@ async def test_risk_scale_down_no_longer_resizes_v2_child(
     assert order.metadata["decision_id"] == entry.decision_id
     assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
     await engine.stop()
+
+
+async def test_next_reassessment_wakes_llm_only_once_per_condition(database):
+    """NEXT_REASSESSMENT is a wake-only contract with no-novelty dedup."""
+    from sqlalchemy import select as _select
+
+    from crypto_trader.persistence.models import TradePlanORM
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-next-reassessment")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    plan = await _open_v2_position(engine, decisions, plans, "entry-next-r", 0.1)
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                _select(TradePlanORM).where(TradePlanORM.trade_plan_id == plan.trade_plan_id)
+            )
+        ).scalar_one()
+        row.next_reassessment_json = {
+            "logic": "OR",
+            "conditions": [{"type": "PRICE", "value": ">=1", "priority": "HIGH"}],
+        }
+        await session.commit()
+
+    chief = SequencedChief([("HOLD", "0"), ("HOLD", "0")])
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=600,
+    )
+    order_count = len(engine.adapter.orders)
+    await engine.tick()
+    assert chief.calls == 1, "reassessment condition must wake the Core LLM"
+    assert len(engine.adapter.orders) == order_count, "wake is not an order"
+    await engine.tick()
+    assert chief.calls == 1, "no-novelty repeated wake must be deduplicated"
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(_select(AuditEventORM))).scalars().all()
+        ]
+    assert actions.count("NEXT_REASSESSMENT_WAKE") == 1
+    await engine.stop()

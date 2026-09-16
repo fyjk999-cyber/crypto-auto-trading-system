@@ -14,7 +14,7 @@ WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-low-risk-core-closure
 | R2 | Fresh-state stale-response rejection; horizon wake dedup (one per factual state version) | pending | 297 focused | DONE |
 | R3/R3b | Exit precedence / partial-close safety + versioned MODIFY_EXIT activation | this commit | 40 + 302 focused | DONE |
 | R4 | Offline/recovery semantics | this commit | 303 focused | DONE |
-| R5 | NEXT_REASSESSMENT closure | - | - | TODO |
+| R5 | NEXT_REASSESSMENT wake-only + dedup | this commit | 304 focused | DONE (price/time; indicator/event feeds P1) |
 | R6 | Execution/authority contract audit | - | - | TODO |
 | R7 | Lineage/observability | - | - | TODO |
 | R8 | Fresh full regression | - | - | TODO |
@@ -107,3 +107,20 @@ FLASH_HIGH_POLICY_CHANGED = NO
   `OFFLINE_RECOVERY_RECONCILE_FAILED` and stays offline. No synthetic decision.
 - New engine-level test `test_engine_offline_recovery_reconciles_then_normal`; fresh
   offline+failover run 21 passed; focused closure suite 303 passed; ruff clean.
+
+## R5 evidence (NEXT_REASSESSMENT)
+
+- `runtime/engine.py` now evaluates `plan.next_reassessment` each tick with
+  `ReassessmentEvaluator` (PRICE/TIME/INDICATOR/EVENT, AND/OR, priority).
+- When a condition fires, the engine audits `NEXT_REASSESSMENT_WAKE` with
+  `authority=WAKE_LLM_ONLY`, `is_order=false`, matched conditions, priority and state
+  version, and forces a fresh Core-LLM review (bypassing ordinary cooldown).
+- Wake dedup: one wake per distinct matched-condition fingerprint per plan version
+  (`_last_reassessment_wake`); an unchanged repeated trigger does not invoke the LLM again.
+- The trigger itself never emits an order; any action still travels the Core-LLM decision
+  and normal exit precedence.
+- Engine test `test_next_reassessment_wakes_llm_only_once_per_condition`: first tick wakes
+  exactly once, emits no order; second tick is deduplicated; exactly one
+  `NEXT_REASSESSMENT_WAKE` audit. Focused closure suite 304 passed; ruff clean.
+- P1: INDICATOR/EVENT condition feeds are evaluated when supplied, but runtime tick
+  currently supplies price/time only; enriching indicator/event maps is scheduled R7.

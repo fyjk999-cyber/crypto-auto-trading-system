@@ -60,6 +60,7 @@ from crypto_trader.ledger.service import (
     build_trade_entries,
 )
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+from crypto_trader.llm_chief.reassessment import ReassessmentEvaluator
 from crypto_trader.llm_chief.state_version import position_state_version
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
@@ -134,6 +135,8 @@ class TradingEngine:
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
         # Low-Risk V2 deterministic protection layer (Risk/Base Exit/Fast Profit).
         self.exit_controller = exit_controller or DeterministicExitController()
+        self.reassessment_evaluator = ReassessmentEvaluator()
+        self._last_reassessment_wake: dict[str, str] = {}
         self.offline_mode = OfflineMode()
         self.llm_router = llm_router
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
@@ -592,9 +595,35 @@ class TradingEngine:
             horizon_wake = plan is not None and self.position_manager.horizon_wake_due(
                 position, plan, ctx.clock_time.astimezone(UTC)
             )
+            reassessment_wake = False
+            if plan is not None and getattr(plan, "next_reassessment", None):
+                wake = self.reassessment_evaluator.evaluate(
+                    plan.next_reassessment,
+                    now=ctx.clock_time.astimezone(UTC),
+                    price=ctx.mark_price or ctx.book.mid_price(),
+                )
+                if wake.triggered:
+                    fingerprint = "|".join(wake.matched_conditions) + (
+                        f"#{getattr(plan, 'plan_version', 1)}"
+                    )
+                    if self._last_reassessment_wake.get(plan.trade_plan_id) != fingerprint:
+                        self._last_reassessment_wake[plan.trade_plan_id] = fingerprint
+                        reassessment_wake = True
+                        await self.audit.log(
+                            "NEXT_REASSESSMENT_WAKE",
+                            target=plan.trade_plan_id,
+                            run_id=self.run_id,
+                            after={
+                                **wake.as_dict(),
+                                "trade_plan_id": plan.trade_plan_id,
+                                "state_version": self._position_state_version(position, plan),
+                            },
+                        )
             try:
                 signal = await self.position_manager.review(
-                    ctx, position, force=wake_required or horizon_wake
+                    ctx,
+                    position,
+                    force=wake_required or horizon_wake or reassessment_wake,
                 )
             except Exception as exc:
                 self.consecutive_failures += 1
