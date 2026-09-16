@@ -115,6 +115,7 @@ class MLOrchestrator:
         self.state_path.write_text(json.dumps(payload, indent=2, default=str))
         heartbeat = {
             "pid": __import__("os").getpid(),
+            "running_sha": __import__("os").environ.get("RUNNING_SHA", ""),
             "at": datetime.now(UTC).isoformat(),
             "state": state,
             "dataset_version": self.state.dataset_version,
@@ -264,6 +265,7 @@ class MLOrchestrator:
         closure = "ML_CLOSURE_PASS" if active_21 and active_25 else "AUTONOMOUSLY_ACCUMULATING"
         return {
             "lifecycle_state": self.state.state,
+            "running_sha": __import__("os").environ.get("RUNNING_SHA", ""),
             "dataset_version": self.state.dataset_version,
             "last_train_at": self.state.last_train_at,
             "retrain_reasons": list(self.state.reasons),

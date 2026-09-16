@@ -94,6 +94,7 @@ async def main(db, status):
     )
     st = {
         "pid": os.getpid(),
+        "running_sha": os.environ.get("RUNNING_SHA", ""),
         "started_at": datetime.now(UTC).isoformat(),
         "cycles": 0,
         "snapshots": 0,
