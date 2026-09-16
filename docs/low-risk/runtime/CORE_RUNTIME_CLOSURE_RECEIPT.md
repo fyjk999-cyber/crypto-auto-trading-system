@@ -13,7 +13,7 @@ WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-low-risk-core-closure
 | R1 | Remove hard max-hold exit; reassessment-only horizon; ADD/MODIFY_EXIT reduce fallthrough quarantined | 0b7c464 | 296 focused | DONE |
 | R2 | Fresh-state stale-response rejection; horizon wake dedup (one per factual state version) | pending | 297 focused | DONE |
 | R3/R3b | Exit precedence / partial-close safety + versioned MODIFY_EXIT activation | this commit | 40 + 302 focused | DONE |
-| R4 | Offline/recovery semantics | - | - | TODO |
+| R4 | Offline/recovery semantics | this commit | 303 focused | DONE |
 | R5 | NEXT_REASSESSMENT closure | - | - | TODO |
 | R6 | Execution/authority contract audit | - | - | TODO |
 | R7 | Lineage/observability | - | - | TODO |
@@ -93,3 +93,17 @@ FLASH_HIGH_POLICY_CHANGED = NO
 - Tests: `test_modify_exit_activates_versioned_base_exit_without_order`,
   `test_modify_exit_stale_replacement_rejected`; lifecycle file 16/16; focused closure
   suite 302 passed; ruff clean.
+
+## R4 evidence (offline/recovery)
+
+- `runtime/offline.py` NEW_RISK_LIFECYCLE_ACTIONS = OPEN/ENTRY/ADD/HEDGE/REVERSE/RE_ENTRY;
+  dead legacy `TIME_STOP_SAFETY_FALLBACK` classification removed (no time-stop authority
+  remains anywhere after R1).
+- `engine.enter_offline_mode`: cancels/reconciles every pending new-risk order
+  (`OFFLINE_CANCEL_PENDING_NEW_RISK`), keeps protective reduce/close paths active.
+- `process_signal` blocks new risk while offline (`OFFLINE_NEW_RISK_BLOCKED`).
+- `attempt_offline_recovery`: runs factual reconciliation first, then returns NORMAL and
+  audits `LLM_RECOVERED_NORMAL`; failed reconciliation audits
+  `OFFLINE_RECOVERY_RECONCILE_FAILED` and stays offline. No synthetic decision.
+- New engine-level test `test_engine_offline_recovery_reconciles_then_normal`; fresh
+  offline+failover run 21 passed; focused closure suite 303 passed; ruff clean.

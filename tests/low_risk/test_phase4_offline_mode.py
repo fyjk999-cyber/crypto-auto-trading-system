@@ -237,3 +237,29 @@ async def test_runtime_snapshot_exposes_router_diagnostics_and_offline_state(dat
     engine.llm_router = None
     assert engine.runtime_snapshot()["llm_router"] is None
     await engine.stop()
+
+
+async def test_engine_offline_recovery_reconciles_then_normal(database) -> None:
+    """Provider recovery -> factual reconciliation -> NORMAL, no synthetic decision."""
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import AuditEventORM
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    engine.llm_router = _FakeRouter(offline=True)
+    await engine.start("run-offline-recover-normal")
+    await engine.tick()
+    assert engine.offline_mode.is_offline is True
+
+    engine.llm_router.offline = False
+    recovered = await engine.attempt_offline_recovery()
+    assert recovered is True
+    assert engine.offline_mode.is_offline is False
+    async with database.session_factory() as session:
+        actions = [
+            row.action
+            for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "LLM_RECOVERED_NORMAL" in actions
+    assert "OFFLINE_RECOVERY_RECONCILE_FAILED" not in actions
+    await engine.stop()
