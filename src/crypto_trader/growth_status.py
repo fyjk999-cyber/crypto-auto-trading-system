@@ -117,6 +117,22 @@ async def growth_status(session_factory, growth_dir) -> dict:
         compressed = (
             await session.scalar(select(func.count()).select_from(AICompressedExperienceORM)) or 0
         )
+        review_type_rows = (
+            await session.execute(
+                select(GrowthEventReviewORM.review_type, func.count()).group_by(
+                    GrowthEventReviewORM.review_type
+                )
+            )
+        ).all()
+        reviews_by_type = {str(row[0]): int(row[1]) for row in review_type_rows}
+        horizon_rows = (
+            await session.execute(
+                select(OpportunityOutcomeMaturationORM.horizon, func.count()).group_by(
+                    OpportunityOutcomeMaturationORM.horizon
+                )
+            )
+        ).all()
+        outcomes_by_horizon = {str(row[0]): int(row[1]) for row in horizon_rows}
     metrics = dict(state.get("metrics", heartbeat.get("metrics", {})))
     return {
         "service": {
