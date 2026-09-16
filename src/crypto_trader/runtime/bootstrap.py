@@ -48,6 +48,7 @@ from crypto_trader.portfolio.service import PortfolioService
 from crypto_trader.reconciliation.service import ReconciliationService
 from crypto_trader.risk.engine import RiskEngine
 from crypto_trader.runtime.engine import TradingEngine
+from crypto_trader.runtime.exit_controller import DeterministicExitController
 from crypto_trader.runtime.lease import LeaseManager
 from crypto_trader.simulator.exchange import SimulatedExchangeAdapter
 from crypto_trader.simulator.real_market_paper import PaperRealMarketAdapter
@@ -234,6 +235,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     )
     strategies = [live_llm] if settings.auto_start_runtime else [DummyStrategy()]
     leg_service = PositionLegService(database.session_factory)
+    exit_controller = DeterministicExitController()
     position_manager = (
         LiveLLMPositionManager(
             chief=chief,
@@ -250,6 +252,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 max_holding_time_seconds=settings.max_holding_time_seconds,
             ),
             leg_service=leg_service,
+            base_exit_registry=exit_controller.base_exits,
         )
         if settings.auto_start_runtime
         else None
@@ -286,6 +289,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         enforce_llm_entry_authority=settings.auto_start_runtime,
         opportunity_service=opportunity_service,
         llm_router=llm_provider,
+        exit_controller=exit_controller,
         leg_service=leg_service,
         leg_reconciler=LegPositionReconciler(leg_service),
     )

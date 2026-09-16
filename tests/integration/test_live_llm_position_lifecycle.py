@@ -97,6 +97,31 @@ class SequencedChief:
         )
 
 
+class ModifyExitChief:
+    def __init__(self, trigger: str, *, based_on: str | None = None) -> None:
+        self.trigger = trigger
+        self.based_on = based_on
+        self.calls = 0
+
+    async def decide(self, ctx):
+        self.calls += 1
+        return ChiefTraderDecision(
+            decision_id=f"position-modify-{self.calls}",
+            symbol=ctx.symbol,
+            position_state=PositionState.OPEN,
+            action="MODIFY_EXIT",
+            market_regime=ctx.regime,
+            thesis="tighten protection after fresh facts",
+            position_size_request=0,
+            base_exit=BaseExitPlan(
+                type="PRICE", trigger=self.trigger, size_pct=100.0, reason_code="BASE_EXIT"
+            ),
+            based_on_state_version=self.based_on,
+            model_provider="deepseek",
+            model="deepseek-v4-pro",
+        )
+
+
 async def _open_v2_position(engine, decisions, plans, decision_id: str, quantity: float):
     """Open one constitutional V2 PAPER position for authority tests."""
     entry = ChiefTraderDecision(
@@ -664,7 +689,7 @@ async def test_modify_exit_action_never_becomes_reduce_order(database):
         actions = [
             row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
         ]
-    assert "MODIFY_EXIT_REQUIRES_VERSIONED_BASE_EXIT" in actions
+    assert "MODIFY_EXIT_MISSING_BASE_EXIT" in actions
     position = await engine.portfolio.get_position("BTCUSDT")
     assert position is not None and position.quantity == Decimal("0.1")
     await engine.stop()
@@ -705,6 +730,83 @@ async def test_stale_llm_response_after_factual_change_is_rejected(database, mon
             row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
         ]
     assert "STALE_LLM_RESPONSE_REJECTED" in actions
+    await engine.stop()
+
+
+async def test_modify_exit_activates_versioned_base_exit_without_order(database):
+    """MODIFY_EXIT = validate -> stage -> atomic activate; never an order."""
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-modify-exit-activate")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    plan = await _open_v2_position(engine, decisions, plans, "entry-modify-act", 0.1)
+    ctx = await engine._strategy_context("BTCUSDT")
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None
+
+    registry = engine.exit_controller.base_exits
+    chief = ModifyExitChief("120")
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=0,
+        base_exit_registry=registry,
+    )
+    order_count = len(engine.adapter.orders)
+    signal = await engine.position_manager.review(ctx, position, force=True)
+    assert signal is None
+    assert len(engine.adapter.orders) == order_count
+    active = registry.active(plan.trade_plan_id)
+    assert active is not None and active.trigger == "120"
+    updated = await plans.get(plan.trade_plan_id)
+    assert updated is not None and updated.base_exit["trigger"] == "120"
+    assert updated.plan_version == plan.plan_version + 1
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "MODIFY_EXIT_ACTIVATED" in actions
+    await engine.stop()
+
+
+async def test_modify_exit_stale_replacement_rejected(database):
+    """A MODIFY_EXIT built on old state cannot replace the active Base Exit."""
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-modify-exit-stale")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    plan = await _open_v2_position(engine, decisions, plans, "entry-modify-stale", 0.1)
+    await engine.tick()  # deterministic layer stages/activates the entry Base Exit
+    ctx = await engine._strategy_context("BTCUSDT")
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None
+    registry = engine.exit_controller.base_exits
+    active_before = registry.active(plan.trade_plan_id)
+    assert active_before is not None and active_before.trigger == "110"
+    engine.position_manager = LiveLLMPositionManager(
+        chief=ModifyExitChief("120", based_on="stale-v0"),
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=0,
+        base_exit_registry=registry,
+    )
+    signal = await engine.position_manager.review(ctx, position, force=True)
+    assert signal is None
+    assert registry.active(plan.trade_plan_id).version_id == active_before.version_id
+    unchanged = await plans.get(plan.trade_plan_id)
+    assert unchanged is not None and unchanged.plan_version == plan.plan_version
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "MODIFY_EXIT_STALE_REJECTED" in actions
     await engine.stop()
 
 

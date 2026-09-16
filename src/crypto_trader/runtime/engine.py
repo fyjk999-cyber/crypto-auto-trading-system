@@ -113,6 +113,7 @@ class TradingEngine:
         llm_router=None,
         leg_service=None,
         leg_reconciler=None,
+        exit_controller=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -132,7 +133,7 @@ class TradingEngine:
         self.require_lease = require_lease
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
         # Low-Risk V2 deterministic protection layer (Risk/Base Exit/Fast Profit).
-        self.exit_controller = DeterministicExitController()
+        self.exit_controller = exit_controller or DeterministicExitController()
         self.offline_mode = OfflineMode()
         self.llm_router = llm_router
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.

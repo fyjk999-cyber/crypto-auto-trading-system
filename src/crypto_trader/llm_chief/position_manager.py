@@ -10,6 +10,7 @@ from typing import Any
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Position, SignalIntent
+from crypto_trader.execution.base_exit import StaleBaseExitError
 from crypto_trader.execution.hedge_legs import HedgeLegContract, LegKind, validate_hedge_leg
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
@@ -48,6 +49,7 @@ class LiveLLMPositionManager:
         hedge_planner=None,
         leg_service=None,
         leg_registry=None,
+        base_exit_registry=None,
     ) -> None:
         self.chief = chief
         self.evidence_engine = evidence_engine
@@ -69,6 +71,7 @@ class LiveLLMPositionManager:
         self.hedge_planner = hedge_planner
         self.leg_service = leg_service
         self.leg_registry = leg_registry
+        self.base_exit_registry = base_exit_registry
         self._last_review_attempt: dict[str, datetime] = {}
 
     async def _hedge_leg_signal(self, decision, plan, position: Position, ctx: StrategyContext):
@@ -140,6 +143,105 @@ class LiveLLMPositionManager:
             return False
         current = position_state_version(position, plan)
         return self._last_horizon_wake_state.get(position.symbol) != current
+
+    async def _modify_exit(self, decision, plan, position, ctx, state_version: str):
+        """Versioned Base Exit replacement: validate -> stage -> atomic activate.
+
+        Never emits an order and never creates a protection gap: the currently
+        active Base Exit remains authoritative until the new version is
+        validated and atomically activated.
+        """
+        if decision.base_exit is None:
+            await self.audit.log(
+                "MODIFY_EXIT_MISSING_BASE_EXIT",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"is_order": False},
+            )
+            return None
+        if self.base_exit_registry is None:
+            await self.audit.log(
+                "MODIFY_EXIT_UNAVAILABLE",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "required_path": "BASE_EXIT_VALIDATE_PERSIST_ATOMIC_ACTIVATE",
+                    "is_order": False,
+                },
+            )
+            return None
+        if decision.based_on_state_version not in (None, state_version):
+            await self.audit.log(
+                "MODIFY_EXIT_STALE_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "based_on_state_version": decision.based_on_state_version,
+                    "current_state_version": state_version,
+                    "is_order": False,
+                },
+            )
+            return None
+        new_exit = decision.base_exit.model_dump(mode="json")
+        try:
+            version = self.base_exit_registry.stage(
+                plan.trade_plan_id,
+                plan_version=int(getattr(plan, "plan_version", 1)) + 1,
+                exit_type=str(new_exit.get("type", "PRICE")),
+                trigger=str(new_exit.get("trigger", "")),
+                size_pct=float(new_exit.get("size_pct", 100.0) or 100.0),
+                reason_code=str(new_exit.get("reason_code", "BASE_EXIT")),
+                based_on_state_version=state_version,
+            )
+            activated = self.base_exit_registry.activate(
+                version.version_id, factual_state_version=state_version
+            )
+        except (StaleBaseExitError, ValueError) as exc:
+            await self.audit.log(
+                "MODIFY_EXIT_STALE_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={"reason": str(exc), "is_order": False},
+            )
+            return None
+        updated = await self.plans.replace_base_exit(
+            plan.trade_plan_id,
+            base_exit=new_exit,
+            expected_plan_version=int(getattr(plan, "plan_version", 1)),
+        )
+        if updated is None:
+            await self.audit.log(
+                "MODIFY_EXIT_PLAN_CONFLICT",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "version_id": version.version_id,
+                    "reason": "plan_version_changed",
+                    "is_order": False,
+                },
+            )
+            return None
+        await self.audit.log(
+            "MODIFY_EXIT_ACTIVATED",
+            target=decision.decision_id,
+            actor="live_llm",
+            run_id=ctx.run_id,
+            after={
+                "version_id": activated.version_id,
+                "trade_plan_id": plan.trade_plan_id,
+                "new_plan_version": updated.plan_version,
+                "trigger": activated.trigger,
+                "size_pct": activated.size_pct,
+                "based_on_state_version": state_version,
+                "is_order": False,
+            },
+        )
+        return None
 
     def expected_holding_horizon_reached(self, position, plan, now) -> bool:
         """Expected holding horizon is an informational reassessment trigger.
@@ -272,7 +374,11 @@ class LiveLLMPositionManager:
         finally:
             completed_at = _utc(self.attempt_clock())
             self._last_review_attempt[position.symbol] = max(now, completed_at)
-        decision = decision.model_copy(update={"based_on_state_version": state_version_before})
+        if decision.based_on_state_version is None:
+            # Bind provenance only when the provider did not state one. An
+            # explicit (wrong) claim is preserved so MODIFY_EXIT validation can
+            # reject a stale replacement instead of silently re-basing it.
+            decision = decision.model_copy(update={"based_on_state_version": state_version_before})
         state_version_after = position_state_version(position, plan)
         await self.decisions.save(
             decision,
@@ -379,20 +485,7 @@ class LiveLLMPositionManager:
             )
             return None
         if decision.action == OpenAction.MODIFY_EXIT:
-            # Exit modification replaces the Base Exit contract version and is
-            # not a discretionary reduce order.
-            await self.audit.log(
-                "MODIFY_EXIT_REQUIRES_VERSIONED_BASE_EXIT",
-                target=decision.decision_id,
-                actor="live_llm",
-                run_id=ctx.run_id,
-                after={
-                    "has_base_exit": decision.base_exit is not None,
-                    "required_path": "BASE_EXIT_VALIDATE_PERSIST_ATOMIC_ACTIVATE",
-                    "is_order": False,
-                },
-            )
-            return None
+            return await self._modify_exit(decision, plan, position, ctx, state_version_before)
         if decision.action in {OpenAction.HEDGE, OpenAction.REVERSE}:
             # Low-Risk V2: a hedge/reverse is NEW RISK with its own strategy,
             # thesis, model-family evidence, Base Exit and invalidation. It must

@@ -12,7 +12,7 @@ WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-low-risk-core-closure
 | R0 | Forensic runtime authority map | a42905d | docs | DONE |
 | R1 | Remove hard max-hold exit; reassessment-only horizon; ADD/MODIFY_EXIT reduce fallthrough quarantined | 0b7c464 | 296 focused | DONE |
 | R2 | Fresh-state stale-response rejection; horizon wake dedup (one per factual state version) | pending | 297 focused | DONE |
-| R3 | Exit precedence / partial-close safety | this commit | 40 focused | VERIFIED (versioned MODIFY_EXIT activation pending R3b) |
+| R3/R3b | Exit precedence / partial-close safety + versioned MODIFY_EXIT activation | this commit | 40 + 302 focused | DONE |
 | R4 | Offline/recovery semantics | - | - | TODO |
 | R5 | NEXT_REASSESSMENT closure | - | - | TODO |
 | R6 | Execution/authority contract audit | - | - | TODO |
@@ -75,3 +75,21 @@ FLASH_HIGH_POLICY_CHANGED = NO
   validate -> persist -> atomic activate replacement on TradePlanService/BaseExitRegistry
   remains the next R3b slice (currently safe quarantine, no protection gap created
   because the existing Base Exit stays active).
+
+## R3b evidence (versioned MODIFY_EXIT, no order, no protection gap)
+
+- `TradePlanService.replace_base_exit(...)` performs optimistic versioned persistence:
+  only an ACTIVE plan whose `plan_version` still matches the decision base is replaced,
+  incrementing `plan_version`; otherwise returns None (stale replacement).
+- `LiveLLMPositionManager._modify_exit`: validates `decision.base_exit`, requires an
+  injected BaseExitRegistry, rejects an explicit mismatched `based_on_state_version`
+  (`MODIFY_EXIT_STALE_REJECTED`), stages a new Base Exit version, atomically activates
+  it, then persists the new plan version. Never emits an order.
+- `Engine`/`bootstrap` now share one `DeterministicExitController` between the runtime
+  and the position manager, so MODIFY_EXIT replaces the same active protection the
+  deterministic layer evaluates.
+- Binding rule: a provider-returned explicit `based_on_state_version` is preserved and
+  validated; only a missing value is bound to the current factual state version.
+- Tests: `test_modify_exit_activates_versioned_base_exit_without_order`,
+  `test_modify_exit_stale_replacement_rejected`; lifecycle file 16/16; focused closure
+  suite 302 passed; ruff clean.
