@@ -1,7 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
 from crypto_trader.learning.retrieval import GrowthRetriever, record_version
-from crypto_trader.llm_chief.growth_context import build_growth_context
+from crypto_trader.llm_chief.growth_context import (
+    apply_context_refs,
+    build_growth_context,
+    split_context_refs,
+)
 
 T = datetime(2026, 9, 16, 0, 0, tzinfo=UTC)
 
@@ -80,3 +84,26 @@ async def test_growth_context_as_of_excludes_future_versions(database):
     )  # before any version became available
     assert context["patterns"] == [] and context["generalized_knowledge"] == []
     assert context["memory_refs"] == []
+
+
+def test_typed_refs_persist_additively():
+    from crypto_trader.persistence.models import LLMDecisionORM
+
+    refs = [
+        "pattern:p1:v2",
+        "generalized:g1:v1",
+        "episode:e1:v3",
+        "review:r1:v1",
+        "profile:BTCUSDT:v4",
+        "compressed:c1:v1",
+        "research:news-1",
+    ]
+    payload = split_context_refs(refs)
+    assert "episode:e1:v3" in payload["episode_refs_json"]
+    assert "review:r1:v1" in payload["episode_refs_json"]
+    assert payload["research_refs_json"] == ["research:news-1"]
+    decision = LLMDecisionORM(decision_id="d1")
+    apply_context_refs(decision, {"memory_refs": refs})
+    apply_context_refs(decision, {"memory_refs": ["pattern:p1:v2"]})
+    assert sorted(decision.memory_refs_json) == sorted(refs)  # idempotent
+    assert len(decision.episode_refs_json) == 2

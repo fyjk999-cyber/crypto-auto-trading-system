@@ -21,6 +21,39 @@ _REF_PREFIX = {
 }
 
 
+def split_context_refs(refs: list[str]) -> dict:
+    groups: dict[str, list[str]] = {
+        "episode": [],
+        "review": [],
+        "pattern": [],
+        "generalized": [],
+        "profile": [],
+        "compressed": [],
+        "research": [],
+    }
+    for ref in refs or []:
+        prefix = ref.split(":", 1)[0]
+        groups.setdefault(prefix, []).append(ref)
+    episode_refs = sorted(set(groups["episode"] + groups["review"]))
+    return {
+        "memory_refs_json": sorted(set(refs or [])),
+        "episode_refs_json": episode_refs,
+        "research_refs_json": sorted(set(groups["research"])),
+    }
+
+
+def apply_context_refs(decision, context: dict):
+    """Attach exact typed memory versions seen by this decision (additive)."""
+    if not context:
+        return decision
+    payload = split_context_refs(context.get("memory_refs", []))
+    for attr in ("memory_refs_json", "episode_refs_json", "research_refs_json"):
+        existing = list(getattr(decision, attr, None) or [])
+        merged = sorted(set(existing) | set(payload[attr]))
+        setattr(decision, attr, merged)
+    return decision
+
+
 def memory_ref(item: dict) -> str:
     prefix = _REF_PREFIX.get(item.get("memory_type"), "memory")
     return f"{prefix}:{item['memory_id']}:v{item['version']}"
