@@ -93,10 +93,17 @@ class MLOrchestrator:
         if not readiness.ready:
             return self._save(state="WAITING_FOR_DATA", reasons=readiness.reasons)
         frozen = await ml_dataset.freeze_dataset(
-            self.session_factory, self.base_dir / "datasets", code_sha=self.code_sha
+            self.session_factory,
+            self.base_dir / "datasets",
+            code_sha=self.code_sha,
+            feature_version=ml_trainer.FEATURE_VERSION_21,
+            horizon=HORIZON,
+            direction=DIRECTION,
         )
         payload = json.loads(Path(frozen["path"]).read_text())
-        samples = ml_trainer.build_samples(payload, HORIZON, DIRECTION, MIN_EDGE_BPS)
+        samples = ml_trainer.build_samples(
+            payload, HORIZON, DIRECTION, MIN_EDGE_BPS, label_version="label-v2"
+        )
         if len(samples) < 40:
             return self._save(
                 state="DATA_READY",
@@ -111,6 +118,10 @@ class MLOrchestrator:
             min_edge_bps=MIN_EDGE_BPS,
             code_sha=self.code_sha,
             dataset_version=frozen["dataset_version"],
+            dataset_hash=frozen["dataset_hash"],
+            feature_version=ml_trainer.FEATURE_VERSION_21,
+            label_version="label-v2",
+            training_cutoff_ts=frozen["training_cutoff_ts"],
         )
         if result.get("status") != "OK":
             return self._save(
@@ -126,9 +137,13 @@ class MLOrchestrator:
             artifact_path=result["artifact_path"],
             artifact_hash=result["artifact_hash"],
             dataset_version=frozen["dataset_version"],
-            feature_version="scan-features-v1",
-            label_version="label-v1",
+            dataset_hash=frozen["dataset_hash"],
+            feature_version=ml_trainer.FEATURE_VERSION_21,
+            feature_schema_hash=result["feature_schema_hash"],
+            label_version="label-v2",
             code_sha=self.code_sha,
+            algorithm=ml_trainer.ALGORITHM_21,
+            training_cutoff_ts=result["training_cutoff_ts"],
             training_window={"rows": len(samples)},
             validation_windows=result["metrics"]["folds"],
             hyperparameters={"n_folds": 3},

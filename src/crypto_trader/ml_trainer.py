@@ -7,6 +7,8 @@ import json
 import math
 from pathlib import Path
 
+FEATURE_VERSION_21 = "order-flow-v2"
+ALGORITHM_21 = "chronological_logistic_regression_v1"
 FEATURES = (
     "l1_imbalance",
     "l5_imbalance",
@@ -17,6 +19,10 @@ FEATURES = (
     "oi_change_pct",
     "funding_rate",
     "price_change_24h_pct",
+    "trade_count",
+    "trade_notional_window_usd",
+    "large_trade_count",
+    "price_velocity",
 )
 
 
@@ -38,6 +44,10 @@ def extract_features(f: dict) -> dict:
         "oi_change_pct": f.get("oi_change_pct"),
         "funding_rate": f.get("funding_rate"),
         "price_change_24h_pct": f.get("price_change_24h_pct"),
+        "trade_count": f.get("trade_count"),
+        "trade_notional_window_usd": f.get("trade_notional_window_usd"),
+        "large_trade_count": f.get("large_trade_count"),
+        "price_velocity": f.get("price_velocity"),
         "taker_imbalance": taker,
     }
 
@@ -45,9 +55,26 @@ def extract_features(f: dict) -> dict:
 ALL_FEATURES = FEATURES + ("taker_imbalance",)
 
 
-def build_samples(frozen: dict, horizon: str, direction: str, min_edge_bps: float) -> list:
+def feature_schema_hash(feature_names: tuple[str, ...] = ALL_FEATURES) -> str:
+    """Stable hash of the complete ordered #21 feature schema."""
+    import hashlib as _hashlib
+
+    return _hashlib.sha256(json.dumps(list(feature_names)).encode()).hexdigest()
+
+
+def build_samples(
+    frozen: dict,
+    horizon: str,
+    direction: str,
+    min_edge_bps: float,
+    *,
+    label_version: str = "label-v2",
+) -> list:
     labels = {
-        row["snapshot_id"]: row for row in frozen.get("labels", []) if row.get("horizon") == horizon
+        row["snapshot_id"]: row
+        for row in frozen.get("labels", [])
+        if row.get("horizon") == horizon
+        and row.get("label_version", "label-v2") == label_version
     }
     samples = []
     for snap in frozen.get("snapshots", []):
@@ -188,8 +215,10 @@ def walk_forward_train(
     model_id: str = "21_ORDER_FLOW_ML",
     code_sha: str = "",
     dataset_version: str = "",
-    feature_version: str = "scan-features-v1",
-    label_version: str = "label-v1",
+    dataset_hash: str = "",
+    feature_version: str = FEATURE_VERSION_21,
+    label_version: str = "label-v2",
+    training_cutoff_ts: str = "",
 ) -> dict:
     folds = make_folds(samples, n_folds=n_folds, min_train=min_train, min_valid=min_valid)
     if len(folds) < 2:
@@ -218,6 +247,7 @@ def walk_forward_train(
                 **prf(labels, probs),
             }
         )
+    positives = sum(pooled_labels)
     pooled_metrics = {
         "auc": auc_score(pooled_labels, pooled_probs),
         **prf(pooled_labels, pooled_probs),
@@ -226,24 +256,52 @@ def walk_forward_train(
         "direction": direction,
         "fold_count": len(folds),
         "mean_net_bps_valid": sum(pooled_net) / max(1, len(pooled_net)),
+        "class_balance": {
+            "positive": positives,
+            "negative": len(pooled_labels) - positives,
+        },
     }
     prep_all = fit_preprocessing(samples)
     weights_all = fit_logistic(
         [vectorize(r, prep_all) for r in samples], [r["label"] for r in samples]
     )
     metrics = {"walk_forward": pooled_metrics, "folds": fold_records}
+    cutoff = training_cutoff_ts or samples[-1]["ts"]
+    schema_hash = feature_schema_hash()
     artifact = {
         "model_id": model_id,
+        "artifact_format": "canonical_json_v1",
+        "algorithm": ALGORITHM_21,
         "feature_version": feature_version,
+        "feature_schema_hash": schema_hash,
         "label_version": label_version,
         "features": list(ALL_FEATURES),
-        "hyperparameters": {"epochs": 300, "lr": 0.3, "l2": 0.01, "n_folds": n_folds},
+        "code_sha": code_sha,
+        "dataset_version": dataset_version,
+        "dataset_hash": dataset_hash,
+        "training_cutoff_ts": cutoff,
+        "hyperparameters": {
+            "epochs": 300,
+            "lr": 0.3,
+            "l2": 0.01,
+            "n_folds": n_folds,
+            "seed": 0,
+        },
         "preprocessing": prep_all,
         "weights": weights_all,
         "metrics": metrics,
-        "training_window": {"rows": len(samples)},
+        "training_window": {
+            "rows": len(samples),
+            "min_ts": samples[0]["ts"],
+            "max_ts": samples[-1]["ts"],
+        },
         "validation_windows": [
-            {"max_train_ts": f["max_train_ts"], "min_valid_ts": f["min_valid_ts"]}
+            {
+                "max_train_ts": f["max_train_ts"],
+                "min_valid_ts": f["min_valid_ts"],
+                "train_rows": f["train_rows"],
+                "valid_rows": f["valid_rows"],
+            }
             for f in fold_records
         ],
     }
@@ -261,7 +319,14 @@ def walk_forward_train(
         "model_version": version,
         "artifact_path": str(path),
         "artifact_hash": digest,
+        "artifact_metadata": artifact,
         "metrics": metrics,
         "chronological": chronological,
         "fold_count": len(fold_records),
+        "feature_version": feature_version,
+        "feature_schema_hash": schema_hash,
+        "label_version": label_version,
+        "training_cutoff_ts": cutoff,
+        "dataset_version": dataset_version,
+        "dataset_hash": dataset_hash,
     }
