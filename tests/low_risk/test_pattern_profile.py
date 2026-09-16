@@ -103,3 +103,43 @@ async def test_compression_requires_supported_pattern_and_preserves_provenance(d
     async with database.session_factory() as session:
         count = await session.scalar(select(func.count()).select_from(AICompressedExperienceORM))
     assert count == 1 and content_len > 0
+
+
+async def test_pipeline_writes_immutable_versions_for_as_of(database):
+    import asyncio
+    from datetime import UTC, datetime
+
+    from crypto_trader.learning.retrieval import GrowthRetriever
+
+    pipeline = GrowthMemoryPipeline(database.session_factory)
+    await pipeline.update_from_episode(_episode(1), reviewed=True)
+    checkpoint = datetime.now(UTC)
+    await asyncio.sleep(0.02)
+    second = await pipeline.update_from_episode(_episode(2), reviewed=True)
+    retriever = GrowthRetriever(database.session_factory)
+    early = await retriever.search(
+        symbol="BTCUSDT",
+        regime="TREND_UP",
+        strategy="breakout",
+        horizon="15m",
+        setup_signature="s1",
+        as_of_timestamp=checkpoint,
+    )
+    assert early["result_count"] >= 1
+    assert all(item["version"] == 1 for item in early["results"])
+    assert second["sample_count"] == 2
+    async with database.session_factory() as session:
+        from crypto_trader.persistence.models import GrowthMemoryVersionORM
+
+        versions = (
+            (
+                await session.execute(
+                    select(GrowthMemoryVersionORM).where(
+                        GrowthMemoryVersionORM.object_type == "REGIME_PATTERN"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert sorted(v.version for v in versions) == [1, 2]

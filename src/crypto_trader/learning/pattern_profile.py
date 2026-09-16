@@ -17,6 +17,7 @@ from crypto_trader.learning.memory_speeds import (
     classify_speed,
     sample_tier,
 )
+from crypto_trader.learning.retrieval import record_version
 from crypto_trader.persistence.models import (
     AICoinProfileORM,
     AICompressedExperienceORM,
@@ -170,6 +171,38 @@ class GrowthMemoryPipeline:
             profile.version = int(profile.version or 1) + 1
             profile.updated_at = now
             await session.commit()
+        await record_version(
+            self._session_factory,
+            object_type="REGIME_PATTERN",
+            object_id=key,
+            sample_count=count,
+            sample_tier=pattern.sample_tier,
+            memory_speed=pattern.memory_speed,
+            quality=pattern.quality,
+            contradictions=pattern.contradiction_count,
+            post_cost_expectancy_bps=pattern.post_cost_expectancy_bps,
+            payload_json={
+                "symbol": identity.asset,
+                "regime": identity.regime,
+                "strategy": identity.strategy,
+                "horizon": identity.horizon,
+                "setup_signature": identity.setup_signature,
+                "direction": pattern.direction,
+            },
+            source_refs_json={"episode": episode.get("episode_id")},
+        )
+        await record_version(
+            self._session_factory,
+            object_type="COIN_PROFILE",
+            object_id=identity.asset,
+            sample_count=pcount,
+            sample_tier=profile.sample_tier,
+            memory_speed="FAST_EXPERIENCE",
+            quality=profile.quality_confidence,
+            post_cost_expectancy_bps=profile.post_cost_expectancy_bps,
+            payload_json={"symbol": identity.asset},
+            source_refs_json={},
+        )
         return {
             "status": "UPDATED",
             "pattern_key": key,
@@ -264,6 +297,25 @@ class GrowthMemoryPipeline:
             row.available_at = now
             row.updated_at = now
             await session.commit()
+        await record_version(
+            self._session_factory,
+            object_type="GENERALIZED_KNOWLEDGE",
+            object_id=generalized_id,
+            sample_count=total,
+            sample_tier=tier,
+            memory_speed=speed,
+            quality=row.quality,
+            contradictions=contradictions,
+            post_cost_expectancy_bps=expectancy,
+            payload_json={
+                "asset": asset,
+                "strategy": strategy,
+                "horizon": horizon,
+                "setup_signature": setup_signature,
+                "regime_count": len(regimes),
+            },
+            source_refs_json={"source_regimes": regimes},
+        )
         return {
             "status": "VALIDATED" if validated else "NOT_VALIDATED",
             "generalized_id": generalized_id,
@@ -328,6 +380,24 @@ class GrowthMemoryPipeline:
                 )
             )
             await session.commit()
+            await record_version(
+                self._session_factory,
+                object_type="COMPRESSED_PATTERN",
+                object_id=rule_id,
+                sample_count=int(pattern.sample_count or 0),
+                sample_tier=pattern.sample_tier,
+                memory_speed="PATTERN",
+                quality=float(pattern.quality or 0.0),
+                post_cost_expectancy_bps=float(pattern.post_cost_expectancy_bps or 0.0),
+                payload_json={
+                    "asset": pattern.asset,
+                    "strategy": pattern.strategy,
+                    "horizon": pattern.horizon,
+                    "setup_signature": pattern.setup_signature,
+                    "tier_note": "CANDIDATE_NOT_VALIDATED",
+                },
+                source_refs_json={"source_pattern_ids": [pattern_key]},
+            )
             return {
                 "status": "CREATED",
                 "rule_id": rule_id,
