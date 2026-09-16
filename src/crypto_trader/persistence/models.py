@@ -1361,3 +1361,356 @@ class GrowthMemoryVersionORM(Base):
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     source_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Canonical News / External Evidence tables (frozen News spec N1).
+# News is EVIDENCE ONLY: no table in this section is an order/risk authority.
+# ---------------------------------------------------------------------------
+class NewsRawItemORM(Base):
+    __tablename__ = "news_raw_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_id",
+            "provider_item_id",
+            "source_payload_hash",
+            name="uq_news_raw_provider_item_hash",
+        ),
+    )
+
+    raw_item_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider_item_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    canonical_url: Mapped[str | None] = mapped_column(String(1500))
+    source_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_class: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    summary_snippet: Mapped[str] = mapped_column(String(8000), nullable=False, default="")
+    raw_language: Mapped[str] = mapped_column(String(16), nullable=False, default="und")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    author: Mapped[str | None] = mapped_column(String(255))
+    source_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    normalized_text_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    retrieval_status: Mapped[str] = mapped_column(String(32), nullable=False, default="OK")
+    parse_status: Mapped[str] = mapped_column(String(32), nullable=False, default="OK")
+    source_metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    raw_payload_ref: Mapped[str | None] = mapped_column(String(1500))
+    raw_payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="news.raw.v1")
+
+
+class NewsEventORM(Base):
+    __tablename__ = "news_events"
+
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    canonical_title: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    factual_summary: Mapped[str] = mapped_column(String(8000), nullable=False, default="")
+    earliest_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    latest_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN")
+    primary_source_item_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    independent_source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contradiction_state: Mapped[str] = mapped_column(String(32), nullable=False, default="NONE")
+    novelty_state: Mapped[str] = mapped_column(String(32), nullable=False, default="NEW_EVENT")
+    freshness_state: Mapped[str] = mapped_column(String(32), nullable=False, default="FRESH")
+    materiality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    materiality_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="NOISE")
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class NewsEventVersionORM(Base):
+    __tablename__ = "news_event_versions"
+    __table_args__ = (
+        UniqueConstraint("event_id", "event_version", name="uq_news_event_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    fact_class: Mapped[str] = mapped_column(String(32), nullable=False, default="SOURCE_CLAIM")
+    canonical_title: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    factual_summary: Mapped[str] = mapped_column(String(8000), nullable=False, default="")
+    earliest_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    latest_update_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN")
+    primary_source_item_id: Mapped[str | None] = mapped_column(String(64))
+    entities_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    symbols_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    sectors_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    geography_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    independent_source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contradiction_state: Mapped[str] = mapped_column(String(32), nullable=False, default="NONE")
+    contradictions_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    novelty_state: Mapped[str] = mapped_column(String(32), nullable=False, default="NEW_EVENT")
+    freshness_state: Mapped[str] = mapped_column(String(32), nullable=False, default="FRESH")
+    materiality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    materiality_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="NOISE")
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")
+    direction_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    impact_horizon: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    uncertainty_notes: Mapped[list[Any] | None] = mapped_column(JSON)
+    correction_of_version: Mapped[int | None] = mapped_column(Integer)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    taxonomy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    clustering_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    materiality_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    freshness_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsEventItemORM(Base):
+    __tablename__ = "news_event_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id", "event_version", "raw_item_id", name="uq_news_event_item_version"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_item_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    relation: Mapped[str] = mapped_column(String(32), nullable=False)
+    independent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source_domain: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsEntityLinkORM(Base):
+    __tablename__ = "news_entity_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id",
+            "event_version",
+            "entity_id",
+            "symbol",
+            "relevance_class",
+            name="uq_news_entity_link_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_item_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    entity_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    relevance_class: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    mapping_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    ambiguous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    evidence_span: Mapped[str | None] = mapped_column(String(512))
+    reason: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    mapping_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsEvidenceORM(Base):
+    __tablename__ = "news_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "event_id",
+            "event_version",
+            "symbol",
+            "evidence_version",
+            name="uq_news_evidence_version",
+        ),
+    )
+
+    news_evidence_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    relevance_class: Mapped[str] = mapped_column(String(32), nullable=False)
+    relevance_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    relevance_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")
+    direction_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    impact_horizon: Mapped[str] = mapped_column(String(16), nullable=False, default="UNKNOWN")
+    materiality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    materiality_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="NOISE")
+    novelty_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    novelty_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    source_reliability_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    corroboration_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    freshness_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    contradiction_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    contradiction_state: Mapped[str] = mapped_column(String(32), nullable=False, default="NONE")
+    data_quality: Mapped[str] = mapped_column(String(32), nullable=False, default="UNKNOWN")
+    factual_summary: Mapped[str] = mapped_column(String(8000), nullable=False, default="")
+    support_points_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    counter_points_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    uncertainty_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    source_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    raw_item_refs_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    trigger_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    source_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    freshness_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    materiality_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    dedup_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsProviderStateORM(Base):
+    __tablename__ = "news_provider_state"
+
+    provider_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    cursor: Mapped[str | None] = mapped_column(String(4000))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_item_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    consecutive_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    checkpoint_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="HEALTHY")
+    last_error: Mapped[str | None] = mapped_column(String(512))
+    last_latency_ms: Mapped[float | None] = mapped_column(Float)
+    items_ingested: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rate_limit_state_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsSourceProfileORM(Base):
+    __tablename__ = "news_source_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_domain", "source_policy_version", name="uq_news_source_profile_version"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    source_class: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    provenance_quality: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    timestamp_quality: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    correction_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    duplicate_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    corroboration_tendency: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    machine_readability: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+    factual_error_indicator: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    notes: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsReassessmentEventORM(Base):
+    __tablename__ = "news_reassessment_events"
+
+    request_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    news_evidence_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), index=True)
+    dedup_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, default="NORMAL")
+    materiality_tier: Mapped[str] = mapped_column(String(16), nullable=False, default="LOW")
+    reason: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    position_state: Mapped[str] = mapped_column(String(32), nullable=False, default="UNKNOWN")
+    leg_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    state_version: Mapped[str | None] = mapped_column(String(128))
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(512))
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class NewsDecisionRefORM(Base):
+    __tablename__ = "news_decision_refs"
+    __table_args__ = (
+        UniqueConstraint(
+            "decision_id",
+            "news_evidence_id",
+            "event_version",
+            name="uq_news_decision_ref_version",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    decision_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    news_evidence_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    ref: Mapped[str] = mapped_column(String(160), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    state_version: Mapped[str | None] = mapped_column(String(128))
+    context_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NewsOutcomeReviewORM(Base):
+    __tablename__ = "news_outcome_reviews"
+    __table_args__ = (
+        UniqueConstraint("news_evidence_id", "horizon", name="uq_news_outcome_evidence_horizon"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    news_evidence_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    event_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    horizon: Mapped[str] = mapped_column(String(16), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING", index=True)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    price_return: Mapped[float | None] = mapped_column(Float)
+    mfe: Mapped[float | None] = mapped_column(Float)
+    mae: Mapped[float | None] = mapped_column(Float)
+    realized_volatility: Mapped[float | None] = mapped_column(Float)
+    rvol: Mapped[float | None] = mapped_column(Float)
+    spread_change: Mapped[float | None] = mapped_column(Float)
+    oi_change: Mapped[float | None] = mapped_column(Float)
+    funding_change: Mapped[float | None] = mapped_column(Float)
+    llm_called: Mapped[bool | None] = mapped_column(Boolean)
+    decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    trade_plan_id: Mapped[str | None] = mapped_column(String(64))
+    position_existed: Mapped[bool | None] = mapped_column(Boolean)
+    post_cost_result: Mapped[float | None] = mapped_column(Float)
+    causal_claim: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    counterfactual_label: Mapped[str | None] = mapped_column(String(32))
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
