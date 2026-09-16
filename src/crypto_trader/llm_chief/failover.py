@@ -142,6 +142,19 @@ class CoreLLMRouter:
         self._now = now or (lambda: datetime.now(UTC))
         self.status = OfflineStatus()
         self.events: list[dict[str, Any]] = []
+        # Factual runtime LLM state: configured vs actually served.
+        self.configured_provider = getattr(self.primary, "name", "primary")
+        self.configured_model = getattr(self.primary, "model", None)
+        self.config_source = getattr(self.primary, "model_config_source", "unknown")
+        self.thinking = True
+        self.reasoning_effort = "high"
+        self.effective_provider: str | None = None
+        self.effective_model: str | None = None
+        self.served_by: str | None = None
+        self.last_success_ts: str | None = None
+        self.last_latency_ms: float | None = None
+        self.last_token_usage: dict | None = None
+        self.last_error: str | None = None
 
     # ------------------------------------------------------------------ state
     @property
@@ -156,8 +169,31 @@ class CoreLLMRouter:
             "router": self.name,
             "primary": getattr(self.primary, "diagnostics", lambda: {})(),
             "backup": (getattr(self.backup, "diagnostics", lambda: {})() if self.backup else None),
+            "glm": {
+                "interface_present": True,
+                "configured": bool(
+                    self.backup is not None and getattr(self.backup, "api_key", None)
+                ),
+                "enabled": bool(
+                    self.backup is not None and getattr(self.backup, "healthy", lambda: False)()
+                ),
+                "model": (getattr(self.backup, "model", None) if self.backup is not None else None),
+                "last_call": None,
+            },
             "offline": self.status.as_dict(now=self._now()),
             "latency": self.tracker.snapshot(),
+            "configured_provider": self.configured_provider,
+            "configured_model": self.configured_model,
+            "config_source": self.config_source,
+            "thinking": self.thinking,
+            "reasoning_effort": self.reasoning_effort,
+            "effective_provider": self.effective_provider,
+            "effective_model": self.effective_model,
+            "served_by": self.served_by,
+            "last_success_ts": self.last_success_ts,
+            "last_latency_ms": self.last_latency_ms,
+            "last_token_usage": self.last_token_usage,
+            "last_error": self.last_error,
             "events": list(self.events[-50:]),
         }
 
@@ -305,6 +341,16 @@ class CoreLLMRouter:
             timeout=response.error == "LLM_TIMEOUT",
             attempts=attempts,
         )
+        if response.ok:
+            self.effective_provider = response.provider or provider
+            self.effective_model = response.model
+            self.served_by = response.served_by or provider
+            self.last_success_ts = self._now().isoformat()
+            self.last_latency_ms = response.latency_ms
+            self.last_token_usage = response.token_usage
+            self.last_error = None
+        else:
+            self.last_error = response.error
 
     def _fail(self, reason: str, state_version: str | None) -> LLMResponse:
         return LLMResponse(

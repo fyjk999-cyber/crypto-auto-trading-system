@@ -73,7 +73,7 @@ class ChiefTraderEngine:
             retries=1,
             max_tokens=2400,
             thinking=True,
-            reasoning_effort="low",
+            reasoning_effort="high",
             operation="trading_decision",
         )
         # Phase 4A seam: a Core LLM router may use a per-call fresh-state

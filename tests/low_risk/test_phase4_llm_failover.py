@@ -313,3 +313,119 @@ def test_core_llm_prompt_requires_v2_new_risk_contract() -> None:
     assert "plan_contract_version=2" in prompt
     assert "size_pct as a JSON number in (0,100]" in prompt
     assert "rejected by execution" in prompt
+
+
+def test_deepseek_defaults_to_flash_high() -> None:
+    import inspect
+
+    from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+    provider = DeepSeekProvider(api_key=None)
+    assert provider.model == "deepseek-flash"
+    default_effort = (
+        inspect.signature(DeepSeekProvider.complete_json).parameters["reasoning_effort"].default
+    )
+    assert default_effort == "high"
+
+
+def test_trading_resolver_allowlist_and_generic_env_isolation(monkeypatch) -> None:
+    from crypto_trader.llm_chief.provider import (
+        DisallowedTradingLLMModel,
+        resolve_trading_llm_config,
+    )
+
+    monkeypatch.delenv("TRADING_LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    default = resolve_trading_llm_config()
+    assert default.model == "deepseek-flash"
+    assert default.thinking is True
+    assert default.reasoning_effort == "high"
+    assert default.config_source == "canonical_default"
+
+    monkeypatch.setenv("TRADING_LLM_MODEL", "deepseek-flash")
+    assert resolve_trading_llm_config().model == "deepseek-flash"
+
+    for bad in (
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-flash-high",
+        "garbage",
+    ):
+        monkeypatch.setenv("TRADING_LLM_MODEL", bad)
+        try:
+            resolve_trading_llm_config()
+        except DisallowedTradingLLMModel as exc:
+            assert "DISALLOWED_TRADING_LLM_MODEL" in str(exc)
+        else:
+            raise AssertionError(f"{bad} must be rejected")
+
+    # Generic Harness/developer env must never control the trading model.
+    monkeypatch.delenv("TRADING_LLM_MODEL", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    assert resolve_trading_llm_config().model == "deepseek-flash"
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+    assert resolve_trading_llm_config().model == "deepseek-flash"
+
+
+async def test_effective_model_comes_only_from_factual_response() -> None:
+    from crypto_trader.llm_chief.failover import CoreLLMRouter
+    from crypto_trader.llm_chief.provider import DeepSeekProvider, LLMResponse
+
+    class OkProvider:
+        name = "deepseek"
+        model = "deepseek-flash"
+
+        def healthy(self):
+            return True
+
+        async def complete_json(self, **kwargs):
+            return LLMResponse(
+                text='{"action":"NO_TRADE"}',
+                provider="deepseek",
+                model="deepseek-flash",
+                latency_ms=12.5,
+                ok=True,
+                parsed_json={"action": "NO_TRADE"},
+                served_by="deepseek",
+                token_usage={"total_tokens": 7},
+            )
+
+    primary = OkProvider()
+    primary.model_config_source = "canonical_default"
+    router = CoreLLMRouter(primary=primary, backup=None)
+    before = router.diagnostics()
+    assert before["configured_model"] == "deepseek-flash"
+    assert before["effective_model"] is None and before["served_by"] is None
+
+    await router.complete_json(prompt="x", state_version="v1")
+    after = router.diagnostics()
+    assert after["effective_provider"] == "deepseek"
+    assert after["effective_model"] == "deepseek-flash"
+    assert after["served_by"] == "deepseek"
+    assert after["last_latency_ms"] == 12.5
+    assert after["last_token_usage"] == {"total_tokens": 7}
+    assert after["config_source"] == "canonical_default"
+    assert after["thinking"] is True and after["reasoning_effort"] == "high"
+
+    keyless = CoreLLMRouter(primary=DeepSeekProvider(api_key=None), backup=None)
+    await keyless.complete_json(prompt="x")
+    assert keyless.diagnostics()["effective_model"] is None  # config alone never infers effective
+    assert keyless.diagnostics()["last_error"] == "NO_API_KEY"
+
+
+async def test_glm_interface_present_but_not_configured() -> None:
+    from crypto_trader.llm_chief.failover import CoreLLMRouter
+    from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+    router = CoreLLMRouter(primary=DeepSeekProvider(api_key=None), backup=None)
+    glm = router.diagnostics()["glm"]
+    assert glm["interface_present"] is True
+    assert glm["configured"] is False
+    assert glm["enabled"] is False
+    assert glm["model"] is None
+    assert glm["last_call"] is None
+
+    response = await router.complete_json(prompt="x")
+    assert response.ok is False
+    assert router.status.offline is True  # primary fail + GLM unconfigured -> offline, no crash

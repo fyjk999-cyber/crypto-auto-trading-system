@@ -37,7 +37,7 @@ class LLMProvider(Protocol):
         retries: int = 1,
         max_tokens: int = 1200,
         thinking: bool = True,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse: ...
 
@@ -55,7 +55,7 @@ class DeepSeekProvider:
         transport=None,
     ) -> None:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        self.model = model or os.environ.get("LLM_MODEL", "deepseek-chat")
+        self.model = model or os.environ.get("LLM_MODEL", "deepseek-flash")
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         self._transport = transport
         self.last_success_ts: str | None = None
@@ -77,7 +77,7 @@ class DeepSeekProvider:
         retries: int = 1,
         max_tokens: int = 1200,
         thinking: bool = True,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse:
         import json
@@ -119,14 +119,8 @@ class DeepSeekProvider:
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": temperature,
                             "max_tokens": max_tokens,
-                            "thinking": {
-                                "type": "enabled" if attempt_thinking else "disabled"
-                            },
-                            **(
-                                {"reasoning_effort": reasoning_effort}
-                                if attempt_thinking
-                                else {}
-                            ),
+                            "thinking": {"type": "enabled" if attempt_thinking else "disabled"},
+                            **({"reasoning_effort": reasoning_effort} if attempt_thinking else {}),
                             "response_format": {"type": "json_object"},
                         },
                     )
@@ -214,20 +208,14 @@ class DeepSeekProvider:
             error=self.last_error or "LLM_PROVIDER_ERROR",
         )
         self.last_latency_ms = result.latency_ms
-        self._record_operation(
-            operation, result, attempts=self.last_attempt_count or retries + 1
-        )
+        self._record_operation(operation, result, attempts=self.last_attempt_count or retries + 1)
         return result
 
-    def _record_operation(
-        self, operation: str, response: LLMResponse, *, attempts: int
-    ) -> None:
+    def _record_operation(self, operation: str, response: LLMResponse, *, attempts: int) -> None:
         previous = self._operation_diagnostics.get(operation, {})
         self._operation_diagnostics[operation] = {
             "last_success_ts": (
-                datetime.now(UTC).isoformat()
-                if response.ok
-                else previous.get("last_success_ts")
+                datetime.now(UTC).isoformat() if response.ok else previous.get("last_success_ts")
             ),
             "last_error": response.error,
             "last_latency_ms": response.latency_ms,
@@ -248,8 +236,7 @@ class DeepSeekProvider:
             "last_token_usage": self.last_token_usage,
             "last_attempt_count": self.last_attempt_count,
             "operations": {
-                operation: dict(values)
-                for operation, values in self._operation_diagnostics.items()
+                operation: dict(values) for operation, values in self._operation_diagnostics.items()
             },
         }
 
@@ -296,7 +283,7 @@ class GLMProvider:
         retries: int = 1,
         max_tokens: int = 1200,
         thinking: bool = True,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse:
         import json
@@ -434,7 +421,53 @@ class GLMProvider:
             "last_token_usage": self.last_token_usage,
             "last_attempt_count": self.last_attempt_count,
             "operations": {
-                operation: dict(values)
-                for operation, values in self._operation_diagnostics.items()
+                operation: dict(values) for operation, values in self._operation_diagnostics.items()
             },
         }
+
+
+# --- Canonical trading-system LLM policy (DEEPSEEK_FLASH_HIGH) ---------------
+CANONICAL_TRADING_PROVIDER = "deepseek"
+CANONICAL_TRADING_MODEL = "deepseek-flash"
+CANONICAL_THINKING = True
+CANONICAL_REASONING_EFFORT = "high"
+ALLOWED_TRADING_MODELS = frozenset({"deepseek-flash"})
+
+
+class DisallowedTradingLLMModel(RuntimeError):
+    """Raised when TRADING_LLM_MODEL is not on the trading allowlist."""
+
+
+@dataclass(frozen=True)
+class TradingLLMConfig:
+    provider: str
+    model: str
+    thinking: bool
+    reasoning_effort: str
+    config_source: str
+
+
+def resolve_trading_llm_config(explicit_model: str | None = None) -> TradingLLMConfig:
+    """One canonical resolver; generic LLM_MODEL is ignored for trading."""
+    requested = explicit_model or os.environ.get("TRADING_LLM_MODEL")
+    if requested:
+        if requested not in ALLOWED_TRADING_MODELS:
+            raise DisallowedTradingLLMModel(
+                "DISALLOWED_TRADING_LLM_MODEL "
+                f"requested_model={requested} canonical_model={CANONICAL_TRADING_MODEL} "
+                "config_source=TRADING_LLM_MODEL"
+            )
+        return TradingLLMConfig(
+            provider=CANONICAL_TRADING_PROVIDER,
+            model=requested,
+            thinking=CANONICAL_THINKING,
+            reasoning_effort=CANONICAL_REASONING_EFFORT,
+            config_source="TRADING_LLM_MODEL",
+        )
+    return TradingLLMConfig(
+        provider=CANONICAL_TRADING_PROVIDER,
+        model=CANONICAL_TRADING_MODEL,
+        thinking=CANONICAL_THINKING,
+        reasoning_effort=CANONICAL_REASONING_EFFORT,
+        config_source="canonical_default",
+    )
