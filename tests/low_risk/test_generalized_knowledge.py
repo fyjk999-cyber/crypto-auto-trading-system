@@ -79,3 +79,31 @@ async def test_contradiction_blocks_validation(database):
     result = await _evaluate(database)
     assert result["status"] == "NOT_VALIDATED"
     assert "unresolved_contradiction" in result["reasons"]
+
+
+async def test_only_validated_generalized_can_create_validated_compression(database):
+    await _seed(
+        database, [_pattern("TREND_UP", 40), _pattern("RANGE", 40), _pattern("TREND_DOWN", 40)]
+    )
+    pipeline = GrowthMemoryPipeline(database.session_factory)
+    validated = await pipeline.evaluate_generalized(
+        asset="BTCUSDT", strategy="BREAKOUT", horizon="1h", setup_signature="s1"
+    )
+    assert validated["status"] == "VALIDATED"
+    created = await pipeline.compress_validated(validated["generalized_id"])
+    assert created["status"] == "CREATED"
+    assert created["sample_tier"] == "VALIDATED_COMPRESSED_KNOWLEDGE"
+    again = await pipeline.compress_validated(validated["generalized_id"])
+    assert again["status"] == "ALREADY_COMPRESSED"
+
+
+async def test_single_regime_cannot_create_validated_compression(database):
+    await _seed(database, [_pattern("TREND_UP", 500)])
+    pipeline = GrowthMemoryPipeline(database.session_factory)
+    result = await pipeline.evaluate_generalized(
+        asset="BTCUSDT", strategy="BREAKOUT", horizon="1h", setup_signature="s1"
+    )
+    assert result["status"] == "NOT_VALIDATED"
+    rejected = await pipeline.compress_validated(result["generalized_id"])
+    assert rejected["status"] == "NOT_ELIGIBLE"
+    assert "generalized_not_validated" in rejected["reasons"]

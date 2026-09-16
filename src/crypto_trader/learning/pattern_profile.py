@@ -327,6 +327,90 @@ class GrowthMemoryPipeline:
             "available_at": now.isoformat(),
         }
 
+    async def compress_validated(self, generalized_id: str) -> dict:
+        """Create VALIDATED_COMPRESSED_KNOWLEDGE only from validated generalized rows."""
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(GeneralizedKnowledgeORM).where(
+                        GeneralizedKnowledgeORM.generalized_id == generalized_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return {"status": "NOT_ELIGIBLE", "reasons": ["missing_generalized"]}
+            reasons = []
+            if (
+                row.sample_tier != "VALIDATED_KNOWLEDGE"
+                or int(row.regime_count or 0) < VALIDATED_MIN_REGIMES
+            ):
+                reasons.append("generalized_not_validated")
+            if int(row.sample_count or 0) < VALIDATED_MIN_OBSERVATIONS:
+                reasons.append("insufficient_samples")
+            if float(row.post_cost_expectancy_bps or 0.0) <= VALIDATED_MIN_POST_COST_BPS:
+                reasons.append("post_cost_not_positive")
+            if not row.chronological_stability or int(row.contradictions or 0) > 0:
+                reasons.append("unstable_or_contradicted")
+            if reasons:
+                return {"status": "NOT_ELIGIBLE", "reasons": reasons}
+            rule_id = f"cmpv-{generalized_id}-v{int(row.version or 1)}"
+            if await session.scalar(
+                select(AICompressedExperienceORM.id).where(
+                    AICompressedExperienceORM.rule_id == rule_id
+                )
+            ):
+                return {"status": "ALREADY_COMPRESSED", "rule_id": rule_id}
+            content = (
+                f"VALIDATED_COMPRESSED_KNOWLEDGE: {row.asset} {row.strategy} {row.horizon} "
+                f"setup={row.setup_signature}; samples={row.sample_count} "
+                f"regimes={row.regime_count}; post_cost="
+                f"{float(row.post_cost_expectancy_bps or 0.0):.2f}bps; "
+                "evidence=generalized validation; LEARNING_ONLY, no order authority."
+            )
+            session.add(
+                AICompressedExperienceORM(
+                    rule_id=rule_id,
+                    title=f"VALIDATED {row.asset} {row.strategy} {row.horizon}"[:200],
+                    content=content,
+                    source_episode_count=int(row.sample_count or 0),
+                    version=int(row.version or 1),
+                    source_pattern_ids_json=list(row.source_pattern_ids_json or []),
+                    sample_tier="VALIDATED_COMPRESSED_KNOWLEDGE",
+                    regime_coverage=int(row.regime_count or 0),
+                    post_cost_expectancy_bps=float(row.post_cost_expectancy_bps or 0.0),
+                    stability=1.0,
+                    contradictions=0,
+                    policy_version=POLICY_VERSION,
+                )
+            )
+            await session.commit()
+        await record_version(
+            self._session_factory,
+            object_type="VALIDATED_COMPRESSED_KNOWLEDGE",
+            object_id=rule_id,
+            sample_count=int(row.sample_count or 0),
+            sample_tier="VALIDATED_COMPRESSED_KNOWLEDGE",
+            memory_speed="VALIDATED_KNOWLEDGE",
+            quality=float(row.quality or 0.0),
+            post_cost_expectancy_bps=float(row.post_cost_expectancy_bps or 0.0),
+            payload_json={
+                "asset": row.asset,
+                "strategy": row.strategy,
+                "horizon": row.horizon,
+                "setup_signature": row.setup_signature,
+                "regime_count": int(row.regime_count or 0),
+            },
+            source_refs_json={
+                "generalized_id": generalized_id,
+                "source_regimes": row.source_regimes_json,
+            },
+        )
+        return {
+            "status": "CREATED",
+            "rule_id": rule_id,
+            "sample_tier": "VALIDATED_COMPRESSED_KNOWLEDGE",
+        }
+
     async def compress(self, pattern_key: str) -> dict:
         async with self._session_factory() as session:
             pattern = (
