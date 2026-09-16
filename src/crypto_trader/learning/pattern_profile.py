@@ -10,6 +10,9 @@ from sqlalchemy import select
 
 from crypto_trader.learning.memory_speeds import (
     POLICY_VERSION,
+    VALIDATED_MIN_OBSERVATIONS,
+    VALIDATED_MIN_POST_COST_BPS,
+    VALIDATED_MIN_REGIMES,
     MemoryRecord,
     classify_speed,
     sample_tier,
@@ -18,6 +21,7 @@ from crypto_trader.persistence.models import (
     AICoinProfileORM,
     AICompressedExperienceORM,
     AIMarketPatternORM,
+    GeneralizedKnowledgeORM,
 )
 
 PATTERN_VERSION = 2
@@ -174,6 +178,101 @@ class GrowthMemoryPipeline:
             "memory_speed": pattern.memory_speed,
             "profile_symbol": identity.asset,
             "profile_samples": pcount,
+        }
+
+    async def evaluate_generalized(
+        self, *, asset: str, strategy: str, horizon: str, setup_signature: str
+    ) -> dict:
+        """Aggregate compatible regime patterns; never fake regime diversity."""
+        async with self._session_factory() as session:
+            patterns = (
+                (
+                    await session.execute(
+                        select(AIMarketPatternORM)
+                        .where(AIMarketPatternORM.asset == asset)
+                        .where(AIMarketPatternORM.strategy == strategy)
+                        .where(AIMarketPatternORM.horizon == horizon)
+                        .where(AIMarketPatternORM.setup_signature == setup_signature)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        if not patterns:
+            return {"status": "NOT_VALIDATED", "reasons": ["no_source_patterns"]}
+        total = sum(int(p.sample_count or 0) for p in patterns)
+        regimes = sorted({str(p.regime or "UNKNOWN") for p in patterns})
+        contradictions = sum(int(p.contradiction_count or 0) for p in patterns)
+        weighted = sum(
+            float(p.post_cost_expectancy_bps or 0.0) * int(p.sample_count or 0) for p in patterns
+        )
+        expectancy = weighted / total if total else 0.0
+        stable = bool(patterns) and all(
+            float(p.post_cost_expectancy_bps or 0.0) > 0 for p in patterns
+        )
+        reasons = []
+        if total < VALIDATED_MIN_OBSERVATIONS:
+            reasons.append("insufficient_samples")
+        if len(regimes) < VALIDATED_MIN_REGIMES:
+            reasons.append("insufficient_regimes")
+        if expectancy <= VALIDATED_MIN_POST_COST_BPS:
+            reasons.append("post_cost_not_positive")
+        if not stable:
+            reasons.append("unstable")
+        if contradictions > 0:
+            reasons.append("unresolved_contradiction")
+        validated = not reasons
+        generalized_id = hashlib.sha1(  # noqa: S324
+            f"{asset}|{strategy}|{horizon}|{setup_signature}".encode()
+        ).hexdigest()[:16]
+        tier = (
+            "VALIDATED_KNOWLEDGE"
+            if validated
+            else ("CANDIDATE" if total >= COMPRESSION_MIN_SAMPLES else "PROVISIONAL")
+        )
+        speed = (
+            "VALIDATED_KNOWLEDGE"
+            if validated
+            else ("PATTERN" if total >= 20 else "FAST_EXPERIENCE")
+        )
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(GeneralizedKnowledgeORM).where(
+                        GeneralizedKnowledgeORM.generalized_id == generalized_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = GeneralizedKnowledgeORM(generalized_id=generalized_id, version=0)
+                session.add(row)
+            row.asset, row.strategy, row.horizon = asset, strategy, horizon
+            row.setup_signature = setup_signature
+            row.sample_count = total
+            row.regime_count = len(regimes)
+            row.source_pattern_ids_json = [p.pattern_id for p in patterns]
+            row.source_regimes_json = regimes
+            row.source_episode_count = total
+            row.post_cost_expectancy_bps = expectancy
+            row.chronological_stability = stable
+            row.contradictions = contradictions
+            row.quality = min(1.0, total / 100.0) * (0.0 if contradictions else 1.0)
+            row.sample_tier = tier
+            row.memory_speed = speed
+            row.version = int(row.version or 0) + 1
+            row.available_at = now
+            row.updated_at = now
+            await session.commit()
+        return {
+            "status": "VALIDATED" if validated else "NOT_VALIDATED",
+            "generalized_id": generalized_id,
+            "reasons": reasons,
+            "sample_count": total,
+            "regime_count": len(regimes),
+            "sample_tier": tier,
+            "memory_speed": speed,
+            "available_at": now.isoformat(),
         }
 
     async def compress(self, pattern_key: str) -> dict:

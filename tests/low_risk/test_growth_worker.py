@@ -407,7 +407,8 @@ async def test_worker_applies_mature_reviews_to_patterns_once(database, tmp_path
     )
     worker = GrowthWorker(database.session_factory, tmp_path, FakeClient(), code_sha="sha")
     first = await worker._apply_reviewed_patterns()
-    assert first == {"patterns": 1, "profiles": 1, "compressed": 0}
+    assert first["patterns"] == 1 and first["profiles"] == 1
+    assert first["compressed"] == 0 and first["generalized"] == 1
     async with database.session_factory() as session:
         pattern = (await session.execute(select(AIMarketPatternORM))).scalars().one()
     assert pattern.sample_count == 1

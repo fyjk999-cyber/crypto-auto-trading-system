@@ -16,6 +16,7 @@ from crypto_trader.learning.memory_speeds import MemoryRecord, apply_observation
 from crypto_trader.learning.pattern_profile import GrowthMemoryPipeline
 from crypto_trader.market_data.opportunity import ledger_freeze, outcome_maturer
 from crypto_trader.persistence.models import (
+    AIMarketPatternORM,
     GrowthEventReviewORM,
     OpportunityOutcomeMaturationORM,
     ScanSnapshotORM,
@@ -308,7 +309,7 @@ class GrowthWorker:
                 .all()
             )
         pipeline = GrowthMemoryPipeline(self._session_factory)
-        updated = profiles = compressed = rejected = 0
+        updated = profiles = compressed = rejected = generalized_updates = 0
         for review in reviews:
             actual = (review.actual_json or {}).get("event") or {}
             net = float(review.actual_net_bps or 0.0)
@@ -330,6 +331,23 @@ class GrowthWorker:
             if result.get("status") == "UPDATED":
                 updated += 1
                 profiles += 1
+                async with self._session_factory() as session:
+                    pattern = (
+                        await session.execute(
+                            select(AIMarketPatternORM).where(
+                                AIMarketPatternORM.pattern_key == result["pattern_key"]
+                            )
+                        )
+                    ).scalar_one_or_none()
+                if pattern is not None:
+                    generalized = await pipeline.evaluate_generalized(
+                        asset=pattern.asset or "UNKNOWN",
+                        strategy=pattern.strategy or "UNKNOWN",
+                        horizon=pattern.horizon or "UNKNOWN",
+                        setup_signature=pattern.setup_signature or "UNKNOWN",
+                    )
+                    if generalized.get("status") in ("VALIDATED", "NOT_VALIDATED"):
+                        generalized_updates += 1
                 compression = await pipeline.compress(result["pattern_key"])
                 if compression.get("status") == "CREATED":
                     compressed += 1
@@ -342,7 +360,15 @@ class GrowthWorker:
         metrics["profile_updates"] = int(metrics.get("profile_updates", 0)) + profiles
         metrics["compressed_created"] = int(metrics.get("compressed_created", 0)) + compressed
         metrics["compressed_rejected"] = int(metrics.get("compressed_rejected", 0)) + rejected
-        return {"patterns": updated, "profiles": profiles, "compressed": compressed}
+        metrics["generalized_updates"] = (
+            int(metrics.get("generalized_updates", 0)) + generalized_updates
+        )
+        return {
+            "patterns": updated,
+            "profiles": profiles,
+            "compressed": compressed,
+            "generalized": generalized_updates,
+        }
 
     async def run_once(self, *, now: datetime | None = None) -> dict:
         moment = now or datetime.now(UTC)

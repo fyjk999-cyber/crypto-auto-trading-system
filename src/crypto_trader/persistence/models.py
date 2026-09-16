@@ -1309,3 +1309,31 @@ class GrowthEventReviewORM(Base):
     is_order: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GeneralizedKnowledgeORM(Base):
+    """Cross-regime generalized growth knowledge (LEARNING_ONLY)."""
+
+    __tablename__ = "growth_generalized_knowledge"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    generalized_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    asset: Mapped[str] = mapped_column(String(32), index=True)
+    strategy: Mapped[str] = mapped_column(String(64), index=True)
+    horizon: Mapped[str] = mapped_column(String(8), index=True)
+    setup_signature: Mapped[str] = mapped_column(String(64), index=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    regime_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_pattern_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    source_regimes_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    source_episode_count: Mapped[int] = mapped_column(Integer, default=0)
+    post_cost_expectancy_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    chronological_stability: Mapped[bool] = mapped_column(Boolean, default=False)
+    contradictions: Mapped[int] = mapped_column(Integer, default=0)
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    sample_tier: Mapped[str] = mapped_column(String(32), default="PROVISIONAL")
+    memory_speed: Mapped[str] = mapped_column(String(32), default="FAST_EXPERIENCE")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    policy_version: Mapped[str] = mapped_column(String(32), default="memory-policy-v2")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
