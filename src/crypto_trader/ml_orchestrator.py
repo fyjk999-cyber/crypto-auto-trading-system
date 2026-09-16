@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from crypto_trader import ml_dataset, ml_meta, ml_shadow, ml_trainer
+from crypto_trader import ml_artifacts, ml_dataset, ml_forward, ml_meta, ml_shadow, ml_trainer
 from crypto_trader.ml_registry import ModelRegistry
 
 MODEL_21_ID = "21_ORDER_FLOW_ML"
@@ -22,6 +22,8 @@ class TrainerState:
     dataset_version: str | None = None
     model_21_version: str | None = None
     model_25_version: str | None = None
+    model_21_forward: dict = field(default_factory=dict)
+    model_25_forward: dict = field(default_factory=dict)
     last_success: str | None = None
     last_error: str | None = None
     reasons: list = field(default_factory=list)
@@ -34,7 +36,12 @@ class MLOrchestrator:
         self.base_dir = Path(base_dir)
         self.code_sha = code_sha
         self.registry = ModelRegistry(self.base_dir / "registry.json")
-        self.shadow = ml_shadow.ShadowStore(self.base_dir / "shadow" / "predictions.jsonl")
+        self.artifact_resolver = ml_artifacts.ArtifactResolver(self.registry)
+        self.forward = ml_forward.ForwardPredictionStore(session_factory)
+        # Legacy diagnostic replay store: never used for promotion or ACTIVE.
+        self.shadow_diagnostic = ml_shadow.ShadowStore(
+            self.base_dir / "shadow" / "historical_replay_diagnostic.jsonl"
+        )
         self.state_path = self.base_dir / "state.json"
         self.heartbeat_path = self.base_dir / "trainer_heartbeat.json"
         self.state = TrainerState()
@@ -55,6 +62,8 @@ class MLOrchestrator:
         dataset_version: str | None = None,
         model_21_version: str | None = None,
         model_25_version: str | None = None,
+        model_21_forward: dict | None = None,
+        model_25_forward: dict | None = None,
         last_error: str | None = None,
     ) -> dict:
         self.state.state = state
@@ -65,6 +74,10 @@ class MLOrchestrator:
             self.state.model_21_version = model_21_version
         if model_25_version:
             self.state.model_25_version = model_25_version
+        if model_21_forward is not None:
+            self.state.model_21_forward = dict(model_21_forward)
+        if model_25_forward is not None:
+            self.state.model_25_forward = dict(model_25_forward)
         self.state.last_error = last_error
         if state not in ("WAITING_FOR_DATA",):
             self.state.last_success = datetime.now(UTC).isoformat()
@@ -157,24 +170,40 @@ class MLOrchestrator:
                 dataset_version=frozen["dataset_version"],
                 model_21_version=result["model_version"],
             )
-        artifact = json.loads(Path(result["artifact_path"]).read_text())
-        for sample in samples[-50:]:
-            probability = self._score(artifact, sample)
-            self.shadow.record(
-                model_id=MODEL_21_ID,
-                model_version=result["model_version"],
-                symbol="UNIVERSE",
-                probability=probability,
-                expected_edge=probability * result["metrics"]["walk_forward"]["mean_net_bps_valid"],
-                confidence=abs(probability - 0.5) * 2.0,
+        loaded = self.artifact_resolver.resolve(MODEL_21_ID, result["model_version"])
+        if loaded is None:
+            return self._save(
+                state="VALIDATION_FAILED",
+                reasons=["artifact_integrity_failed"],
+                dataset_version=frozen["dataset_version"],
+                model_21_version=result["model_version"],
             )
-        summary = self.shadow.summary(MODEL_21_ID, result["model_version"])
+        await self.forward.attach_natural_outcomes()
+        predicted = await self.forward.generate(
+            model_id=MODEL_21_ID,
+            model_version=result["model_version"],
+            artifact_hash=result["artifact_hash"],
+            training_cutoff_ts=result["training_cutoff_ts"],
+            loaded_artifact=loaded,
+            feature_version=result["feature_version"],
+            label_version="label-v2",
+        )
+        summary = await self.forward.summary(MODEL_21_ID, result["model_version"])
         decision = ml_shadow.decide_promotion(
-            post_cost_passed=True, fold_count=result["fold_count"], shadow_summary=summary
+            post_cost_passed=True,
+            fold_count=result["fold_count"],
+            shadow_summary=summary,
+            min_shadow=ml_forward.TRUE_FORWARD_MIN_SAMPLES_21,
+            artifact_integrity=True,
+            schema_compatible=True,
         )
         if decision == "PROMOTE":
             self.registry.set_state(
                 MODEL_21_ID, result["model_version"], "ACTIVE", reason="promotion_gate"
+            )
+        elif decision == "REJECT":
+            self.registry.set_state(
+                MODEL_21_ID, result["model_version"], "VALIDATION_FAILED", reason="promotion_reject"
             )
         model25 = None
         if ml_meta.can_train_25(self.registry):
@@ -190,11 +219,17 @@ class MLOrchestrator:
             )
             if meta.get("status") == "OK":
                 model25 = meta["model_version"]
-        state = "MODEL_21_ACTIVE" if decision == "PROMOTE" else "SHADOW_MODEL_21"
+        if decision == "PROMOTE":
+            state = "MODEL_21_ACTIVE"
+        elif decision == "REJECT":
+            state = "VALIDATION_FAILED"
+        else:
+            state = "SHADOW_MODEL_21"
         return self._save(
             state=state,
-            reasons=[decision],
+            reasons=[decision, f"forward_predicted={predicted}"],
             dataset_version=frozen["dataset_version"],
             model_21_version=result["model_version"],
             model_25_version=model25,
+            model_21_forward=summary,
         )

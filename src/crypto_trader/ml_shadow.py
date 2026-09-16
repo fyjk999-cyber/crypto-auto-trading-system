@@ -107,14 +107,24 @@ def decide_promotion(
     shadow_summary: dict,
     min_shadow: int = MIN_SHADOW_SAMPLES,
     min_mean_net: float = MIN_MEAN_NET_BPS,
+    min_win_rate: float = 0.5,
+    artifact_integrity: bool = True,
+    schema_compatible: bool = True,
 ) -> str:
+    """Deterministic promotion gate; the caller supplies true-forward counts.
+
+    HISTORICAL_REPLAY_COUNTED_AS_FORWARD must remain NO: callers pass the
+    database-backed true-forward summary, never a historical replay summary.
+    """
+    if not artifact_integrity or not schema_compatible:
+        return "REJECT"
     if not post_cost_passed or fold_count < 2:
         return "REJECT"
     if shadow_summary.get("samples", 0) < min_shadow:
         return "CONTINUE_SHADOW"
     if (
         shadow_summary.get("mean_net_bps", 0.0) > min_mean_net
-        and shadow_summary.get("win_rate", 0.0) >= 0.5
+        and shadow_summary.get("win_rate", 0.0) >= min_win_rate
     ):
         return "PROMOTE"
     return "REJECT"

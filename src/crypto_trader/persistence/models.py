@@ -1161,3 +1161,54 @@ class ScanSnapshotLabelORM(Base):
     matured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
+
+
+class MLForwardPredictionORM(Base):
+    """True-forward learning-only prediction, persisted before outcome maturity.
+
+    Rows enter this table only for snapshots captured strictly after the
+    artifact training cutoff and before the label-v2 outcome was known.
+    Historical replay is structurally excluded: ``prediction_created_at`` must
+    precede the mature label timestamp and the store never counts a row twice.
+    """
+
+    __tablename__ = "ml_forward_predictions"
+    __table_args__ = (
+        UniqueConstraint("prediction_id", name="uq_ml_forward_predictions_prediction_id"),
+        UniqueConstraint(
+            "model_id",
+            "model_version",
+            "snapshot_id",
+            name="uq_ml_forward_predictions_model_snapshot",
+        ),
+        Index("ix_ml_forward_predictions_model_state", "model_id", "model_version", "state"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    prediction_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    artifact_hash: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    snapshot_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False)
+    horizon: Mapped[str] = mapped_column(String(8), nullable=False, default="15m")
+    snapshot_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    prediction_created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    training_cutoff_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    probability: Mapped[float] = mapped_column(Float, nullable=False)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False, default="NEUTRAL")
+    expected_edge: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    model21_probability: Mapped[float | None] = mapped_column(Float)
+    label_version: Mapped[str] = mapped_column(String(32), nullable=False, default="label-v2")
+    state: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING_OUTCOME")
+    outcome_label: Mapped[str | None] = mapped_column(String(16))
+    outcome_net_bps: Mapped[float | None] = mapped_column(Float)
+    outcome_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    maturity_quality: Mapped[str | None] = mapped_column(String(32))
+    authority: Mapped[str] = mapped_column(String(24), nullable=False, default="LEARNING_ONLY")
+    is_order: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

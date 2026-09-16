@@ -89,7 +89,11 @@ async def test_autonomous_shadow_model_21_step(database, tmp_path, monkeypatch):
     version = result["model_21_version"]
     assert version and orch.registry.get("21_ORDER_FLOW_ML", version)["state"] == "SHADOW"
     assert (tmp_path / "datasets").exists() and (tmp_path / "models").exists()
-    assert (tmp_path / "shadow" / "predictions.jsonl").exists()
+    # Historical rows are not true forward: they must not be counted and the
+    # legacy replay file is not a promotion input.
+    assert result["model_21_forward"]["total"] == 0
+    assert result["model_21_forward"]["samples"] == 0
+    assert not (tmp_path / "shadow" / "predictions.jsonl").exists()
     assert result["model_25_version"] is None  # no model_evidence in seed, so #25 stays gated
 
 
