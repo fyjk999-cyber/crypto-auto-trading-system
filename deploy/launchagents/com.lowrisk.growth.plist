@@ -25,8 +25,10 @@
     <string>__SHA__</string>
     <key>GROWTH_INTERVAL_SECONDS</key>
     <string>300</string>
-    <key>GROWTH_DB</key>
-    <string>__GROWTH_DB__</string>
+    <key>GROWTH_SCAN_SOURCE_DB</key>
+    <string>__GROWTH_SOURCE_DB__</string>
+    <key>GROWTH_DERIVED_DB</key>
+    <string>__GROWTH_DERIVED_DB__</string>
   </dict>
 </dict>
 </plist>

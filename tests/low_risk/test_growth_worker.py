@@ -1,6 +1,8 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import func, select
+
 from crypto_trader.learning.growth_worker import GrowthWorker
 from crypto_trader.persistence.models import ScanSnapshotORM
 
@@ -66,11 +68,13 @@ async def test_worker_cycle_idempotent_and_heartbeat(database, tmp_path):
     first = await worker.run_once(now=FIXED_NOW)
     assert first["top10"] == "FROZEN"
     assert first["outcomes_written"] == 8
-    assert first["memory_updates"] == first["outcomes_written"]
+    assert first["memory_updates"] == 0  # direction_source=NONE is not a factual directional win
+    assert worker.metrics["nondirectional_opportunities_skipped"] == first["outcomes_written"]
     assert (tmp_path / "growth_state.json").exists()
     assert (tmp_path / "growth_heartbeat.json").exists()
     heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
-    assert heartbeat["state"] == "ACCUMULATING" and heartbeat["cycles"] == 1
+    assert heartbeat["state"] == "DEGRADED_SOURCE_MISSING" and heartbeat["cycles"] == 1
+    assert heartbeat["scan_source_ok"] is False
     assert heartbeat["runtime_sha"] == "sha-worker"
     second = await worker.run_once(now=FIXED_NOW)
     assert second["top10"] == "ALREADY_FROZEN"
@@ -92,5 +96,170 @@ async def test_worker_records_degraded_without_trading_impact(database, tmp_path
     result = await worker.run_once(now=FIXED_NOW)
     assert result["errors"] and any(e.startswith("top10:") for e in result["errors"])
     state = json.loads((tmp_path / "growth_state.json").read_text())
-    assert state["state"] == "DEGRADED" and state["last_error"]
+    assert state["state"] == "DEGRADED_SOURCE_MISSING" and state["last_error"]
     assert worker.is_order is False and worker.can_modify_core is False
+
+
+async def test_direction_and_regime_semantics_without_hindsight(database, tmp_path):
+    from crypto_trader.learning.memory_speed_store import MemorySpeedStore
+    from crypto_trader.persistence.models import OpportunityOutcomeMaturationORM
+
+    async with database.session_factory() as session:
+        session.add(
+            ScanSnapshotORM(
+                snapshot_id="obs-dir",
+                captured_at=CAPTURED,
+                cycle_id="c",
+                trading_day="2026-09-15",
+                snapshot_version="scan-snapshot-v1",
+                symbol="BTCUSDT",
+                candidate=True,
+                control=False,
+                scanner_score=1.0,
+                market_regime="TREND_UP",
+                features_json={"price": 100.0, "decision_id": "d1", "expected_direction": "LONG"},
+            )
+        )
+        session.add(
+            OpportunityOutcomeMaturationORM(
+                observation_id="obs-dir",
+                trading_day="2026-09-15",
+                symbol="BTCUSDT",
+                horizon="1h",
+                outcome_version="outcome-v1",
+                direction_source="CORE_LLM",
+                expected_direction="LONG",
+                long_net_bps=-50.0,
+                short_net_bps=200.0,
+                long_gross_bps=-28.0,
+                short_gross_bps=178.0,
+                all_in_cost_bps=22.0,
+            )
+        )
+        session.add(
+            OpportunityOutcomeMaturationORM(
+                observation_id="obs-nodir",
+                trading_day="2026-09-15",
+                symbol="ETHUSDT",
+                horizon="1h",
+                outcome_version="outcome-v1",
+                direction_source="NONE",
+                long_net_bps=500.0,
+                short_net_bps=-500.0,
+            )
+        )
+        await session.commit()
+
+    worker = GrowthWorker(database.session_factory, tmp_path, FakeClient(), code_sha="sha")
+    updated = await worker._update_memory()
+    assert updated == 1  # only the factual-direction row may update memory
+    record = await MemorySpeedStore(database.session_factory).load("BTCUSDT|1h|outcome-v1")
+    assert record.net_bps_total == -50.0  # LONG decision used, not hindsight best side
+    assert record.regimes == ["TREND_UP"]  # not the direction_source string
+    assert record.win_rate == 0.0
+    assert worker.metrics["nondirectional_opportunities_skipped"] == 1
+
+
+def _make_source_db(path, rows):
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE scan_snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, snapshot_id TEXT,
+        captured_at TEXT, cycle_id TEXT, symbol TEXT, candidate INTEGER,
+        control INTEGER, scanner_score REAL, selection_reason TEXT,
+        market_regime TEXT, features_json TEXT, outcome_status TEXT)""")
+    for row in rows:
+        conn.execute(
+            "INSERT INTO scan_snapshots (snapshot_id, captured_at, cycle_id, symbol,"
+            " candidate, control, scanner_score, selection_reason, market_regime,"
+            " features_json, outcome_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            row,
+        )
+    conn.commit()
+    conn.close()
+
+
+async def test_scan_source_backfill_and_continuous_ingest(database, tmp_path):
+    import sqlite3
+
+    source = tmp_path / "source.db"
+    features = '{"price": 100.0, "costs": {"total_cost_bps": 22.0}}'
+    _make_source_db(
+        source,
+        [
+            (
+                "obs-src-1",
+                CAPTURED.isoformat(),
+                "c1",
+                "BTCUSDT",
+                1,
+                0,
+                5.0,
+                "FACTOR_SCANNER",
+                "TREND_UP",
+                features,
+                "PENDING",
+            ),
+            (
+                "obs-src-2",
+                CAPTURED.isoformat(),
+                "c1",
+                "ETHUSDT",
+                0,
+                1,
+                0.0,
+                "CONTROL_SAMPLE",
+                "RANGE",
+                features,
+                "PENDING",
+            ),
+        ],
+    )
+    worker = GrowthWorker(
+        database.session_factory,
+        tmp_path / "derived",
+        FakeClient(_rows(CAPTURED - timedelta(minutes=5), 1460)),
+        code_sha="sha",
+        scan_source_db=str(source),
+    )
+    first = await worker.run_once(now=FIXED_NOW)
+    assert first["scan_status"] == "OK" and first["scan_ingested"] == 2
+    assert first["top10"] == "FROZEN"
+    async with database.session_factory() as session:
+        from crypto_trader.persistence.models import ScanSnapshotORM
+
+        count = await session.scalar(select(func.count()).select_from(ScanSnapshotORM))
+    assert count == 2
+    conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    assert conn.execute("SELECT COUNT(*) FROM scan_snapshots").fetchone()[0] == 2
+    conn.close()
+
+    conn = sqlite3.connect(source)
+    conn.execute(
+        "INSERT INTO scan_snapshots (snapshot_id, captured_at, cycle_id, symbol,"
+        " candidate, control, scanner_score, selection_reason, market_regime,"
+        " features_json, outcome_status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "obs-src-3",
+            (CAPTURED + timedelta(hours=1)).isoformat(),
+            "c2",
+            "SOLUSDT",
+            1,
+            0,
+            3.0,
+            "FACTOR_SCANNER",
+            "TREND_UP",
+            features,
+            "PENDING",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    second = await worker.run_once(now=FIXED_NOW)
+    assert second["scan_ingested"] == 1
+    async with database.session_factory() as session:
+        from crypto_trader.persistence.models import ScanSnapshotORM
+
+        count2 = await session.scalar(select(func.count()).select_from(ScanSnapshotORM))
+    assert count2 == 3  # no duplicates
