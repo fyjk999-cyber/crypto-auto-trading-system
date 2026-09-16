@@ -412,3 +412,20 @@ async def test_effective_model_comes_only_from_factual_response() -> None:
     await keyless.complete_json(prompt="x")
     assert keyless.diagnostics()["effective_model"] is None  # config alone never infers effective
     assert keyless.diagnostics()["last_error"] == "NO_API_KEY"
+
+
+async def test_glm_interface_present_but_not_configured() -> None:
+    from crypto_trader.llm_chief.failover import CoreLLMRouter
+    from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+    router = CoreLLMRouter(primary=DeepSeekProvider(api_key=None), backup=None)
+    glm = router.diagnostics()["glm"]
+    assert glm["interface_present"] is True
+    assert glm["configured"] is False
+    assert glm["enabled"] is False
+    assert glm["model"] is None
+    assert glm["last_call"] is None
+
+    response = await router.complete_json(prompt="x")
+    assert response.ok is False
+    assert router.status.offline is True  # primary fail + GLM unconfigured -> offline, no crash

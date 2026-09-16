@@ -169,6 +169,17 @@ class CoreLLMRouter:
             "router": self.name,
             "primary": getattr(self.primary, "diagnostics", lambda: {})(),
             "backup": (getattr(self.backup, "diagnostics", lambda: {})() if self.backup else None),
+            "glm": {
+                "interface_present": True,
+                "configured": bool(
+                    self.backup is not None and getattr(self.backup, "api_key", None)
+                ),
+                "enabled": bool(
+                    self.backup is not None and getattr(self.backup, "healthy", lambda: False)()
+                ),
+                "model": (getattr(self.backup, "model", None) if self.backup is not None else None),
+                "last_call": None,
+            },
             "offline": self.status.as_dict(now=self._now()),
             "latency": self.tracker.snapshot(),
             "configured_provider": self.configured_provider,
