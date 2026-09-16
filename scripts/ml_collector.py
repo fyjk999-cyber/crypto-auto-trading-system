@@ -40,10 +40,21 @@ def _sig(*_):
     STOP = True
 
 
-async def label(db, provider, now):
-    """Exact factual label-v2 maturity; label-v1 is archival only."""
+LABEL_BATCH_LIMIT = 50
+LABEL_TIMEOUT_SECONDS = 120.0
+
+
+async def label(db, provider, now, *, limit: int = LABEL_BATCH_LIMIT):
+    """Exact factual label-v2 maturity; label-v1 is archival only.
+
+    Bounded batch keeps the collector loop live when the external history
+    provider is slow or unavailable; the loop writes a heartbeat before and
+    after this call.
+    """
     maturer = LabelV2Maturer()
-    return await maturer.mature_pending(db.session_factory, provider, now=now)
+    return await maturer.mature_pending(
+        db.session_factory, provider, now=now, limit=limit
+    )
 
 
 async def main(db, status):
@@ -112,7 +123,18 @@ async def main(db, status):
             st["snapshots"] += int(cs.get("persisted", 0))
             st["candidates"] += int(cs.get("candidates", 0))
             st["controls"] += int(cs.get("controls", 0))
-            statuses = await label(d, label_provider, datetime.now(UTC))
+            # Liveness first: scanner facts are durable even if the external
+            # history provider is slow or unavailable.
+            Path(status).write_text(json.dumps(st))
+            try:
+                statuses = await asyncio.wait_for(
+                    label(d, label_provider, datetime.now(UTC)),
+                    timeout=LABEL_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                statuses = {}
+                st["errors"] += 1
+                st["last_error"] = "LABEL_MATURATION_TIMEOUT"
             for status_key, status_count in statuses.items():
                 st["label_v2"][status_key] = st["label_v2"].get(status_key, 0) + int(status_count)
             st["labels"] += int(statuses.get(STATUS_MATURE_VALID, 0))
