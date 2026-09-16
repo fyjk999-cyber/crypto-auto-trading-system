@@ -334,3 +334,155 @@ Window #4 (SHA 1ef721d6d491) continued, no restart:
   (uPnL -2.890), MSTRUSDT flat 0; their Base Exits remain active.
 - Totals: 4 plans (1 CLOSED, 2 ACTIVE, 1 CANCELLED), 5 orders, 7 fills, 67 decisions,
   1 natural TRADE_EPISODE; no duplicate client order ids, no oversell, no offline fill.
+
+## cron-49 daily Growth jobs (2026-09-17 00:10 +08) - BOTH PASS; soak window #4 found DEAD
+
+Job `cron-49` (`10 0 * * *` Asia/Shanghai). Executed against the acceptance window
+`/tmp/lr2-soak2` @ `1ef721d6d491` (SHA re-verified by `git rev-parse HEAD` before running).
+
+### Step 0 - the acceptance runtime was DEAD (restart authorised by the task)
+
+- Port 8010 had no listener (`lsof -nP -iTCP:8010 -sTCP:LISTEN` empty; `curl /health` ->
+  `Failed to connect`). No `local_runner ... --port 8010` process existed.
+- `data/low-risk-paper.log` ended with a **clean** shutdown:
+  `Shutting down / Application shutdown complete / Finished server process [69741]`.
+- Death pinned by audit `ENGINE_STOPPED 2026-09-16 02:26:21.715682Z` (= 10:26:21 +08); the log
+  mtime agrees (10:26:21). Last `llm_decisions` row `02:26:19Z`.
+- Window #4 therefore ran only `05:57:42 +08 -> 10:26:21 +08` = **4h28m39s**, then was down for
+  **13h58m03s** before this job's restart.
+- Restarted the SAME identity (SHA `1ef721d6d491`, port 8010, real OKX public data, real DeepSeek
+  key from macOS Keychain, PAPER / `LIVE_TRADING_ENABLED=false`) via the new
+  `scripts/restart_soak2_preserve_db.sh`. That script deliberately does **not** `rm` the DB (the
+  original fresh-window launch did); the acceptance DB is evidence and was preserved.
+- Restart evidence: log marker `===== SOAK RESTART 2026-09-17T00:24:13+0800 sha=1ef721d6d491
+  (DB preserved) =====`, audit `ENGINE_STARTED 2026-09-16 16:24:25.064149Z`, `/health` OVERALL OK.
+- Recovery on restart was **clean, not divergent**: `recovery_factual_state = MATCHED`; positions
+  restored from persisted facts (LITUSDT -73 @ 4.0857, CRCLUSDT -8.5 @ 84.49, SNXXUSDT -0.5,
+  SNDKUSDT -1.074). The round-60 divergence guard did not need to fire - state matched.
+
+### Step 1 - daily Top-10 freeze: PASS
+
+`scripts/freeze_daily_top10.py --base-url http://127.0.0.1:8010 --db .../crypto_trader.db`
+
+- First run: `trading_day=2026-09-17`, `frozen=true`, `already_frozen=false`,
+  `candidate_count=15`, 10 entries, `authority=LEARNING_ONLY`, `not_an_order=true`.
+- Live scanner returned **15** candidates (>=10), so 10 frozen rows is the correct full quota -
+  not a short scanner day.
+- DB evidence: `daily_opportunity_top10` for `2026-09-17` = **10 rows**, ranks 1-10,
+  `COUNT(DISTINCT rank)=10`, `COUNT(DISTINCT symbol)=10` (no duplicate rank/symbol).
+- Top ranks: CAPUSDT 3.002273, CNPYUSDT 2.0015056, PUMPUSDT 2.0014728, ZECUSDT 2.0012177,
+  PONSUSDT 1.001; all `FACTOR_SCANNER`.
+- Re-run: `frozen=true`, `already_frozen=true`, entries=10 - **idempotency verified**.
+- First-freeze immutability verified: `frozen_at` stayed `2026-09-16 16:26:20.776301` (single
+  distinct value) across both runs.
+
+### Step 2 - Growth lifecycle review: PASS (first run)
+
+`scripts/growth_lifecycle_review.py --db .../crypto_trader.db`
+
+- Latest factual closed episode = `episode_plan_75506599a561421eb23538d21ed56bd9` (KORUUSDT SHORT),
+  `closed_at 2026-09-16 00:58:18Z` -> `trading_day=2026-09-16`. No `2026-09-16:*` review existed,
+  so this is a genuinely new episode (the two existing rows were `2026-09-15:*`).
+- Derived from real fills only: entry VWAP `18.84` (SELL 0.5), exit VWAP `18.89` (BUY 0.5),
+  2 fills -> `net_bps = -26.53927813163482`.
+- Independent recomputation: `(18.89-18.84)/18.84*10000 = 26.53927813163482`, SHORT -> negative =
+  **loss** -> verdict **DEFECT**. Reported value matches to 1e-9.
+- Result: `written=2`, `verdicts=[DEFECT, DEFECT]` (`EXIT_MODIFICATION_REVIEW`,
+  `LLM_INVOCATION_REVIEW`), `authority=LEARNING_ONLY`, `is_order=false`.
+- Persisted rows `id=3,4` cite real ids only: plan `plan_75506599a561421eb23538d21ed56bd9`,
+  `exit_decision=llm_ff9fa748a5434677809f4abf650e711e` (verified present in `llm_decisions`,
+  action=EXIT, KORUUSDT), `position_decisions=8 total_decisions=14
+  live_llm_position_audits=333`. No fabrication.
+- Old rows `id=1,2` untouched (still `created_at 2026-09-15 22:12:36`).
+
+### DEFECT (new, P1) - the review write-through is NOT re-runnable: DecimalError on read-back
+
+Re-running step 2 crashes **after** the first successful write:
+
+```
+crypto_trader.domain.money.DecimalError: binary float is forbidden in financial core;
+convert at adapter boundary with Decimal(str(raw_value))
+  growth_persistence.py:33  session.execute(select(AITradeReviewORM)...)
+  models.py:42              ExactDecimal.process_result_value -> D(value)
+```
+
+- Root cause: `AITradeReviewORM.confidence` uses `ExactDecimal()` whose `impl = String(80)` and
+  whose read path requires a canonical **string**; but migration
+  `0003_ai_memory_and_shadow_tables.py:69` declares the column `sa.Numeric(38, 18)`. On SQLite,
+  NUMERIC affinity coerces the bound `"0.5"` to REAL, so the value comes back as a binary float.
+- Verified: `SELECT id, confidence, typeof(confidence) FROM ai_trade_reviews` -> all four rows are
+  `0.5 | real`.
+- Blast radius is wider than the script: `GrowthPersistence.list_reviews()` (any ORM read of this
+  table) fails with the same error - reproduced directly.
+- **Pre-existing, not introduced by this run**: rows `id=1,2` (written in the earlier round on
+  2026-09-15) are stored `real` too. The first write of any new `(trading_day, review_type)` key
+  succeeds because the SELECT matches nothing; only re-runs / reads hit the bad decode.
+- Consequence: `cron-49` step 2 would crash on any retry for an already-written day, and no
+  consumer can read `ai_trade_reviews` through the ORM.
+- Not fixed here: the fix is a schema/model reconciliation (store TEXT, or a Numeric-tolerant
+  decorator) plus a migration on a shared, live acceptance DB. Recorded for the master goal rather
+  than changed unilaterally under a running acceptance window.
+
+### DEFECT (new, P1) - terminal deterministic exits close the position but create no trade_episode
+
+Two positions were closed naturally right after the restart, and neither produced an episode:
+
+- **LITUSDT** `plan_64bfd1ff6e6a4342ada1280d78f55502`: `DETERMINISTIC_EXIT_INTENT`
+  `RISK_HARD_EXIT` / 100% / `L2_HARD_EXIT + POSITION_LOSS_LIMIT + FORCED_CLOSE_REQUIRED`,
+  `loss_pct 5.1885648225682`, order `LITUSDT BUY 73 FILLED` (fills `fill_759cec05...` @4.2978 x20 +
+  `fill_5693ad6a...` @4.2982 x53) at `16:25:20Z` -> position flat. A factual **loss**.
+- **CRCLUSDT** `plan_ab18912e6af145e3b0bd6dd58ea9b69e`: `FAST_PROFIT_PROTECTION` / 100%,
+  order `CRCLUSDT BUY 8.5 FILLED` (fills `fill_bf0f658b...` @81.77 x5.8 + `fill_cdee8454...`
+  @81.78 x2.7) at `16:28:05Z` -> position flat. A factual **gain** (entry 84.49).
+- Both exits were `reduce_only=true`, `deterministic_exit=true` and are spec-correct; nothing was
+  forced.
+- But afterwards `trade_plans.state` is still **ACTIVE** for both, and `trade_episodes` stayed at
+  **2** (`TRADE_EPISODE_CREATED` count = 2, latest `2026-09-16 00:58:18`). At the clean boundary
+  there were **4 ACTIVE plans but only 2 open positions**.
+- Impact: Growth V2 lifecycle review derives exclusively from `trade_episodes`, so a fully closed
+  Risk-L2 forced loss and a fully closed Fast-Profit gain are both invisible to the review ledger.
+  These two would have been exactly the "post-close review" material this job exists to produce.
+
+### P0/P1 - the acceptance window was KILLED and its DB taken over by a different SHA
+
+While this job was finishing, the acceptance runtime was killed by a concurrent session:
+
+- `ENGINE_STOPPED 2026-09-16 16:29:09.781752Z` (= 00:29:09 +08) - the restart process `[58324]`
+  logged `Finished server process [58324]`.
+- Port 8010 was immediately taken by a **different runtime**:
+  `pid 67789`, cwd `/Users/huhongjie/lowrisk-provider-durability`,
+  venv `lowrisk-provider-durability/.venv`, SHA **`f319ecbece318493e8444a59f234fb32bcb445bd`**
+  ("fix(low-risk): durable Keychain provider startup", parent `115571c`), started
+  `16:29:36.516934Z`. It ran `alembic upgrade head` and serves port 8010.
+- **It is writing the SAME acceptance DB**: `lsof -p 67789` shows
+  `/private/tmp/lr2-soak2/data/crypto_trader.db` (+ `-wal`, `-shm`) held open.
+- Contamination boundary = `2026-09-16T16:29:09Z`. Writes after it are NOT attributable to
+  `1ef721d6d491`: `LIVE_LLM_DECISION` 16:29:53, `LIVE_LLM_POSITION_DECISION` 16:30:11/16:30:31,
+  `DETERMINISTIC_EXIT_LEG_KEY` 16:29:55/16:30:14, `ORDER_SUBMITTED` + `FILL_SETTLED` +
+  `FILL_LINEAGE` 16:30:34 (1 order, 1 fill).
+- This job's own outputs were written at `16:26:20Z` (freeze) and `16:26:48Z` (reviews) - both
+  **before** the boundary - so they are clean and remain valid.
+- No process was killed by this job to reclaim the port: the intruding runtime belongs to another
+  session and re-taking 8010 would have destroyed its work. The correct action was to stop and
+  record. **Two different SHAs' runtimes now share one acceptance DB - a standing integrity
+  hazard**; the acceptance ledger needs either a dedicated DB per window or single-writer
+  enforcement.
+
+### Soak accounting - the >=72h clock is BROKEN and must be re-based
+
+| segment | SHA | from | to | duration |
+|---|---|---|---|---|
+| 1 | `1ef721d6d491` | 2026-09-16 05:57:42 +08 | 2026-09-16 10:26:21 +08 | 4h28m39s |
+| gap | - | 2026-09-16 10:26:21 +08 | 2026-09-17 00:24:13 +08 | **13h58m03s DOWN** |
+| 2 | `1ef721d6d491` | 2026-09-17 00:24:13 +08 | 2026-09-17 00:29:09 +08 | 4m44s |
+| 3 | `f319ecb` (foreign) | 2026-09-17 00:29:36 +08 | running | - |
+
+- Total uptime actually achieved by the acceptance SHA = **4h33m24s, non-contiguous**.
+- Nominal 72h point would have been `2026-09-19T05:57+08`; the window is dead well short of it.
+- Therefore the `>=72h` gate is **NOT met**, and window #4 cannot be extended: it is no longer the
+  process on 8010. Any future 72h claim must start a fresh, continuously-running window on a
+  dedicated DB, and `FINAL_STATUS` stays **PARTIAL**.
+
+At the clean boundary (`16:29:09Z`): 7 plans (2 CLOSED, 4 ACTIVE, 1 CANCELLED), 12 orders, 19
+fills, 444 decisions, 2 trade_episodes, 4 ai_trade_reviews, 20 daily_opportunity_top10 rows; no
+oversell, no offline fill, no duplicate client order id observed in this job's checks.
