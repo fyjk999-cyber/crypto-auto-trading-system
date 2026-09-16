@@ -1154,3 +1154,48 @@ class ScanSnapshotLabelORM(Base):
     matured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
+
+
+class OpportunityOutcomeMaturationORM(Base):
+    """Per-observation factual horizon outcome (derived; LEARNING_ONLY)."""
+
+    __tablename__ = "opportunity_outcome_maturations"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id", "horizon", "outcome_version",
+            name="uq_outcome_maturation_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    observation_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    trading_day: Mapped[str | None] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    horizon: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    outcome_version: Mapped[str] = mapped_column(String(16), default="outcome-v1")
+    market_source: Mapped[str] = mapped_column(String(24), default="OKX_PUBLIC_CANDLES")
+    direction_source: Mapped[str] = mapped_column(String(24), default="NONE")
+    expected_direction: Mapped[str | None] = mapped_column(String(8))
+    entry_price: Mapped[float | None] = mapped_column(Float)
+    target_price: Mapped[float | None] = mapped_column(Float)
+    requested_target_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    actual_target_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    alignment_error_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    alignment_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    path_start_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    path_end_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    long_gross_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    short_gross_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    all_in_cost_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    long_net_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    short_net_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    net_edge_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    future_high: Mapped[float | None] = mapped_column(Float)
+    future_low: Mapped[float | None] = mapped_column(Float)
+    mfe_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    mae_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_volatility: Mapped[float] = mapped_column(Float, default=0.0)
+    label: Mapped[str | None] = mapped_column(String(32))
+    cost_version: Mapped[str] = mapped_column(String(16), default="all-in-v1")
+    authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
