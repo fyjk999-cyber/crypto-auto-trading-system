@@ -107,3 +107,20 @@ def test_typed_refs_persist_additively():
     apply_context_refs(decision, {"memory_refs": ["pattern:p1:v2"]})
     assert sorted(decision.memory_refs_json) == sorted(refs)  # idempotent
     assert len(decision.episode_refs_json) == 2
+
+
+async def test_existing_chief_loader_exposes_growth_memory(database):
+    from types import SimpleNamespace
+
+    from crypto_trader.llm_chief.context_loader import ChiefContextLoader
+
+    await _seed(database.session_factory, T + timedelta(hours=1))
+    loader = ChiefContextLoader(database.session_factory, limit=5)
+    context = SimpleNamespace(
+        symbol="BTCUSDT", regime="TREND_UP", strategy="breakout", horizon="1h", setup_signature="s1"
+    )
+    evidence = await loader.load_tool("growth_memory", context)
+    assert evidence.features["strategy"] == "breakout"
+    assert evidence.features["direction"] == "LONG"  # never direction=row.strategy
+    assert evidence.features["patterns"][0]["direction"] == "LONG"
+    assert evidence.source_refs[0]["memory_ref"].startswith(("pattern:", "generalized:"))
