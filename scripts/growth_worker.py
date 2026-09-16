@@ -29,6 +29,7 @@ async def main(db_path: str, growth_dir: str, interval: float) -> None:
         growth_dir,
         OKXAdapter(),
         code_sha=os.environ.get("RUNNING_SHA", ""),
+        scan_source_db=os.environ.get("GROWTH_SCAN_SOURCE_DB"),
     )
     while not STOP:
         try:
