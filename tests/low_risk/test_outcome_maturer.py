@@ -22,7 +22,7 @@ class FakeClient:
     def __init__(self, rows):
         self.rows = rows
 
-    async def get_candles(self, inst_id, bar, limit=300):
+    async def get_candles(self, inst_id, bar, limit=300, **kwargs):
         return self.rows
 
 
@@ -193,3 +193,56 @@ async def test_unaligned_gap_is_flagged(database):
     async with database.session_factory() as session:
         row = (await session.execute(select(OpportunityOutcomeMaturationORM))).scalars().first()
     assert row.alignment_ok is False and row.alignment_error_seconds > 120
+
+
+class _PagedClient:
+    def __init__(self, rows):
+        self.rows = sorted(rows, key=lambda row: int(row[0]))
+
+    async def get_candles(self, inst_id, bar, limit=300, after=None, **kwargs):
+        if after is None:
+            return self.rows[-limit:]
+        older = [row for row in self.rows if int(row[0]) <= int(after)]
+        return older[-limit:]
+
+
+async def test_post_horizon_spike_cannot_affect_path_or_metrics(database):
+    from crypto_trader.market_data.opportunity.outcome_maturer import _load_candles  # noqa: F401
+
+    now = datetime(2026, 9, 16, 4, 0, tzinfo=UTC)
+    captured = now - timedelta(hours=2)
+    rows = _rows(captured - timedelta(minutes=5), 180)
+    spike_index = 75  # candle opening at captured+70m, beyond the 1h horizon
+    rows[spike_index][2] = "500.0"
+    rows[spike_index][3] = "50.0"
+    rows[spike_index][4] = "400.0"
+    async with database.session_factory() as session:
+        session.add(_obs("obs-strict", captured))
+        await session.commit()
+    result = await mature_due(
+        database.session_factory, FakeClient(rows), now=now, horizons={"1h": 3600}
+    )
+    assert result["written"] == 1
+    async with database.session_factory() as session:
+        row = (await session.execute(select(OpportunityOutcomeMaturationORM))).scalars().first()
+    assert row.future_high < 200.0  # post-horizon spike excluded
+    assert row.endpoint_policy == "CLOSED_BAR_END_LE_TARGET"
+    assert row.final_bar_partial is False
+    assert _aware(row.actual_target_ts) <= captured + timedelta(hours=1)
+
+
+async def test_historical_pagination_reconstructs_beyond_300_bars():
+    from crypto_trader.market_data.opportunity.outcome_maturer import _load_candles
+
+    start = datetime(2026, 9, 16, 0, 0, tzinfo=UTC)
+    target = start + timedelta(hours=8)
+    rows = _rows(start - timedelta(minutes=5), 8 * 60 + 10)
+    candles, pages, data_gap = await _load_candles(
+        _PagedClient(rows), {}, "BTCUSDT", "1m", start, target
+    )
+    assert pages >= 2
+    assert data_gap is False
+    assert candles[0].ts <= start
+    assert candles[-1].ts >= target - timedelta(minutes=1)
+    timestamps = [candle.ts for candle in candles]
+    assert len(timestamps) == len(set(timestamps))

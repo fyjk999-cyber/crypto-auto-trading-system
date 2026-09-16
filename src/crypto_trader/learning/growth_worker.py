@@ -96,6 +96,32 @@ class GrowthWorker:
             },
         )
 
+    def _heartbeat_stage(self, stage: str) -> None:
+        now = datetime.now(UTC).isoformat()
+        self.state["stage"] = stage
+        self.state["stage_started_at"] = now
+        self.state["last_progress_at"] = now
+        _write_json(
+            self.heartbeat_path,
+            {
+                "pid": os.getpid(),
+                "at": now,
+                "state": self.state.get("state", "STARTING"),
+                "stage": stage,
+                "cycles": self.state.get("cycles", 0),
+                "runtime_sha": self.code_sha,
+                "cycle_started_at": self.state.get("cycle_started_at"),
+                "stage_started_at": now,
+                "last_progress_at": now,
+                "source_cursor": self.state.get("last_scan_source_id", 0),
+                "scan_source_path": self.scan_source_db,
+                "scan_source_ok": bool(self.scan_source_db and Path(self.scan_source_db).exists()),
+                "derived_db_path": str(self.base_dir),
+                "last_error": self.state.get("last_error"),
+                "metrics": self.metrics,
+            },
+        )
+
     async def _ingest_scan_source(self, batch: int = 500) -> dict:
         if not self.scan_source_db or not Path(self.scan_source_db).exists():
             return {"status": "SOURCE_MISSING", "ingested": 0, "seen": 0}
@@ -236,12 +262,14 @@ class GrowthWorker:
             "memory_updates": 0,
             "errors": [],
         }
+        self._heartbeat_stage("SCAN_INGEST")
         try:
             scan = await self._ingest_scan_source()
             summary["scan_status"] = scan.get("status")
             summary["scan_ingested"] = int(scan.get("ingested", 0))
         except Exception as exc:
             summary["errors"].append(f"scan:{type(exc).__name__}")
+        self._heartbeat_stage("TOP10")
         try:
             day = ledger_freeze.latest_completed_trading_day(moment)
             frozen = await ledger_freeze.freeze_completed_day(self._session_factory, day)
@@ -255,6 +283,7 @@ class GrowthWorker:
             summary["outcomes_written"] = int(matured.get("written", 0))
         except Exception as exc:
             summary["errors"].append(f"outcomes:{type(exc).__name__}")
+        self._heartbeat_stage("MEMORY_UPDATE")
         try:
             summary["memory_updates"] = await self._update_memory()
         except Exception as exc:
@@ -279,4 +308,5 @@ class GrowthWorker:
         else:
             state = "ACCUMULATING"
         self._save(state=state, last_error=";".join(summary["errors"]) or None)
+        self._heartbeat_stage("CYCLE_COMPLETE")
         return summary

@@ -106,39 +106,69 @@ def evaluate_horizon(
     }
 
 
-async def _load_candles(client, cache: dict, symbol: str, bar: str) -> list[_Candle]:
-    key = (symbol, bar)
+async def _load_candles(
+    client,
+    cache: dict,
+    symbol: str,
+    bar: str,
+    start_ts: datetime,
+    target_ts: datetime,
+    max_pages: int = 20,
+) -> tuple:
+    """Bounded historical pagination covering [start_ts, target_ts]."""
+    bar_seconds = {"1m": 60, "5m": 300, "1h": 3600}.get(bar, 60)
+    key = (symbol, bar, int(start_ts.timestamp()) // 60, int(target_ts.timestamp()) // 60)
     if key in cache:
         return cache[key]
     try:
         inst_id = SymbolMapper().to_okx(symbol)
     except ValueError:
-        cache[key] = []
-        return []
-    try:
-        rows = await client.get_candles(inst_id, bar, 300)
-    except Exception:
-        cache[key] = []
-        return []
-    candles: list[_Candle] = []
-    for row in rows or []:
-        if not isinstance(row, (list, tuple)) or len(row) < 9 or str(row[8]) != "1":
-            continue
+        cache[key] = ([], 0, True)
+        return cache[key]
+    start_ms = int(start_ts.timestamp() * 1000)
+    cursor_ms = int(target_ts.timestamp() * 1000) + bar_seconds * 1000
+    candles: dict = {}
+    pages = 0
+    data_gap = False
+    while pages < max_pages:
         try:
-            candles.append(
-                _Candle(
-                    datetime.fromtimestamp(int(row[0]) / 1000, UTC),
-                    float(row[1]),
-                    float(row[2]),
-                    float(row[3]),
-                    float(row[4]),
+            rows = await client.get_candles(inst_id, bar, 300, after=cursor_ms)
+        except Exception:
+            data_gap = True
+            break
+        parsed = []
+        for row in rows or []:
+            if not isinstance(row, (list, tuple)) or len(row) < 9 or str(row[8]) != "1":
+                continue
+            try:
+                parsed.append(
+                    _Candle(
+                        datetime.fromtimestamp(int(row[0]) / 1000, UTC),
+                        float(row[1]),
+                        float(row[2]),
+                        float(row[3]),
+                        float(row[4]),
+                    )
                 )
-            )
-        except (TypeError, ValueError, IndexError):
-            continue
-    candles.sort(key=lambda candle: candle.ts)
-    cache[key] = candles
-    return candles
+            except (TypeError, ValueError, IndexError):
+                continue
+        if not parsed:
+            break
+        pages += 1
+        earliest = min(candle.ts for candle in parsed)
+        for candle in parsed:
+            candles.setdefault(candle.ts, candle)
+        if int(earliest.timestamp() * 1000) <= start_ms:
+            break
+        if pages > 1 and int(earliest.timestamp() * 1000) >= cursor_ms:
+            data_gap = True
+            break
+        cursor_ms = int(earliest.timestamp() * 1000)
+    ordered = sorted(candles.values(), key=lambda candle: candle.ts)
+    if not ordered or ordered[0].ts > start_ts:
+        data_gap = True
+    cache[key] = (ordered, pages, data_gap)
+    return cache[key]
 
 
 async def mature_due(
@@ -159,6 +189,9 @@ async def mature_due(
         "skipped_immature": 0,
         "errors": 0,
         "unaligned": 0,
+        "inconclusive": 0,
+        "history_pages": 0,
+        "data_gaps": 0,
         "by_direction_source": {},
     }
     cache: dict = {}
@@ -207,18 +240,28 @@ async def mature_due(
                     summary["errors"] += 1
                     continue
                 bar = HORIZON_BAR.get(horizon, "1m")
-                candles = await _load_candles(client, cache, observation.symbol, bar)
                 target_ts = captured + timedelta(seconds=seconds)
                 bar_seconds = {"1m": 60, "5m": 300, "1h": 3600}.get(bar, 60)
                 bar_delta = timedelta(seconds=bar_seconds)
-                path = [c for c in candles if captured <= c.ts <= target_ts + bar_delta]
-                target = [c for c in path if c.ts <= target_ts]
-                if not path or not target:
-                    summary["errors"] += 1
+                candles, pages_fetched, data_gap = await _load_candles(
+                    client, cache, observation.symbol, bar, captured, target_ts
+                )
+                summary["history_pages"] += pages_fetched
+                if data_gap:
+                    summary["data_gaps"] += 1
+                # STRICT: only fully-closed bars whose end is at/before the horizon.
+                path = [
+                    candle
+                    for candle in candles
+                    if captured <= candle.ts and candle.ts + bar_delta <= target_ts
+                ]
+                if not path:
+                    summary["inconclusive"] += 1
                     continue
-                target_candle = target[-1]
-                alignment_error = abs((target_candle.ts - target_ts).total_seconds())
-                alignment_ok = alignment_error <= bar_seconds * 2
+                target_candle = path[-1]
+                actual_target_ts = target_candle.ts + bar_delta
+                alignment_error = (target_ts - actual_target_ts).total_seconds()
+                alignment_ok = alignment_error <= bar_seconds and not data_gap
                 if not alignment_ok:
                     summary["unaligned"] += 1
                 all_in_cost = float(
@@ -247,11 +290,15 @@ async def mature_due(
                         entry_price=float(entry_price),
                         target_price=target_candle.close,
                         requested_target_ts=target_ts,
-                        actual_target_ts=target_candle.ts,
+                        actual_target_ts=actual_target_ts,
                         alignment_error_seconds=alignment_error,
                         alignment_ok=alignment_ok,
+                        endpoint_policy="CLOSED_BAR_END_LE_TARGET",
+                        final_bar_partial=False,
+                        data_gap=data_gap,
+                        pages_fetched=pages_fetched,
                         path_start_ts=path[0].ts,
-                        path_end_ts=target_candle.ts,
+                        path_end_ts=actual_target_ts,
                         long_gross_bps=metrics["long_gross_bps"],
                         short_gross_bps=metrics["short_gross_bps"],
                         all_in_cost_bps=all_in_cost,

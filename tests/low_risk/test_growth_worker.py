@@ -15,7 +15,7 @@ class FakeClient:
         self.rows = rows or []
         self.fail = fail
 
-    async def get_candles(self, inst_id, bar, limit=300):
+    async def get_candles(self, inst_id, bar, limit=300, **kwargs):
         if self.fail:
             raise RuntimeError("okx_down")
         return self.rows
@@ -75,6 +75,7 @@ async def test_worker_cycle_idempotent_and_heartbeat(database, tmp_path):
     heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
     assert heartbeat["state"] == "DEGRADED_SOURCE_MISSING" and heartbeat["cycles"] == 1
     assert heartbeat["scan_source_ok"] is False
+    assert heartbeat["stage"] == "CYCLE_COMPLETE"
     assert heartbeat["runtime_sha"] == "sha-worker"
     second = await worker.run_once(now=FIXED_NOW)
     assert second["top10"] == "ALREADY_FROZEN"

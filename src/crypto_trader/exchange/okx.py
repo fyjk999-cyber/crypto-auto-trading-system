@@ -422,13 +422,22 @@ class OKXAdapter(ExchangeAdapter):
             )
         return rows
 
-    async def get_candles(self, inst_id: str, bar: str, limit: int = 500) -> list[list[str]]:
-        """Fetch public OKX candles; no credentials or demo headers are used."""
-        data = await self._public_request(
-            "GET",
-            "/api/v5/market/candles",
-            params={"instId": inst_id, "bar": bar, "limit": limit},
-        )
+    async def get_candles(
+        self,
+        inst_id: str,
+        bar: str,
+        limit: int = 500,
+        *,
+        after: int | None = None,
+        before: int | None = None,
+    ) -> list[list[str]]:
+        """Fetch public OKX candles; optional ts cursors enable pagination."""
+        params = {"instId": inst_id, "bar": bar, "limit": limit}
+        if after is not None:
+            params["after"] = str(int(after))
+        if before is not None:
+            params["before"] = str(int(before))
+        data = await self._public_request("GET", "/api/v5/market/candles", params=params)
         rows = data.get("data")
         if not isinstance(rows, list):
             raise OKXDiagnosticError("MALFORMED_RESPONSE", "OKX candle response is incomplete")
