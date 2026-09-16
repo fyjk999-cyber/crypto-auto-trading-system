@@ -16,8 +16,8 @@ WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-low-risk-core-closure
 | R4 | Offline/recovery semantics | this commit | 303 focused | DONE |
 | R5 | NEXT_REASSESSMENT wake-only + dedup | this commit | 304 focused | DONE (price/time; indicator/event feeds P1) |
 | R6 | Execution/authority contract audit | this commit | 62 authority/lease/UNKNOWN tests | DONE (ADD full path P1 quarantine) |
-| R7 | Lineage/observability | - | - | TODO |
-| R8 | Fresh full regression | - | - | TODO |
+| R7 | Lineage/observability (indicator feed + wake audit) | this commit | 304 focused | DONE (EVENT feed P1) |
+| R8 | Fresh full regression | this commit | 902 passed | DONE (detached acceptance pending) |
 | R9 | Factual PAPER acceptance | - | - | TODO |
 
 ## R2 evidence
@@ -144,3 +144,21 @@ FLASH_HIGH_POLICY_CHANGED = NO
   contracts are rejected, never silently resized.
 - P1: full ADD new-risk execution path (Core-LLM ADD -> child TradePlan with Base Exit ->
   ExecutionAuthority) is not implemented; rejection is the safe current semantics.
+
+## R7 evidence (lineage/observability)
+
+- NEXT_REASSESSMENT evaluator now receives a factual indicator feed from the strategy
+  context (`atr_pct`, `mark_price`, `funding`, `oi`, `basis`) in addition to price/time;
+  P1: EVENT condition feed (event timestamps) still to be enriched.
+- Every forced review now audits `LLM_REASSESSMENT_REQUESTED` with the exact wake sources
+  (`risk_wake`, `expected_holding_horizon_wake`, `next_reassessment_wake`), trade plan id,
+  factual state version, `authority=REASSESSMENT_ONLY` and `is_order=false`, giving the
+  full why-was-the-LLM-woken lineage alongside the decision/plan/state version.
+
+## R8 evidence (fresh full regression, working tree)
+
+- Focused closure suite: 304 passed
+  (`tests/low_risk` + `tests/llm_chief` + lifecycle + bootstrap).
+- Fresh full suite: `pytest tests -q` -> 902 passed, 0 failed (89s).
+- `ruff check src/ scripts/ tests/` clean.
+- Detached exact-SHA acceptance run is recorded below after commit.

@@ -597,10 +597,22 @@ class TradingEngine:
             )
             reassessment_wake = False
             if plan is not None and getattr(plan, "next_reassessment", None):
+                indicator_feed = {
+                    key: value
+                    for key, value in {
+                        "atr_pct": getattr(ctx, "realized_volatility", None),
+                        "mark_price": ctx.mark_price,
+                        "funding": getattr(ctx, "funding", None),
+                        "oi": getattr(ctx, "oi", None),
+                        "basis": getattr(ctx, "basis", None),
+                    }.items()
+                    if value is not None
+                }
                 wake = self.reassessment_evaluator.evaluate(
                     plan.next_reassessment,
                     now=ctx.clock_time.astimezone(UTC),
                     price=ctx.mark_price or ctx.book.mid_price(),
+                    indicators=indicator_feed,
                 )
                 if wake.triggered:
                     fingerprint = "|".join(wake.matched_conditions) + (
@@ -619,6 +631,25 @@ class TradingEngine:
                                 "state_version": self._position_state_version(position, plan),
                             },
                         )
+            if wake_required or horizon_wake or reassessment_wake:
+                await self.audit.log(
+                    "LLM_REASSESSMENT_REQUESTED",
+                    target=position.symbol,
+                    run_id=self.run_id,
+                    after={
+                        "trade_plan_id": plan.trade_plan_id if plan else None,
+                        "risk_wake": wake_required,
+                        "expected_holding_horizon_wake": horizon_wake,
+                        "next_reassessment_wake": reassessment_wake,
+                        "state_version": (
+                            self._position_state_version(position, plan)
+                            if plan is not None
+                            else position_state_version(position, plan)
+                        ),
+                        "authority": "REASSESSMENT_ONLY",
+                        "is_order": False,
+                    },
+                )
             try:
                 signal = await self.position_manager.review(
                     ctx,
