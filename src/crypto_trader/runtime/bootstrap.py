@@ -168,10 +168,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     # enters LLM_OFFLINE_MODE and the engine blocks new risk.
     trading_llm_config = resolve_trading_llm_config()  # fail closed on non-allowlisted models
     glm_provider = GLMProvider() if os.environ.get("GLM_API_KEY") else None
-    llm_provider = CoreLLMRouter(
-        primary=DeepSeekProvider(model=trading_llm_config.model),
-        backup=glm_provider,
-    )
+    primary_provider = DeepSeekProvider(model=trading_llm_config.model)
+    primary_provider.model_config_source = trading_llm_config.config_source
+    llm_provider = CoreLLMRouter(primary=primary_provider, backup=glm_provider)
     chief = ChiefTraderEngine(provider=llm_provider)
     # Phase 4A: real fresh-state provider. On DeepSeek failure the router
     # rebuilds a CURRENT ChiefTraderContext from engine facts before GLM; a

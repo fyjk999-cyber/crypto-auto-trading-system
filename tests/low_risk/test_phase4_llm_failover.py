@@ -366,3 +366,49 @@ def test_trading_resolver_allowlist_and_generic_env_isolation(monkeypatch) -> No
     assert resolve_trading_llm_config().model == "deepseek-flash"
     monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
     assert resolve_trading_llm_config().model == "deepseek-flash"
+
+
+async def test_effective_model_comes_only_from_factual_response() -> None:
+    from crypto_trader.llm_chief.failover import CoreLLMRouter
+    from crypto_trader.llm_chief.provider import DeepSeekProvider, LLMResponse
+
+    class OkProvider:
+        name = "deepseek"
+        model = "deepseek-flash"
+
+        def healthy(self):
+            return True
+
+        async def complete_json(self, **kwargs):
+            return LLMResponse(
+                text='{"action":"NO_TRADE"}',
+                provider="deepseek",
+                model="deepseek-flash",
+                latency_ms=12.5,
+                ok=True,
+                parsed_json={"action": "NO_TRADE"},
+                served_by="deepseek",
+                token_usage={"total_tokens": 7},
+            )
+
+    primary = OkProvider()
+    primary.model_config_source = "canonical_default"
+    router = CoreLLMRouter(primary=primary, backup=None)
+    before = router.diagnostics()
+    assert before["configured_model"] == "deepseek-flash"
+    assert before["effective_model"] is None and before["served_by"] is None
+
+    await router.complete_json(prompt="x", state_version="v1")
+    after = router.diagnostics()
+    assert after["effective_provider"] == "deepseek"
+    assert after["effective_model"] == "deepseek-flash"
+    assert after["served_by"] == "deepseek"
+    assert after["last_latency_ms"] == 12.5
+    assert after["last_token_usage"] == {"total_tokens": 7}
+    assert after["config_source"] == "canonical_default"
+    assert after["thinking"] is True and after["reasoning_effort"] == "high"
+
+    keyless = CoreLLMRouter(primary=DeepSeekProvider(api_key=None), backup=None)
+    await keyless.complete_json(prompt="x")
+    assert keyless.diagnostics()["effective_model"] is None  # config alone never infers effective
+    assert keyless.diagnostics()["last_error"] == "NO_API_KEY"
