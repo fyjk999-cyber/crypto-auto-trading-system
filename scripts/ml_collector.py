@@ -5,12 +5,11 @@ import json
 import os
 import signal
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from sqlalchemy import select
 
 from crypto_trader.exchange.okx import OKXAdapter
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
@@ -21,10 +20,15 @@ from crypto_trader.market_data.opportunity.scanner import FactorScanner
 from crypto_trader.market_data.opportunity.service import OpportunityScannerService
 from crypto_trader.market_data.opportunity.snapshots import ScanSnapshotCollector
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
+from crypto_trader.ml_labels import (
+    HORIZON_SECONDS,
+    STATUS_MATURE_VALID,
+    LabelV2Maturer,
+    OkxHistoricalCandleProvider,
+)
 from crypto_trader.persistence import Database
-from crypto_trader.persistence.models import ScanSnapshotLabelORM, ScanSnapshotORM
 
-H = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}
+H = HORIZON_SECONDS
 STOP = False
 
 
@@ -33,63 +37,10 @@ def _sig(*_):
     STOP = True
 
 
-async def prices(c):
-    rows = await c.get_tickers("SWAP")
-    return {str(r["instId"]).split("-")[0] + "USDT": float(r["last"]) for r in rows}
-
-
-async def label(db, px, now):
-    n = 0
-    async with db.session_factory() as s:
-        q = select(
-            ScanSnapshotLabelORM.snapshot_id,
-            ScanSnapshotLabelORM.horizon,
-            ScanSnapshotLabelORM.label_version,
-        )
-        have = {(a, b, c) for a, b, c in (await s.execute(q)).all()}
-        pend = select(ScanSnapshotORM).where(ScanSnapshotORM.outcome_status == "PENDING")
-        snaps = (await s.execute(pend)).scalars().all()
-        for x in snaps:
-            entry = (x.features_json or {}).get("price")
-            price = px.get(x.symbol)
-            if not entry or not price:
-                continue
-            for h, sec in H.items():
-                k = (x.snapshot_id, h, "label-v1")
-                m = x.captured_at.replace(tzinfo=UTC) + timedelta(seconds=sec)
-                if k in have or m > now:
-                    continue
-                g = (price - float(entry)) / float(entry) * 10000
-                c = 22.0
-                ln, sn = g - c, -g - c
-                s.add(
-                    ScanSnapshotLabelORM(
-                        snapshot_id=x.snapshot_id,
-                        symbol=x.symbol,
-                        snapshot_ts=x.captured_at,
-                        horizon=h,
-                        feature_version="scan-features-v1",
-                        label_version="label-v1",
-                        future_high=price,
-                        future_low=price,
-                        long_gross_bps=g,
-                        short_gross_bps=-g,
-                        all_in_cost_bps=c,
-                        long_net_bps=ln,
-                        short_net_bps=sn,
-                        long_net_edge_bps=ln,
-                        short_net_edge_bps=sn,
-                        long_label="PROFITABLE" if ln > 10 else "NOT_PROFITABLE",
-                        short_label="PROFITABLE" if sn > 10 else "NOT_PROFITABLE",
-                        matured_at=m,
-                    )
-                )
-                have.add(k)
-                n += 1
-            if all((x.snapshot_id, h, "label-v1") in have for h in H):
-                x.outcome_status = "LABELED"
-        await s.commit()
-    return n
+async def label(db, provider, now):
+    """Exact factual label-v2 maturity; label-v1 is archival only."""
+    maturer = LabelV2Maturer()
+    return await maturer.mature_pending(db.session_factory, provider, now=now)
 
 
 async def main(db, status):
@@ -97,6 +48,7 @@ async def main(db, status):
     await d.init_schema()
     c = OKXAdapter()
     feed = OKXPublicMarketFeed(client=c)
+    label_provider = OkxHistoricalCandleProvider(c)
 
     async def prefetch(symbols):
         await asyncio.gather(*(feed.refresh(sym) for sym in symbols[:24]), return_exceptions=True)
@@ -124,6 +76,7 @@ async def main(db, status):
         "controls": 0,
         "labels": 0,
         "errors": 0,
+        "label_v2": {},
     }
     while not STOP:
         st["cycles"] += 1
@@ -133,7 +86,10 @@ async def main(db, status):
             st["snapshots"] += int(cs.get("persisted", 0))
             st["candidates"] += int(cs.get("candidates", 0))
             st["controls"] += int(cs.get("controls", 0))
-            st["labels"] += await label(d, await prices(c), datetime.now(UTC))
+            statuses = await label(d, label_provider, datetime.now(UTC))
+            for status_key, status_count in statuses.items():
+                st["label_v2"][status_key] = st["label_v2"].get(status_key, 0) + int(status_count)
+            st["labels"] += int(statuses.get(STATUS_MATURE_VALID, 0))
         except Exception as e:
             st["errors"] += 1
             st["last_error"] = f"{type(e).__name__}: {e}"[:200]

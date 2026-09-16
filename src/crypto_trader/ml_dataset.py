@@ -79,6 +79,16 @@ async def evaluate_data_quality(session_factory) -> DataQuality:
                 )
             )
         ).all()
+        final_ready = int(
+            await s.scalar(
+                select(func.count()).where(
+                    ScanSnapshotLabelORM.label_version == FINAL_LABEL_VERSION,
+                    ScanSnapshotLabelORM.maturation_status == "MATURE_VALID",
+                    ScanSnapshotLabelORM.usable_for_training.is_(True),
+                )
+            )
+            or 0
+        )
     ids = [r[0] for r in rows]
     first = rows[0][1].isoformat() if rows and rows[0][1] else None
     last = rows[-1][1].isoformat() if rows and rows[-1][1] else None
@@ -99,7 +109,7 @@ async def evaluate_data_quality(session_factory) -> DataQuality:
         null_rates=null_rates,
         label_counts={h: int(c) for h, c in lab},
         label_counts_by_version={str(v): int(c) for v, c in lab_v},
-        final_label_count=sum(int(c) for v, c in lab_v if str(v) == FINAL_LABEL_VERSION),
+        final_label_count=final_ready,
     )
 
 
@@ -167,7 +177,11 @@ async def freeze_dataset(session_factory, output_dir, code_sha="") -> dict:
             (
                 await s.execute(
                     select(ScanSnapshotLabelORM)
-                    .where(ScanSnapshotLabelORM.label_version == FINAL_LABEL_VERSION)
+                    .where(
+                        ScanSnapshotLabelORM.label_version == FINAL_LABEL_VERSION,
+                        ScanSnapshotLabelORM.maturation_status == "MATURE_VALID",
+                        ScanSnapshotLabelORM.usable_for_training.is_(True),
+                    )
                     .order_by(ScanSnapshotLabelORM.snapshot_id, ScanSnapshotLabelORM.horizon)
                 )
             )

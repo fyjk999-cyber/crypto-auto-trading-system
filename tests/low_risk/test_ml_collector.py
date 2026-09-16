@@ -24,14 +24,17 @@ def test_signal_sets_stop_flag():
     mod.STOP = False
 
 
-async def test_label_maturity_and_idempotency(database):
+async def test_label_v2_maturity_and_idempotency(database):
+    from crypto_trader.ml_labels import STATUS_MATURE_VALID, Candle
     from crypto_trader.persistence.models import ScanSnapshotLabelORM, ScanSnapshotORM
 
+    captured = datetime(2026, 1, 1, tzinfo=UTC)
+    captured_ms = int(captured.timestamp() * 1000)
     async with database.session_factory() as s:
         s.add(
             ScanSnapshotORM(
                 snapshot_id="s1",
-                captured_at=datetime.now(UTC),
+                captured_at=captured,
                 cycle_id="c1",
                 symbol="BTCUSDT",
                 candidate=True,
@@ -41,14 +44,38 @@ async def test_label_maturity_and_idempotency(database):
             )
         )
         await s.commit()
-    now = datetime.now(UTC) + timedelta(minutes=2)
-    assert await mod.label(database, {"BTCUSDT": 101.0}, now) == 1
-    assert await mod.label(database, {"BTCUSDT": 101.0}, now) == 0
+
+    class Provider:
+        async def closed_candles(self, symbol, bar, start_ms, end_ms):
+            return [
+                Candle(
+                    ts_ms=captured_ms,
+                    open=100.0,
+                    high=101.5,
+                    low=99.5,
+                    close=101.0,
+                    bar_ms=60_000,
+                )
+            ]
+
+    now = captured + timedelta(minutes=2)
+    first = await mod.label(database, Provider(), now)
+    assert first[STATUS_MATURE_VALID] == 1
+    second = await mod.label(database, Provider(), now)
+    assert second[STATUS_MATURE_VALID] == 0
     async with database.session_factory() as s:
-        rows = (await s.execute(select(ScanSnapshotLabelORM))).scalars().all()
-    assert [r.horizon for r in rows] == ["1m"]
-    assert rows[0].long_net_bps == 78.0
-    assert rows[0].label_version == "label-v1"
+        row = (
+            await s.execute(
+                select(ScanSnapshotLabelORM).where(ScanSnapshotLabelORM.snapshot_id == "s1")
+            )
+        ).scalar_one()
+    assert row.horizon == "1m"
+    assert row.label_version == "label-v2"
+    assert row.maturation_status == STATUS_MATURE_VALID
+    assert row.usable_for_training is True
+    assert round(row.long_gross_bps, 6) == 100.0
+    assert round(row.long_net_bps, 6) == 78.0
+    assert row.cost_version is not None and row.cost_version.startswith("label-cost-v2")
 
 
 def test_collector_reuses_canonical_state_feed():
@@ -56,3 +83,5 @@ def test_collector_reuses_canonical_state_feed():
     assert "OKXPublicMarketFeed" in source
     assert "state_provider=lambda symbol: feed.states.get(symbol)" in source
     assert "state_prefetch=prefetch" in source
+    assert "OkxHistoricalCandleProvider" in source
+    assert "prices(" not in source

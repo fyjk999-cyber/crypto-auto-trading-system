@@ -46,6 +46,8 @@ async def _seed(database, n=90, label_version="label-v2"):
                     matured_at=start + timedelta(minutes=i + 15),
                     feature_version="scan-features-v1",
                     label_version=label_version,
+                    maturation_status="MATURE_VALID" if label_version == "label-v2" else None,
+                    usable_for_training=label_version == "label-v2",
                     long_net_bps=40.0 if (i % 5) >= 3 else -20.0,
                     short_net_bps=-40.0 if (i % 5) >= 3 else 20.0,
                     long_label="PROFITABLE" if (i % 5) >= 3 else "NOT_PROFITABLE",

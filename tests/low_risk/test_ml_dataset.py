@@ -52,6 +52,8 @@ async def test_readiness_ready_with_thresholds(database, monkeypatch):
                 horizon="1m",
                 matured_at=now,
                 label_version="label-v2",
+                maturation_status="MATURE_VALID",
+                usable_for_training=True,
                 long_net_bps=10.0,
                 short_net_bps=-10.0,
             )
@@ -79,6 +81,8 @@ async def test_freeze_versioning_and_immutability(database, tmp_path):
                 horizon="1m",
                 matured_at=now,
                 label_version="label-v2",
+                maturation_status="MATURE_VALID",
+                usable_for_training=True,
                 long_net_bps=10.0,
                 short_net_bps=-10.0,
             )
@@ -102,6 +106,8 @@ async def test_freeze_versioning_and_immutability(database, tmp_path):
                 horizon="1m",
                 matured_at=now,
                 label_version="label-v2",
+                maturation_status="MATURE_VALID",
+                usable_for_training=True,
                 long_net_bps=5.0,
                 short_net_bps=-5.0,
             )
