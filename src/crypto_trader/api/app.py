@@ -72,8 +72,7 @@ def serialize_position(position, *, price: Decimal | None = None) -> dict:
     if (
         price is not None
         and position.avg_entry_price is not None
-        and position.instrument_type.upper()
-        not in {"INVERSE", "INVERSE_PERP", "INVERSE_FUTURES"}
+        and position.instrument_type.upper() not in {"INVERSE", "INVERSE_PERP", "INVERSE_FUTURES"}
     ):
         payload["unrealized_pnl"] = str(
             (price - position.avg_entry_price)
@@ -177,6 +176,15 @@ def create_app(state: AppState) -> FastAPI:
         )
         return snapshot
 
+    @app.get("/growth/status")
+    async def growth_status_endpoint():
+        import os
+
+        from crypto_trader.growth_status import growth_status
+
+        growth_dir = os.environ.get("GROWTH_DIR", "data/growth")
+        return await growth_status(state.database.session_factory, growth_dir)
+
     @app.get("/llm/health")
     async def llm_health():
         return state.llm_runtime.snapshot()
@@ -226,9 +234,7 @@ def create_app(state: AppState) -> FastAPI:
                 "requested_leverage": _num_or_none(row.requested_leverage),
                 "parent_decision_id": row.parent_decision_id,
                 "trade_plan_id": row.trade_plan_id,
-                "position_quantity_before": _num_or_none(
-                    row.position_quantity_before
-                ),
+                "position_quantity_before": _num_or_none(row.position_quantity_before),
                 "entry_price": _num_or_none(row.entry_price),
                 "mark_price": _num_or_none(row.mark_price),
                 "unrealized_pnl": _num_or_none(row.unrealized_pnl),
@@ -242,12 +248,16 @@ def create_app(state: AppState) -> FastAPI:
     async def trade_plans(limit: int = 100):
         async with state.database.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(TradePlanORM)
-                    .order_by(TradePlanORM.created_at.desc())
-                    .limit(max(1, min(limit, 500)))
+                (
+                    await session.execute(
+                        select(TradePlanORM)
+                        .order_by(TradePlanORM.created_at.desc())
+                        .limit(max(1, min(limit, 500)))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return {
                 "trade_plans": [
                     {
@@ -286,9 +296,7 @@ def create_app(state: AppState) -> FastAPI:
         from crypto_trader.runtime.lineage_audit import LineageCoverageAuditor
 
         bounded = max(1, min(int(limit), 500))
-        return await LineageCoverageAuditor(state.database.session_factory).audit(
-            limit=bounded
-        )
+        return await LineageCoverageAuditor(state.database.session_factory).audit(limit=bounded)
 
     @app.get("/growth/daily-report")
     async def growth_daily_report(trading_day: str):
@@ -352,12 +360,16 @@ def create_app(state: AppState) -> FastAPI:
     async def trade_episodes(limit: int = 100):
         async with state.database.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(TradeEpisodeORM)
-                    .order_by(TradeEpisodeORM.closed_at.desc())
-                    .limit(max(1, min(limit, 500)))
+                (
+                    await session.execute(
+                        select(TradeEpisodeORM)
+                        .order_by(TradeEpisodeORM.closed_at.desc())
+                        .limit(max(1, min(limit, 500)))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return {
                 "trade_episodes": [
                     {
