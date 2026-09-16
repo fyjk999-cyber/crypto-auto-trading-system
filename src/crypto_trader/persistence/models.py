@@ -1110,3 +1110,40 @@ class ScanSnapshotORM(Base):
     outcome_status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
     authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ScanSnapshotLabelORM(Base):
+    """Maturity-gated factual label per snapshot/horizon/version (learning only)."""
+
+    __tablename__ = "scan_snapshot_labels"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id",
+            "horizon",
+            "label_version",
+            name="uq_scan_snapshot_labels_identity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    snapshot_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    horizon: Mapped[str] = mapped_column(String(8), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(32), default="scan-features-v1")
+    label_version: Mapped[str] = mapped_column(String(32), default="label-v1")
+    future_high: Mapped[float | None] = mapped_column(Float)
+    future_low: Mapped[float | None] = mapped_column(Float)
+    realized_volatility: Mapped[float | None] = mapped_column(Float)
+    long_gross_bps: Mapped[float | None] = mapped_column(Float)
+    short_gross_bps: Mapped[float | None] = mapped_column(Float)
+    all_in_cost_bps: Mapped[float | None] = mapped_column(Float)
+    long_net_bps: Mapped[float | None] = mapped_column(Float)
+    short_net_bps: Mapped[float | None] = mapped_column(Float)
+    long_net_edge_bps: Mapped[float | None] = mapped_column(Float)
+    short_net_edge_bps: Mapped[float | None] = mapped_column(Float)
+    long_label: Mapped[str] = mapped_column(String(16), default="NOT_PROFITABLE")
+    short_label: Mapped[str] = mapped_column(String(16), default="NOT_PROFITABLE")
+    matured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
