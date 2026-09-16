@@ -51,6 +51,7 @@ async def test_readiness_ready_with_thresholds(database, monkeypatch):
                 snapshot_ts=now,
                 horizon="1m",
                 matured_at=now,
+                label_version="label-v2",
                 long_net_bps=10.0,
                 short_net_bps=-10.0,
             )
@@ -59,6 +60,8 @@ async def test_readiness_ready_with_thresholds(database, monkeypatch):
     r = await ml_dataset.evaluate_readiness(database.session_factory)
     assert r.ready is True, r.reasons
     assert r.quality["total"] == 2 and r.quality["label_counts"] == {"1m": 1}
+    assert r.quality["final_label_count"] == 1
+    assert "no_label_v2" not in r.reasons
 
 
 from pathlib import Path
@@ -68,6 +71,18 @@ async def test_freeze_versioning_and_immutability(database, tmp_path):
     now = datetime.now(UTC)
     async with database.session_factory() as s:
         s.add(_snap(1, now))
+        s.add(
+            ScanSnapshotLabelORM(
+                snapshot_id="s1",
+                symbol="BTCUSDT",
+                snapshot_ts=now,
+                horizon="1m",
+                matured_at=now,
+                label_version="label-v2",
+                long_net_bps=10.0,
+                short_net_bps=-10.0,
+            )
+        )
         await s.commit()
     one = await ml_dataset.freeze_dataset(database.session_factory, tmp_path, code_sha="abc")
     assert one["dataset_version"].startswith("ds-")
@@ -79,6 +94,46 @@ async def test_freeze_versioning_and_immutability(database, tmp_path):
     assert p.stat().st_mtime_ns == stamp
     async with database.session_factory() as s:
         s.add(_snap(2, now + timedelta(minutes=1)))
+        s.add(
+            ScanSnapshotLabelORM(
+                snapshot_id="s2",
+                symbol="BTCUSDT",
+                snapshot_ts=now + timedelta(minutes=1),
+                horizon="1m",
+                matured_at=now,
+                label_version="label-v2",
+                long_net_bps=5.0,
+                short_net_bps=-5.0,
+            )
+        )
         await s.commit()
     three = await ml_dataset.freeze_dataset(database.session_factory, tmp_path, code_sha="abc")
     assert three["dataset_version"] != one["dataset_version"]
+
+
+async def test_label_v1_only_is_excluded_from_final_training(database, tmp_path):
+    now = datetime.now(UTC)
+    async with database.session_factory() as s:
+        s.add(_snap(1, now))
+        s.add(
+            ScanSnapshotLabelORM(
+                snapshot_id="s1",
+                symbol="BTCUSDT",
+                snapshot_ts=now,
+                horizon="1m",
+                matured_at=now,
+                label_version="label-v1",
+                long_net_bps=10.0,
+                short_net_bps=-10.0,
+            )
+        )
+        await s.commit()
+    r = await ml_dataset.evaluate_readiness(database.session_factory)
+    assert r.ready is False
+    assert "no_label_v2" in r.reasons
+    assert ml_dataset.LABEL_V1_EXCLUDED_REASON in r.reasons
+    frozen = await ml_dataset.freeze_dataset(database.session_factory, tmp_path, code_sha="abc")
+    assert frozen["ready"] is False
+    assert frozen["reason"] == "NO_LABEL_V2"
+    assert frozen["label_v1_excluded"] == 1
+    assert not any(item.suffix == ".json" for item in tmp_path.iterdir())

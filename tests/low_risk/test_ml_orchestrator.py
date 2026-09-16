@@ -5,7 +5,7 @@ from crypto_trader.ml_orchestrator import MLOrchestrator
 from crypto_trader.persistence.models import ScanSnapshotLabelORM, ScanSnapshotORM
 
 
-async def _seed(database, n=90):
+async def _seed(database, n=90, label_version="label-v2"):
     start = datetime(2026, 1, 1, tzinfo=UTC)
     async with database.session_factory() as s:
         for i in range(n):
@@ -45,7 +45,7 @@ async def _seed(database, n=90):
                     horizon="15m",
                     matured_at=start + timedelta(minutes=i + 15),
                     feature_version="scan-features-v1",
-                    label_version="label-v1",
+                    label_version=label_version,
                     long_net_bps=40.0 if (i % 5) >= 3 else -20.0,
                     short_net_bps=-40.0 if (i % 5) >= 3 else 20.0,
                     long_label="PROFITABLE" if (i % 5) >= 3 else "NOT_PROFITABLE",
@@ -89,3 +89,21 @@ async def test_autonomous_shadow_model_21_step(database, tmp_path, monkeypatch):
     assert (tmp_path / "datasets").exists() and (tmp_path / "models").exists()
     assert (tmp_path / "shadow" / "predictions.jsonl").exists()
     assert result["model_25_version"] is None  # no model_evidence in seed, so #25 stays gated
+
+
+async def test_label_v1_only_cannot_train_or_promote(database, tmp_path, monkeypatch):
+    # OLD behavior: label-v1 rows could satisfy readiness and reach shadow training.
+    # NEW behavior (M0 safety gate): label-v1 is archival only; final training stays waiting.
+    monkeypatch.setattr(ml_dataset, "MIN_SNAPSHOTS", 20)
+    monkeypatch.setattr(ml_dataset, "MIN_CANDIDATES", 10)
+    monkeypatch.setattr(ml_dataset, "MIN_CONTROLS", 10)
+    monkeypatch.setattr(ml_dataset, "MIN_SYMBOLS", 2)
+    monkeypatch.setattr(ml_dataset, "MIN_LABELED", 20)
+    monkeypatch.setattr(ml_dataset, "MIN_COVERAGE_DAYS", 0)
+    await _seed(database, label_version="label-v1")
+    orch = MLOrchestrator(database.session_factory, tmp_path, code_sha="sha1")
+    result = await orch.run_once()
+    assert result["state"] == "WAITING_FOR_DATA", result
+    assert any("label_v2" in reason or "label_v1" in reason for reason in result["reasons"])
+    assert not (tmp_path / "models").exists() or not list((tmp_path / "models").iterdir())
+    assert not (tmp_path / "datasets").exists() or not list((tmp_path / "datasets").iterdir())

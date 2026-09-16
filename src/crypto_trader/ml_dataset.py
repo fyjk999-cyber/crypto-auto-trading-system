@@ -17,6 +17,8 @@ MIN_CANDIDATES = 50
 MIN_CONTROLS = 50
 MIN_SYMBOLS = 10
 MIN_LABELED = 50
+FINAL_LABEL_VERSION = "label-v2"
+LABEL_V1_EXCLUDED_REASON = "label_v1_excluded_from_final_training"
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,8 @@ class DataQuality:
     duplicate_rate: float
     null_rates: dict = field(default_factory=dict)
     label_counts: dict = field(default_factory=dict)
+    label_counts_by_version: dict = field(default_factory=dict)
+    final_label_count: int = 0
 
     def as_dict(self) -> dict:
         return {
@@ -42,6 +46,8 @@ class DataQuality:
             "duplicate_rate": self.duplicate_rate,
             "null_rates": self.null_rates,
             "label_counts": self.label_counts,
+            "label_counts_by_version": self.label_counts_by_version,
+            "final_label_count": self.final_label_count,
         }
 
 
@@ -66,6 +72,13 @@ async def evaluate_data_quality(session_factory) -> DataQuality:
                 )
             )
         ).all()
+        lab_v = (
+            await s.execute(
+                select(ScanSnapshotLabelORM.label_version, func.count()).group_by(
+                    ScanSnapshotLabelORM.label_version
+                )
+            )
+        ).all()
     ids = [r[0] for r in rows]
     first = rows[0][1].isoformat() if rows and rows[0][1] else None
     last = rows[-1][1].isoformat() if rows and rows[-1][1] else None
@@ -85,6 +98,8 @@ async def evaluate_data_quality(session_factory) -> DataQuality:
         duplicate_rate=dup,
         null_rates=null_rates,
         label_counts={h: int(c) for h, c in lab},
+        label_counts_by_version={str(v): int(c) for v, c in lab_v},
+        final_label_count=sum(int(c) for v, c in lab_v if str(v) == FINAL_LABEL_VERSION),
     )
 
 
@@ -112,8 +127,13 @@ async def evaluate_readiness(session_factory) -> Readiness:
         reasons.append(f"insufficient_controls:{q.controls}<{MIN_CONTROLS}")
     if q.symbols < MIN_SYMBOLS:
         reasons.append(f"insufficient_symbols:{q.symbols}<{MIN_SYMBOLS}")
-    if sum(q.label_counts.values()) < MIN_LABELED:
-        reasons.append(f"insufficient_labels:{sum(q.label_counts.values())}<{MIN_LABELED}")
+    if q.final_label_count <= 0:
+        reasons.append("no_label_v2")
+    if q.final_label_count < MIN_LABELED:
+        reasons.append(f"insufficient_label_v2:{q.final_label_count}<{MIN_LABELED}")
+    if sum(v for k, v in q.label_counts_by_version.items() if k != FINAL_LABEL_VERSION) > 0:
+        # label-v1 is archival only; it may never satisfy final training readiness.
+        reasons.append(LABEL_V1_EXCLUDED_REASON)
     if q.duplicate_rate > MAX_DUPLICATE_RATE:
         reasons.append(f"duplicate_rate:{q.duplicate_rate}>{MAX_DUPLICATE_RATE}")
     for name in REQUIRED_FEATURES:
@@ -146,19 +166,27 @@ async def freeze_dataset(session_factory, output_dir, code_sha="") -> dict:
         labs = (
             (
                 await s.execute(
-                    select(ScanSnapshotLabelORM).order_by(
-                        ScanSnapshotLabelORM.snapshot_id, ScanSnapshotLabelORM.horizon
-                    )
+                    select(ScanSnapshotLabelORM)
+                    .where(ScanSnapshotLabelORM.label_version == FINAL_LABEL_VERSION)
+                    .order_by(ScanSnapshotLabelORM.snapshot_id, ScanSnapshotLabelORM.horizon)
                 )
             )
             .scalars()
             .all()
         )
+    if not labs:
+        return {
+            "ready": False,
+            "reason": "NO_LABEL_V2",
+            "label_version": FINAL_LABEL_VERSION,
+            "label_v1_excluded": q.label_counts_by_version.get("label-v1", 0),
+            "message": "label-v1 is archival only and cannot freeze a final scientific dataset",
+        }
     payload = {
         "created_at": q.last_ts or "",
         "code_sha": code_sha,
         "feature_version": "scan-features-v1",
-        "label_version": "label-v1",
+        "label_version": FINAL_LABEL_VERSION,
         "sample_start_ts": q.first_ts,
         "sample_end_ts": q.last_ts,
         "candidate_count": q.candidates,
