@@ -131,6 +131,18 @@ class LiveLLMPositionManager:
         )
         return signal
 
+    def expected_holding_horizon_reached(self, position, plan, now) -> bool:
+        """Expected holding horizon is an informational reassessment trigger.
+
+        Low-Risk V2 has NO hard maximum holding time: reaching the expectation
+        wakes the Core LLM with fresh factual state and never forces an exit.
+        """
+        horizon = getattr(plan, "max_holding_time_seconds", None)
+        if horizon is None or float(horizon) <= 0:
+            return False
+        opened_at = _utc(plan.opened_at or position.updated_at or now)
+        return (now - opened_at).total_seconds() >= float(horizon)
+
     def _rebuild_kwargs(self, position: Position, ctx: StrategyContext) -> dict:
         """Build the fresh-state rebuilder passed to the Core LLM on failover.
 
@@ -258,14 +270,28 @@ class LiveLLMPositionManager:
             position_context=position_context,
         )
         await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
-        max_hold_reached = (
-            position_context["time_in_trade_seconds"] >= plan.max_holding_time_seconds
-        )
-        # Once the factual maximum holding period is reached, only a normal
-        # full EXIT remains preferable. HOLD, fail-closed, or a partial REDUCE
-        # cannot satisfy the safety boundary and therefore becomes a full
-        # reduce-only TIME_STOP fallback.
-        time_stop = max_hold_reached and decision.action != OpenAction.EXIT
+        horizon_reached = self.expected_holding_horizon_reached(position, plan, now)
+        if horizon_reached:
+            # Time threshold -> high-priority Core LLM reassessment. The trigger
+            # itself is never an order; Base Exit / Fast Profit / Risk hard exit
+            # remain active independently while the LLM thinks.
+            await self.audit.log(
+                "TIME_THRESHOLD_REASSESSMENT",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "trigger": "EXPECTED_HOLDING_HORIZON_REACHED",
+                    "authority": "REASSESSMENT_ONLY",
+                    "is_order": False,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "plan_version": getattr(plan, "plan_version", None),
+                    "based_on_state_version": plan.based_on_state_version,
+                    "time_in_trade_seconds": position_context["time_in_trade_seconds"],
+                    "expected_holding_period": plan.expected_holding_period,
+                    "max_holding_time_seconds": plan.max_holding_time_seconds,
+                },
+            )
         await self.plans.link_position_decision(
             plan.trade_plan_id,
             decision.decision_id,
@@ -280,11 +306,56 @@ class LiveLLMPositionManager:
                 "symbol": position.symbol,
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_authority": "LIVE_LLM_ONLY",
+                "expected_holding_horizon_reached": horizon_reached,
+                "time_threshold_reassessment_only": True,
             },
         )
-        if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED} and not time_stop:
+        if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED}:
+            if horizon_reached:
+                await self.audit.log(
+                    "EXPECTED_HOLDING_NO_FORCED_EXIT",
+                    target=decision.decision_id,
+                    actor="live_llm",
+                    run_id=ctx.run_id,
+                    after={
+                        "action": decision.action.value,
+                        "reason": "TIME_THRESHOLD_IS_REASSESSMENT_ONLY",
+                        "is_order": False,
+                    },
+                )
             return None
-        if decision.action in {OpenAction.HEDGE, OpenAction.REVERSE} and not time_stop:
+        if decision.action == OpenAction.ADD:
+            # ADD is NEW RISK (Core-LLM child with its own TradePlan/Base
+            # Exit). It must never be transformed into a reduce-only order on
+            # the original leg.
+            await self.audit.log(
+                "ADD_REQUIRES_CORE_NEW_RISK_PATH",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "required_path": "CORE_LLM_TRADEPLAN_EXECUTION",
+                    "is_order": False,
+                    "expected_holding_horizon_reached": horizon_reached,
+                },
+            )
+            return None
+        if decision.action == OpenAction.MODIFY_EXIT:
+            # Exit modification replaces the Base Exit contract version and is
+            # not a discretionary reduce order.
+            await self.audit.log(
+                "MODIFY_EXIT_REQUIRES_VERSIONED_BASE_EXIT",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "has_base_exit": decision.base_exit is not None,
+                    "required_path": "BASE_EXIT_VALIDATE_PERSIST_ATOMIC_ACTIVATE",
+                    "is_order": False,
+                },
+            )
+            return None
+        if decision.action in {OpenAction.HEDGE, OpenAction.REVERSE}:
             # Low-Risk V2: a hedge/reverse is NEW RISK with its own strategy,
             # thesis, model-family evidence, Base Exit and invalidation. It must
             # travel the Core-LLM -> TradePlan -> ExecutionAuthority path; it must
@@ -306,10 +377,9 @@ class LiveLLMPositionManager:
                 )
             return signal
 
+        full_reduce = decision.action in {OpenAction.EXIT, OpenAction.CLOSE}
         quantity = (
-            abs(position.quantity)
-            if decision.action == OpenAction.EXIT or time_stop
-            else Decimal(str(decision.position_size_request))
+            abs(position.quantity) if full_reduce else Decimal(str(decision.position_size_request))
         )
         if quantity <= 0 or quantity > abs(position.quantity):
             await self.audit.log(
@@ -326,21 +396,16 @@ class LiveLLMPositionManager:
             symbol=position.symbol,
             side=OrderSide.SELL if position.quantity > 0 else OrderSide.BUY,
             quantity=quantity,
-            reason=(
-                "maximum holding time safety fallback"
-                if time_stop
-                else decision.thesis or decision.action.value
-            ),
+            reason=decision.thesis or decision.action.value,
             metadata={
                 "trade_plan_id": plan.trade_plan_id,
                 "decision_id": decision.decision_id,
                 "entry_decision_id": plan.decision_id,
                 "direction": plan.direction,
-                "lifecycle_action": (
-                    "TIME_STOP_SAFETY_FALLBACK" if time_stop else decision.action.value
-                ),
-                "time_stop": time_stop,
+                "lifecycle_action": decision.action.value,
                 "reduce_only": True,
+                "expected_holding_horizon_reached": horizon_reached,
+                "time_threshold_reassessment_only": True,
                 "instrument_type": position.instrument_type,
                 "contract_size": str(position.contract_size),
                 "contract_multiplier": str(position.contract_multiplier),

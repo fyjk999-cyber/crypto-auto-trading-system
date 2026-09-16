@@ -586,8 +586,17 @@ class TradingEngine:
                     self.exit_controller.cancel(exit_request_id, "DETERMINISTIC_EXIT_NOT_SUBMITTED")
             if self.position_manager is None:
                 continue
+            plan = await self.trade_plans.get_active_for_symbol(position.symbol)
+            horizon_wake = (
+                plan is not None
+                and self.position_manager.expected_holding_horizon_reached(
+                    position, plan, ctx.clock_time.astimezone(UTC)
+                )
+            )
             try:
-                signal = await self.position_manager.review(ctx, position, force=wake_required)
+                signal = await self.position_manager.review(
+                    ctx, position, force=wake_required or horizon_wake
+                )
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.health.set("position_manager", False, type(exc).__name__)

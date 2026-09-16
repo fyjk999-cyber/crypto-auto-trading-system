@@ -32,6 +32,7 @@ from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
 from crypto_trader.persistence.models import (
     AIMarketPatternORM,
     AITradeReviewORM,
+    AuditEventORM,
     TradeEpisodeORM,
 )
 from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
@@ -62,13 +63,26 @@ class Evidence:
 
 
 class SequencedChief:
-    def __init__(self, sequence: list[tuple[str, str]]) -> None:
+    def __init__(self, sequence: list[tuple[str, str]], *, contract: bool = False) -> None:
         self.sequence = sequence
         self.calls = 0
+        self.contract = contract
 
     async def decide(self, ctx):
         action, quantity = self.sequence[self.calls]
         self.calls += 1
+        contract_fields = (
+            {
+                "plan_contract_version": 2,
+                "capital_allocation_pct": 5.0,
+                "leverage_request": 1,
+                "base_exit": BaseExitPlan(
+                    type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+                ),
+            }
+            if self.contract
+            else {}
+        )
         return ChiefTraderDecision(
             decision_id=f"position-{self.calls}-{action.lower()}",
             symbol=ctx.symbol,
@@ -79,7 +93,38 @@ class SequencedChief:
             position_size_request=float(quantity),
             model_provider="deepseek",
             model="deepseek-v4-pro",
+            **contract_fields,
         )
+
+
+async def _open_v2_position(engine, decisions, plans, decision_id: str, quantity: float):
+    """Open one constitutional V2 PAPER position for authority tests."""
+    entry = ChiefTraderDecision(
+        decision_id=decision_id,
+        symbol="BTCUSDT",
+        action="LONG",
+        market_regime="TREND",
+        thesis="factual V2 entry",
+        position_size_request=quantity,
+        leverage_request=1,
+        stop_loss=95,
+        plan_contract_version=2,
+        capital_allocation_pct=5.0,
+        base_exit=BaseExitPlan(
+            type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
+        ),
+        model_provider="deepseek",
+        model="deepseek-v4-pro",
+    )
+    await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
+    plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
+        entry, limit_price=Decimal("101")
+    )
+    assert plan is not None and signal is not None
+    await decisions.link_trade_plan(entry.decision_id, plan.trade_plan_id)
+    await engine.process_signal(signal)
+    await engine.wait_for_event_queue()
+    return plan
 
 
 async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(database):
@@ -486,21 +531,31 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
     await engine.stop()
 
 
-async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
+async def test_expected_holding_horizon_triggers_reassessment_not_forced_exit(database):
+    """Expected holding horizon is a reassessment trigger, never an order.
+
+    OLD BEHAVIOR: reaching max_holding_time_seconds forced a full TIME_STOP
+    reduce-only order even when the Core LLM said HOLD.
+    NEW BEHAVIOR: the horizon forces a fresh Core-LLM reassessment (bypassing
+    the ordinary review cooldown); the LLM's HOLD remains HOLD and no order is
+    emitted. Base Exit protection stays active independently.
+    WHY SUPERSEDED: the Low-Risk V2 constitution has NO hard maximum holding
+    time; expected duration is context, not an exit authority.
+    """
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     clock = MutableClock()
     engine.clock = clock
-    await engine.start("run-time-stop")
+    await engine.start("run-horizon-reassessment")
     assert await engine._strategy_context("BTCUSDT") is not None
 
     decisions = LLMDecisionStore(database.session_factory)
     plans = TradePlanService(database.session_factory)
     entry = ChiefTraderDecision(
-        decision_id="entry-time-stop",
+        decision_id="entry-horizon",
         symbol="BTCUSDT",
         action="LONG",
         market_regime="TREND",
-        thesis="time bounded thesis",
+        thesis="horizon expectation, no hard stop",
         position_size_request=0.1,
         leverage_request=1,
         stop_loss=95,
@@ -521,31 +576,95 @@ async def test_time_stop_is_only_a_max_hold_reduce_only_fallback(database):
     await engine.process_signal(signal)
     await engine.wait_for_event_queue()
 
-    chief = SequencedChief([("HOLD", "0"), ("REDUCE", "0.01")])
+    chief = SequencedChief([("HOLD", "0"), ("HOLD", "0")])
     engine.position_manager = LiveLLMPositionManager(
         chief=chief,
         evidence_engine=Evidence(),
         decisions=decisions,
         plans=plans,
         audit=engine.audit,
-        review_cooldown_seconds=30,
+        review_cooldown_seconds=600,
+    )
+    order_count = len(engine.adapter.orders)
+    await engine.tick()  # ordinary first review
+    assert len(engine.adapter.orders) == order_count
+
+    clock.advance(61)  # horizon reached; cooldown still active
+    await engine.tick()
+    assert chief.calls == 2, "horizon must force a fresh Core-LLM reassessment"
+    assert len(engine.adapter.orders) == order_count, "no forced time-stop order"
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None and position.quantity == Decimal("0.1")
+    active = await plans.get(plan.trade_plan_id)
+    assert active is not None and active.state == TradePlanState.ACTIVE
+    assert active.base_exit is not None, "Base Exit remains active during reassessment"
+
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "TIME_THRESHOLD_REASSESSMENT" in actions
+    assert "EXPECTED_HOLDING_NO_FORCED_EXIT" in actions
+    assert "TIME_STOP_SAFETY_FALLBACK" not in actions
+    await engine.stop()
+
+
+async def test_add_action_never_becomes_reduce_order(database):
+    """ADD is NEW RISK: it may not be silently transformed into a reduce."""
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-add-quarantine")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    await _open_v2_position(engine, decisions, plans, "entry-add-q", 0.1)
+    chief = SequencedChief([("ADD", "0.05")], contract=True)
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=0,
     )
     order_count = len(engine.adapter.orders)
     await engine.tick()
     assert len(engine.adapter.orders) == order_count
-    assert (await plans.get(plan.trade_plan_id)).state == TradePlanState.ACTIVE
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "ADD_REQUIRES_CORE_NEW_RISK_PATH" in actions
+    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == Decimal("0.1")
+    await engine.stop()
 
-    clock.advance(61)
+
+async def test_modify_exit_action_never_becomes_reduce_order(database):
+    """MODIFY_EXIT is a versioned Base Exit replacement, not a sell order."""
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-modify-exit-quarantine")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    await _open_v2_position(engine, decisions, plans, "entry-modify-q", 0.1)
+    chief = SequencedChief([("MODIFY_EXIT", "0.05")])
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=0,
+    )
+    order_count = len(engine.adapter.orders)
     await engine.tick()
-    submitted = list(engine.adapter.orders.values())[-1]
-    assert submitted.metadata["reduce_only"] is True
-    assert submitted.metadata["time_stop"] is True
-    assert submitted.metadata["lifecycle_action"] == "TIME_STOP_SAFETY_FALLBACK"
-    await engine.wait_for_event_queue()
-    assert (await engine.portfolio.get_position("BTCUSDT")).quantity == 0
-    closed = await plans.get(plan.trade_plan_id)
-    assert closed.state == TradePlanState.CLOSED
-    assert closed.terminal_reason == "TIME_STOP_SAFETY_FALLBACK"
+    assert len(engine.adapter.orders) == order_count
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "MODIFY_EXIT_REQUIRES_VERSIONED_BASE_EXIT" in actions
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None and position.quantity == Decimal("0.1")
     await engine.stop()
 
 
