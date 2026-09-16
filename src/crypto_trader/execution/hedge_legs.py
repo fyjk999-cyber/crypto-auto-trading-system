@@ -668,6 +668,87 @@ class PositionLegService:
             if row.remaining_quantity is not None and row.remaining_quantity > 0
         ]
 
+    async def leg_economics(self, leg_id: str, *, mark_price=None) -> dict | None:
+        """Full leg economics: VWAPs, gross/realized/unrealized, fees, funding."""
+        state = await self.snapshot_state(leg_id)
+        if state is None:
+            return None
+        mark = Decimal(str(mark_price)) if mark_price is not None else None
+        avg = state["average_entry_price"]
+        remaining = Decimal(str(state["remaining_quantity"] or 0))
+        direction = Decimal("1") if state["side"] == "LONG" else Decimal("-1")
+        if mark is not None and avg is not None and remaining > 0:
+            unrealized = ((mark - avg) * remaining * direction).quantize(self.QUANT)
+        else:
+            unrealized = Decimal("0")
+        realized = Decimal(str(state["realized_pnl"] or 0))
+        fees = Decimal(str(state["fees"] or 0))
+        funding = Decimal(str(state["funding"] or 0))
+        gross = (realized + unrealized).quantize(self.QUANT)
+        net = (gross - fees + funding).quantize(self.QUANT)
+        return {
+            **state,
+            "mark_price": mark,
+            "unrealized_pnl": unrealized,
+            "gross_pnl": gross,
+            "net_pnl": net,
+            "precision": str(self.QUANT),
+            "authority": "POSITION_LEG_ECONOMICS",
+            "is_order": False,
+        }
+
+    async def symbol_economics(self, symbol: str, *, mark_price=None) -> dict:
+        """Authoritative symbol PnL = deterministic sum of independent legs."""
+        legs = await self.all_legs_for_symbol(symbol)
+        items = [
+            await self.leg_economics(str(leg["leg_id"]), mark_price=mark_price) for leg in legs
+        ]
+        items = [item for item in items if item is not None]
+        realized = sum((item["realized_pnl"] for item in items), Decimal("0"))
+        unrealized = sum((item["unrealized_pnl"] for item in items), Decimal("0"))
+        fees = sum((item["fees"] for item in items), Decimal("0"))
+        funding = sum((item["funding"] for item in items), Decimal("0"))
+        gross = (realized + unrealized).quantize(self.QUANT)
+        net = (gross - fees + funding).quantize(self.QUANT)
+        long_qty = sum(
+            (
+                Decimal(str(item["remaining_quantity"] or 0))
+                for item in items
+                if item["side"] == "LONG"
+            ),
+            Decimal("0"),
+        )
+        short_qty = sum(
+            (
+                Decimal(str(item["remaining_quantity"] or 0))
+                for item in items
+                if item["side"] == "SHORT"
+            ),
+            Decimal("0"),
+        )
+        open_legs = [item for item in items if item["state"] == "OPEN"]
+        return {
+            "symbol": symbol,
+            "legs": items,
+            "leg_count": len(items),
+            "open_leg_count": len(open_legs),
+            "gross_long_quantity": long_qty.quantize(self.QUANT),
+            "gross_short_quantity": short_qty.quantize(self.QUANT),
+            "net_quantity": (long_qty - short_qty).quantize(self.QUANT),
+            "gross_quantity": (long_qty + short_qty).quantize(self.QUANT),
+            "both_sides": long_qty > 0 and short_qty > 0,
+            "realized_pnl": realized.quantize(self.QUANT),
+            "unrealized_pnl": unrealized.quantize(self.QUANT),
+            "gross_pnl": gross,
+            "fees": fees.quantize(self.QUANT),
+            "funding": funding.quantize(self.QUANT),
+            "net_pnl": net,
+            "netting_hides_gross": bool(long_qty > 0 and short_qty > 0),
+            "precision": str(self.QUANT),
+            "authority": "POSITION_LEG_ECONOMICS",
+            "is_order": False,
+        }
+
     async def all_legs_for_symbol(self, symbol: str) -> list[dict]:
         """Every persisted leg for a symbol, including CLOSED (for restart truth)."""
         from sqlalchemy import select
@@ -979,3 +1060,62 @@ class LegPositionReconciler:
             "authority": self.authority,
             "is_order": False,
         }
+
+
+def compare_leg_symbol_to_portfolio(
+    symbol_report: dict,
+    portfolio_position,
+    *,
+    tolerance=Decimal("0.00000001"),
+) -> dict:
+    """Prove symbol leg PnL against the canonical portfolio view.
+
+    A net-zero same-symbol LONG+SHORT cannot be represented by a net position
+    PnL alone: in that case the honest result is GROSS_VIEW_REQUIRED, not a
+    false MATCH that would erase the independent leg economics.
+    """
+    tol = Decimal(str(tolerance))
+    if portfolio_position is None:
+        return {
+            "status": "NO_PORTFOLIO_VIEW",
+            "match": False,
+            "reason": "portfolio has no position for symbol",
+            "authority": "POSITION_LEG_ECONOMICS",
+            "is_order": False,
+        }
+    net_quantity = Decimal(str(getattr(portfolio_position, "quantity", 0) or 0))
+    portfolio_unrealized = Decimal(str(getattr(portfolio_position, "unrealized_pnl", 0) or 0))
+    portfolio_realized = Decimal(str(getattr(portfolio_position, "realized_pnl", 0) or 0))
+    leg_gross = Decimal(str(symbol_report.get("gross_pnl") or 0))
+    leg_unrealized = Decimal(str(symbol_report.get("unrealized_pnl") or 0))
+    leg_realized = Decimal(str(symbol_report.get("realized_pnl") or 0))
+    if abs(net_quantity) <= tol and symbol_report.get("both_sides"):
+        return {
+            "status": "GROSS_VIEW_REQUIRED",
+            "match": False,
+            "reason": "net position is zero but independent gross legs carry risk",
+            "portfolio_net_quantity": net_quantity,
+            "leg_gross_quantity": symbol_report.get("gross_quantity"),
+            "leg_gross_pnl": leg_gross,
+            "portfolio_unrealized_pnl": portfolio_unrealized,
+            "unrealized_difference": (leg_unrealized - portfolio_unrealized).quantize(tol),
+            "authority": "POSITION_LEG_ECONOMICS",
+            "is_order": False,
+        }
+    unrealized_difference = (leg_unrealized - portfolio_unrealized).quantize(tol)
+    realized_difference = (leg_realized - portfolio_realized).quantize(tol)
+    matched = abs(unrealized_difference) <= tol and abs(realized_difference) <= tol
+    return {
+        "status": "MATCH" if matched else "MISMATCH",
+        "match": matched,
+        "portfolio_net_quantity": net_quantity,
+        "leg_unrealized_pnl": leg_unrealized,
+        "portfolio_unrealized_pnl": portfolio_unrealized,
+        "unrealized_difference": unrealized_difference,
+        "leg_realized_pnl": leg_realized,
+        "portfolio_realized_pnl": portfolio_realized,
+        "realized_difference": realized_difference,
+        "tolerance": str(tol),
+        "authority": "POSITION_LEG_ECONOMICS",
+        "is_order": False,
+    }
