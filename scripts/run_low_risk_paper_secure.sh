@@ -22,7 +22,10 @@ export TRADING_LLM_MODEL=deepseek-flash
 unset LLM_MODEL || true
 export LLM_BASE_URL="${LLM_BASE_URL:-https://api.deepseek.com}"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
-export RUNNING_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ -z "${RUNNING_SHA:-}" ]; then
+  RUNNING_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+fi
+export RUNNING_SHA="${RUNNING_SHA:-unknown}"
 
 PROVIDER_STATE="PROVIDER_UNCONFIGURED"
 PROVIDER_STATUS_CODE=0

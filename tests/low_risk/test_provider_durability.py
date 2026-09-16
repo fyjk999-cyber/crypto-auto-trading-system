@@ -215,6 +215,8 @@ def test_all_startup_paths_converge_on_one_secure_wrapper():
     assert "TRADING_LLM_MODEL=deepseek-flash" in wrapper
     assert "export LLM_MODEL=" not in wrapper
     assert "unset LLM_MODEL" in wrapper
+    assert "RUNNING_SHA" in wrapper
+    assert "DATABASE_URL" in (ROOT / "migrations/env.py").read_text()
 
 
 def test_launch_agent_contract_is_secret_free_and_durable():
