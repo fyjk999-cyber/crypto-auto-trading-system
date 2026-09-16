@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     live_trading_enabled: bool = False
     database_url: str = "sqlite+aiosqlite:///./data/crypto_trader.db"
 
+    # Applies only to original/pre-Low-Risk-V2 clients such as
+    # ``crypto_trader.deepseek.DeepSeekClient`` and ``LLMExecutor``.  It does
+    # not disable the separate Low-Risk V2 ``llm_chief`` decision boundary.
+    legacy_llm_enabled: bool = True
+
     # OKX
     okx_base_url: str = "https://openapi.okx.com"
     okx_demo: bool = True
