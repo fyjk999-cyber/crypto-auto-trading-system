@@ -372,3 +372,46 @@ async def test_maturer_exception_truth(database, tmp_path, monkeypatch):
     heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
     assert heartbeat["cycles_started"] == 1 and heartbeat["cycles_completed"] == 1
     assert heartbeat["state"] == "DEGRADED_PROCESSING_ERROR"
+
+
+async def test_worker_applies_mature_reviews_to_patterns_once(database, tmp_path):
+    from crypto_trader.learning.lifecycle_reviews import LifecycleReviewEngine
+    from crypto_trader.persistence.models import AIMarketPatternORM
+
+    engine = LifecycleReviewEngine(database.session_factory)
+    await engine.ingest_events(
+        "ep-1",
+        [
+            {
+                "event_id": "evt-1",
+                "kind": "ADD",
+                "symbol": "BTCUSDT",
+                "regime": "TREND_UP",
+                "strategy": "breakout",
+                "direction": "LONG",
+                "horizon": "1h",
+                "setup_signature": "s1",
+            }
+        ],
+    )
+    review = (await engine.list_reviews(episode_id="ep-1"))[0]
+    await engine.mature(
+        review["review_id"],
+        actual_net_bps=-20.0,
+        counterfactual_net_bps=-10.0,
+        verdict="HARMFUL",
+        confidence=0.6,
+        mfe_bps=5.0,
+        mae_bps=-25.0,
+        maturity_horizon="1h",
+    )
+    worker = GrowthWorker(database.session_factory, tmp_path, FakeClient(), code_sha="sha")
+    first = await worker._apply_reviewed_patterns()
+    assert first == {"patterns": 1, "profiles": 1, "compressed": 0}
+    async with database.session_factory() as session:
+        pattern = (await session.execute(select(AIMarketPatternORM))).scalars().one()
+    assert pattern.sample_count == 1
+    assert pattern.regime == "TREND_UP"  # not direction_source
+    assert pattern.strategy == "BREAKOUT" and pattern.direction == "LONG"
+    second = await worker._apply_reviewed_patterns()
+    assert second["patterns"] == 0  # durable cursor, no double-count

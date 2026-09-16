@@ -13,8 +13,10 @@ from sqlalchemy import select
 
 from crypto_trader.learning.memory_speed_store import MemorySpeedStore
 from crypto_trader.learning.memory_speeds import MemoryRecord, apply_observation
+from crypto_trader.learning.pattern_profile import GrowthMemoryPipeline
 from crypto_trader.market_data.opportunity import ledger_freeze, outcome_maturer
 from crypto_trader.persistence.models import (
+    GrowthEventReviewORM,
     OpportunityOutcomeMaturationORM,
     ScanSnapshotORM,
 )
@@ -44,12 +46,14 @@ class GrowthWorker:
         *,
         code_sha: str = "",
         scan_source_db: str | None = None,
+        trading_source_db: str | None = None,
     ) -> None:
         self._session_factory = session_factory
         self.base_dir = Path(base_dir)
         self.client = client
         self.code_sha = code_sha
         self.scan_source_db = scan_source_db
+        self.trading_source_db = trading_source_db
         self.scan_batch = self._int_env("GROWTH_SCAN_BATCH", 500, 1, 5000)
         self.outcome_batch = self._int_env("GROWTH_OUTCOME_BATCH", 25, 1, 1000)
         self.memory_batch = self._int_env("GROWTH_MEMORY_BATCH", 200, 1, 5000)
@@ -287,6 +291,59 @@ class GrowthWorker:
         )
         return updated
 
+    async def _apply_reviewed_patterns(self, limit: int = 100) -> dict:
+        cursor = int(self.state.get("last_applied_review_id", 0))
+        async with self._session_factory() as session:
+            reviews = (
+                (
+                    await session.execute(
+                        select(GrowthEventReviewORM)
+                        .where(GrowthEventReviewORM.id > cursor)
+                        .where(GrowthEventReviewORM.status == "MATURE")
+                        .order_by(GrowthEventReviewORM.id)
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        pipeline = GrowthMemoryPipeline(self._session_factory)
+        updated = profiles = compressed = rejected = 0
+        for review in reviews:
+            actual = (review.actual_json or {}).get("event") or {}
+            net = float(review.actual_net_bps or 0.0)
+            episode = {
+                "episode_id": review.episode_id,
+                "symbol": actual.get("symbol") or "UNKNOWN",
+                "regime": actual.get("regime") or "UNKNOWN",
+                "strategy": actual.get("strategy"),
+                "horizon": actual.get("horizon") or review.maturity_horizon,
+                "setup_signature": actual.get("setup_signature") or actual.get("setup"),
+                "direction": actual.get("direction"),
+                "post_cost_net_bps": net,
+                "win": net > 0,
+                "mfe_bps": review.mfe_bps or 0.0,
+                "mae_bps": review.mae_bps or 0.0,
+                "contradiction": str(review.verdict or "") in ("HARMFUL", "CONTRADICTION"),
+            }
+            result = await pipeline.update_from_episode(episode, reviewed=True)
+            if result.get("status") == "UPDATED":
+                updated += 1
+                profiles += 1
+                compression = await pipeline.compress(result["pattern_key"])
+                if compression.get("status") == "CREATED":
+                    compressed += 1
+                elif compression.get("status") == "NOT_ELIGIBLE":
+                    rejected += 1
+            cursor = max(cursor, int(review.id))
+        self.state["last_applied_review_id"] = cursor
+        metrics = self.metrics
+        metrics["pattern_updates"] = int(metrics.get("pattern_updates", 0)) + updated
+        metrics["profile_updates"] = int(metrics.get("profile_updates", 0)) + profiles
+        metrics["compressed_created"] = int(metrics.get("compressed_created", 0)) + compressed
+        metrics["compressed_rejected"] = int(metrics.get("compressed_rejected", 0)) + rejected
+        return {"patterns": updated, "profiles": profiles, "compressed": compressed}
+
     async def run_once(self, *, now: datetime | None = None) -> dict:
         moment = now or datetime.now(UTC)
         self.state["cycles"] = int(self.state.get("cycles", 0)) + 1
@@ -300,6 +357,7 @@ class GrowthWorker:
             "outcomes_written": 0,
             "due_work_items": 0,
             "memory_updates": 0,
+            "pattern_profile": {},
             "errors": [],
         }
         self._heartbeat_stage("SCAN_INGEST")
@@ -325,11 +383,19 @@ class GrowthWorker:
             summary["due_work_items"] = int(matured.get("due_work_items", 0))
         except Exception as exc:
             summary["errors"].append(f"outcomes:{type(exc).__name__}")
+        self._heartbeat_stage("LIFECYCLE_REVIEW")
         self._heartbeat_stage("MEMORY_UPDATE")
         try:
             summary["memory_updates"] = await self._update_memory(limit=self.memory_batch)
         except Exception as exc:
             summary["errors"].append(f"memory:{type(exc).__name__}")
+        self._heartbeat_stage("PATTERN_PROFILE")
+        try:
+            summary["pattern_profile"] = await self._apply_reviewed_patterns(
+                limit=self.review_batch
+            )
+        except Exception as exc:
+            summary["errors"].append(f"pattern_profile:{type(exc).__name__}")
         self.metrics["top10_frozen"] = int(self.metrics.get("top10_frozen", 0)) + (
             1 if summary["top10"] == "FROZEN" else 0
         )
