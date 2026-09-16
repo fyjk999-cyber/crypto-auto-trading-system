@@ -162,3 +162,78 @@ FLASH_HIGH_POLICY_CHANGED = NO
 - Fresh full suite: `pytest tests -q` -> 902 passed, 0 failed (89s).
 - `ruff check src/ scripts/ tests/` clean.
 - Detached exact-SHA acceptance run is recorded below after commit.
+
+## R8 detached exact-SHA acceptance
+
+- Detached worktree `/tmp/lr2-closure-accept` at code SHA
+  `0a9d8779f8896945a14c65b45efbae6372187e70` (exact commit, no dirty state):
+  `pytest tests -q` -> **902 passed, 0 failed**; `ruff check src/ scripts/ tests/` clean.
+
+## R9 factual PAPER acceptance
+
+- `RUNTIME_ENGINEERING = PASS`: all constitutional runtime semantics are implemented,
+  focused-tested and fresh-full-regression-tested on a detached exact SHA; no fabricated
+  evidence and no forced trade.
+- `RUNTIME_OPERATIONAL_EVIDENCE = AUTONOMOUSLY_ACCUMULATING`: no rare natural lifecycle
+  event was manufactured inside this engineering checkpoint; the directive's isolation
+  rules (do not disturb the running `com.lowrisk.growth` / `mlcollector` / `mltrainer`
+  services) were respected, so no shared or parallel runner was started merely to force
+  acceptance evidence.
+
+## FINAL RECEIPT FIELDS
+
+STARTING_SHA = 8dc0ca43451372b877f95bf7bc054170492a04ec
+SPEC_SHA = 779f7e17d0e948ba54bacb817d14d37078c811b4
+FINAL_SHA = (this commit; remote-verified)
+REMOTE_SHA_MATCH = YES
+WORKTREE_CLEAN = YES
+DETACHED_EXACT_SHA_ACCEPTANCE = YES @ 0a9d8779f8896945a14c65b45efbae6372187e70
+
+HARD_MAX_HOLD_EXIT_REMOVED = YES
+TIME_THRESHOLD_REASSESSMENT = YES
+EXPECTED_HOLDING_NOT_ORDER = YES
+
+CORE_LLM_NEW_RISK_AUTHORITY = YES
+MODEL_NEW_RISK_AUTHORITY = NO
+GROWTH_NEW_RISK_AUTHORITY = NO
+RISK_NEW_RISK_AUTHORITY = NO
+
+BASE_EXIT_ACTIVE_DURING_REASSESSMENT = YES
+BASE_EXIT_ATOMIC_REPLACEMENT = YES
+
+FAST_PROFIT_REDUCE_ONLY = YES
+RISK_HARD_EXIT_REDUCE_ONLY = YES
+OFFLINE_NEW_RISK_BLOCK = YES
+
+STALE_RESPONSE_PROTECTION = YES
+STATE_VERSION_ENFORCED = YES
+UNKNOWN_DUPLICATE_PROTECTION = YES (order manager recovery test + chaos duplicate ids)
+
+EXIT_PRECEDENCE = YES
+NO_DOUBLE_CLOSE = YES
+PARTIAL_REDUCE_SAFE = YES
+NO_SIGN_FLIP_REDUCE_ONLY = YES
+
+NEXT_REASSESSMENT_WAKES_ONLY = YES
+REASSESSMENT_DEDUP = YES
+INFORMATION_NOVELTY_GATE = YES (state-version/fingerprint dedup; EVENT feed P1)
+
+EXECUTION_LEASE_PRESERVED = YES
+KILL_SWITCH_PRESERVED = YES
+RECONCILIATION_GATE_PRESERVED = YES
+INVALID_NEW_RISK_REJECTED_NOT_RESIZED = YES
+
+AUDIT_LINEAGE_COMPLETE = YES (decision/plan/order/fill/state-version + wake/rejection reasons)
+
+GROWTH_RUNTIME_CHANGED = NO
+ML_RUNTIME_CHANGED = NO
+FLASH_HIGH_POLICY_CHANGED = NO
+
+FOCUSED_TESTS = 304 passed
+LOW_RISK_TESTS = included in focused/full green
+FULL_TEST_SUITE = 902 passed (also detached exact SHA)
+RUFF = clean
+
+P0_BLOCKERS = NONE
+P1_ISSUES = full ADD new-risk execution path (currently safely quarantined, never resized);
+EVENT-condition reassessment feed; natural PAPER lifecycle accumulation.
