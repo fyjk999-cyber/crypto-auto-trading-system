@@ -97,6 +97,8 @@ class Readiness:
 
 MIN_COVERAGE_DAYS = 3
 MAX_DUPLICATE_RATE = 0.05
+REQUIRED_FEATURES = ("l1_imbalance", "l5_imbalance", "microprice", "cvd")
+MAX_FEATURE_NULL_RATE = 0.5
 
 
 async def evaluate_readiness(session_factory) -> Readiness:
@@ -114,6 +116,10 @@ async def evaluate_readiness(session_factory) -> Readiness:
         reasons.append(f"insufficient_labels:{sum(q.label_counts.values())}<{MIN_LABELED}")
     if q.duplicate_rate > MAX_DUPLICATE_RATE:
         reasons.append(f"duplicate_rate:{q.duplicate_rate}>{MAX_DUPLICATE_RATE}")
+    for name in REQUIRED_FEATURES:
+        rate = q.null_rates.get(name, 1.0)
+        if rate > MAX_FEATURE_NULL_RATE:
+            reasons.append(f"feature_incomplete:{name}:{rate}>{MAX_FEATURE_NULL_RATE}")
     if not q.first_ts or not q.last_ts:
         reasons.append("no_timestamp_coverage")
     else:

@@ -55,6 +55,7 @@ class OpportunityScannerService:
         max_cycles: int | None = None,  # test hook
         sleep=None,
         state_provider=None,
+        state_prefetch=None,
         snapshot_collector=None,
         control_sample_size: int = 20,
     ) -> None:
@@ -72,6 +73,7 @@ class OpportunityScannerService:
         self._sleep = sleep or asyncio.sleep
         self._rotation = RotationScheduler()
         self._oi_history: dict[str, list[float]] = {}
+        self.state_prefetch = state_prefetch
         self.snapshot_collector = snapshot_collector
         self.control_sample_size = max(0, int(control_sample_size))
         self.collection_error: str | None = None
@@ -210,6 +212,12 @@ class OpportunityScannerService:
         scan_rows = active + [
             rotation_by_symbol[s] for s in rotation_rows if s in rotation_by_symbol
         ]
+        if self.state_prefetch is not None:
+            try:
+                await self.state_prefetch([r["symbol"] for r in scan_rows])
+            except Exception:
+                pass  # factual states remain whatever the canonical feed already has
+
 
         # ---- per-symbol factual candles + factor scan -----------------------
         facts_by_symbol: dict[str, SymbolFacts] = {}

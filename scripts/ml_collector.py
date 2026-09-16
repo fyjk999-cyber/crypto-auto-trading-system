@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO / "src"))
 from sqlalchemy import select
 
 from crypto_trader.exchange.okx import OKXAdapter
+from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.opportunity.board import OpportunityBoard
 from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
 from crypto_trader.market_data.opportunity.factors import DEFAULT_FACTORS
@@ -95,6 +96,11 @@ async def main(db, status):
     d = Database(f"sqlite+aiosqlite:///{db}")
     await d.init_schema()
     c = OKXAdapter()
+    feed = OKXPublicMarketFeed(client=c)
+
+    async def prefetch(symbols):
+        await asyncio.gather(*(feed.refresh(sym) for sym in symbols[:24]), return_exceptions=True)
+
     v = OpportunityScannerService(
         universe=OkxUniverseManager(c),
         okx_client=c,
@@ -104,6 +110,8 @@ async def main(db, status):
         scan_interval_seconds=0,
         active_set_size=8,
         rotation_size=2,
+        state_provider=lambda symbol: feed.states.get(symbol),
+        state_prefetch=prefetch,
         snapshot_collector=ScanSnapshotCollector(d.session_factory),
         control_sample_size=20,
     )
@@ -131,6 +139,7 @@ async def main(db, status):
             st["last_error"] = f"{type(e).__name__}: {e}"[:200]
         Path(status).write_text(json.dumps(st))
         await asyncio.sleep(90)
+    await feed.close()
     await d.close()
 
 

@@ -49,3 +49,10 @@ async def test_label_maturity_and_idempotency(database):
     assert [r.horizon for r in rows] == ["1m"]
     assert rows[0].long_net_bps == 78.0
     assert rows[0].label_version == "label-v1"
+
+
+def test_collector_reuses_canonical_state_feed():
+    source = (ROOT / "scripts/ml_collector.py").read_text()
+    assert "OKXPublicMarketFeed" in source
+    assert "state_provider=lambda symbol: feed.states.get(symbol)" in source
+    assert "state_prefetch=prefetch" in source

@@ -13,7 +13,15 @@ def _snap(i, ts, symbol="BTCUSDT", cand=True, features=None):
         symbol=symbol,
         candidate=cand,
         control=not cand,
-        features_json=features or {"price": 100.0, "l10_imbalance": None},
+        features_json=features
+        or {
+            "price": 100.0,
+            "l1_imbalance": 0.1,
+            "l5_imbalance": 0.2,
+            "microprice": 100.01,
+            "cvd": 1.0,
+            "l10_imbalance": None,
+        },
     )
 
 
