@@ -80,6 +80,11 @@ class LLMRuntimeStatus:
     model: str | None = None
     configured: bool = False
     reachable: bool = False
+    provider_state: str = "UNKNOWN"
+    configured_provider: str = "none"
+    configured_model: str | None = None
+    effective_provider: str | None = None
+    effective_model: str | None = None
     last_success_ts: str | None = None
     last_error: str | None = None
     provider_instance: object | None = field(default=None, repr=False)
@@ -87,33 +92,61 @@ class LLMRuntimeStatus:
     async def probe(self) -> None:
         import os
 
-        from crypto_trader.llm_chief.provider import DeepSeekProvider
+        from crypto_trader.llm_chief.provider import DeepSeekProvider, resolve_trading_model
 
-        self.provider = os.environ.get("LLM_PROVIDER", "none").lower()
-        self.model = os.environ.get("LLM_MODEL")
+        self.provider = (os.environ.get("LLM_PROVIDER") or "none").lower()
+        self.model = resolve_trading_model()
         self.configured = self.provider == "deepseek" and bool(
             os.environ.get("DEEPSEEK_API_KEY")
         )
         self.reachable = False
+        self.effective_provider = None
+        self.effective_model = None
         self.last_error = None
         if not self.configured:
+            self.provider_state = "PROVIDER_UNCONFIGURED"
+            self.configured_provider = "none"
+            self.configured_model = None
             self.last_error = "NOT_CONFIGURED"
             return
+        self.provider_state = "PROVIDER_CONFIGURED"
+        self.configured_provider = "deepseek"
+        self.configured_model = self.model
         provider = self.provider_instance or DeepSeekProvider()
-        result = await provider.complete_json(
-            prompt='Return only valid JSON: {"runtime_health":"ok"}',
-            temperature=0.0,
-            timeout_seconds=10.0,
-            retries=0,
-            max_tokens=64,
-            thinking=False,
-            operation="health_probe",
-        )
-        self.reachable = result.ok and result.parsed_json is not None
+        try:
+            # Bounded real DeepSeek probe: thinking + high reasoning effort, no trade.
+            result = await provider.complete_json(
+                prompt='Return only valid JSON: {"runtime_health":"ok"}',
+                temperature=0.0,
+                timeout_seconds=15.0,
+                retries=0,
+                max_tokens=512,
+                thinking=True,
+                reasoning_effort="high",
+                operation="health_probe",
+            )
+        except Exception as exc:  # noqa: BLE001 - health must never crash the PAPER runtime
+            self.provider_state = "PROVIDER_UNREACHABLE"
+            self.last_error = "PROBE_EXCEPTION:" + type(exc).__name__
+            return
+        self.reachable = bool(result.ok and result.parsed_json is not None)
+        self.effective_provider = result.provider or self.provider
+        self.effective_model = result.model or self.model
         if self.reachable:
+            self.provider_state = "PROVIDER_CONFIGURED"
             self.last_success_ts = datetime.now(UTC).isoformat()
+            self.last_error = None
         else:
+            self.provider_state = "PROVIDER_UNREACHABLE"
             self.last_error = result.error or "PROBE_FAILED"
+
+    def record_probe_exception(self, exc: Exception) -> None:
+        """Keep the process alive and observable when the probe itself raises."""
+        self.reachable = False
+        self.provider_state = "PROVIDER_UNREACHABLE"
+        self.effective_provider = None
+        self.effective_model = None
+        self.last_error = "PROBE_EXCEPTION:" + type(exc).__name__
 
     def snapshot(self) -> dict:
         snapshot = {
@@ -121,6 +154,11 @@ class LLMRuntimeStatus:
             "model": self.model,
             "configured": self.configured,
             "reachable": self.reachable,
+            "provider_state": self.provider_state,
+            "configured_provider": self.configured_provider,
+            "configured_model": self.configured_model,
+            "effective_provider": self.effective_provider,
+            "effective_model": self.effective_model,
             "last_success_ts": self.last_success_ts,
             "last_error": self.last_error,
         }
@@ -128,6 +166,9 @@ class LLMRuntimeStatus:
         if callable(diagnostics):
             actual = diagnostics()
             decision = (actual.get("operations") or {}).get("trading_decision", {})
+            offline = actual.get("offline")
+            if isinstance(offline, dict):
+                snapshot["llm_offline_mode"] = bool(offline.get("offline"))
             snapshot.update(
                 {
                     "decision_last_success_ts": decision.get("last_success_ts"),

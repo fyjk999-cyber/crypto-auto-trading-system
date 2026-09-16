@@ -175,9 +175,12 @@ async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatc
     async def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         if payload["messages"][0]["content"].startswith("Return only valid JSON"):
-            assert payload["thinking"] == {"type": "disabled"}
-            assert payload["max_tokens"] == 64
-            assert "reasoning_effort" not in payload
+            # Canonical health probe contract: deepseek-flash with thinking + high
+            # reasoning effort. It remains a bounded real provider call, no trade.
+            assert payload["model"] == "deepseek-flash"
+            assert payload["thinking"] == {"type": "enabled"}
+            assert payload["reasoning_effort"] == "high"
+            assert payload["max_tokens"] == 512
         return httpx.Response(
             200,
             json={"choices": [{"message": {"content": '{"status":"ok"}'}}]},
@@ -185,6 +188,7 @@ async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatc
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("TRADING_LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
     provider = DeepSeekProvider(
         api_key="test-secret", transport=httpx.MockTransport(handler)
@@ -193,6 +197,9 @@ async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatc
     await status.probe()
     after_probe = status.snapshot()
     assert after_probe["reachable"] is True
+    assert after_probe["provider_state"] == "PROVIDER_CONFIGURED"
+    assert after_probe["configured_model"] == "deepseek-flash"
+    assert after_probe["effective_model"] == "deepseek-flash"
     assert after_probe["decision_last_success_ts"] is None
 
     await provider.complete_json(

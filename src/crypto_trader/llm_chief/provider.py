@@ -7,6 +7,26 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+TRADING_MODEL_ENV = "TRADING_LLM_MODEL"
+DEFAULT_TRADING_MODEL = "deepseek-chat"
+
+
+def resolve_trading_model(explicit: str | None = None) -> str:
+    """Canonical trading-model precedence.
+
+    ``TRADING_LLM_MODEL`` always wins over a generic ``LLM_MODEL`` so an
+    operational default cannot silently change the model used for decisions.
+    An explicit constructor value is for tests and dependency injection.
+    """
+
+    if explicit:
+        return explicit
+    return (
+        os.environ.get(TRADING_MODEL_ENV)
+        or os.environ.get("LLM_MODEL")
+        or DEFAULT_TRADING_MODEL
+    )
+
 
 @dataclass
 class LLMResponse:
@@ -55,7 +75,7 @@ class DeepSeekProvider:
         transport=None,
     ) -> None:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        self.model = model or os.environ.get("LLM_MODEL", "deepseek-chat")
+        self.model = resolve_trading_model(model)
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         self._transport = transport
         self.last_success_ts: str | None = None
