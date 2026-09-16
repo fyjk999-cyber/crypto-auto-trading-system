@@ -185,9 +185,7 @@ class TradePlanService:
                     if getattr(existing, field) != expected
                 ]
                 if conflicts:
-                    raise ValueError(
-                        "immutable TradePlan conflict: " + ",".join(conflicts)
-                    )
+                    raise ValueError("immutable TradePlan conflict: " + ",".join(conflicts))
                 return self._to_domain(existing)
             row = TradePlanORM(
                 trade_plan_id=new_id("plan"),
@@ -238,25 +236,57 @@ class TradePlanService:
         """Resolve factual execution lineage without trusting signal metadata."""
         async with self.session_factory() as session:
             row = (
-                await session.execute(
-                    select(TradePlanORM).where(TradePlanORM.order_id == order_id)
-                )
+                await session.execute(select(TradePlanORM).where(TradePlanORM.order_id == order_id))
             ).scalar_one_or_none()
             return self._to_domain(row) if row is not None else None
 
     async def get_active_for_symbol(self, symbol: str) -> TradePlan | None:
         async with self.session_factory() as session:
             row = (
-                await session.execute(
-                    select(TradePlanORM)
-                    .where(
-                        TradePlanORM.symbol == symbol,
-                        TradePlanORM.state == TradePlanState.ACTIVE.value,
+                (
+                    await session.execute(
+                        select(TradePlanORM)
+                        .where(
+                            TradePlanORM.symbol == symbol,
+                            TradePlanORM.state == TradePlanState.ACTIVE.value,
+                        )
+                        .order_by(TradePlanORM.opened_at.desc(), TradePlanORM.created_at.desc())
                     )
-                    .order_by(TradePlanORM.opened_at.desc(), TradePlanORM.created_at.desc())
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             return self._to_domain(row) if row is not None else None
+
+    async def replace_base_exit(
+        self,
+        trade_plan_id: str,
+        *,
+        base_exit: dict,
+        expected_plan_version: int,
+    ) -> TradePlan | None:
+        """Atomically version a validated Base Exit replacement.
+
+        Returns None when the plan version moved since the LLM decision was made
+        (stale replacement); callers must keep the old protection active.
+        """
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(TradePlanORM).where(TradePlanORM.trade_plan_id == trade_plan_id)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            if row.state != TradePlanState.ACTIVE.value:
+                return None
+            if int(row.plan_version or 1) != int(expected_plan_version):
+                return None
+            row.base_exit_json = dict(base_exit)
+            row.plan_version = int(row.plan_version or 1) + 1
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+            return self._to_domain(row)
 
     async def transition(
         self, trade_plan_id: str, state: TradePlanState, *, reason: str | None = None
@@ -308,9 +338,7 @@ class TradePlanService:
                     continue
                 current = getattr(row, field)
                 if current is not None and current != value:
-                    raise ValueError(
-                        f"immutable TradePlan entry lineage conflict: {field}"
-                    )
+                    raise ValueError(f"immutable TradePlan entry lineage conflict: {field}")
                 setattr(row, field, value)
             row.updated_at = datetime.now(UTC)
             await session.commit()
@@ -354,9 +382,7 @@ class TradePlanService:
                 raise ValueError("factual close requires an ACTIVE TradePlan")
             position = (
                 await session.execute(
-                    select(PositionProjectionORM).where(
-                        PositionProjectionORM.symbol == row.symbol
-                    )
+                    select(PositionProjectionORM).where(PositionProjectionORM.symbol == row.symbol)
                 )
             ).scalar_one_or_none()
             if position is None or position.quantity != 0:

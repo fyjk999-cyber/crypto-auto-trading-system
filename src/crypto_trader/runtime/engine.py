@@ -60,6 +60,8 @@ from crypto_trader.ledger.service import (
     build_trade_entries,
 )
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+from crypto_trader.llm_chief.reassessment import ReassessmentEvaluator
+from crypto_trader.llm_chief.state_version import position_state_version
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -112,6 +114,7 @@ class TradingEngine:
         llm_router=None,
         leg_service=None,
         leg_reconciler=None,
+        exit_controller=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -131,7 +134,9 @@ class TradingEngine:
         self.require_lease = require_lease
         self.trade_plans = trade_plans or TradePlanService(database.session_factory)
         # Low-Risk V2 deterministic protection layer (Risk/Base Exit/Fast Profit).
-        self.exit_controller = DeterministicExitController()
+        self.exit_controller = exit_controller or DeterministicExitController()
+        self.reassessment_evaluator = ReassessmentEvaluator()
+        self._last_reassessment_wake: dict[str, str] = {}
         self.offline_mode = OfflineMode()
         self.llm_router = llm_router
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
@@ -586,8 +591,71 @@ class TradingEngine:
                     self.exit_controller.cancel(exit_request_id, "DETERMINISTIC_EXIT_NOT_SUBMITTED")
             if self.position_manager is None:
                 continue
+            plan = await self.trade_plans.get_active_for_symbol(position.symbol)
+            horizon_wake = plan is not None and self.position_manager.horizon_wake_due(
+                position, plan, ctx.clock_time.astimezone(UTC)
+            )
+            reassessment_wake = False
+            if plan is not None and getattr(plan, "next_reassessment", None):
+                indicator_feed = {
+                    key: value
+                    for key, value in {
+                        "atr_pct": getattr(ctx, "realized_volatility", None),
+                        "mark_price": ctx.mark_price,
+                        "funding": getattr(ctx, "funding", None),
+                        "oi": getattr(ctx, "oi", None),
+                        "basis": getattr(ctx, "basis", None),
+                    }.items()
+                    if value is not None
+                }
+                wake = self.reassessment_evaluator.evaluate(
+                    plan.next_reassessment,
+                    now=ctx.clock_time.astimezone(UTC),
+                    price=ctx.mark_price or ctx.book.mid_price(),
+                    indicators=indicator_feed,
+                )
+                if wake.triggered:
+                    fingerprint = "|".join(wake.matched_conditions) + (
+                        f"#{getattr(plan, 'plan_version', 1)}"
+                    )
+                    if self._last_reassessment_wake.get(plan.trade_plan_id) != fingerprint:
+                        self._last_reassessment_wake[plan.trade_plan_id] = fingerprint
+                        reassessment_wake = True
+                        await self.audit.log(
+                            "NEXT_REASSESSMENT_WAKE",
+                            target=plan.trade_plan_id,
+                            run_id=self.run_id,
+                            after={
+                                **wake.as_dict(),
+                                "trade_plan_id": plan.trade_plan_id,
+                                "state_version": self._position_state_version(position, plan),
+                            },
+                        )
+            if wake_required or horizon_wake or reassessment_wake:
+                await self.audit.log(
+                    "LLM_REASSESSMENT_REQUESTED",
+                    target=position.symbol,
+                    run_id=self.run_id,
+                    after={
+                        "trade_plan_id": plan.trade_plan_id if plan else None,
+                        "risk_wake": wake_required,
+                        "expected_holding_horizon_wake": horizon_wake,
+                        "next_reassessment_wake": reassessment_wake,
+                        "state_version": (
+                            self._position_state_version(position, plan)
+                            if plan is not None
+                            else position_state_version(position, plan)
+                        ),
+                        "authority": "REASSESSMENT_ONLY",
+                        "is_order": False,
+                    },
+                )
             try:
-                signal = await self.position_manager.review(ctx, position, force=wake_required)
+                signal = await self.position_manager.review(
+                    ctx,
+                    position,
+                    force=wake_required or horizon_wake or reassessment_wake,
+                )
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.health.set("position_manager", False, type(exc).__name__)
@@ -602,15 +670,7 @@ class TradingEngine:
 
     @staticmethod
     def _position_state_version(position, plan) -> str:
-        updated = getattr(position, "updated_at", None)
-        return "|".join(
-            [
-                str(plan.trade_plan_id),
-                str(getattr(plan, "plan_version", 1)),
-                str(position.quantity),
-                updated.isoformat() if updated is not None else "none",
-            ]
-        )
+        return position_state_version(position, plan)
 
     async def _deterministic_exit_signals(
         self, ctx, position
