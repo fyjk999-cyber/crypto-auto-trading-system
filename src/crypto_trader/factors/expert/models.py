@@ -1245,7 +1245,100 @@ def model_24_market_regime(inputs: ExpertInputs) -> ModelEvidence:
 
 
 # --------------------------------------------------------------------------- 25
+def _active_artifact_failure_25(inputs: ExpertInputs, reason: str) -> ModelEvidence:
+    result = unavailable(
+        spec_of("25_META_FORECAST"),
+        inputs.symbol,
+        f"ACTIVE_ARTIFACT_INTEGRITY_FAILED:{reason}",
+    )
+    result.metrics.update(
+        {
+            "artifact_status": "ACTIVE_ARTIFACT_INTEGRITY_FAILED",
+            "artifact_failure": reason,
+        }
+    )
+    return result
+
+
+def _runtime_25_features(inputs: ExpertInputs, evidence: list[ModelEvidence]) -> dict:
+    """Build the frozen #25 meta feature row from runtime #01-#24 evidence."""
+    from crypto_trader import ml_meta
+
+    model21 = next((item for item in evidence if item.model_id == "21_ORDER_FLOW_ML"), None)
+    model21_prob = None
+    if model21 is not None:
+        try:
+            model21_prob = float(model21.metrics.get("probability_up"))
+        except (TypeError, ValueError):
+            model21_prob = None
+    state = inputs.state
+    feature_map: dict[str, Any] = {
+        "model_evidence": [item.as_dict() for item in evidence],
+        "costs": {"total_cost_bps": inputs.costs.total_cost_bps},
+        "market_regime": inputs.extra.get("regime"),
+    }
+    if state is not None:
+        feature_map.update(
+            {
+                "spread_bps": float(state.spread_bps),
+                "relative_volume": None,
+                "trade_notional_window_usd": (
+                    float(state.trade_notional) if state.trade_notional is not None else None
+                ),
+                "evidence_quality": state.evidence_quality.value,
+                "evidence_degraded_reasons": list(state.evidence_degraded_reasons),
+            }
+        )
+    return ml_meta.meta_features(
+        {"features": feature_map, "market_regime": inputs.extra.get("regime")},
+        model21_prob,
+    )
+
+
 def model_25_meta_forecast(inputs: ExpertInputs, evidence: list[ModelEvidence]) -> ModelEvidence:
+    resolver = inputs.extra.get("model_runtime")
+    if resolver is not None and callable(getattr(resolver, "resolve_active", None)):
+        try:
+            loaded = resolver.resolve_active("25_META_FORECAST")
+        except Exception as exc:
+            return _active_artifact_failure_25(inputs, str(exc))
+        if loaded is not None:
+            try:
+                meta_row = _runtime_25_features(inputs, evidence)
+                probability = loaded.predict(meta_row)
+            except Exception as exc:
+                return _active_artifact_failure_25(inputs, f"PREDICT_FAILED:{exc}")
+            score = (probability - 0.5) * 2.0
+            return _evidence(
+                "25_META_FORECAST",
+                inputs,
+                score=score,
+                confidence=min(0.9, 0.4 + abs(score) * 0.5),
+                model_version=loaded.model_version,
+                theory="ACTIVE trained XGBoost meta forecast (chronological validation).",
+                support=[f"p_up={probability:.3f}"] if score > 0 else [],
+                counter=[f"p_up={probability:.3f}"] if score < 0 else [],
+                neutral=[f"p_up={probability:.3f}"]
+                if direction_from_score(score) == EvidenceDirection.NEUTRAL
+                else [],
+                metrics={
+                    "artifact_status": "ACTIVE_TRAINED_ARTIFACT",
+                    "artifact_hash": loaded.artifact_hash,
+                    "dataset_version": loaded.dataset_version,
+                    "feature_version": loaded.feature_version,
+                    "feature_schema_hash": loaded.feature_schema_hash,
+                    "label_version": loaded.label_version,
+                    "training_cutoff_ts": loaded.training_cutoff_ts,
+                    "algorithm": loaded.algorithm,
+                    "xgboost_version": loaded.xgboost_version,
+                    "probability_up": probability,
+                },
+                quality=EvidenceQuality.HEALTHY,
+                entry_use="ACTIVE XGBoost meta probability evidence",
+                exit_use="ACTIVE XGBoost meta deterioration evidence",
+                reassessment_use="ACTIVE meta probability shift is a material aggregate event",
+                invalidation="ACTIVE artifact unavailable or degraded",
+            )
     available = [
         item for item in evidence if item.available and item.model_id != "25_META_FORECAST"
     ]
