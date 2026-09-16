@@ -60,6 +60,7 @@ from crypto_trader.ledger.service import (
     build_trade_entries,
 )
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
+from crypto_trader.llm_chief.state_version import position_state_version
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -587,11 +588,8 @@ class TradingEngine:
             if self.position_manager is None:
                 continue
             plan = await self.trade_plans.get_active_for_symbol(position.symbol)
-            horizon_wake = (
-                plan is not None
-                and self.position_manager.expected_holding_horizon_reached(
-                    position, plan, ctx.clock_time.astimezone(UTC)
-                )
+            horizon_wake = plan is not None and self.position_manager.horizon_wake_due(
+                position, plan, ctx.clock_time.astimezone(UTC)
             )
             try:
                 signal = await self.position_manager.review(
@@ -611,15 +609,7 @@ class TradingEngine:
 
     @staticmethod
     def _position_state_version(position, plan) -> str:
-        updated = getattr(position, "updated_at", None)
-        return "|".join(
-            [
-                str(plan.trade_plan_id),
-                str(getattr(plan, "plan_version", 1)),
-                str(position.quantity),
-                updated.isoformat() if updated is not None else "none",
-            ]
-        )
+        return position_state_version(position, plan)
 
     async def _deterministic_exit_signals(
         self, ctx, position

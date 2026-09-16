@@ -17,6 +17,7 @@ from crypto_trader.llm_chief.decision import OpenAction, PositionState
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.fresh_context import build_rebuild_kwargs
+from crypto_trader.llm_chief.state_version import position_state_version
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.strategy.base import StrategyContext
@@ -58,6 +59,8 @@ class LiveLLMPositionManager:
         self.tool_chief = tool_chief
         self.context_loader = context_loader
         self.attempt_clock = attempt_clock or (lambda: datetime.now(UTC))
+        # One horizon reassessment per factual state version (dedup/novelty).
+        self._last_horizon_wake_state: dict[str, str] = {}
         # Low-Risk V2 Phase 2: 25-model factual evidence package (evidence only).
         self.expert_engine = expert_engine
         self.fresh_context_provider = fresh_context_provider
@@ -131,6 +134,13 @@ class LiveLLMPositionManager:
         )
         return signal
 
+    def horizon_wake_due(self, position, plan, now) -> bool:
+        """Horizon wake only once per factual state version (dedup/novelty)."""
+        if not self.expected_holding_horizon_reached(position, plan, now):
+            return False
+        current = position_state_version(position, plan)
+        return self._last_horizon_wake_state.get(position.symbol) != current
+
     def expected_holding_horizon_reached(self, position, plan, now) -> bool:
         """Expected holding horizon is an informational reassessment trigger.
 
@@ -172,6 +182,8 @@ class LiveLLMPositionManager:
             return None
 
         now = ctx.clock_time.astimezone(UTC)
+        state_version_before = position_state_version(position, plan)
+        horizon_reached = self.expected_holding_horizon_reached(position, plan, now)
         last_attempt = self._last_review_attempt.get(position.symbol)
         if not force and last_attempt is not None and now - last_attempt < self.review_cooldown:
             # Ordinary cadence. A Risk L1 material wake bypasses this cooldown.
@@ -211,6 +223,7 @@ class LiveLLMPositionManager:
             "exit_conditions": plan.exit_conditions,
             "expected_holding_period": plan.expected_holding_period,
             "max_holding_time_seconds": plan.max_holding_time_seconds,
+            "state_version": state_version_before,
         }
         chief_ctx = ChiefTraderContext(
             symbol=position.symbol,
@@ -225,6 +238,7 @@ class LiveLLMPositionManager:
             position_state=PositionState.OPEN,
             position_context=position_context,
         )
+        chief_ctx.state_version = state_version_before
         if self.context_loader is not None:
             chief_ctx = await self.context_loader.enrich(chief_ctx)
         if self.expert_engine is not None:
@@ -258,6 +272,8 @@ class LiveLLMPositionManager:
         finally:
             completed_at = _utc(self.attempt_clock())
             self._last_review_attempt[position.symbol] = max(now, completed_at)
+        decision = decision.model_copy(update={"based_on_state_version": state_version_before})
+        state_version_after = position_state_version(position, plan)
         await self.decisions.save(
             decision,
             run_id=ctx.run_id,
@@ -269,8 +285,27 @@ class LiveLLMPositionManager:
             parent_decision_id=plan.decision_id,
             position_context=position_context,
         )
+        if state_version_after != state_version_before:
+            # Factual state moved while the LLM was thinking (Base Exit fill,
+            # partial reduction, position close, leg change, UNKNOWN...).
+            # The decision is stale: no new risk, no exit replacement, no order.
+            if horizon_reached:
+                self._last_horizon_wake_state[position.symbol] = state_version_after
+            await self.audit.log(
+                "STALE_LLM_RESPONSE_REJECTED",
+                target=decision.decision_id,
+                actor="live_llm",
+                run_id=ctx.run_id,
+                after={
+                    "action": decision.action.value,
+                    "based_on_state_version": state_version_before,
+                    "current_state_version": state_version_after,
+                    "trade_plan_id": plan.trade_plan_id,
+                    "is_order": False,
+                },
+            )
+            return None
         await self.decisions.link_trade_plan(decision.decision_id, plan.trade_plan_id)
-        horizon_reached = self.expected_holding_horizon_reached(position, plan, now)
         if horizon_reached:
             # Time threshold -> high-priority Core LLM reassessment. The trigger
             # itself is never an order; Base Exit / Fast Profit / Risk hard exit
@@ -310,6 +345,9 @@ class LiveLLMPositionManager:
                 "time_threshold_reassessment_only": True,
             },
         )
+        if horizon_reached:
+            # One horizon reassessment per factual state version.
+            self._last_horizon_wake_state[position.symbol] = state_version_before
         if decision.action in {OpenAction.HOLD, OpenAction.FAIL_CLOSED}:
             if horizon_reached:
                 await self.audit.log(

@@ -592,6 +592,8 @@ async def test_expected_holding_horizon_triggers_reassessment_not_forced_exit(da
     clock.advance(61)  # horizon reached; cooldown still active
     await engine.tick()
     assert chief.calls == 2, "horizon must force a fresh Core-LLM reassessment"
+    await engine.tick()  # same factual state: horizon wake is deduplicated
+    assert chief.calls == 2, "no-novelty horizon wake must be suppressed"
     assert len(engine.adapter.orders) == order_count, "no forced time-stop order"
     position = await engine.portfolio.get_position("BTCUSDT")
     assert position is not None and position.quantity == Decimal("0.1")
@@ -665,6 +667,44 @@ async def test_modify_exit_action_never_becomes_reduce_order(database):
     assert "MODIFY_EXIT_REQUIRES_VERSIONED_BASE_EXIT" in actions
     position = await engine.portfolio.get_position("BTCUSDT")
     assert position is not None and position.quantity == Decimal("0.1")
+    await engine.stop()
+
+
+async def test_stale_llm_response_after_factual_change_is_rejected(database, monkeypatch):
+    """Base Exit fill / partial reduce while LLM thinks -> stale response rejected."""
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("run-stale-response")
+    assert await engine._strategy_context("BTCUSDT") is not None
+    decisions = LLMDecisionStore(database.session_factory)
+    plans = TradePlanService(database.session_factory)
+    await _open_v2_position(engine, decisions, plans, "entry-stale-q", 0.1)
+    ctx = await engine._strategy_context("BTCUSDT")
+    position = await engine.portfolio.get_position("BTCUSDT")
+    assert position is not None
+
+    chief = SequencedChief([("REDUCE", "0.05")])
+    engine.position_manager = LiveLLMPositionManager(
+        chief=chief,
+        evidence_engine=Evidence(),
+        decisions=decisions,
+        plans=plans,
+        audit=engine.audit,
+        review_cooldown_seconds=0,
+    )
+    versions = iter(["state-v1", "state-v2"])
+    monkeypatch.setattr(
+        "crypto_trader.llm_chief.position_manager.position_state_version",
+        lambda *_args, **_kwargs: next(versions),
+    )
+    order_count = len(engine.adapter.orders)
+    signal = await engine.position_manager.review(ctx, position, force=True)
+    assert signal is None, "stale response must not emit any order"
+    assert len(engine.adapter.orders) == order_count
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "STALE_LLM_RESPONSE_REJECTED" in actions
     await engine.stop()
 
 
