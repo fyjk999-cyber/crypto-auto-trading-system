@@ -20,3 +20,11 @@
 
 No natural same-symbol two-leg hedge has been observed yet.
 HEDGE_OPERATIONAL_EVIDENCE = AUTONOMOUSLY_ACCUMULATING
+
+## Observed operational limitation (factual, 2026-09-16T12:39Z)
+- The PAPER runtime is alive and safe (PAPER, live=false, lease held) but is in LLM_OFFLINE_MODE:
+  real DeepSeek decisions returned LLM_TIMEOUT then INVALID_JSON, so new risk is correctly blocked.
+- With no open positions, no LLM call is attempted during offline mode, so the router cannot clear
+  its own offline flag without an external probe. This belongs to the broader Core-LLM runtime
+  contract, not to the hedge/position-leg subsystem; no hedge code or gate was changed to bypass it.
+- No natural hedge can occur until Core LLM decisions parse successfully again; this is recorded as P1.
