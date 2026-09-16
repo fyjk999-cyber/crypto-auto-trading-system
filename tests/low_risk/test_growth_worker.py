@@ -297,3 +297,78 @@ async def test_data_gap_outcome_cannot_update_memory(database, tmp_path):
     assert updated == 0
     assert worker.metrics["memory_rows_rejected_quality"] == 1
     assert await MemorySpeedStore(database.session_factory).load("BTCUSDT|1h|outcome-v1") is None
+
+
+async def test_effective_batches_defaults_and_override(database, tmp_path, monkeypatch):
+    monkeypatch.delenv("GROWTH_OUTCOME_BATCH", raising=False)
+    default = GrowthWorker(database.session_factory, tmp_path / "d1", FakeClient())
+    assert default.outcome_batch == 25
+    monkeypatch.setenv("GROWTH_OUTCOME_BATCH", "7")
+    override = GrowthWorker(database.session_factory, tmp_path / "d2", FakeClient())
+    assert override.outcome_batch == 7
+
+
+async def test_run_once_wires_outcome_batch_and_stage_truth(database, tmp_path, monkeypatch):
+    from crypto_trader.learning import growth_worker as worker_module
+
+    stages = []
+    internal = []
+    original_stage = GrowthWorker._heartbeat_stage
+    original_ingest = GrowthWorker._ingest_scan_source
+
+    def spy_stage(self, name):
+        stages.append(name)
+        return original_stage(self, name)
+
+    async def spy_ingest(self, *args, **kwargs):
+        heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
+        internal.append(
+            (heartbeat["stage"], heartbeat["cycles_started"], heartbeat["cycles_completed"])
+        )
+        return await original_ingest(self, *args, **kwargs)
+
+    monkeypatch.setattr(GrowthWorker, "_heartbeat_stage", spy_stage)
+    monkeypatch.setattr(GrowthWorker, "_ingest_scan_source", spy_ingest)
+    calls = {}
+    original_mature = worker_module.outcome_maturer.mature_due
+
+    async def spy_mature(*args, **kwargs):
+        heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
+        calls["stage"] = heartbeat["stage"]
+        calls["max_work_items"] = kwargs.get("max_work_items")
+        return await original_mature(*args, **kwargs)
+
+    monkeypatch.setattr(worker_module.outcome_maturer, "mature_due", spy_mature)
+    monkeypatch.setenv("GROWTH_OUTCOME_BATCH", "7")
+    worker = GrowthWorker(database.session_factory, tmp_path, FakeClient(), code_sha="sha")
+    result = await worker.run_once(now=FIXED_NOW)
+    assert calls["stage"] == "OUTCOME_MATURATION"
+    assert calls["max_work_items"] == 7
+    assert result["due_work_items"] <= 7
+    assert stages[:2] == ["CYCLE_START", "SCAN_INGEST"]
+    assert "OUTCOME_MATURATION" in stages and stages[-1] == "CYCLE_COMPLETE"
+    assert internal[0][0] == "SCAN_INGEST"
+    assert internal[0][1] == 1 and internal[0][2] == 0
+    heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
+    assert heartbeat["cycles_started"] == 1 and heartbeat["cycles_completed"] == 1
+    assert heartbeat["effective_outcome_batch"] == 7
+    assert heartbeat["stage"] == "CYCLE_COMPLETE"
+
+
+async def test_maturer_exception_truth(database, tmp_path, monkeypatch):
+    from crypto_trader.learning import growth_worker as worker_module
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("okx_down")
+
+    monkeypatch.setattr(worker_module.outcome_maturer, "mature_due", boom)
+    source = tmp_path / "empty-source.db"
+    _make_source_db(source, [])
+    worker = GrowthWorker(
+        database.session_factory, tmp_path, FakeClient(), code_sha="sha", scan_source_db=str(source)
+    )
+    result = await worker.run_once(now=FIXED_NOW)
+    assert any(e.startswith("outcomes:") for e in result["errors"])
+    heartbeat = json.loads((tmp_path / "growth_heartbeat.json").read_text())
+    assert heartbeat["cycles_started"] == 1 and heartbeat["cycles_completed"] == 1
+    assert heartbeat["state"] == "DEGRADED_PROCESSING_ERROR"

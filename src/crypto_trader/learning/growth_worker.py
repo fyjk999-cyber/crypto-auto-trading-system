@@ -50,11 +50,26 @@ class GrowthWorker:
         self.client = client
         self.code_sha = code_sha
         self.scan_source_db = scan_source_db
+        self.scan_batch = self._int_env("GROWTH_SCAN_BATCH", 500, 1, 5000)
+        self.outcome_batch = self._int_env("GROWTH_OUTCOME_BATCH", 25, 1, 1000)
+        self.memory_batch = self._int_env("GROWTH_MEMORY_BATCH", 200, 1, 5000)
+        self.review_batch = self._int_env("GROWTH_REVIEW_BATCH", 100, 1, 1000)
         self.state_path = self.base_dir / STATE_FILE
         self.heartbeat_path = self.base_dir / HEARTBEAT_FILE
         self.metrics_path = self.base_dir / METRICS_FILE
         self.state = self._load_state()
         self.metrics = self.state.get("metrics", {})
+
+    @staticmethod
+    def _int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+        raw = os.environ.get(name)
+        if raw in (None, ""):
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return max(minimum, min(maximum, value))
 
     def _load_state(self) -> dict:
         if self.state_path.exists():
@@ -111,6 +126,12 @@ class GrowthWorker:
                 "state": self.state.get("state", "STARTING"),
                 "stage": stage,
                 "cycles": self.state.get("cycles", 0),
+                "cycles_started": self.state.get("cycles_started", 0),
+                "cycles_completed": self.state.get("cycles_completed", 0),
+                "effective_scan_batch": self.scan_batch,
+                "effective_outcome_batch": self.outcome_batch,
+                "effective_memory_batch": self.memory_batch,
+                "effective_review_batch": self.review_batch,
                 "runtime_sha": self.code_sha,
                 "cycle_started_at": self.state.get("cycle_started_at"),
                 "stage_started_at": now,
@@ -269,19 +290,21 @@ class GrowthWorker:
     async def run_once(self, *, now: datetime | None = None) -> dict:
         moment = now or datetime.now(UTC)
         self.state["cycles"] = int(self.state.get("cycles", 0)) + 1
+        self.state["cycles_started"] = int(self.state.get("cycles_started", 0)) + 1
+        self.state["cycle_started_at"] = moment.isoformat()
+        self._heartbeat_stage("CYCLE_START")
         summary = {
             "scan_status": None,
             "scan_ingested": 0,
             "top10": None,
             "outcomes_written": 0,
+            "due_work_items": 0,
             "memory_updates": 0,
             "errors": [],
         }
         self._heartbeat_stage("SCAN_INGEST")
         try:
-            scan = await self._ingest_scan_source(
-                batch=int(os.environ.get("GROWTH_SCAN_BATCH", "500"))
-            )
+            scan = await self._ingest_scan_source(batch=self.scan_batch)
             summary["scan_status"] = scan.get("status")
             summary["scan_ingested"] = int(scan.get("ingested", 0))
         except Exception as exc:
@@ -293,18 +316,18 @@ class GrowthWorker:
             summary["top10"] = frozen.get("status")
         except Exception as exc:
             summary["errors"].append(f"top10:{type(exc).__name__}")
+        self._heartbeat_stage("OUTCOME_MATURATION")
         try:
             matured = await outcome_maturer.mature_due(
-                self._session_factory, self.client, now=moment
+                self._session_factory, self.client, now=moment, max_work_items=self.outcome_batch
             )
             summary["outcomes_written"] = int(matured.get("written", 0))
+            summary["due_work_items"] = int(matured.get("due_work_items", 0))
         except Exception as exc:
             summary["errors"].append(f"outcomes:{type(exc).__name__}")
         self._heartbeat_stage("MEMORY_UPDATE")
         try:
-            summary["memory_updates"] = await self._update_memory(
-                limit=int(os.environ.get("GROWTH_MEMORY_BATCH", "200"))
-            )
+            summary["memory_updates"] = await self._update_memory(limit=self.memory_batch)
         except Exception as exc:
             summary["errors"].append(f"memory:{type(exc).__name__}")
         self.metrics["top10_frozen"] = int(self.metrics.get("top10_frozen", 0)) + (
@@ -312,6 +335,9 @@ class GrowthWorker:
         )
         self.metrics["outcomes_written"] = (
             int(self.metrics.get("outcomes_written", 0)) + summary["outcomes_written"]
+        )
+        self.metrics["due_work_items"] = (
+            int(self.metrics.get("due_work_items", 0)) + summary["due_work_items"]
         )
         self.metrics["memory_updates"] = (
             int(self.metrics.get("memory_updates", 0)) + summary["memory_updates"]
@@ -326,6 +352,8 @@ class GrowthWorker:
             state = "DEGRADED_PROCESSING_ERROR"
         else:
             state = "ACCUMULATING"
+        # A cycle that finishes with recorded errors is still a completed
+        # (degraded) cycle; cycles_completed is never incremented mid-cycle.
         self.state["cycles_completed"] = int(self.state.get("cycles_completed", 0)) + 1
         self._save(state=state, last_error=";".join(summary["errors"]) or None)
         self._heartbeat_stage("CYCLE_COMPLETE")
