@@ -28,3 +28,12 @@ HEDGE_OPERATIONAL_EVIDENCE = AUTONOMOUSLY_ACCUMULATING
   its own offline flag without an external probe. This belongs to the broader Core-LLM runtime
   contract, not to the hedge/position-leg subsystem; no hedge code or gate was changed to bypass it.
 - No natural hedge can occur until Core LLM decisions parse successfully again; this is recorded as P1.
+
+## Active Core-LLM configuration (2026-09-16T12:45Z)
+- Runtime is online in PAPER with DeepSeek model `deepseek-chat` (config override only).
+- The previously pinned `deepseek-v4-pro` produced `LLM_TIMEOUT`/`INVALID_JSON` on this frozen branch;
+  no hedge, order, fill or leg state was fabricated or bypassed during the offline windows.
+- Decision contract now parses (`plan_contract_version=2`, Base Exit present). The first real SHORT
+  decision (FILUSDT, 4% capital, 2x) was factually rejected by Execution with BELOW_MINIMUM_LOT,
+  confirming the hard-contract path remains intact.
+- Natural same-symbol two-leg evidence is still pending; heartbeat continues every 6 hours.
