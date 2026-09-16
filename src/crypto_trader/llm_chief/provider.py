@@ -55,7 +55,12 @@ class DeepSeekProvider:
         transport=None,
     ) -> None:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        self.model = model or os.environ.get("LLM_MODEL", "deepseek-flash")
+        # One canonical trading-model resolver: generic LLM_MODEL is ignored,
+        # invalid trading models fail closed. Non-trading callers that need a
+        # different model must use a different provider class.
+        trading_config = resolve_trading_llm_config(explicit_model=model)
+        self.model = trading_config.model
+        self.model_config_source = trading_config.config_source
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         self._transport = transport
         self.last_success_ts: str | None = None

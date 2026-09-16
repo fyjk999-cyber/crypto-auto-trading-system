@@ -34,14 +34,14 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
 
     provider = DeepSeekProvider(
         api_key="test-secret",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         transport=httpx.MockTransport(handler),
     )
     result = await provider.complete_json(prompt="JSON", retries=0, max_tokens=64)
     diagnostics = provider.diagnostics()
     assert result.ok is True
     assert diagnostics["provider"] == "deepseek"
-    assert diagnostics["model"] == "deepseek-v4-pro"
+    assert diagnostics["model"] == "deepseek-flash"
     assert diagnostics["last_token_usage"] == {
         "prompt_tokens": 4,
         "completion_tokens": 2,
@@ -154,11 +154,14 @@ def test_llm_provider_abstraction_without_key():
     assert provider.healthy() is False
 
 
-def test_deepseek_provider_uses_non_secret_runtime_configuration(monkeypatch):
+def test_deepseek_provider_ignores_generic_llm_model(monkeypatch):
+    # Pre-ML convergence contract: generic LLM_MODEL is a developer/harness
+    # variable and must never select the trading model. TRADING_LLM_MODEL is
+    # the canonical selector; anything outside the allowlist fails closed.
     monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
     provider = DeepSeekProvider(api_key=None)
-    assert provider.model == "deepseek-v4-pro"
+    assert provider.model == "deepseek-flash"
     assert provider.base_url == "https://api.deepseek.com"
 
 

@@ -263,3 +263,81 @@ async def test_engine_offline_recovery_reconciles_then_normal(database) -> None:
     assert "LLM_RECOVERED_NORMAL" in actions
     assert "OFFLINE_RECOVERY_RECONCILE_FAILED" not in actions
     await engine.stop()
+
+
+async def test_flat_offline_self_clears_when_provider_recovers(database) -> None:
+    """FLAT + LLM_OFFLINE_MODE + provider recovers -> NORMAL, no trade.
+
+    The frozen Hedge operations run exposed this gap: with no open position,
+    no position review ever invoked the provider router, so a flat runtime
+    could remain in LLM_OFFLINE_MODE indefinitely. The merged Core Runtime now
+    owns a deterministic health probe and must clear offline state without
+    fabricating a position or a trade.
+    """
+    from types import SimpleNamespace
+
+    from crypto_trader.llm_chief.provider import LLMResponse
+
+    class RecoveringRouter:
+        name = "core_llm"
+
+        def __init__(self) -> None:
+            self.offline = True
+            self.probe_calls = 0
+            self.status = SimpleNamespace(
+                next_probe_at=datetime.now(UTC) - timedelta(seconds=1),
+                as_dict=lambda now=None: {"offline": self.offline},
+            )
+
+        def healthy(self) -> bool:
+            return True
+
+        def diagnostics(self) -> dict:
+            return {"router": self.name, "offline": {"offline": self.offline}}
+
+        async def complete_json(self, **kwargs) -> LLMResponse:
+            assert kwargs.get("operation") == "provider_recovery_probe"
+            assert "Do not place, size, or propose any trade." in kwargs.get("prompt", "")
+            self.probe_calls += 1
+            self.offline = False
+            return LLMResponse(
+                text='{"status":"ok","task":"provider_recovery_probe"}',
+                provider="deepseek",
+                model="deepseek-flash",
+                latency_ms=3.0,
+                ok=True,
+                served_by="deepseek",
+            )
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    router = RecoveringRouter()
+    engine.llm_router = router
+    await engine.start("run-flat-offline-recovery")
+
+    # Force the factual flat offline window to be due (normally five minutes).
+    engine.offline_mode.enter(
+        "ALL_PROVIDERS_FAILED",
+        now=datetime.now(UTC) - timedelta(seconds=301),
+    )
+    assert engine.offline_mode.is_offline is True
+
+    await engine.tick()
+
+    assert router.probe_calls == 1
+    assert router.offline is False
+    assert engine.offline_mode.is_offline is False
+    assert engine.health.snapshot()["components"]["llm_offline_mode"]["ok"] is True
+
+    # Recovery must not synthesize risk: no position, no order.
+    positions = await engine.portfolio.get_positions()
+    assert positions == [] or (isinstance(positions, dict) and not positions)
+    orders = await engine.order_manager.list_all(limit=50)
+    assert orders == []
+
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    assert "LLM_OFFLINE_RECOVERY_PROBE" in actions
+    assert "LLM_RECOVERED_NORMAL" in actions
+    await engine.stop()

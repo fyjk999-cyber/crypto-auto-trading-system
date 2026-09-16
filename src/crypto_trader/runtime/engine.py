@@ -554,6 +554,62 @@ class TradingEngine:
             )
         return recovered
 
+    async def _probe_offline_router(self, router) -> None:
+        """Probe provider recovery while the runtime may be FLAT.
+
+        The CoreLLMRouter owns the canonical probe window and only recovers on
+        an accepted factual provider response. This probe is a non-decision
+        health request (strict JSON, no trade instruction); it cannot place,
+        size, or nominate an order. Flat runtimes therefore self-clear
+        ``LLM_OFFLINE_MODE`` without fabricating a position.
+        """
+        status = getattr(router, "status", None)
+        next_probe_at = getattr(status, "next_probe_at", None)
+        if next_probe_at is None:
+            return
+        probe = getattr(router, "complete_json", None)
+        if not callable(probe):
+            return
+        now = datetime.now(UTC)
+        if getattr(next_probe_at, "tzinfo", None) is None:
+            next_probe_at = next_probe_at.replace(tzinfo=UTC)
+        if now < next_probe_at or not self.offline_mode.probe_due(now=now):
+            return
+        await self.audit.log(
+            "LLM_OFFLINE_RECOVERY_PROBE",
+            target=self.run_id or "offline",
+            run_id=self.run_id,
+            after={
+                "operation": "provider_recovery_probe",
+                "is_order": False,
+                "authority": "HEALTH_PROBE_ONLY",
+            },
+        )
+        try:
+            response = await probe(
+                prompt=(
+                    "Return only valid JSON matching "
+                    '{"status":"ok","task":"provider_recovery_probe"}. '
+                    "Do not place, size, or propose any trade."
+                ),
+                temperature=0.0,
+                timeout_seconds=30.0,
+                retries=0,
+                max_tokens=64,
+                thinking=True,
+                reasoning_effort="high",
+                operation="provider_recovery_probe",
+            )
+        except Exception:
+            logger.exception("offline provider recovery probe failed")
+            response = None
+        if response is not None and bool(getattr(response, "ok", False)):
+            await self.attempt_offline_recovery()
+        else:
+            # Keep the engine's factual probe bookkeeping in lockstep with the
+            # router; the next window is retried even if the runtime stays FLAT.
+            self.offline_mode.probe_failed()
+
     async def _sync_offline_mode(self) -> None:
         router = self.llm_router
         if router is None:
@@ -561,6 +617,8 @@ class TradingEngine:
         router_offline = bool(getattr(router, "offline", False))
         if router_offline and not self.offline_mode.is_offline:
             await self.enter_offline_mode("CORE_LLM_ROUTER_OFFLINE")
+        elif router_offline:
+            await self._probe_offline_router(router)
         elif not router_offline and self.offline_mode.is_offline:
             await self.attempt_offline_recovery()
 
@@ -1300,7 +1358,6 @@ class TradingEngine:
                 in {
                     "REDUCE",
                     "EXIT",
-                    "TIME_STOP_SAFETY_FALLBACK",
                     "BASE_EXIT",
                     "FAST_PROFIT_PROTECTION",
                     "RISK_HARD_EXIT",

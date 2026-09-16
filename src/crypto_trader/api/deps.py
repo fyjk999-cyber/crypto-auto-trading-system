@@ -87,13 +87,27 @@ class LLMRuntimeStatus:
     async def probe(self) -> None:
         import os
 
-        from crypto_trader.llm_chief.provider import DeepSeekProvider
-
-        self.provider = os.environ.get("LLM_PROVIDER", "none").lower()
-        self.model = os.environ.get("LLM_MODEL")
-        self.configured = self.provider == "deepseek" and bool(
-            os.environ.get("DEEPSEEK_API_KEY")
+        from crypto_trader.llm_chief.provider import (
+            DeepSeekProvider,
+            resolve_trading_llm_config,
         )
+
+        # Configured identity comes from the canonical trading resolver, never
+        # from generic LLM_MODEL/LLM_PROVIDER harness variables.
+        trading_config = resolve_trading_llm_config()
+        self.provider = trading_config.provider
+        self.model = trading_config.model
+        diagnostics = getattr(self.provider_instance, "diagnostics", None)
+        if callable(diagnostics):
+            actual = diagnostics()
+            primary = actual.get("primary") or {}
+            self.provider = actual.get("configured_provider") or self.provider
+            self.model = actual.get("configured_model") or self.model
+            self.configured = bool(
+                actual.get("configured", primary.get("configured", False))
+            )
+        else:
+            self.configured = bool(os.environ.get("DEEPSEEK_API_KEY"))
         self.reachable = False
         self.last_error = None
         if not self.configured:
@@ -127,9 +141,24 @@ class LLMRuntimeStatus:
         diagnostics = getattr(self.provider_instance, "diagnostics", None)
         if callable(diagnostics):
             actual = diagnostics()
-            decision = (actual.get("operations") or {}).get("trading_decision", {})
+            primary = actual.get("primary") or {}
+            if actual.get("configured_model"):
+                snapshot["model"] = actual["configured_model"]
+            if actual.get("configured_provider"):
+                snapshot["provider"] = actual["configured_provider"]
+            decision = (
+                (primary.get("operations") or {}).get("trading_decision")
+                or (actual.get("operations") or {}).get("trading_decision")
+                or {}
+            )
             snapshot.update(
                 {
+                    "config_source": actual.get("config_source"),
+                    "thinking": actual.get("thinking"),
+                    "reasoning_effort": actual.get("reasoning_effort"),
+                    "effective_provider": actual.get("effective_provider"),
+                    "effective_model": actual.get("effective_model"),
+                    "served_by": actual.get("served_by"),
                     "decision_last_success_ts": decision.get("last_success_ts"),
                     "decision_last_error": decision.get("last_error"),
                     "decision_last_latency_ms": decision.get("last_latency_ms"),
