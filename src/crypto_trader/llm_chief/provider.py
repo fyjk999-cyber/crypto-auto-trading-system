@@ -37,7 +37,7 @@ class LLMProvider(Protocol):
         retries: int = 1,
         max_tokens: int = 1200,
         thinking: bool = True,
-        reasoning_effort: str = "low",
+        reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse: ...
 
@@ -55,7 +55,7 @@ class DeepSeekProvider:
         transport=None,
     ) -> None:
         self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        self.model = model or os.environ.get("LLM_MODEL", "deepseek-chat")
+        self.model = model or os.environ.get("LLM_MODEL", "deepseek-flash")
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         self._transport = transport
         self.last_success_ts: str | None = None

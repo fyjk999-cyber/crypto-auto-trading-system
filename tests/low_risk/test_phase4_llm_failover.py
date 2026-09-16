@@ -313,3 +313,16 @@ def test_core_llm_prompt_requires_v2_new_risk_contract() -> None:
     assert "plan_contract_version=2" in prompt
     assert "size_pct as a JSON number in (0,100]" in prompt
     assert "rejected by execution" in prompt
+
+
+def test_deepseek_defaults_to_flash_high() -> None:
+    import inspect
+
+    from crypto_trader.llm_chief.provider import DeepSeekProvider
+
+    provider = DeepSeekProvider(api_key=None)
+    assert provider.model == "deepseek-flash"
+    default_effort = (
+        inspect.signature(DeepSeekProvider.complete_json).parameters["reasoning_effort"].default
+    )
+    assert default_effort == "high"
