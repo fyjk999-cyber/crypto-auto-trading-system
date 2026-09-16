@@ -15,7 +15,7 @@ WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-low-risk-core-closure
 | R3/R3b | Exit precedence / partial-close safety + versioned MODIFY_EXIT activation | this commit | 40 + 302 focused | DONE |
 | R4 | Offline/recovery semantics | this commit | 303 focused | DONE |
 | R5 | NEXT_REASSESSMENT wake-only + dedup | this commit | 304 focused | DONE (price/time; indicator/event feeds P1) |
-| R6 | Execution/authority contract audit | - | - | TODO |
+| R6 | Execution/authority contract audit | this commit | 62 authority/lease/UNKNOWN tests | DONE (ADD full path P1 quarantine) |
 | R7 | Lineage/observability | - | - | TODO |
 | R8 | Fresh full regression | - | - | TODO |
 | R9 | Factual PAPER acceptance | - | - | TODO |
@@ -124,3 +124,23 @@ FLASH_HIGH_POLICY_CHANGED = NO
   `NEXT_REASSESSMENT_WAKE` audit. Focused closure suite 304 passed; ruff clean.
 - P1: INDICATOR/EVENT condition feeds are evaluated when supplied, but runtime tick
   currently supplies price/time only; enriching indicator/event maps is scheduled R7.
+
+## R6 evidence (execution/authority audit)
+
+- Fresh run 62 passed: `tests/low_risk/test_phase4_contract.py` (>25% child rejected,
+  >20x rejected, boundary 25%/20x approved, invalid not resized),
+  `tests/low_risk/test_phase4_risk_gate_adapt.py` (Risk is not a sizing gate; LLM size
+  preserved), `tests/integration/test_lease.py` (single-writer lease, dual-engine block,
+  lease-loss fail-closed and restart recovery), `tests/integration/test_recovery.py`,
+  `tests/integration/test_order_manager.py` (duplicate fill single-application,
+  `test_unknown_recovery`), `tests/chaos/test_chaos.py` (duplicate client-order id,
+  duplicate fill events).
+- Authority boundary: only Core-LLM decisions with a durable TradePlan reach
+  `process_signal` as new risk; models/Growth/Risk have no entry-constructing path
+  (Risk hard exits and all deterministic protections are reduce-only; ADD remains
+  quarantined `ADD_REQUIRES_CORE_NEW_RISK_PATH` rather than transformed).
+- ExecutionAuthority remains a safety validator (lease, kill switch, reconciliation halt,
+  freshness, precision/min-notional, duplicate client ids, rate limiting); invalid
+  contracts are rejected, never silently resized.
+- P1: full ADD new-risk execution path (Core-LLM ADD -> child TradePlan with Base Exit ->
+  ExecutionAuthority) is not implemented; rejection is the safe current semantics.
