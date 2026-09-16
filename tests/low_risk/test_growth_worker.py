@@ -85,6 +85,7 @@ async def test_worker_cycle_idempotent_and_heartbeat(database, tmp_path):
 
 
 async def test_worker_records_degraded_without_trading_impact(database, tmp_path, monkeypatch):
+    from crypto_trader.learning import growth_worker as worker_module
 
     async def boom(*args, **kwargs):
         raise RuntimeError("db_down")
@@ -422,7 +423,6 @@ async def test_worker_applies_mature_reviews_to_patterns_once(database, tmp_path
 async def test_worker_creates_validated_compression_only_on_validation(
     database, tmp_path, monkeypatch
 ):
-    from crypto_trader.learning import growth_worker as worker_module
     from crypto_trader.learning.lifecycle_reviews import LifecycleReviewEngine
     from crypto_trader.learning.pattern_profile import GrowthMemoryPipeline
 
