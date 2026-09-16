@@ -626,6 +626,26 @@ class PositionLegService:
                 )
         return out
 
+    @staticmethod
+    def _open_leg_dict(row) -> dict:
+        return {
+            "leg_id": row.leg_id,
+            "symbol": row.symbol,
+            "side": row.side,
+            "kind": row.kind,
+            "remaining_quantity": row.remaining_quantity,
+            "quantity": row.quantity,
+            "strategy": row.strategy,
+            "thesis": row.thesis,
+            "base_exit": row.base_exit_json,
+            "average_entry_price": row.average_entry_price,
+            "state_version": row.state_version,
+            "trade_plan_id": row.trade_plan_id,
+            "decision_id": row.decision_id,
+            "reverse_of": row.reverse_of,
+            "updated_at": row.updated_at,
+        }
+
     async def open_legs_for_symbol(self, symbol: str) -> list[dict]:
         """Factual open legs (remaining quantity > 0) for deterministic exits."""
         from sqlalchemy import select
@@ -643,13 +663,21 @@ class PositionLegService:
                 .all()
             )
         return [
-            {
-                "leg_id": row.leg_id,
-                "symbol": row.symbol,
-                "side": row.side,
-                "remaining_quantity": row.remaining_quantity,
-                "strategy": row.strategy,
-            }
+            self._open_leg_dict(row)
+            for row in rows
+            if row.remaining_quantity is not None and row.remaining_quantity > 0
+        ]
+
+    async def open_legs_all(self) -> list[dict]:
+        """Every factual open leg across symbols (independent of net view)."""
+        from sqlalchemy import select
+
+        from crypto_trader.persistence.models import PositionLegORM
+
+        async with self._session_factory() as session:
+            rows = (await session.execute(select(PositionLegORM))).scalars().all()
+        return [
+            self._open_leg_dict(row)
             for row in rows
             if row.remaining_quantity is not None and row.remaining_quantity > 0
         ]
