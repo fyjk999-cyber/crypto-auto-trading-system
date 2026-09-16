@@ -33,9 +33,12 @@ def test_repeated_cost_adjusted_edge_promotes_to_pattern() -> None:
 
 
 def test_many_regimes_promote_to_validated_knowledge() -> None:
+    # OLD: 21 samples promoted to VALIDATED_KNOWLEDGE.
+    # NEW: memory-policy-v2 requires >=100 samples plus post-cost/multi-regime/stability.
+    # WHY: avoid premature "20 samples = validated" promotion.
     record = _observe(
         MemoryRecord(key="k3", signature="trend_pullback"),
-        n=21,
+        n=100,
         net=5.0,
         regimes=["TREND_UP", "TREND_DOWN", "RANGE"],
     )
@@ -43,9 +46,12 @@ def test_many_regimes_promote_to_validated_knowledge() -> None:
 
 
 def test_contradiction_demotes_but_never_grants_core_access() -> None:
+    # OLD: demotion started from a 21-sample VALIDATED record.
+    # NEW: the validated tier requires 100 samples under memory-policy-v2.
+    # WHY: demotion semantics are unchanged; only the promotion threshold moved.
     record = _observe(
         MemoryRecord(key="k4", signature="late_breakout"),
-        n=21,
+        n=100,
         net=5.0,
         regimes=["TREND_UP", "TREND_DOWN", "RANGE"],
     )

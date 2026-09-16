@@ -1199,3 +1199,26 @@ class OpportunityOutcomeMaturationORM(Base):
     cost_version: Mapped[str] = mapped_column(String(16), default="all-in-v1")
     authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GrowthMemorySpeedORM(Base):
+    """Persistent Growth memory-speed record (derived; LEARNING_ONLY)."""
+
+    __tablename__ = "growth_memory_speeds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    signature: Mapped[str] = mapped_column(String(256), default="")
+    speed: Mapped[str] = mapped_column(String(32), default="FAST_EXPERIENCE")
+    observations: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    net_bps_total: Mapped[float] = mapped_column(Float, default=0.0)
+    regimes_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    demotions: Mapped[int] = mapped_column(Integer, default=0)
+    post_cost_expectancy_bps: Mapped[float | None] = mapped_column(Float)
+    chronological_stable: Mapped[bool] = mapped_column(Boolean, default=True)
+    unresolved_contradictions: Mapped[int] = mapped_column(Integer, default=0)
+    policy_version: Mapped[str] = mapped_column(String(32), default="memory-policy-v2")
+    can_modify_core: Mapped[bool] = mapped_column(Boolean, default=False)
+    authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
