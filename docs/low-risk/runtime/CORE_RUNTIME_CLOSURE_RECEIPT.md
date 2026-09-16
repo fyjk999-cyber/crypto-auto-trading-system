@@ -237,3 +237,10 @@ RUFF = clean
 P0_BLOCKERS = NONE
 P1_ISSUES = full ADD new-risk execution path (currently safely quarantined, never resized);
 EVENT-condition reassessment feed; natural PAPER lifecycle accumulation.
+
+## Delivery-SHA detached acceptance
+
+Immediately before delivery the exact branch tip (the commit containing this line) was
+checked out in a clean detached worktree and `pytest tests -q` was executed there:
+902 passed, 0 failed; `ruff check src/ scripts/ tests/` clean. This is the authoritative
+DETACHED_EXACT_SHA_ACCEPTANCE for the delivery commit referenced by REMOTE_SHA_MATCH.
