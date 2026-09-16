@@ -135,6 +135,10 @@ async def test_direction_and_regime_semantics_without_hindsight(database, tmp_pa
                 long_gross_bps=-28.0,
                 short_gross_bps=178.0,
                 all_in_cost_bps=22.0,
+                maturation_status="MATURE_VALID",
+                usable_for_learning=True,
+                alignment_ok=True,
+                data_gap=False,
             )
         )
         session.add(
@@ -264,3 +268,32 @@ async def test_scan_source_backfill_and_continuous_ingest(database, tmp_path):
 
         count2 = await session.scalar(select(func.count()).select_from(ScanSnapshotORM))
     assert count2 == 3  # no duplicates
+
+
+async def test_data_gap_outcome_cannot_update_memory(database, tmp_path):
+    from crypto_trader.learning.memory_speed_store import MemorySpeedStore
+    from crypto_trader.persistence.models import OpportunityOutcomeMaturationORM
+
+    async with database.session_factory() as session:
+        session.add(
+            OpportunityOutcomeMaturationORM(
+                observation_id="obs-gap",
+                symbol="BTCUSDT",
+                horizon="1h",
+                outcome_version="outcome-v1",
+                direction_source="CORE_LLM",
+                expected_direction="LONG",
+                long_net_bps=500.0,
+                short_net_bps=-500.0,
+                maturation_status="INCONCLUSIVE_DATA_GAP",
+                usable_for_learning=False,
+                alignment_ok=False,
+                data_gap=True,
+            )
+        )
+        await session.commit()
+    worker = GrowthWorker(database.session_factory, tmp_path, FakeClient(), code_sha="sha")
+    updated = await worker._update_memory()
+    assert updated == 0
+    assert worker.metrics["memory_rows_rejected_quality"] == 1
+    assert await MemorySpeedStore(database.session_factory).load("BTCUSDT|1h|outcome-v1") is None

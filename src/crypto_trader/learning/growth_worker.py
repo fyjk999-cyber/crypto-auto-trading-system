@@ -86,6 +86,8 @@ class GrowthWorker:
                 "at": datetime.now(UTC).isoformat(),
                 "state": state,
                 "cycles": self.state.get("cycles", 0),
+                "cycles_started": self.state.get("cycles_started", 0),
+                "cycles_completed": self.state.get("cycles_completed", 0),
                 "runtime_sha": self.code_sha,
                 "scan_source_path": self.scan_source_db,
                 "scan_source_ok": bool(self.scan_source_db and Path(self.scan_source_db).exists()),
@@ -188,7 +190,7 @@ class GrowthWorker:
         self.state["last_scan_source_id"] = cursor
         return {"status": "OK", "ingested": ingested, "seen": len(rows), "latest_id": cursor}
 
-    async def _update_memory(self) -> int:
+    async def _update_memory(self, limit: int = 200) -> int:
         cursor = int(self.state.get("last_memory_maturation_id", 0))
         async with self._session_factory() as session:
             rows = (
@@ -197,7 +199,7 @@ class GrowthWorker:
                         select(OpportunityOutcomeMaturationORM)
                         .where(OpportunityOutcomeMaturationORM.id > cursor)
                         .order_by(OpportunityOutcomeMaturationORM.id)
-                        .limit(200)
+                        .limit(limit)
                     )
                 )
                 .scalars()
@@ -218,6 +220,7 @@ class GrowthWorker:
         store = MemorySpeedStore(self._session_factory)
         updated = 0
         skipped = 0
+        rejected = 0
         for row in rows:
             direction_source = str(row.direction_source or "NONE")
             direction = str(row.expected_direction or "").upper()
@@ -226,6 +229,15 @@ class GrowthWorker:
                 "SHORT",
             ):
                 skipped += 1
+                cursor = max(cursor, int(row.id))
+                continue
+            if (
+                row.maturation_status != "MATURE_VALID"
+                or not row.usable_for_learning
+                or not row.alignment_ok
+                or row.data_gap
+            ):
+                rejected += 1
                 cursor = max(cursor, int(row.id))
                 continue
             net = float(row.long_net_bps if direction == "LONG" else row.short_net_bps)
@@ -249,6 +261,9 @@ class GrowthWorker:
         self.metrics["nondirectional_opportunities_skipped"] = (
             int(self.metrics.get("nondirectional_opportunities_skipped", 0)) + skipped
         )
+        self.metrics["memory_rows_rejected_quality"] = (
+            int(self.metrics.get("memory_rows_rejected_quality", 0)) + rejected
+        )
         return updated
 
     async def run_once(self, *, now: datetime | None = None) -> dict:
@@ -264,7 +279,9 @@ class GrowthWorker:
         }
         self._heartbeat_stage("SCAN_INGEST")
         try:
-            scan = await self._ingest_scan_source()
+            scan = await self._ingest_scan_source(
+                batch=int(os.environ.get("GROWTH_SCAN_BATCH", "500"))
+            )
             summary["scan_status"] = scan.get("status")
             summary["scan_ingested"] = int(scan.get("ingested", 0))
         except Exception as exc:
@@ -285,7 +302,9 @@ class GrowthWorker:
             summary["errors"].append(f"outcomes:{type(exc).__name__}")
         self._heartbeat_stage("MEMORY_UPDATE")
         try:
-            summary["memory_updates"] = await self._update_memory()
+            summary["memory_updates"] = await self._update_memory(
+                limit=int(os.environ.get("GROWTH_MEMORY_BATCH", "200"))
+            )
         except Exception as exc:
             summary["errors"].append(f"memory:{type(exc).__name__}")
         self.metrics["top10_frozen"] = int(self.metrics.get("top10_frozen", 0)) + (
@@ -307,6 +326,7 @@ class GrowthWorker:
             state = "DEGRADED_PROCESSING_ERROR"
         else:
             state = "ACCUMULATING"
+        self.state["cycles_completed"] = int(self.state.get("cycles_completed", 0)) + 1
         self._save(state=state, last_error=";".join(summary["errors"]) or None)
         self._heartbeat_stage("CYCLE_COMPLETE")
         return summary

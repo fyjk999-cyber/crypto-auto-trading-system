@@ -237,12 +237,100 @@ async def test_historical_pagination_reconstructs_beyond_300_bars():
     start = datetime(2026, 9, 16, 0, 0, tzinfo=UTC)
     target = start + timedelta(hours=8)
     rows = _rows(start - timedelta(minutes=5), 8 * 60 + 10)
-    candles, pages, data_gap = await _load_candles(
+    candles, pages, data_gap, transient = await _load_candles(
         _PagedClient(rows), {}, "BTCUSDT", "1m", start, target
     )
+    assert transient is False
     assert pages >= 2
     assert data_gap is False
     assert candles[0].ts <= start
     assert candles[-1].ts >= target - timedelta(minutes=1)
     timestamps = [candle.ts for candle in candles]
     assert len(timestamps) == len(set(timestamps))
+
+
+async def test_due_work_queue_never_starves_tail_observations(database):
+    from datetime import timedelta as _td
+
+    now = datetime(2026, 9, 16, 4, 0, tzinfo=UTC)
+    rows = _rows(now - _td(hours=2) - _td(minutes=5), 180)
+    async with database.session_factory() as session:
+        for i in range(600):
+            session.add(
+                ScanSnapshotORM(
+                    snapshot_id=f"obs-{i}",
+                    captured_at=now - _td(hours=2),
+                    cycle_id="c",
+                    trading_day="2026-09-15",
+                    snapshot_version="scan-snapshot-v1",
+                    symbol="BTCUSDT",
+                    candidate=True,
+                    control=False,
+                    scanner_score=1.0,
+                    features_json={"price": 100.0, "costs": {"total_cost_bps": 22.0}},
+                )
+            )
+        for i in range(500):
+            session.add(
+                OpportunityOutcomeMaturationORM(
+                    observation_id=f"obs-{i}",
+                    symbol="BTCUSDT",
+                    horizon="1h",
+                    outcome_version="outcome-v1",
+                    maturation_status="MATURE_VALID",
+                    usable_for_learning=True,
+                    alignment_ok=True,
+                    data_gap=False,
+                )
+            )
+        await session.commit()
+    result = await mature_due(
+        database.session_factory,
+        FakeClient(rows),
+        now=now,
+        horizons={"1h": 3600},
+        max_work_items=25,
+    )
+    assert result["due_work_items"] == 25 and result["written"] == 25
+    async with database.session_factory() as session:
+        written = (
+            (
+                await session.execute(
+                    select(OpportunityOutcomeMaturationORM.observation_id).where(
+                        OpportunityOutcomeMaturationORM.id > 500
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(written) == 25
+    assert all(int(observation.split("-")[1]) >= 500 for observation in written)
+
+
+async def test_configured_work_budget_is_exactly_enforced(database):
+    from datetime import timedelta as _td
+
+    now = datetime(2026, 9, 16, 4, 0, tzinfo=UTC)
+    rows = _rows(now - _td(hours=2) - _td(minutes=5), 180)
+    async with database.session_factory() as session:
+        for i in range(30):
+            session.add(
+                ScanSnapshotORM(
+                    snapshot_id=f"batch-{i}",
+                    captured_at=now - _td(hours=2),
+                    cycle_id="c",
+                    trading_day="2026-09-15",
+                    snapshot_version="scan-snapshot-v1",
+                    symbol="BTCUSDT",
+                    candidate=True,
+                    control=False,
+                    scanner_score=1.0,
+                    features_json={"price": 100.0, "costs": {"total_cost_bps": 22.0}},
+                )
+            )
+        await session.commit()
+    result = await mature_due(
+        database.session_factory, FakeClient(rows), now=now, horizons={"1h": 3600}, max_work_items=7
+    )
+    assert result["due_work_items"] == 7 and result["written"] == 7

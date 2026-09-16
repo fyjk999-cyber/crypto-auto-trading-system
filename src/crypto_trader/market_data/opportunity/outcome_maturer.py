@@ -123,18 +123,19 @@ async def _load_candles(
     try:
         inst_id = SymbolMapper().to_okx(symbol)
     except ValueError:
-        cache[key] = ([], 0, True)
+        cache[key] = ([], 0, True, False)
         return cache[key]
     start_ms = int(start_ts.timestamp() * 1000)
     cursor_ms = int(target_ts.timestamp() * 1000) + bar_seconds * 1000
     candles: dict = {}
     pages = 0
     data_gap = False
+    transient = False
     while pages < max_pages:
         try:
             rows = await client.get_candles(inst_id, bar, 300, after=cursor_ms)
         except Exception:
-            data_gap = True
+            transient = True
             break
         parsed = []
         for row in rows or []:
@@ -167,7 +168,7 @@ async def _load_candles(
     ordered = sorted(candles.values(), key=lambda candle: candle.ts)
     if not ordered or ordered[0].ts > start_ts:
         data_gap = True
-    cache[key] = (ordered, pages, data_gap)
+    cache[key] = (ordered, pages, data_gap, transient)
     return cache[key]
 
 
@@ -177,12 +178,14 @@ async def mature_due(
     *,
     now: datetime | None = None,
     max_observations: int = 500,
+    max_work_items: int | None = None,
     horizons: dict | None = None,
 ) -> dict:
     moment = now or datetime.now(UTC)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=UTC)
     horizon_map = horizons or HORIZON_SECONDS
+    work_budget = int(max_work_items if max_work_items is not None else max_observations)
     summary = {
         "written": 0,
         "skipped_existing": 0,
@@ -192,6 +195,11 @@ async def mature_due(
         "inconclusive": 0,
         "history_pages": 0,
         "data_gaps": 0,
+        "due_work_items": 0,
+        "valid_outcomes": 0,
+        "inconclusive_data_gap": 0,
+        "inconclusive_alignment": 0,
+        "transient_errors": 0,
         "by_direction_source": {},
     }
     cache: dict = {}
@@ -203,7 +211,6 @@ async def mature_due(
                     .where(ScanSnapshotORM.trading_day.is_not(None))
                     .where(ScanSnapshotORM.candidate.is_(True))
                     .order_by(ScanSnapshotORM.captured_at.asc())
-                    .limit(max_observations)
                 )
             )
             .scalars()
@@ -236,6 +243,9 @@ async def mature_due(
                 if captured + timedelta(seconds=seconds) > moment:
                     summary["skipped_immature"] += 1
                     continue
+                if summary["due_work_items"] >= work_budget:
+                    break
+                summary["due_work_items"] += 1
                 if not entry_price:
                     summary["errors"] += 1
                     continue
@@ -243,7 +253,7 @@ async def mature_due(
                 target_ts = captured + timedelta(seconds=seconds)
                 bar_seconds = {"1m": 60, "5m": 300, "1h": 3600}.get(bar, 60)
                 bar_delta = timedelta(seconds=bar_seconds)
-                candles, pages_fetched, data_gap = await _load_candles(
+                candles, pages_fetched, data_gap, transient = await _load_candles(
                     client, cache, observation.symbol, bar, captured, target_ts
                 )
                 summary["history_pages"] += pages_fetched
@@ -264,6 +274,24 @@ async def mature_due(
                 alignment_ok = alignment_error <= bar_seconds and not data_gap
                 if not alignment_ok:
                     summary["unaligned"] += 1
+                if transient:
+                    summary["transient_errors"] += 1
+                    continue  # not finalized; retried on a later bounded cycle
+                if data_gap:
+                    maturation_status = "INCONCLUSIVE_DATA_GAP"
+                    usable_for_learning = False
+                    quality_reason = "data_gap"
+                    summary["inconclusive_data_gap"] += 1
+                elif not alignment_ok:
+                    maturation_status = "INCONCLUSIVE_ALIGNMENT"
+                    usable_for_learning = False
+                    quality_reason = "alignment_gap"
+                    summary["inconclusive_alignment"] += 1
+                else:
+                    maturation_status = "MATURE_VALID"
+                    usable_for_learning = True
+                    quality_reason = None
+                    summary["valid_outcomes"] += 1
                 all_in_cost = float(
                     (features.get("costs") or {}).get("total_cost_bps") or DEFAULT_COST_BPS
                 )
@@ -297,6 +325,11 @@ async def mature_due(
                         final_bar_partial=False,
                         data_gap=data_gap,
                         pages_fetched=pages_fetched,
+                        maturation_status=maturation_status,
+                        usable_for_learning=usable_for_learning,
+                        quality_reason=quality_reason,
+                        attempts=1,
+                        last_attempt_at=datetime.now(UTC),
                         path_start_ts=path[0].ts,
                         path_end_ts=actual_target_ts,
                         long_gross_bps=metrics["long_gross_bps"],
