@@ -12,7 +12,7 @@ WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-low-risk-core-closure
 | R0 | Forensic runtime authority map | a42905d | docs | DONE |
 | R1 | Remove hard max-hold exit; reassessment-only horizon; ADD/MODIFY_EXIT reduce fallthrough quarantined | 0b7c464 | 296 focused | DONE |
 | R2 | Fresh-state stale-response rejection; horizon wake dedup (one per factual state version) | pending | 297 focused | DONE |
-| R3 | Exit precedence / partial-close safety | - | - | TODO |
+| R3 | Exit precedence / partial-close safety | this commit | 40 focused | VERIFIED (versioned MODIFY_EXIT activation pending R3b) |
 | R4 | Offline/recovery semantics | - | - | TODO |
 | R5 | NEXT_REASSESSMENT closure | - | - | TODO |
 | R6 | Execution/authority contract audit | - | - | TODO |
@@ -59,3 +59,19 @@ ADD NEW-RISK PATH = QUARANTINED (no order/reduce); full path scheduled R6
 GROWTH_RUNTIME_CHANGED = NO
 ML_RUNTIME_CHANGED = NO
 FLASH_HIGH_POLICY_CHANGED = NO
+
+## R3 evidence (fresh)
+
+- Fresh run: `pytest tests/low_risk/test_phase4_exit_coordinator.py
+  tests/low_risk/test_phase4_base_exit.py tests/low_risk/test_phase4_fast_profit.py
+  tests/low_risk/test_phase7_exit_races.py -q` -> 40 passed.
+- Covered: Risk Hard Exit > Fast Profit > active Base Exit > LLM discretionary
+  precedence; stale Base Exit version rejected (`STALE_DECISION`); atomic Base Exit
+  activation; partial preemption without oversell; cancel/fill and duplicate-fill races
+  (no double close); fill larger than reservation never goes below zero; grown position
+  reservation revalidation.
+- `MODIFY_EXIT` can never become a discretionary reduce order (R1 quarantine test
+  `test_modify_exit_action_never_becomes_reduce_order`). Full versioned
+  validate -> persist -> atomic activate replacement on TradePlanService/BaseExitRegistry
+  remains the next R3b slice (currently safe quarantine, no protection gap created
+  because the existing Base Exit stays active).
