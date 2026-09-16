@@ -104,6 +104,7 @@ class ModelRegistry:
         *,
         reason: str = "",
         metrics: dict | None = None,
+        details: dict | None = None,
     ) -> dict:
         entry = self.get(model_id, version)
         if entry is None:
@@ -111,7 +112,15 @@ class ModelRegistry:
         if state not in MODEL_STATES:
             raise ValueError(f"invalid_state:{state}")
         now = datetime.now(UTC).isoformat()
-        entry["history"].append({"from": entry["state"], "to": state, "at": now, "reason": reason})
+        entry["history"].append(
+            {
+                "from": entry["state"],
+                "to": state,
+                "at": now,
+                "reason": reason,
+                "details": dict(details or {}),
+            }
+        )
         entry["state"] = state
         if metrics:
             entry["metrics"].update(metrics)
