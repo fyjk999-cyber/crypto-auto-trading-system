@@ -38,7 +38,6 @@ PROFILE_COLUMNS = (
     ("first_sample_at", sa.DateTime(timezone=True)),
     ("last_sample_at", sa.DateTime(timezone=True)),
     ("extended_json", sa.JSON()),
-    ("updated_at", sa.DateTime(timezone=True)),
 )
 COMPRESSION_COLUMNS = (
     ("source_pattern_ids_json", sa.JSON()),
