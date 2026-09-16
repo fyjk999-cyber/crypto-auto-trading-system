@@ -23,6 +23,7 @@ import statistics
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from crypto_trader.domain.identifiers import new_id
 from crypto_trader.market_data.opportunity.board import OpportunityBoard
 from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
 from crypto_trader.market_data.opportunity.factors import (
@@ -54,6 +55,8 @@ class OpportunityScannerService:
         max_cycles: int | None = None,  # test hook
         sleep=None,
         state_provider=None,
+        snapshot_collector=None,
+        control_sample_size: int = 20,
     ) -> None:
         self.universe = universe
         self.client = okx_client
@@ -69,6 +72,10 @@ class OpportunityScannerService:
         self._sleep = sleep or asyncio.sleep
         self._rotation = RotationScheduler()
         self._oi_history: dict[str, list[float]] = {}
+        self.snapshot_collector = snapshot_collector
+        self.control_sample_size = max(0, int(control_sample_size))
+        self.collection_error: str | None = None
+        self.collection_stats: dict = {}
         # Optional factual microstructure/taker-flow source (e.g. the canonical
         # OKXPublicMarketFeed.states mapping). Evidence only, never authority.
         self.state_provider = state_provider
@@ -133,9 +140,7 @@ class OpportunityScannerService:
             change_pct = (last - open24h) / open24h * 100.0 if last and open24h else None
             ts_ms = _f(row.get("ts"))
             ticker_age = (
-                max(0.0, now.timestamp() * 1000.0 - ts_ms) / 1000.0
-                if ts_ms is not None
-                else None
+                max(0.0, now.timestamp() * 1000.0 - ts_ms) / 1000.0 if ts_ms is not None else None
             )
             facts_rows.append(
                 {
@@ -240,12 +245,11 @@ class OpportunityScannerService:
                 microprice=_fd(state.microprice) if state else None,
                 spread_bps=float(state.spread_bps) if state else None,
                 evidence_quality=state.evidence_quality.value if state else None,
-                evidence_degraded_reasons=list(state.evidence_degraded_reasons)
-                if state
-                else [],
+                evidence_degraded_reasons=list(state.evidence_degraded_reasons) if state else [],
             )
 
         candidates = self.scanner.scan(facts_by_symbol)
+        await self._collect_ml_snapshots(candidates, facts_by_symbol, eligible, captured_at=now)
 
         broad_summary = self._broad_summary(facts_rows)
         self.board.publish(
@@ -256,6 +260,8 @@ class OpportunityScannerService:
                 "scan_set_size": len(scan_rows),
                 "candle_fetch_errors": candle_fetch_errors,
                 "universe_rows_with_ticker": len(facts_rows),
+                "ml_collection": self.collection_stats,
+                "ml_collection_error": self.collection_error,
             },
             universe_size=snapshot.size,
             eligible_count=len(eligible),
@@ -271,6 +277,74 @@ class OpportunityScannerService:
         }
 
     # -------------------------------------------------------------- internals
+
+    async def _collect_ml_snapshots(
+        self, candidates, facts_by_symbol, eligible, *, captured_at
+    ) -> None:
+        """Best-effort ML dataset collection; never affects trading or scanning."""
+        if self.snapshot_collector is None:
+            return
+        try:
+            from crypto_trader.market_data.opportunity.snapshots import (
+                build_scan_snapshot,
+                decision_time_features,
+                select_control_samples,
+            )
+
+            cycle_id = new_id("cycle")
+            ranked = sorted(candidates, key=lambda c: (-float(c.priority), c.symbol))
+            rows = []
+            for rank, candidate in enumerate(ranked, start=1):
+                facts = facts_by_symbol.get(candidate.symbol)
+                if facts is None:
+                    continue
+                rows.append(
+                    build_scan_snapshot(
+                        symbol=candidate.symbol,
+                        features=decision_time_features(facts),
+                        captured_at=captured_at,
+                        cycle_id=cycle_id,
+                        candidate=True,
+                        control=False,
+                        scanner_rank=rank,
+                        scanner_score=float(candidate.priority),
+                        selection_reason=candidate.nominated_reason or "FACTOR_SCANNER",
+                        sampling_method="CANDIDATE",
+                    )
+                )
+            controls = select_control_samples(
+                facts_by_symbol,
+                candidate_symbols={c.symbol for c in candidates},
+                count=self.control_sample_size,
+            )
+            for item in controls:
+                facts = facts_by_symbol[item["symbol"]]
+                rows.append(
+                    build_scan_snapshot(
+                        symbol=item["symbol"],
+                        features=decision_time_features(facts),
+                        captured_at=captured_at,
+                        cycle_id=cycle_id,
+                        candidate=False,
+                        control=True,
+                        selection_reason="CONTROL_SAMPLE",
+                        sampling_method=item["sampling_method"],
+                        selection_probability=item["selection_probability"],
+                    )
+                )
+            written = await self.snapshot_collector.persist(rows)
+            self.collection_stats = {
+                "cycle_id": cycle_id,
+                "candidates": sum(1 for row in rows if row["candidate"]),
+                "controls": sum(1 for row in rows if row["control"]),
+                "persisted": written,
+                "control_pool": len(facts_by_symbol),
+            }
+            self.collection_error = None
+        except Exception as exc:  # data-quality only; trading must continue
+            self.collection_error = f"{type(exc).__name__}: {exc}"[:200]
+            self.collection_stats = {"persisted": 0, "error": self.collection_error}
+
     async def _safe_batch(self, method, inst_type: str) -> list[dict]:
         try:
             rows = await method(inst_type)

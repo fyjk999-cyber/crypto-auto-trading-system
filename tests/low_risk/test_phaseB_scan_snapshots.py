@@ -93,3 +93,52 @@ async def test_scan_snapshot_persists_candidate_and_control(database) -> None:
     async with database.engine.begin() as conn:
         names = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names())
     assert "scan_snapshots" in names
+
+
+async def test_collector_failure_never_propagates(database) -> None:
+    from types import SimpleNamespace
+
+    from crypto_trader.market_data.opportunity.service import OpportunityScannerService
+
+    class ExplodingCollector:
+        async def persist(self, rows):
+            raise RuntimeError("storage down")
+
+    service = object.__new__(OpportunityScannerService)
+    service.snapshot_collector = ExplodingCollector()
+    service.control_sample_size = 1
+    service.collection_error = None
+    service.collection_stats = {}
+    candidate = SimpleNamespace(symbol="BTCUSDT", priority=0.9, nominated_reason="BREAKOUT_ATTEMPT")
+    facts = {"BTCUSDT": _facts("BTCUSDT"), "ETHUSDT": _facts("ETHUSDT")}
+    await service._collect_ml_snapshots([candidate], facts, [], captured_at=datetime.now(UTC))
+    assert service.collection_error is not None
+    assert service.collection_stats["persisted"] == 0
+
+
+async def test_collector_persists_candidate_and_control_same_schema(database) -> None:
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from crypto_trader.market_data.opportunity.service import OpportunityScannerService
+    from crypto_trader.persistence.models import ScanSnapshotORM
+
+    service = object.__new__(OpportunityScannerService)
+    service.snapshot_collector = ScanSnapshotCollector(database.session_factory)
+    service.control_sample_size = 2
+    service.collection_error = None
+    service.collection_stats = {}
+    candidates = [
+        SimpleNamespace(symbol="BTCUSDT", priority=0.9, nominated_reason="BREAKOUT_ATTEMPT")
+    ]
+    facts = {symbol: _facts(symbol) for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT")}
+    await service._collect_ml_snapshots(candidates, facts, [], captured_at=datetime.now(UTC))
+    assert service.collection_error is None
+    async with database.session_factory() as session:
+        rows = (await session.execute(select(ScanSnapshotORM))).scalars().all()
+    assert len(rows) == 3
+    assert {row.candidate for row in rows} == {True, False}
+    features = [row.features_json for row in rows]
+    assert all(item["available_at_decision_time"] is True for item in features)
+    assert all(set(item) == set(features[0]) for item in features)  # same schema
