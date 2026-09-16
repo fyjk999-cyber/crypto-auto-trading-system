@@ -1337,3 +1337,27 @@ class GeneralizedKnowledgeORM(Base):
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     policy_version: Mapped[str] = mapped_column(String(32), default="memory-policy-v2")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GrowthMemoryVersionORM(Base):
+    """Immutable Growth memory versions for as-of retrieval (LEARNING_ONLY)."""
+
+    __tablename__ = "growth_memory_versions"
+    __table_args__ = (
+        UniqueConstraint("object_type", "object_id", "version", name="uq_growth_memory_version"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    object_type: Mapped[str] = mapped_column(String(40), index=True)
+    object_id: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    sample_tier: Mapped[str] = mapped_column(String(32), default="PROVISIONAL")
+    memory_speed: Mapped[str] = mapped_column(String(32), default="FAST_EXPERIENCE")
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    contradictions: Mapped[int] = mapped_column(Integer, default=0)
+    post_cost_expectancy_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    source_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
