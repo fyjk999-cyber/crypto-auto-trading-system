@@ -41,6 +41,8 @@ from crypto_trader.market_data.opportunity.scanner import FactorScanner
 from crypto_trader.market_data.opportunity.service import OpportunityScannerService
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
+from crypto_trader.ml_artifacts import ArtifactResolver
+from crypto_trader.ml_registry import ModelRegistry
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
 from crypto_trader.persistence.database import Database
@@ -203,9 +205,13 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 for bar, result in zip(bars, results, strict=False)
             }
 
+        model_runtime = ArtifactResolver(
+            ModelRegistry(os.environ.get("ML_REGISTRY_PATH", "data/ml/registry.json"))
+        )
         expert_engine = ExpertEvidenceEngine(
             timeframe_provider=_expert_timeframes,
             state_provider=lambda symbol, _feed=feed: _feed.states.get(symbol),
+            model_runtime=model_runtime,
         )
     if opportunity_service is not None and expert_engine is not None:
         # M2: the canonical scanner freezes the same models 01-24 factual evidence

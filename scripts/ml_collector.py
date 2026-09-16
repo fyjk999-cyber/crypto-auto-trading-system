@@ -21,12 +21,14 @@ from crypto_trader.market_data.opportunity.scanner import FactorScanner
 from crypto_trader.market_data.opportunity.service import OpportunityScannerService
 from crypto_trader.market_data.opportunity.snapshots import ScanSnapshotCollector
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
+from crypto_trader.ml_artifacts import ArtifactResolver
 from crypto_trader.ml_labels import (
     HORIZON_SECONDS,
     STATUS_MATURE_VALID,
     LabelV2Maturer,
     OkxHistoricalCandleProvider,
 )
+from crypto_trader.ml_registry import ModelRegistry
 from crypto_trader.persistence import Database
 
 H = HORIZON_SECONDS
@@ -68,9 +70,11 @@ async def main(db, status):
             for bar, result in zip(bars, results, strict=False)
         }
 
+    model_runtime = ArtifactResolver(ModelRegistry(REPO / "data" / "ml" / "registry.json"))
     expert_engine = ExpertEvidenceEngine(
         timeframe_provider=expert_timeframes,
         state_provider=lambda symbol: feed.states.get(symbol),
+        model_runtime=model_runtime,
     )
 
     v = OpportunityScannerService(

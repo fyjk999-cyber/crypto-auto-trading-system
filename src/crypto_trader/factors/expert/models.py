@@ -54,6 +54,7 @@ def _evidence(
     score: float,
     confidence: float,
     theory: str,
+    model_version: str | None = None,
     support: list[str] | None = None,
     counter: list[str] | None = None,
     neutral: list[str] | None = None,
@@ -70,7 +71,7 @@ def _evidence(
     spec = spec_of(model_id)
     return ModelEvidence(
         model_id=spec.model_id,
-        model_version=spec.version,
+        model_version=model_version or spec.version,
         family=spec.family,
         symbol=inputs.symbol,
         timeframes=timeframes or spec.timeframes,
@@ -918,9 +919,122 @@ def model_20_cmf(inputs: ExpertInputs) -> ModelEvidence:
 
 
 # --------------------------------------------------------------------------- 21
+def _runtime_21_features(inputs: ExpertInputs) -> dict[str, Any]:
+    """Build the #21 feature dict from the same factual inputs used at runtime."""
+    state = inputs.state
+    close_values = closes(inputs.series("15m"))
+    price = close_values[-1] if close_values else None
+    velocity = 0.0
+    if len(close_values) >= 6 and close_values[-6] > 0:
+        velocity = close_values[-1] / close_values[-6] - 1.0
+    change_24h = None
+    if len(close_values) >= 97 and close_values[-97] > 0:
+        change_24h = (close_values[-1] / close_values[-97] - 1.0) * 100.0
+
+    def _float(value):
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    if state is None:
+        return {
+            "price": price,
+            "price_velocity": velocity,
+            "price_change_24h_pct": change_24h,
+        }
+    return {
+        "price": price,
+        "best_bid": _float(state.best_bid),
+        "best_ask": _float(state.best_ask),
+        "bid_qty": _float(state.bid_size),
+        "ask_qty": _float(state.ask_size),
+        "spread_bps": _float(state.spread_bps),
+        "l1_imbalance": _float(state.imbalance_l1),
+        "l5_imbalance": _float(state.imbalance_l5),
+        "microprice": _float(state.microprice),
+        "cvd": _float(state.cvd),
+        "taker_buy_volume": _float(state.taker_buy_volume),
+        "taker_sell_volume": _float(state.taker_sell_volume),
+        "trade_count": state.trade_count,
+        "trade_notional_window_usd": _float(state.trade_notional),
+        "large_trade_count": state.large_trade_count,
+        "open_interest": _float(state.open_interest),
+        "oi_change_pct": _float(state.open_interest_change),
+        "funding_rate": _float(state.funding_rate),
+        "price_change_24h_pct": change_24h,
+        "price_velocity": velocity,
+        "relative_volume": None,
+    }
+
+
+def _active_artifact_failure(inputs: ExpertInputs, reason: str) -> ModelEvidence:
+    """Explicitly degrade #21 evidence when ACTIVE cannot be verified.
+
+    The provisional proxy is deliberately not used: the registry claimed a
+    trained artifact and a corrupt artifact must fail closed.
+    """
+    result = unavailable(
+        spec_of("21_ORDER_FLOW_ML"),
+        inputs.symbol,
+        f"ACTIVE_ARTIFACT_INTEGRITY_FAILED:{reason}",
+    )
+    result.metrics.update(
+        {
+            "artifact_status": "ACTIVE_ARTIFACT_INTEGRITY_FAILED",
+            "artifact_failure": reason,
+        }
+    )
+    return result
+
+
 def model_21_order_flow_ml(inputs: ExpertInputs) -> ModelEvidence:
-    """Deterministic logistic order-flow proxy; labelled provisional, not a
-    trained production artifact. Real training/validation belongs to Growth."""
+    """Runtime #21 evidence: verified ACTIVE trained artifact when available,
+    otherwise the explicitly-labelled provisional engineering proxy."""
+    resolver = inputs.extra.get("model_runtime")
+    if resolver is not None and callable(getattr(resolver, "resolve_active", None)):
+        try:
+            loaded = resolver.resolve_active("21_ORDER_FLOW_ML")
+        except Exception as exc:
+            return _active_artifact_failure(inputs, str(exc))
+        if loaded is not None:
+            try:
+                probability = loaded.predict(_runtime_21_features(inputs))
+            except Exception as exc:
+                return _active_artifact_failure(inputs, f"PREDICT_FAILED:{exc}")
+            score = (probability - 0.5) * 2.0
+            confidence = min(0.9, 0.4 + abs(score) * 0.5)
+            return _evidence(
+                "21_ORDER_FLOW_ML",
+                inputs,
+                score=score,
+                confidence=confidence,
+                model_version=loaded.model_version,
+                theory="ACTIVE trained order-flow artifact (chronological validation).",
+                support=[f"P(up)={probability:.3f}"]
+                if score > 0
+                else [],
+                counter=[f"P(up)={probability:.3f}"] if score < 0 else [],
+                neutral=[f"P(up)={probability:.3f}"]
+                if direction_from_score(score) == EvidenceDirection.NEUTRAL
+                else [],
+                metrics={
+                    "artifact_status": "ACTIVE_TRAINED_ARTIFACT",
+                    "artifact_hash": loaded.artifact_hash,
+                    "dataset_version": loaded.dataset_version,
+                    "feature_version": loaded.feature_version,
+                    "feature_schema_hash": loaded.feature_schema_hash,
+                    "label_version": loaded.label_version,
+                    "training_cutoff_ts": loaded.training_cutoff_ts,
+                    "algorithm": loaded.algorithm,
+                    "probability_up": probability,
+                },
+                quality=EvidenceQuality.HEALTHY,
+                entry_use="ACTIVE trained order-flow probability evidence",
+                exit_use="ACTIVE trained order-flow reversal evidence",
+                reassessment_use="ACTIVE probability regime shift is a material flow event",
+                invalidation="ACTIVE artifact unavailable or degraded",
+            )
     if inputs.state is None:
         return unavailable(spec_of("21_ORDER_FLOW_ML"), inputs.symbol, "no factual market state")
     state = inputs.state
