@@ -30,7 +30,11 @@ from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 from crypto_trader.llm_chief.failover import CoreLLMRouter
 from crypto_trader.llm_chief.position_manager import LiveLLMPositionManager
-from crypto_trader.llm_chief.provider import DeepSeekProvider, GLMProvider
+from crypto_trader.llm_chief.provider import (
+    DeepSeekProvider,
+    GLMProvider,
+    resolve_trading_llm_config,
+)
 from crypto_trader.llm_chief.runtime_strategy import LiveLLMDecisionStrategy
 from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 from crypto_trader.llm_chief.trade_planner import LiveLLMTradePlanner
@@ -162,8 +166,12 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     # Until the runtime supplies a fresh-state prompt rebuilder, the backup is
     # deliberately skipped rather than replaying a stale prompt; the router then
     # enters LLM_OFFLINE_MODE and the engine blocks new risk.
+    trading_llm_config = resolve_trading_llm_config()  # fail closed on non-allowlisted models
     glm_provider = GLMProvider() if os.environ.get("GLM_API_KEY") else None
-    llm_provider = CoreLLMRouter(primary=DeepSeekProvider(), backup=glm_provider)
+    llm_provider = CoreLLMRouter(
+        primary=DeepSeekProvider(model=trading_llm_config.model),
+        backup=glm_provider,
+    )
     chief = ChiefTraderEngine(provider=llm_provider)
     # Phase 4A: real fresh-state provider. On DeepSeek failure the router
     # rebuilds a CURRENT ChiefTraderContext from engine facts before GLM; a
