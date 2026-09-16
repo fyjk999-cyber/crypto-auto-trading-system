@@ -173,8 +173,12 @@ async def growth_status(session_factory, growth_dir) -> dict:
         },
         "profiles": {"count": int(profiles)},
         "compressed": {"candidate": int(compressed), "validated": 0},
-        "retrieval": {"queries": 0, "hit_rate": 0.0, "zero_hit_rate": 0.0, "mean_score": 0.0},
-        "cache": {"hits": 0, "misses": 0, "invalidations": 0, "hit_rate": 0.0},
+        "retrieval": metrics.get(
+            "retrieval", {"queries": 0, "hit_rate": 0.0, "zero_hit_rate": 0.0, "mean_score": 0.0}
+        ),
+        "cache": metrics.get(
+            "cache", {"hits": 0, "misses": 0, "invalidations": 0, "hit_rate": 0.0}
+        ),
         "authority": "LEARNING_ONLY",
         "llm_advisory": LLM_ADVISORY,
         "is_order": False,
