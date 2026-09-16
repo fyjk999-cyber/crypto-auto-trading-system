@@ -6,7 +6,7 @@
 - BRANCH: codex/low-risk-hedge-position-leg-final-closure
 - WORKTREE: /Users/huhongjie/Documents/ChatGPT/crypto-hedge-final-closure
 - MODE: PAPER ONLY; LIVE never enabled.
-- LAST CODE/TEST SHA: 0ac0cf0fbc6b (H7 full-suite commit); FINAL_SHA = tip of this receipt commit.
+- LAST ENGINEERING SHA BEFORE OPERATIONAL ACCUMULATION: 0ac0cf0fbc6b; final H8 switch SHA: ebd200227ef3. FINAL_SHA = branch tip reported in the final response (operational obs docs may follow).
 
 ## Checkpoint status
 
