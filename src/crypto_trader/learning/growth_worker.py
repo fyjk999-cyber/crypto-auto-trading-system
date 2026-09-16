@@ -311,6 +311,7 @@ class GrowthWorker:
             )
         pipeline = GrowthMemoryPipeline(self._session_factory)
         updated = profiles = compressed = rejected = generalized_updates = 0
+        validated_compressed = 0
         for review in reviews:
             actual = (review.actual_json or {}).get("event") or {}
             net = float(review.actual_net_bps or 0.0)
@@ -349,6 +350,10 @@ class GrowthWorker:
                     )
                     if generalized.get("status") in ("VALIDATED", "NOT_VALIDATED"):
                         generalized_updates += 1
+                    if generalized.get("status") == "VALIDATED":
+                        validated = await pipeline.compress_validated(generalized["generalized_id"])
+                        if validated.get("status") == "CREATED":
+                            validated_compressed += 1
                 compression = await pipeline.compress(result["pattern_key"])
                 if compression.get("status") == "CREATED":
                     compressed += 1
@@ -364,11 +369,15 @@ class GrowthWorker:
         metrics["generalized_updates"] = (
             int(metrics.get("generalized_updates", 0)) + generalized_updates
         )
+        metrics["validated_compressed_created"] = (
+            int(metrics.get("validated_compressed_created", 0)) + validated_compressed
+        )
         return {
             "patterns": updated,
             "profiles": profiles,
             "compressed": compressed,
             "generalized": generalized_updates,
+            "validated_compressed": validated_compressed,
         }
 
     async def run_once(self, *, now: datetime | None = None) -> dict:

@@ -418,3 +418,50 @@ async def test_worker_applies_mature_reviews_to_patterns_once(database, tmp_path
     assert pattern.strategy == "BREAKOUT" and pattern.direction == "LONG"
     second = await worker._apply_reviewed_patterns()
     assert second["patterns"] == 0  # durable cursor, no double-count
+
+
+async def test_worker_creates_validated_compression_only_on_validation(
+    database, tmp_path, monkeypatch
+):
+    from crypto_trader.learning import growth_worker as worker_module
+    from crypto_trader.learning.lifecycle_reviews import LifecycleReviewEngine
+    from crypto_trader.learning.pattern_profile import GrowthMemoryPipeline
+
+    async def fake_evaluate(self, **kwargs):
+        return {"status": "VALIDATED", "generalized_id": "g1"}
+
+    calls = []
+
+    async def fake_compress_validated(self, generalized_id):
+        calls.append(generalized_id)
+        return {"status": "CREATED", "rule_id": "r1"}
+
+    monkeypatch.setattr(GrowthMemoryPipeline, "evaluate_generalized", fake_evaluate)
+    monkeypatch.setattr(GrowthMemoryPipeline, "compress_validated", fake_compress_validated)
+    engine = LifecycleReviewEngine(database.session_factory)
+    await engine.ingest_events(
+        "ep-v",
+        [
+            {
+                "event_id": "evt-v",
+                "kind": "ADD",
+                "symbol": "BTCUSDT",
+                "regime": "TREND_UP",
+                "strategy": "breakout",
+                "direction": "LONG",
+            }
+        ],
+    )
+    review = (await engine.list_reviews(episode_id="ep-v"))[0]
+    await engine.mature(
+        review["review_id"],
+        actual_net_bps=10.0,
+        counterfactual_net_bps=1.0,
+        verdict="HELPFUL",
+        confidence=0.5,
+    )
+    worker = GrowthWorker(database.session_factory, tmp_path, FakeClient(), code_sha="sha")
+    result = await worker._apply_reviewed_patterns()
+    assert calls == ["g1"]
+    assert result["validated_compressed"] == 1
+    assert worker.metrics["validated_compressed_created"] == 1
