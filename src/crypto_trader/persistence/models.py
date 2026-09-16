@@ -538,7 +538,23 @@ class AIMarketPatternORM(Base):
     regime: Mapped[str] = mapped_column(String(16))
     features_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     strategy: Mapped[str] = mapped_column(String(64))
+    pattern_key: Mapped[str | None] = mapped_column(String(64), index=True)
+    asset: Mapped[str | None] = mapped_column(String(32))
+    horizon: Mapped[str | None] = mapped_column(String(8))
+    setup_signature: Mapped[str | None] = mapped_column(String(64))
+    direction: Mapped[str | None] = mapped_column(String(8))
+    post_cost_expectancy_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    mean_mfe_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    mean_mae_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    contradiction_count: Mapped[int] = mapped_column(Integer, default=0)
+    sample_tier: Mapped[str] = mapped_column(String(32), default="PROVISIONAL")
+    memory_speed: Mapped[str] = mapped_column(String(32), default="FAST_EXPERIENCE")
+    quality: Mapped[float] = mapped_column(Float, default=0.0)
+    source_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
     win_rate: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     profit_factor: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     success_drivers_json: Mapped[list[Any] | None] = mapped_column(JSON)
@@ -560,6 +576,12 @@ class AICoinProfileORM(Base):
     best_setups_json: Mapped[list[Any] | None] = mapped_column(JSON)
     worst_setups_json: Mapped[list[Any] | None] = mapped_column(JSON)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    post_cost_expectancy_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    sample_tier: Mapped[str] = mapped_column(String(32), default="PROVISIONAL")
+    quality_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    first_sample_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sample_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    extended_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -572,6 +594,14 @@ class AICompressedExperienceORM(Base):
     content: Mapped[str] = mapped_column(String(2000))
     source_episode_count: Mapped[int] = mapped_column(Integer, default=0)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    source_pattern_ids_json: Mapped[list[Any] | None] = mapped_column(JSON)
+    sample_tier: Mapped[str] = mapped_column(String(32), default="PROVISIONAL")
+    regime_coverage: Mapped[int] = mapped_column(Integer, default=0)
+    post_cost_expectancy_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    stability: Mapped[float] = mapped_column(Float, default=0.0)
+    contradictions: Mapped[int] = mapped_column(Integer, default=0)
+    policy_version: Mapped[str] = mapped_column(String(32), default="memory-policy-v2")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -1162,7 +1192,9 @@ class OpportunityOutcomeMaturationORM(Base):
     __tablename__ = "opportunity_outcome_maturations"
     __table_args__ = (
         UniqueConstraint(
-            "observation_id", "horizon", "outcome_version",
+            "observation_id",
+            "horizon",
+            "outcome_version",
             name="uq_outcome_maturation_identity",
         ),
     )
@@ -1230,7 +1262,10 @@ class GrowthEventReviewORM(Base):
     __tablename__ = "growth_event_reviews"
     __table_args__ = (
         UniqueConstraint(
-            "episode_id", "source_event_id", "review_type", "review_version",
+            "episode_id",
+            "source_event_id",
+            "review_type",
+            "review_version",
             name="uq_growth_event_reviews_identity",
         ),
     )
