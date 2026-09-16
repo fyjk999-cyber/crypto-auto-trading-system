@@ -163,3 +163,12 @@ async def test_retriever_health_is_no_news_when_all_providers_fail(database):
 
     health = await NewsRetriever(database.session_factory)._health()
     assert health == AggregateHealth.NO_NEWS_AVAILABLE
+
+def test_default_news_providers_include_working_zero_cost_feed(monkeypatch, tmp_path):
+    monkeypatch.delenv("NEWS_RSS_FEEDS", raising=False)
+    monkeypatch.delenv("NEWS_OKX_ANNOUNCEMENTS_ENABLED", raising=False)
+    config = NewsConfig.from_env(tmp_path)
+    provider_ids = [provider.provider_id for provider in config.providers]
+    assert "okx_announcements" in provider_ids
+    assert "rss_newsbtc" in provider_ids
+    assert "rss_cointelegraph" in provider_ids

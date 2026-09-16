@@ -119,12 +119,19 @@ def _provider_configs(root: Path) -> list[NewsProviderConfig]:
     else:
         feeds = [
             {
+                "provider_id": "rss_newsbtc",
+                "url": "https://www.newsbtc.com/feed/",
+                "source_name": "NewsBTC",
+                "source_domain": "newsbtc.com",
+                "source_class": "ESTABLISHED_NEWS",
+            },
+            {
                 "provider_id": "rss_cointelegraph",
                 "url": "https://cointelegraph.com/rss",
                 "source_name": "Cointelegraph",
                 "source_domain": "cointelegraph.com",
                 "source_class": "ESTABLISHED_NEWS",
-            }
+            },
         ]
     for index, feed in enumerate(feeds):
         if not isinstance(feed, dict) or not feed.get("url"):
