@@ -1071,3 +1071,33 @@ class OpportunityOutcomeORM(Base):
     label: Mapped[str] = mapped_column(String(32), nullable=False)
     authority: Mapped[str] = mapped_column(String(32), nullable=False, default="LEARNING_ONLY")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ScanSnapshotORM(Base):
+    """ML dataset collector row per scanner cycle (derived; learning only).
+
+    Canonical trading truth remains in the existing persistence; this table is a
+    derived dataset store for #21/#25 training with explicit decision-time
+    provenance and control-sample flags.
+    """
+
+    __tablename__ = "scan_snapshots"
+    __table_args__ = (UniqueConstraint("snapshot_id", name="uq_scan_snapshots_snapshot_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    cycle_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    candidate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    control: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scanner_rank: Mapped[int | None] = mapped_column(Integer)
+    scanner_score: Mapped[float | None] = mapped_column(Float)
+    selection_reason: Mapped[str] = mapped_column(String(200), default="")
+    sampling_method: Mapped[str] = mapped_column(String(40), default="")
+    selection_probability: Mapped[float | None] = mapped_column(Float)
+    market_regime: Mapped[str | None] = mapped_column(String(32))
+    features_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    outcome_status: Mapped[str] = mapped_column(String(16), default="PENDING", index=True)
+    authority: Mapped[str] = mapped_column(String(24), default="LEARNING_ONLY")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
