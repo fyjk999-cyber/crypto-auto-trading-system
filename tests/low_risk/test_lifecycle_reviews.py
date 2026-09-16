@@ -80,3 +80,26 @@ async def test_maturity_inconclusive_and_counterfactual_provenance(database):
     inconclusive = await engine.mark_inconclusive(risk_review["review_id"], "missing_factual_path")
     assert inconclusive["status"] == "INCONCLUSIVE"
     assert inconclusive["verdict"] == "missing_factual_path"
+
+
+async def test_resolve_maturity_never_guesses_and_requires_facts(database):
+    engine = LifecycleReviewEngine(database.session_factory)
+    await engine.ingest_events("ep-m", [{"event_id": "m1", "kind": "ADD"}])
+    review = (await engine.list_reviews(episode_id="ep-m"))[0]
+    inconclusive = await engine.resolve_maturity(review["review_id"], {})
+    assert inconclusive["status"] == "INCONCLUSIVE"
+    assert inconclusive["verdict"] == "INSUFFICIENT_FACTUAL_INPUTS"
+
+    await engine.ingest_events("ep-m2", [{"event_id": "m2", "kind": "ADD"}])
+    second = (await engine.list_reviews(episode_id="ep-m2"))[0]
+    matured = await engine.resolve_maturity(
+        second["review_id"],
+        {
+            "actual_net_bps": 25.0,
+            "counterfactual_net_bps": 10.0,
+            "confidence": 0.8,
+            "maturity_horizon": "1h",
+        },
+    )
+    assert matured["status"] == "MATURE"
+    assert matured["verdict"] == "HELPFUL" and matured["delta_bps"] == 15.0
