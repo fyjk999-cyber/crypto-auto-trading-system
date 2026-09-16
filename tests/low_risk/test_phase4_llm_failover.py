@@ -326,3 +326,43 @@ def test_deepseek_defaults_to_flash_high() -> None:
         inspect.signature(DeepSeekProvider.complete_json).parameters["reasoning_effort"].default
     )
     assert default_effort == "high"
+
+
+def test_trading_resolver_allowlist_and_generic_env_isolation(monkeypatch) -> None:
+    from crypto_trader.llm_chief.provider import (
+        DisallowedTradingLLMModel,
+        resolve_trading_llm_config,
+    )
+
+    monkeypatch.delenv("TRADING_LLM_MODEL", raising=False)
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    default = resolve_trading_llm_config()
+    assert default.model == "deepseek-flash"
+    assert default.thinking is True
+    assert default.reasoning_effort == "high"
+    assert default.config_source == "canonical_default"
+
+    monkeypatch.setenv("TRADING_LLM_MODEL", "deepseek-flash")
+    assert resolve_trading_llm_config().model == "deepseek-flash"
+
+    for bad in (
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+        "deepseek-flash-high",
+        "garbage",
+    ):
+        monkeypatch.setenv("TRADING_LLM_MODEL", bad)
+        try:
+            resolve_trading_llm_config()
+        except DisallowedTradingLLMModel as exc:
+            assert "DISALLOWED_TRADING_LLM_MODEL" in str(exc)
+        else:
+            raise AssertionError(f"{bad} must be rejected")
+
+    # Generic Harness/developer env must never control the trading model.
+    monkeypatch.delenv("TRADING_LLM_MODEL", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    assert resolve_trading_llm_config().model == "deepseek-flash"
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+    assert resolve_trading_llm_config().model == "deepseek-flash"

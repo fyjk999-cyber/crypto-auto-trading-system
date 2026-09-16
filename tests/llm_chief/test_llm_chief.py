@@ -22,7 +22,8 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
         payload = json.loads(request.content)
         assert payload["max_tokens"] == 64
         assert payload["thinking"] == {"type": "enabled"}
-        assert payload["reasoning_effort"] == "low"
+        # OLD: default effort was low. NEW: canonical trading policy is high.
+        assert payload["reasoning_effort"] == "high"
         return httpx.Response(
             200,
             json={
