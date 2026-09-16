@@ -70,11 +70,18 @@ _RULES: list[tuple[EventType, tuple[str, ...]]] = [
 ]
 
 
+_SPECIAL_RULES: list[tuple[EventType, tuple[str, ...]]] = [
+    (EventType.RETRACTION, ("retract", "withdrawn story", "withdrawn article")),
+    (EventType.CORRECTION, ("correction", "corrects", "corrected", "clarif", "earlier report")),
+    (EventType.RUMOR, ("rumor", "reportedly", "sources say", "unconfirmed", "speculation")),
+]
+
+
 def classify_event(title: str, summary: str = "") -> EventType:
     haystack = f"{title or ''} {summary or ''}".lower()
     if not haystack.strip():
         return EventType.UNKNOWN
-    for event_type, patterns in _RULES:
+    for event_type, patterns in (*_SPECIAL_RULES, *_RULES):
         if any(pattern in haystack for pattern in patterns):
             return event_type
     return EventType.UNKNOWN

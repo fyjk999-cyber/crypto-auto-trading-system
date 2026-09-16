@@ -203,7 +203,41 @@ class NewsRepository:
                 stmt = stmt.where(NewsEventVersionORM.available_at <= as_of)
             stmt = stmt.order_by(NewsEventVersionORM.event_version.desc()).limit(1)
             row = (await session.execute(stmt)).scalars().first()
-            return _snapshot_from_row(row) if row is not None else None
+            if row is None:
+                return None
+            snapshot = _snapshot_from_row(row)
+            if version is None and as_of is None:
+                current = await session.get(NewsEventORM, event_id)
+                if current is not None:
+                    snapshot.source_count = current.source_count
+                    snapshot.independent_source_count = current.independent_source_count
+                    snapshot.event_status = _enum(
+                        EventStatus, current.event_status, snapshot.event_status
+                    )
+                    snapshot.event_type = _enum(EventType, current.event_type, snapshot.event_type)
+                    snapshot.canonical_title = current.canonical_title
+                    snapshot.factual_summary = current.factual_summary
+                    snapshot.latest_update_at = (
+                        _aware(current.latest_update_at) or snapshot.latest_update_at
+                    )
+                    snapshot.materiality_score = (
+                        current.materiality_score or snapshot.materiality_score
+                    )
+                    snapshot.materiality_tier = _enum(
+                        MaterialityTier, current.materiality_tier, snapshot.materiality_tier
+                    )
+                    snapshot.direction = _enum(Direction, current.direction, snapshot.direction)
+                    snapshot.novelty_state = _enum(
+                        NoveltyState, current.novelty_state, snapshot.novelty_state
+                    )
+                    snapshot.freshness_state = _enum(
+                        FreshnessState, current.freshness_state, snapshot.freshness_state
+                    )
+                    payload = dict(snapshot.payload or {})
+                    payload["source_count"] = current.source_count
+                    payload["independent_source_count"] = current.independent_source_count
+                    snapshot.payload = payload
+            return snapshot
 
     async def get_current_event_snapshot(self, event_id: str) -> NewsEventSnapshot | None:
         return await self.get_event_snapshot(event_id)

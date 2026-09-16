@@ -320,7 +320,9 @@ class NewsPipeline:
         fact_class,
         now: datetime,
     ) -> ProcessResult:
-        if relation in {"EXACT_DUPLICATE", "NEAR_DUPLICATE", "SYNDICATED_COPY"}:
+        correction = is_correction(raw.title, raw.summary_snippet)
+        retraction = is_retraction(raw.title, raw.summary_snippet)
+        if not correction and not retraction and relation in {"EXACT_DUPLICATE", "NEAR_DUPLICATE", "SYNDICATED_COPY"}:
             independent = relation not in {"EXACT_DUPLICATE", "NEAR_DUPLICATE", "SYNDICATED_COPY"}
             await self.repository.link_event_item(
                 event_id=candidate.event_id,
@@ -362,8 +364,6 @@ class NewsPipeline:
         resolved_type = candidate.event_type
         if event_type != EventType.UNKNOWN:
             resolved_type = event_type
-        correction = is_correction(raw.title, raw.summary_snippet)
-        retraction = is_retraction(raw.title, raw.summary_snippet)
         if retraction:
             resolved_type = EventType.RETRACTION
         elif correction:
