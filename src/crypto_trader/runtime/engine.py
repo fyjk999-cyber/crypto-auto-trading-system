@@ -112,6 +112,7 @@ class TradingEngine:
         llm_router=None,
         leg_service=None,
         leg_reconciler=None,
+        news_reassessment_runtime=None,
     ) -> None:
         self.settings = settings
         self.database = database
@@ -134,6 +135,7 @@ class TradingEngine:
         self.exit_controller = DeterministicExitController()
         self.offline_mode = OfflineMode()
         self.llm_router = llm_router
+        self.news_reassessment_runtime = news_reassessment_runtime
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
         self.leg_service = leg_service
         self.leg_reconciler = leg_reconciler
@@ -533,6 +535,17 @@ class TradingEngine:
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
         await self._sync_offline_mode()
+        if self.news_reassessment_runtime is not None and not self.offline_mode.is_offline:
+            try:
+                await self.news_reassessment_runtime.dispatch_due(self)
+            except Exception as exc:
+                self.health.set("news_reassessment", False, type(exc).__name__)
+                await self.audit.log(
+                    "NEWS_REASSESSMENT_DISPATCH_FAILED",
+                    target=self.run_id or "unknown",
+                    run_id=self.run_id,
+                    after={"error_type": type(exc).__name__},
+                )
         if self.offline_mode.is_offline:
             # ok=False means the offline flag is active (unhealthy condition).
             self.health.set("llm_offline_mode", False, "LLM_OFFLINE_MODE")

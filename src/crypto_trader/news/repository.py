@@ -647,7 +647,9 @@ class NewsRepository:
                 context=context or {},
             )
 
-    async def list_pending_reassessments(self, *, limit: int = 20) -> list[dict[str, Any]]:
+    async def list_pending_reassessments(
+        self, *, limit: int = 20, symbol: str | None = None
+    ) -> list[dict[str, Any]]:
         async with self.session_factory() as session:
             tier_rank = case(
                 (NewsReassessmentEventORM.materiality_tier == MaterialityTier.CRITICAL.value, 0),
@@ -655,19 +657,55 @@ class NewsRepository:
                 (NewsReassessmentEventORM.materiality_tier == MaterialityTier.MEDIUM.value, 2),
                 else_=3,
             )
+            stmt = select(NewsReassessmentEventORM).where(
+                NewsReassessmentEventORM.status == ReassessmentStatus.PENDING.value
+            )
+            if symbol is not None:
+                stmt = stmt.where(NewsReassessmentEventORM.symbol == symbol)
             rows = (
                 (
                     await session.execute(
-                        select(NewsReassessmentEventORM)
-                        .where(NewsReassessmentEventORM.status == ReassessmentStatus.PENDING.value)
-                        .order_by(tier_rank, NewsReassessmentEventORM.requested_at)
-                        .limit(max(1, min(limit, 200)))
+                        stmt.order_by(tier_rank, NewsReassessmentEventORM.requested_at).limit(
+                            max(1, min(limit, 200))
+                        )
                     )
                 )
                 .scalars()
                 .all()
             )
             return [_reassessment_dict(row) for row in rows]
+
+    async def get_reassessment(self, request_id: str) -> dict[str, Any] | None:
+        async with self.session_factory() as session:
+            row = await session.get(NewsReassessmentEventORM, request_id)
+            return _reassessment_dict(row) if row is not None else None
+
+    async def reassessment_exists_for_state(
+        self,
+        *,
+        event_id: str,
+        event_version: int,
+        symbol: str,
+        state_version: str,
+    ) -> bool:
+        async with self.session_factory() as session:
+            row = (
+                await session.execute(
+                    select(NewsReassessmentEventORM.request_id).where(
+                        NewsReassessmentEventORM.event_id == event_id,
+                        NewsReassessmentEventORM.event_version == event_version,
+                        NewsReassessmentEventORM.symbol == symbol,
+                        NewsReassessmentEventORM.state_version == state_version,
+                        NewsReassessmentEventORM.status.in_(
+                            [
+                                ReassessmentStatus.ACTIVE.value,
+                                ReassessmentStatus.COMPLETED.value,
+                            ]
+                        ),
+                    )
+                )
+            ).scalar_one_or_none()
+            return row is not None
 
     async def claim_reassessment(
         self, request_id: str, *, leg_id: str | None, state_version: str | None
