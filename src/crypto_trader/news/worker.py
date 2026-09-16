@@ -84,6 +84,7 @@ class NewsWorker:
                 continue
             self._set_stage("PIPELINE")
             processed = 0
+            ingested_before = self.pipeline.metrics.items_ingested
             for item in sorted(result.items, key=_item_priority):
                 if processed >= self.config.max_items_per_cycle:
                     metrics.dropped_or_deferred += len(result.items) - processed
@@ -105,7 +106,8 @@ class NewsWorker:
                     metrics.items_ingested += 1
                 if item_result.reassessment_request_id:
                     metrics.reassessment_requests += 1
-            await self._record_provider_success(provider, state, result, processed, now)
+            ingested_new = self.pipeline.metrics.items_ingested - ingested_before
+            await self._record_provider_success(provider, state, result, ingested_new, now)
             provider_states[provider.provider_id] = ProviderHealth.HEALTHY.value
             metrics.provider_health[provider.provider_id] = ProviderHealth.HEALTHY.value
         _merge_pipeline_metrics(metrics, self.pipeline.metrics)

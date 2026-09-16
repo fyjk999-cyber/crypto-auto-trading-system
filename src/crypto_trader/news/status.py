@@ -70,12 +70,9 @@ def _aggregate_health(provider_rows: list[dict], event_count: int) -> AggregateH
         return AggregateHealth.NO_NEWS_AVAILABLE
     statuses = [str(row.get("status") or "") for row in provider_rows]
     healthy = [status for status in statuses if status == ProviderHealth.HEALTHY.value]
-    disabled = [status for status in statuses if status == ProviderHealth.DISABLED.value]
-    if healthy and not disabled:
+    if healthy and len(healthy) == len(statuses):
         return AggregateHealth.HEALTHY
-    if healthy:
-        return AggregateHealth.PARTIAL_NEWS_AVAILABLE
-    if event_count > 0:
+    if healthy or event_count > 0:
         return AggregateHealth.PARTIAL_NEWS_AVAILABLE
     return AggregateHealth.NO_NEWS_AVAILABLE
 
