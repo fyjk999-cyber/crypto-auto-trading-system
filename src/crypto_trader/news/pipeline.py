@@ -110,11 +110,11 @@ class NewsPipeline:
             title=title,
             summary_snippet=summary,
             raw_language=item.language or "und",
-            published_at=_aware(item.published_at),
-            provider_timestamp=_aware(item.provider_timestamp),
+            published_at=_optional_aware(item.published_at),
+            provider_timestamp=_optional_aware(item.provider_timestamp),
             first_seen_at=moment,
             ingested_at=moment,
-            updated_at=_aware(item.updated_at),
+            updated_at=_optional_aware(item.updated_at),
             author=item.author,
             source_payload_hash=payload_hash,
             normalized_text_hash=hash_text(f"{title} {summary}"),
@@ -826,6 +826,12 @@ def _priority_for(tier: MaterialityTier) -> str:
 def _aware(value: datetime | None) -> datetime:
     if value is None:
         return datetime.now(UTC)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _optional_aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 

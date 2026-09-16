@@ -294,8 +294,9 @@ def _tag(element: ET.Element) -> str:
 
 
 def _text(element: ET.Element, name: str) -> str:
+    wanted = name.lower()
     for child in element:
-        if _tag(child) == name:
+        if _tag(child) == wanted:
             return " ".join(child.itertext()).strip()
     return ""
 
