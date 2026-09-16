@@ -1203,6 +1203,8 @@ class MLForwardPredictionORM(Base):
     confidence: Mapped[float | None] = mapped_column(Float)
     feature_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     model21_probability: Mapped[float | None] = mapped_column(Float)
+    model21_version: Mapped[str | None] = mapped_column(String(64))
+    model21_artifact_hash: Mapped[str | None] = mapped_column(String(128))
     label_version: Mapped[str] = mapped_column(String(32), nullable=False, default="label-v2")
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING_OUTCOME")
     outcome_label: Mapped[str | None] = mapped_column(String(16))

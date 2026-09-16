@@ -224,6 +224,71 @@ class MLOrchestrator:
             )
             if meta.get("status") == "OK":
                 model25 = meta["model_version"]
+                loaded25 = self.artifact_resolver.resolve(ml_meta.MODEL_25_ID, model25)
+                if loaded25 is not None:
+                    from crypto_trader.ml_artifacts import LogisticPredictor
+
+                    m21_predictor = LogisticPredictor(loaded.metadata)
+
+                    def _m21_prob(snapshot_features, _predictor=m21_predictor):
+                        try:
+                            return float(_predictor(snapshot_features))
+                        except Exception:
+                            return None
+
+                    def _build_meta_features(snapshot_features, _predictor=_m21_prob):
+                        prob = _predictor(snapshot_features)
+                        return ml_meta.meta_features(
+                            {
+                                "features": snapshot_features,
+                                "market_regime": snapshot_features.get("market_regime"),
+                            },
+                            prob,
+                        )
+
+                    def _row_metadata(snapshot_features, _predictor=_m21_prob):
+                        return {
+                            "model21_probability": _predictor(snapshot_features),
+                            "model21_version": loaded.model_version,
+                            "model21_artifact_hash": loaded.artifact_hash,
+                        }
+
+                    await self.forward.generate(
+                        model_id=ml_meta.MODEL_25_ID,
+                        model_version=model25,
+                        artifact_hash=meta["artifact_hash"],
+                        training_cutoff_ts=meta["training_cutoff_ts"],
+                        loaded_artifact=loaded25,
+                        feature_builder=_build_meta_features,
+                        row_metadata_builder=_row_metadata,
+                        feature_version=meta["feature_version"],
+                        label_version="label-v2",
+                    )
+                    summary25 = await self.forward.summary(ml_meta.MODEL_25_ID, model25)
+                    decision25 = ml_shadow.decide_promotion(
+                        post_cost_passed=True,
+                        fold_count=meta["fold_count"],
+                        shadow_summary=summary25,
+                        min_shadow=ml_forward.TRUE_FORWARD_MIN_SAMPLES_25,
+                        artifact_integrity=True,
+                        schema_compatible=True,
+                    )
+                    if decision25 == "PROMOTE":
+                        self.registry.set_state(
+                            ml_meta.MODEL_25_ID,
+                            model25,
+                            "ACTIVE",
+                            reason="promotion_gate_25",
+                        )
+                    elif decision25 == "REJECT":
+                        self.registry.set_state(
+                            ml_meta.MODEL_25_ID,
+                            model25,
+                            "VALIDATION_FAILED",
+                            reason="promotion_reject_25",
+                        )
+                    summary25 = {**summary25, "decision": decision25}
+                    self.state.model_25_forward = summary25
         if decision == "PROMOTE":
             state = "MODEL_21_ACTIVE"
         elif decision == "REJECT":

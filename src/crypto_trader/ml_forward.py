@@ -29,6 +29,7 @@ from crypto_trader.persistence.models import (
 )
 
 TRUE_FORWARD_MIN_SAMPLES_21 = 30
+TRUE_FORWARD_MIN_SAMPLES_25 = 20
 STATE_PENDING = "PENDING_OUTCOME"
 STATE_MATURED = "MATURED"
 
@@ -103,6 +104,14 @@ class ForwardPredictionStore:
                     if row.get("model21_probability") is not None
                     else None
                 ),
+                model21_version=(
+                    str(row["model21_version"]) if row.get("model21_version") else None
+                ),
+                model21_artifact_hash=(
+                    str(row["model21_artifact_hash"])
+                    if row.get("model21_artifact_hash")
+                    else None
+                ),
                 label_version=str(row.get("label_version") or "label-v2"),
                 state=STATE_PENDING,
                 authority="LEARNING_ONLY",
@@ -126,6 +135,7 @@ class ForwardPredictionStore:
         predictor: Callable[[dict[str, Any]], float] | None = None,
         loaded_artifact=None,
         feature_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        row_metadata_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         horizon: str = "15m",
         feature_version: str = "",
         label_version: str = "label-v2",
@@ -161,6 +171,7 @@ class ForwardPredictionStore:
             features = dict(snapshot.features_json or {})
             prediction_features = feature_builder(features) if feature_builder else features
             probability = float(predictor(prediction_features))
+            row_metadata = row_metadata_builder(features) if row_metadata_builder else {}
             expected_edge = None
             try:
                 metrics = getattr(loaded_artifact, "metadata", {}).get("metrics") or {}
@@ -185,6 +196,9 @@ class ForwardPredictionStore:
                 "confidence": abs(probability - 0.5) * 2.0,
                 "feature_version": feature_version,
                 "label_version": label_version,
+                "model21_probability": row_metadata.get("model21_probability"),
+                "model21_version": row_metadata.get("model21_version"),
+                "model21_artifact_hash": row_metadata.get("model21_artifact_hash"),
             }
             if await self.record(row):
                 written += 1

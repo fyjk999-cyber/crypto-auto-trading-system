@@ -123,6 +123,7 @@ def decision_time_features(
     model_evidence: list | None = None,
     costs=None,
     growth_context: dict | None = None,
+    market_regime: str | None = None,
 ) -> dict:
     """Freeze only information available at decision time (explicit flag)."""
     bid = getattr(facts, "bid", None)
@@ -197,6 +198,7 @@ def decision_time_features(
         ),
         "costs": cost_dict,
         "growth_context": dict(growth_context or {}),
+        "market_regime": market_regime,
         "authority": "LEARNING_ONLY",
         "is_order": False,
     }
