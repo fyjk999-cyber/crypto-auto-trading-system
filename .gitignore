@@ -18,3 +18,5 @@ node_modules/
 .dev.vars*
 .secrets/
 *.key
+
+data/news/
