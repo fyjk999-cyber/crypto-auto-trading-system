@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 
-HORIZONS = ("15m", "30m", "1h", "4h", "12h", "24h")
+HORIZONS = ("1m", "5m", "15m", "30m", "1h", "4h", "12h", "24h")
 LABELS = (
     "TRADED_CORRECT",
     "TRADED_WRONG",
@@ -37,6 +37,17 @@ class OpportunityOutcome:
     mae_bps: float
     label: str
     traded: bool
+    future_high: float | None = None
+    future_low: float | None = None
+    realized_volatility: float = 0.0
+    long_gross_bps: float = 0.0
+    short_gross_bps: float = 0.0
+    long_net_bps: float = 0.0
+    short_net_bps: float = 0.0
+    all_in_cost_bps: float = 0.0
+    net_edge_bps: float = 0.0
+    min_edge_bps: float = 0.0
+    net_edge_label: str = "NOT_PROFITABLE"
     authority: str = "LEARNING_ONLY"
     is_order: bool = False
 
@@ -66,6 +77,7 @@ def evaluate_opportunity(
     window_prices: dict[str, float],
     path_prices: list[float] | None = None,
     all_in_cost_bps: float = 0.0,
+    min_edge_bps: float = 0.0,
 ) -> list[OpportunityOutcome]:
     """Evaluate every supplied horizon; missing horizons are skipped."""
     path = [float(p) for p in (path_prices or [])]
@@ -73,8 +85,26 @@ def evaluate_opportunity(
     for horizon in HORIZONS:
         if horizon not in window_prices:
             continue
+        target = float(window_prices[horizon])
+        raw_move = (target - float(frozen_price)) / float(frozen_price) * 10000.0
+        long_gross = raw_move
+        short_gross = -raw_move
+        cost = float(all_in_cost_bps)
         gross = _signed_return_bps(frozen_price, window_prices[horizon], expected_direction)
-        net = gross - float(all_in_cost_bps)
+        net = gross - cost
+        long_net = long_gross - cost
+        short_net = short_gross - cost
+        future_high = max(path) if path else target
+        future_low = min(path) if path else target
+        realized_vol = 0.0
+        if len(path) >= 3:
+            returns = [
+                (path[i] - path[i - 1]) / path[i - 1] for i in range(1, len(path)) if path[i - 1]
+            ]
+            if len(returns) >= 2:
+                mean = sum(returns) / len(returns)
+                variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+                realized_vol = (variance**0.5) * 10000.0
         if path:
             excursions = [
                 _signed_return_bps(frozen_price, price, expected_direction) for price in path
@@ -96,6 +126,17 @@ def evaluate_opportunity(
                     expected_direction=expected_direction, traded=traded, net_return_bps=net
                 ),
                 traded=traded,
+                future_high=round(future_high, 10),
+                future_low=round(future_low, 10),
+                realized_volatility=round(realized_vol, 6),
+                long_gross_bps=round(long_gross, 6),
+                short_gross_bps=round(short_gross, 6),
+                long_net_bps=round(long_net, 6),
+                short_net_bps=round(short_net, 6),
+                all_in_cost_bps=round(cost, 6),
+                net_edge_bps=round(net, 6),
+                min_edge_bps=round(float(min_edge_bps), 6),
+                net_edge_label=("PROFITABLE" if net > float(min_edge_bps) else "NOT_PROFITABLE"),
             )
         )
     return outcomes
@@ -143,6 +184,17 @@ class OpportunityOutcomeRecorder:
                 row.mfe_bps = outcome.mfe_bps
                 row.mae_bps = outcome.mae_bps
                 row.label = outcome.label
+                row.future_high = outcome.future_high
+                row.future_low = outcome.future_low
+                row.realized_volatility = outcome.realized_volatility
+                row.long_gross_bps = outcome.long_gross_bps
+                row.short_gross_bps = outcome.short_gross_bps
+                row.long_net_bps = outcome.long_net_bps
+                row.short_net_bps = outcome.short_net_bps
+                row.all_in_cost_bps = outcome.all_in_cost_bps
+                row.net_edge_bps = outcome.net_edge_bps
+                row.min_edge_bps = outcome.min_edge_bps
+                row.net_edge_label = outcome.net_edge_label
                 written += 1
             await session.commit()
         return written
@@ -176,6 +228,17 @@ class OpportunityOutcomeRecorder:
                 "mfe_bps": row.mfe_bps,
                 "mae_bps": row.mae_bps,
                 "label": row.label,
+                "future_high": row.future_high,
+                "future_low": row.future_low,
+                "realized_volatility": row.realized_volatility,
+                "long_gross_bps": row.long_gross_bps,
+                "short_gross_bps": row.short_gross_bps,
+                "long_net_bps": row.long_net_bps,
+                "short_net_bps": row.short_net_bps,
+                "all_in_cost_bps": row.all_in_cost_bps,
+                "net_edge_bps": row.net_edge_bps,
+                "min_edge_bps": row.min_edge_bps,
+                "net_edge_label": row.net_edge_label,
             }
             for row in rows
         ]

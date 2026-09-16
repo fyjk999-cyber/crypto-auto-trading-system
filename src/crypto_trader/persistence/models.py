@@ -237,9 +237,7 @@ class PositionProjectionORM(Base):
     realized_pnl: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("0"))
     instrument_type: Mapped[str] = mapped_column(String(24), default="SPOT")
     contract_size: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("1"))
-    contract_multiplier: Mapped[Decimal] = mapped_column(
-        ExactDecimal(), default=Decimal("1")
-    )
+    contract_multiplier: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("1"))
     leverage: Mapped[Decimal] = mapped_column(ExactDecimal(), default=Decimal("1"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -1069,6 +1067,17 @@ class OpportunityOutcomeORM(Base):
     mfe_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     mae_bps: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     label: Mapped[str] = mapped_column(String(32), nullable=False)
+    future_high: Mapped[float | None] = mapped_column(Float)
+    future_low: Mapped[float | None] = mapped_column(Float)
+    realized_volatility: Mapped[float] = mapped_column(Float, default=0.0)
+    long_gross_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    short_gross_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    long_net_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    short_net_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    all_in_cost_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    net_edge_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    min_edge_bps: Mapped[float] = mapped_column(Float, default=0.0)
+    net_edge_label: Mapped[str] = mapped_column(String(16), default="NOT_PROFITABLE")
     authority: Mapped[str] = mapped_column(String(32), nullable=False, default="LEARNING_ONLY")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
