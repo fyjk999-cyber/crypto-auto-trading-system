@@ -175,3 +175,63 @@ async def test_process_signal_requires_explicit_leg_target(database) -> None:
         ]
     assert "LEG_TARGET_REQUIRED" in actions
     await engine.stop()
+
+
+async def test_process_signal_blocks_replacement_while_unknown_order_unresolved(database) -> None:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from crypto_trader.domain.models import SignalIntent
+    from crypto_trader.persistence.models import AuditEventORM, OrderORM
+    from tests.conftest import make_paper_engine
+
+    now = datetime.now(UTC)
+    async with database.session_factory() as session:
+        session.add(
+            OrderORM(
+                internal_order_id="ord-h2-unknown",
+                client_order_id="coid-h2-unknown",
+                symbol="BTCUSDT",
+                side="SELL",
+                order_type="LIMIT",
+                time_in_force="GTC",
+                quantity=Decimal("1"),
+                status="UNKNOWN",
+                trading_mode="PAPER",
+                strategy_id="live_llm",
+                created_at=now,
+                updated_at=now,
+                metadata_json={"leg_id": "leg-unknown"},
+            )
+        )
+        await session.commit()
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    engine.leg_service = PositionLegService(database.session_factory)
+    await engine.start("run-h2-unknown-block")
+    signal = SignalIntent(
+        signal_id="add-while-unknown",
+        strategy_id="live_llm_position",
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        quantity=Decimal("0.1"),
+        reason="leg add",
+        metadata={
+            "lifecycle_action": "ADD",
+            "leg_id": "leg-unknown",
+            "trade_plan_id": "plan-unknown",
+        },
+    )
+    assert await engine.process_signal(signal) is None
+    async with database.session_factory() as session:
+        actions = [
+            row.action for row in (await session.execute(select(AuditEventORM))).scalars().all()
+        ]
+    # Either the canonical unsettled-order guard or the leg-level UNKNOWN guard
+    # may fire first; both prove no replacement exposure is created.
+    assert {
+        "LEG_ORDER_UNKNOWN_BLOCKS_REPLACEMENT",
+        "POSITION_ACTION_BLOCKED_ENTRY_UNSETTLED",
+    } & set(actions)
+    await engine.stop()
