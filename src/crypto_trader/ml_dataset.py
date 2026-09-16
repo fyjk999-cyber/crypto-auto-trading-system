@@ -264,6 +264,10 @@ async def freeze_dataset(
                 "candidate": x.candidate,
                 "control": x.control,
                 "market_regime": x.market_regime,
+                "scanner_rank": x.scanner_rank,
+                "scanner_score": x.scanner_score,
+                "sampling_method": x.sampling_method,
+                "selection_probability": x.selection_probability,
                 "features": x.features_json,
             }
             for x in eligible_snaps

@@ -23,6 +23,7 @@ dependencies = [
   "websockets>=12",
   "structlog>=24.1",
   "cryptography>=48.0.1,<49", # macOS Intel wheel verified for this runtime
+  "xgboost==2.0.3", # literal #25 XGBoost; macOS x86_64 wheel bundles libomp
 ]
 
 [project.optional-dependencies]

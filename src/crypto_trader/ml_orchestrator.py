@@ -211,11 +211,16 @@ class MLOrchestrator:
                 payload,
                 self.base_dir,
                 registry=self.registry,
+                model21_artifact=loaded.metadata,
+                model_21_version=loaded.model_version,
+                model_21_artifact_hash=loaded.artifact_hash,
+                model_21_artifact_status=loaded.registry_state,
                 horizon=HORIZON,
                 direction=DIRECTION,
                 min_edge_bps=MIN_EDGE_BPS,
                 code_sha=self.code_sha,
                 dataset_version=frozen["dataset_version"],
+                dataset_hash=frozen["dataset_hash"],
             )
             if meta.get("status") == "OK":
                 model25 = meta["model_version"]
