@@ -20,6 +20,10 @@ from crypto_trader.domain.models import SignalIntent
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
 from crypto_trader.exchange.symbol_mapper import SymbolMapper
+from crypto_trader.execution.hedge_legs import (
+    LegPositionReconciler,
+    PositionLegService,
+)
 from crypto_trader.exposure.service import ExposureService
 from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.factual_learning import FactualEpisodeLearning
@@ -72,8 +76,7 @@ def serialize_position(position, *, price: Decimal | None = None) -> dict:
     if (
         price is not None
         and position.avg_entry_price is not None
-        and position.instrument_type.upper()
-        not in {"INVERSE", "INVERSE_PERP", "INVERSE_FUTURES"}
+        and position.instrument_type.upper() not in {"INVERSE", "INVERSE_PERP", "INVERSE_FUTURES"}
     ):
         payload["unrealized_pnl"] = str(
             (price - position.avg_entry_price)
@@ -226,9 +229,7 @@ def create_app(state: AppState) -> FastAPI:
                 "requested_leverage": _num_or_none(row.requested_leverage),
                 "parent_decision_id": row.parent_decision_id,
                 "trade_plan_id": row.trade_plan_id,
-                "position_quantity_before": _num_or_none(
-                    row.position_quantity_before
-                ),
+                "position_quantity_before": _num_or_none(row.position_quantity_before),
                 "entry_price": _num_or_none(row.entry_price),
                 "mark_price": _num_or_none(row.mark_price),
                 "unrealized_pnl": _num_or_none(row.unrealized_pnl),
@@ -242,12 +243,16 @@ def create_app(state: AppState) -> FastAPI:
     async def trade_plans(limit: int = 100):
         async with state.database.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(TradePlanORM)
-                    .order_by(TradePlanORM.created_at.desc())
-                    .limit(max(1, min(limit, 500)))
+                (
+                    await session.execute(
+                        select(TradePlanORM)
+                        .order_by(TradePlanORM.created_at.desc())
+                        .limit(max(1, min(limit, 500)))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return {
                 "trade_plans": [
                     {
@@ -286,9 +291,7 @@ def create_app(state: AppState) -> FastAPI:
         from crypto_trader.runtime.lineage_audit import LineageCoverageAuditor
 
         bounded = max(1, min(int(limit), 500))
-        return await LineageCoverageAuditor(state.database.session_factory).audit(
-            limit=bounded
-        )
+        return await LineageCoverageAuditor(state.database.session_factory).audit(limit=bounded)
 
     @app.get("/growth/daily-report")
     async def growth_daily_report(trading_day: str):
@@ -308,8 +311,34 @@ def create_app(state: AppState) -> FastAPI:
             "can_modify_core": False,
         }
 
+    def _leg_service():
+        engine = state.engine
+        service = getattr(engine, "leg_service", None) if engine is not None else None
+        return service or PositionLegService(state.database.session_factory)
+
+    def _mark_price(symbol: str):
+        book = state.market_data.books.get(symbol) if state.market_data is not None else None
+        if book is None:
+            return None
+        try:
+            return book.mid_price()
+        except Exception:
+            return None
+
+    async def _symbol_reconciliation(symbol: str) -> dict:
+        service = _leg_service()
+        position = None
+        try:
+            position = await state.portfolio.get_position(symbol)
+        except Exception:
+            position = None
+        quantity = position.quantity if position is not None else 0
+        reconciler = LegPositionReconciler(service)
+        return await reconciler.reconcile(symbol, quantity, broker_quantity=quantity)
+
     @app.get("/position-legs")
     async def position_legs(symbol: str | None = None, limit: int = 100):
+        service = _leg_service()
         async with state.database.session_factory() as session:
             stmt = (
                 select(PositionLegORM)
@@ -319,45 +348,127 @@ def create_app(state: AppState) -> FastAPI:
             if symbol:
                 stmt = stmt.where(PositionLegORM.symbol == symbol)
             rows = (await session.execute(stmt)).scalars().all()
-            return {
-                "position_legs": [
-                    {
-                        "leg_id": r.leg_id,
-                        "symbol": r.symbol,
-                        "side": r.side,
-                        "kind": r.kind,
-                        "strategy": r.strategy,
-                        "thesis": r.thesis,
-                        "base_exit": r.base_exit_json,
-                        "invalidation": r.invalidation,
-                        "evidence_families": r.evidence_families_json or [],
-                        "reason": r.reason,
-                        "reverse_of": r.reverse_of,
-                        "trade_plan_id": r.trade_plan_id,
-                        "decision_id": r.decision_id,
-                        "state_version": r.state_version,
-                        "state": r.state,
-                        "opened_at": r.opened_at.isoformat() if r.opened_at else None,
-                        "closed_at": r.closed_at.isoformat() if r.closed_at else None,
-                        "created_at": r.created_at.isoformat() if r.created_at else None,
-                    }
-                    for r in rows
-                ],
-                "count": len(rows),
-                "authority": "NEW_RISK_REQUIRES_CORE_LLM",
-                "not_an_order": True,
-            }
+        reconciliation_cache: dict[str, dict] = {}
+        legs = []
+        for row in rows:
+            marks = _mark_price(row.symbol)
+            economics = await service.leg_economics(row.leg_id, mark_price=marks)
+            if row.symbol not in reconciliation_cache:
+                reconciliation_cache[row.symbol] = await _symbol_reconciliation(row.symbol)
+            reconciliation = reconciliation_cache[row.symbol]
+            legs.append(
+                {
+                    **(economics or {}),
+                    "orders": await service.leg_orders(row.leg_id),
+                    "fills": await service.leg_fills(row.leg_id),
+                    "reconciliation": {
+                        "status": reconciliation["status"],
+                        "legacy_status": reconciliation["legacy_status"],
+                        "leg_execution_safe": reconciliation["leg_execution_safe"],
+                        "checks": reconciliation["checks"],
+                    },
+                    "lineage": {
+                        "trade_plan_id": row.trade_plan_id,
+                        "decision_id": row.decision_id,
+                        "state_version": row.state_version,
+                        "reverse_of": row.reverse_of,
+                    },
+                    "evidence_families": row.evidence_families_json or [],
+                    "invalidation": row.invalidation,
+                    "reason": row.reason,
+                }
+            )
+        return {
+            "position_legs": legs,
+            "count": len(legs),
+            "authority": "NEW_RISK_REQUIRES_CORE_LLM",
+            "not_an_order": True,
+        }
+
+    @app.get("/position-legs/summary")
+    async def position_legs_summary(symbol: str | None = None):
+        service = _leg_service()
+        async with state.database.session_factory() as session:
+            stmt = select(PositionLegORM.symbol).distinct()
+            if symbol:
+                stmt = stmt.where(PositionLegORM.symbol == symbol)
+            symbols = sorted(str(item[0]) for item in (await session.execute(stmt)).all())
+        summaries = []
+        for sym in symbols:
+            report = await service.symbol_economics(sym, mark_price=_mark_price(sym))
+            reconciliation = await _symbol_reconciliation(sym)
+            summaries.append(
+                {
+                    "symbol": sym,
+                    "gross_long_quantity": report["gross_long_quantity"],
+                    "gross_short_quantity": report["gross_short_quantity"],
+                    "net_quantity": report["net_quantity"],
+                    "gross_quantity": report["gross_quantity"],
+                    "both_sides": report["both_sides"],
+                    "leg_count": report["leg_count"],
+                    "open_leg_count": report["open_leg_count"],
+                    "realized_pnl": report["realized_pnl"],
+                    "unrealized_pnl": report["unrealized_pnl"],
+                    "gross_pnl": report["gross_pnl"],
+                    "fees": report["fees"],
+                    "funding": report["funding"],
+                    "net_pnl": report["net_pnl"],
+                    "netting_hides_gross": report["netting_hides_gross"],
+                    "reconciliation": {
+                        "status": reconciliation["status"],
+                        "leg_execution_safe": reconciliation["leg_execution_safe"],
+                    },
+                }
+            )
+        return {
+            "symbols": summaries,
+            "count": len(summaries),
+            "authority": "NEW_RISK_REQUIRES_CORE_LLM",
+            "not_an_order": True,
+        }
+
+    @app.get("/position-legs/{leg_id}")
+    async def position_leg_detail(leg_id: str):
+        service = _leg_service()
+        row = None
+        async with state.database.session_factory() as session:
+            row = await session.get(PositionLegORM, leg_id)
+        if row is None:
+            return {"error": "LEG_NOT_FOUND", "leg_id": leg_id, "not_an_order": True}
+        economics = await service.leg_economics(leg_id, mark_price=_mark_price(row.symbol))
+        reconciliation = await _symbol_reconciliation(row.symbol)
+        return {
+            **(economics or {}),
+            "orders": await service.leg_orders(leg_id),
+            "fills": await service.leg_fills(leg_id),
+            "reconciliation": reconciliation,
+            "lineage": {
+                "trade_plan_id": row.trade_plan_id,
+                "decision_id": row.decision_id,
+                "state_version": row.state_version,
+                "reverse_of": row.reverse_of,
+            },
+            "evidence_families": row.evidence_families_json or [],
+            "invalidation": row.invalidation,
+            "reason": row.reason,
+            "authority": "NEW_RISK_REQUIRES_CORE_LLM",
+            "not_an_order": True,
+        }
 
     @app.get("/trade-episodes")
     async def trade_episodes(limit: int = 100):
         async with state.database.session_factory() as session:
             rows = (
-                await session.execute(
-                    select(TradeEpisodeORM)
-                    .order_by(TradeEpisodeORM.closed_at.desc())
-                    .limit(max(1, min(limit, 500)))
+                (
+                    await session.execute(
+                        select(TradeEpisodeORM)
+                        .order_by(TradeEpisodeORM.closed_at.desc())
+                        .limit(max(1, min(limit, 500)))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             return {
                 "trade_episodes": [
                     {
