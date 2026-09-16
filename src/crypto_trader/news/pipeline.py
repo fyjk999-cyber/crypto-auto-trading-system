@@ -53,6 +53,7 @@ from crypto_trader.news.normalization import (
     sanitize_external_text,
     source_payload_hash,
 )
+from crypto_trader.news.outcome import NewsOutcomeReviewService
 from crypto_trader.news.sources import default_profile, source_class_for
 from crypto_trader.news.taxonomy import (
     classify_event,
@@ -82,6 +83,9 @@ class NewsPipeline:
         self.repository = repository
         self.config = config
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.outcomes = NewsOutcomeReviewService(
+            repository.session_factory, repository=repository
+        )
         self.metrics = NewsCycleMetrics()
 
     async def process_item(self, item: ProviderItem, *, now: datetime | None = None) -> ProcessResult:
@@ -589,6 +593,7 @@ class NewsPipeline:
                 dedup_policy_version=DEDUP_POLICY_VERSION,
             )
             await self.repository.insert_evidence(evidence)
+            await self.outcomes.schedule_for_evidence(evidence, now=now)
             evidence_ids.append(evidence.news_evidence_id)
             if eligible and request_id is None:
                 request = await self.repository.request_reassessment(

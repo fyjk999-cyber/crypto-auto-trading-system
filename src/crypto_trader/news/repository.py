@@ -903,7 +903,13 @@ class NewsRepository:
         self, review_id: str, *, status: str, payload: dict[str, Any]
     ) -> None:
         async with self.session_factory() as session:
-            row = await session.get(NewsOutcomeReviewORM, review_id)
+            row = (
+                await session.execute(
+                    select(NewsOutcomeReviewORM).where(
+                        NewsOutcomeReviewORM.review_id == review_id
+                    )
+                )
+            ).scalar_one_or_none()
             if row is None:
                 return
             row.status = status
@@ -922,8 +928,15 @@ class NewsRepository:
             ):
                 if key in payload:
                     setattr(row, key, payload[key])
-            for key in ("llm_called", "position_existed", "decision_id", "trade_plan_id"):
-                if key in payload:
+            for key in (
+                "llm_called",
+                "position_existed",
+                "decision_id",
+                "trade_plan_id",
+                "counterfactual_label",
+                "causal_claim",
+            ):
+                if key in payload and hasattr(row, key):
                     setattr(row, key, payload[key])
             row.payload_json = payload
             await session.commit()
@@ -991,6 +1004,123 @@ class NewsRepository:
         if event_id is None:
             return None
         return await self.get_current_event_snapshot(event_id)
+
+
+    async def list_recent_events(self, *, limit: int = 50) -> list[NewsEventSnapshot]:
+        async with self.session_factory() as session:
+            event_ids = (
+                (
+                    await session.execute(
+                        select(NewsEventORM.event_id)
+                        .order_by(NewsEventORM.updated_at.desc())
+                        .limit(max(1, min(limit, 200)))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        snapshots = []
+        for event_id in event_ids:
+            snapshot = await self.get_current_event_snapshot(event_id)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return snapshots
+
+    async def list_event_evidence(self, event_id: str) -> list[dict[str, Any]]:
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(NewsEvidenceORM)
+                        .where(NewsEvidenceORM.event_id == event_id)
+                        .order_by(NewsEvidenceORM.available_at, NewsEvidenceORM.news_evidence_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                {
+                    "news_evidence_id": row.news_evidence_id,
+                    "event_id": row.event_id,
+                    "event_version": row.event_version,
+                    "evidence_version": row.evidence_version,
+                    "symbol": row.symbol,
+                    "relevance_class": row.relevance_class,
+                    "direction": row.direction,
+                    "materiality_tier": row.materiality_tier,
+                    "materiality_score": row.materiality_score,
+                    "novelty_state": row.novelty_state,
+                    "freshness_score": row.freshness_score,
+                    "trigger_eligible": row.trigger_eligible,
+                    "available_at": _iso(row.available_at),
+                    "expires_at": _iso(row.expires_at),
+                    "factual_summary": row.factual_summary,
+                }
+                for row in rows
+            ]
+
+    async def list_event_decision_refs(self, event_id: str) -> list[dict[str, Any]]:
+        async with self.session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(NewsDecisionRefORM)
+                        .where(NewsDecisionRefORM.event_id == event_id)
+                        .order_by(NewsDecisionRefORM.id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                {
+                    "decision_id": row.decision_id,
+                    "ref": row.ref,
+                    "news_evidence_id": row.news_evidence_id,
+                    "event_version": row.event_version,
+                    "state_version": row.state_version,
+                    "as_of": _iso(row.as_of),
+                }
+                for row in rows
+            ]
+
+    async def latest_raw_ingest_at(self) -> datetime | None:
+        async with self.session_factory() as session:
+            value = (
+                await session.execute(select(func.max(NewsRawItemORM.ingested_at)))
+            ).scalar_one_or_none()
+            return _aware(value)
+
+    async def outcome_counts(self) -> dict[str, int]:
+        async with self.session_factory() as session:
+            total = int(
+                (
+                    await session.execute(select(func.count()).select_from(NewsOutcomeReviewORM))
+                ).scalar()
+                or 0
+            )
+            pending = int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(NewsOutcomeReviewORM)
+                        .where(NewsOutcomeReviewORM.status == "PENDING")
+                    )
+                ).scalar()
+                or 0
+            )
+            reviewed = int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(NewsOutcomeReviewORM)
+                        .where(NewsOutcomeReviewORM.status == "COMPLETED")
+                    )
+                ).scalar()
+                or 0
+            )
+        return {"total": total, "pending": pending, "completed": reviewed}
 
 
 # ---------------------------------------------------------------------------
