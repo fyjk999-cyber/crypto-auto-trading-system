@@ -310,6 +310,36 @@ class TradingEngine:
             actions.append("RECOVERY_FACTUAL_DIVERGENCE")
         else:
             self.health.set("recovery_factual_state", True, "MATCHED")
+        if self.leg_service is not None and self.leg_reconciler is not None:
+            open_legs = await self.leg_service.open_legs_all()
+            for symbol in sorted({str(leg["symbol"]) for leg in open_legs}):
+                position = await self.portfolio.get_position(symbol)
+                quantity = position.quantity if position is not None else Decimal("0")
+                leg_report = await self.leg_reconciler.reconcile(
+                    symbol,
+                    quantity,
+                    broker_quantity=quantity,
+                    after_restart=True,
+                )
+                if not leg_report["leg_execution_safe"]:
+                    self.reconciliation_halted = True
+                    self.health.set("leg_reconciliation", False, str(leg_report["status"]))
+                    await self.audit.log(
+                        "LEG_RECONCILIATION_HALTED",
+                        target=symbol,
+                        run_id=run_id,
+                        after={
+                            "status": leg_report["status"],
+                            "legacy_status": leg_report["legacy_status"],
+                            "checks": leg_report["checks"],
+                            "leg_quantity_issues": leg_report["leg_quantity_issues"][:3],
+                            "orphan_fills": leg_report["orphan_fills"][:3],
+                            "unknown_orders": leg_report["unknown_orders"][:3],
+                        },
+                    )
+                    actions.append("LEG_RECONCILIATION_HALTED")
+                else:
+                    self.health.set("leg_reconciliation", True, str(leg_report["status"]))
         report = await self.lineage_auditor.audit()
         self.health.set("factual_fill_lineage", bool(report["ok"]), report.get("flag") or "OK")
         if not report["ok"]:
@@ -570,9 +600,44 @@ class TradingEngine:
                 decision = await self.process_signal(signal)
                 if decision is not None:
                     decisions.append(decision)
+        open_legs = await self.leg_service.open_legs_all() if self.leg_service is not None else []
+        leg_symbols = sorted({str(leg["symbol"]) for leg in open_legs})
+        for symbol in leg_symbols:
+            ctx = await self._strategy_context(symbol)
+            if ctx is None:
+                continue
+            # Gross legs get their own deterministic protection regardless of
+            # the net aggregate (a LONG+SHORT symbol can net to zero).
+            leg_signals, leg_wake = await self._leg_deterministic_exit_signals(symbol, ctx)
+            for signal, exit_request_id in leg_signals:
+                decision = await self.process_signal(signal)
+                if decision is not None:
+                    decisions.append(decision)
+                if decision is None or decision.decision not in {
+                    ExecutionDecision.APPROVE,
+                    ExecutionDecision.SCALE_DOWN,
+                }:
+                    self.exit_controller.cancel(exit_request_id, "DETERMINISTIC_EXIT_NOT_SUBMITTED")
+            if leg_wake and self.position_manager is not None:
+                position = await self.portfolio.get_position(symbol)
+                if position is not None:
+                    try:
+                        signal = await self.position_manager.review(ctx, position, force=True)
+                    except Exception as exc:
+                        self.consecutive_failures += 1
+                        self.health.set("position_manager", False, type(exc).__name__)
+                    else:
+                        self.health.set("position_manager", True)
+                        if signal is not None:
+                            decision = await self.process_signal(signal)
+                            if decision is not None:
+                                decisions.append(decision)
         positions = await self.portfolio.get_positions()
         for position in positions.values():
             if position.quantity == 0:
+                continue
+            if position.symbol in leg_symbols:
+                # Already handled by the independent leg scan above.
                 continue
             ctx = await self._strategy_context(position.symbol)
             if ctx is None:
@@ -792,6 +857,163 @@ class TradingEngine:
             signals.append((signal, intent.reservation_request_id))
         return signals, wake_required
 
+    @staticmethod
+    def _leg_state_version(leg: dict) -> str:
+        updated = leg.get("updated_at")
+        return "|".join(
+            [
+                str(leg.get("leg_id")),
+                str(leg.get("state_version") or ""),
+                str(leg.get("remaining_quantity")),
+                updated.isoformat() if hasattr(updated, "isoformat") else "none",
+            ]
+        )
+
+    async def _leg_deterministic_exit_signals(
+        self, symbol: str, ctx
+    ) -> tuple[list[tuple[SignalIntent, str]], bool]:
+        """Evaluate deterministic protections per persisted leg.
+
+        Net position is only a view: a same-symbol LONG+SHORT can net to zero
+        while both legs carry real risk, so this scan never keys off the net.
+        """
+        if self.leg_service is None:
+            return [], False
+        legs = await self.leg_service.open_legs_for_symbol(symbol)
+        if not legs:
+            return [], False
+        mark = ctx.mark_price or ctx.book.mid_price()
+        if mark is None or mark <= 0:
+            return [], False
+        equity = ctx.account.equity if ctx.account is not None else Decimal("0")
+        position = await self.portfolio.get_position(symbol)
+        instrument_type = getattr(position, "instrument_type", "LINEAR_PERP")
+        contract_size = str(getattr(position, "contract_size", Decimal("1")) or 1)
+        contract_multiplier = str(getattr(position, "contract_multiplier", Decimal("1")) or 1)
+        market_state = None
+        get_market_state = getattr(self.adapter, "get_market_state", None)
+        if get_market_state is not None:
+            try:
+                market_state = await get_market_state(symbol)
+            except Exception:
+                market_state = None
+        atr_pct = float(ctx.realized_volatility or 0.0)
+        signals: list[tuple[SignalIntent, str]] = []
+        wake_required = False
+        for leg in legs:
+            leg_id = str(leg["leg_id"])
+            side = str(leg["side"])
+            remaining = Decimal(str(leg["remaining_quantity"]))
+            plan = None
+            if leg.get("trade_plan_id"):
+                plan = await self.trade_plans.get(str(leg["trade_plan_id"]))
+            base_exit = leg.get("base_exit") or (plan.base_exit if plan is not None else None)
+            if not base_exit:
+                await self.audit.log(
+                    "LEG_EXIT_MISSING_BASE_EXIT",
+                    target=leg_id,
+                    run_id=self.run_id,
+                    after={"symbol": symbol, "side": side},
+                )
+                continue
+            entry = D(str(leg.get("average_entry_price") or mark))
+            state_version = self._leg_state_version(leg)
+            notional = (
+                remaining
+                * Decimal(str(mark))
+                * Decimal(contract_size)
+                * Decimal(contract_multiplier)
+            )
+            self.exit_controller.ensure_leg(
+                leg_id=leg_id,
+                symbol=symbol,
+                side=side,
+                quantity=remaining,
+                entry_price=entry,
+                state_version=state_version,
+                plan_version=int(getattr(plan, "plan_version", 1) or 1),
+                base_exit=base_exit,
+                exposure_usd=notional,
+                equity_usd=equity if equity > 0 else Decimal("1"),
+                leverage=D(str(getattr(plan, "requested_leverage", 1) or 1)),
+                notional_usd=notional,
+                unrealized_pnl_pct=0.0,
+            )
+            intents = self.exit_controller.evaluate(
+                leg_id,
+                price=mark,
+                state=market_state,
+                atr_pct=atr_pct,
+            )
+            wake_required = wake_required or any(item.requires_llm_reassessment for item in intents)
+            for intent in intents:
+                if intent.reservation_request_id is None:
+                    continue
+                if not intent.quantity or intent.quantity <= 0:
+                    continue
+                fresh_legs = await self.leg_service.open_legs_for_symbol(symbol)
+                current = next((item for item in fresh_legs if item["leg_id"] == leg_id), None)
+                if current is None:
+                    self.exit_controller.cancel(
+                        intent.reservation_request_id, "LEG_CLOSED_BEFORE_SUBMIT"
+                    )
+                    await self.audit.log(
+                        "LEG_EXIT_LEG_CLOSED_BEFORE_SUBMIT",
+                        target=leg_id,
+                        run_id=self.run_id,
+                    )
+                    continue
+                if str(intent.state_version) != self._leg_state_version(current):
+                    self.exit_controller.cancel(
+                        intent.reservation_request_id, "STALE_DECISION_BEFORE_SUBMIT"
+                    )
+                    await self.audit.log(
+                        "DETERMINISTIC_EXIT_STALE",
+                        target=intent.reservation_request_id,
+                        run_id=self.run_id,
+                        after={"leg_id": leg_id, "reason_code": intent.reason_code},
+                    )
+                    continue
+                current_remaining = Decimal(str(current["remaining_quantity"]))
+                qty = min(Decimal(str(intent.quantity)), current_remaining)
+                if qty <= 0:
+                    continue
+                signal = SignalIntent(
+                    signal_id=new_id("detexit"),
+                    strategy_id="live_llm_position",
+                    symbol=symbol,
+                    side=OrderSide.SELL if side == "LONG" else OrderSide.BUY,
+                    quantity=qty,
+                    reason=intent.reason_code,
+                    metadata={
+                        "trade_plan_id": str(leg.get("trade_plan_id") or ""),
+                        "leg_id": leg_id,
+                        "leg_kind": str(leg.get("kind") or ""),
+                        "strategy": str(leg.get("strategy") or ""),
+                        "decision_id": f"det_{intent.reservation_request_id}",
+                        "direction": side,
+                        "lifecycle_action": intent.reason_code,
+                        "reduce_only": True,
+                        "deterministic_exit": True,
+                        "exit_authority": intent.authority,
+                        "exit_request_id": intent.reservation_request_id,
+                        "state_version": intent.state_version,
+                        "instrument_type": instrument_type,
+                        "contract_size": contract_size,
+                        "contract_multiplier": contract_multiplier,
+                        "requested_leverage": str(getattr(plan, "requested_leverage", 1) or 1),
+                    },
+                )
+                await self.audit.log(
+                    "DETERMINISTIC_EXIT_INTENT",
+                    target=signal.signal_id,
+                    run_id=self.run_id,
+                    client_order_id=f"{signal.strategy_id}_{signal.signal_id}"[:60],
+                    after={**intent.as_dict(), "leg_id": leg_id},
+                )
+                signals.append((signal, intent.reservation_request_id))
+        return signals, wake_required
+
     async def _strategy_context(self, symbol: str | None = None) -> StrategyContext | None:
         symbol = symbol or (
             getattr(self.strategies[0], "symbol", "BTCUSDT") if self.strategies else "BTCUSDT"
@@ -958,6 +1180,27 @@ class TradingEngine:
                     },
                 )
                 return None
+        lifecycle_action = str(signal.metadata.get("lifecycle_action") or "").upper()
+        if lifecycle_action in {"HEDGE", "REVERSE", "ADD"}:
+            target_leg_id = str(signal.metadata.get("leg_id") or "")
+            if not target_leg_id:
+                await self.audit.log(
+                    "LEG_TARGET_REQUIRED",
+                    target=client_order_id,
+                    run_id=run_id,
+                    after={"lifecycle_action": lifecycle_action, "symbol": signal.symbol},
+                )
+                return None
+            if self.leg_service is not None:
+                unknowns = await self.leg_service.unresolved_unknowns(target_leg_id)
+                if unknowns:
+                    await self.audit.log(
+                        "LEG_ORDER_UNKNOWN_BLOCKS_REPLACEMENT",
+                        target=target_leg_id,
+                        run_id=run_id,
+                        after={"unknown_orders": unknowns[:5]},
+                    )
+                    return None
         if (is_entry or is_position_action) and not trade_plan_id:
             await self.audit.log(
                 "TRADEPLAN_REQUIRED",
@@ -1366,6 +1609,18 @@ class TradingEngine:
             before={"status": OrderStatus.SUBMITTED.value},
             after={"status": exchange_order.status.value},
         )
+        if order.metadata.get("leg_id") and self.leg_service is not None:
+            await self.leg_service.record_leg_order(
+                leg_id=str(order.metadata["leg_id"]),
+                client_order_id=order.client_order_id,
+                side=order.side.value,
+                intended_quantity=order.quantity,
+                trade_plan_id=order.metadata.get("trade_plan_id"),
+                decision_id=order.metadata.get("decision_id"),
+                reduce_only=bool(order.metadata.get("reduce_only")),
+                source_action=str(order.metadata.get("lifecycle_action") or ""),
+                internal_order_id=order.internal_order_id,
+            )
         self.health.set("submission", True)
         return risk_decision
 
@@ -1510,11 +1765,19 @@ class TradingEngine:
         )
         leg_id = order.metadata.get("leg_id")
         if leg_id and self.leg_service is not None:
-            # Hedge/reverse legs track their own factual quantity; a fill on one
-            # side must never silently net into the opposite leg of the symbol.
+            # Every leg fill is allocated to exactly one leg and is idempotent
+            # by fill_id; duplicate WS/REST delivery cannot double-apply.
             try:
-                remaining = await self.leg_service.apply_order_fill(
-                    str(leg_id), order.side, fill.quantity
+                allocation = await self.leg_service.allocate_fill(
+                    fill_id=str(fill.fill_id),
+                    leg_id=str(leg_id),
+                    side=order.side,
+                    price=fill.price,
+                    quantity=fill.quantity,
+                    fee=getattr(fill, "fee", None),
+                    client_order_id=order.client_order_id,
+                    order_id=order.internal_order_id,
+                    terminal_reason=("EXIT" if order.metadata.get("reduce_only") is True else None),
                 )
                 await self.audit.log(
                     "LEG_FILL_APPLIED",
@@ -1523,10 +1786,20 @@ class TradingEngine:
                     order_id=order.internal_order_id,
                     after={
                         "side": order.side.value,
+                        "fill_id": str(fill.fill_id),
                         "fill_quantity": str(fill.quantity),
-                        "remaining_quantity": str(remaining) if remaining is not None else None,
+                        "price": str(fill.price),
+                        "duplicate": allocation.get("duplicate"),
+                        "remaining_quantity": str(allocation.get("remaining_quantity")),
                     },
                 )
+                if allocation.get("duplicate"):
+                    await self.audit.log(
+                        "LEG_FILL_DUPLICATE_IGNORED",
+                        target=str(leg_id),
+                        run_id=self.run_id,
+                        after={"fill_id": str(fill.fill_id)},
+                    )
             except Exception:
                 logger.exception("LEG_FILL_APPLY_FAILED leg_id=%s", leg_id)
         position = await self.portfolio.get_position(fill.symbol)

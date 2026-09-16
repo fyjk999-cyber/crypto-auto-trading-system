@@ -337,3 +337,103 @@ def test_lineage_coverage_endpoint_flags_untracked_fills(database):
     assert flagged["flag"] == "UNTRACKED_FACTUAL_FILL"
     assert flagged["untracked"][0]["fill_id"] == "fill-api-untracked"
     assert flagged["is_order"] is False
+
+
+def test_position_legs_summary_and_detail_expose_economics_and_lineage(database):
+    import asyncio
+    from decimal import Decimal
+
+    from crypto_trader.execution.hedge_legs import (
+        HedgeLegContract,
+        LegKind,
+        PositionLegService,
+    )
+
+    service = PositionLegService(database.session_factory)
+    long_contract = HedgeLegContract(
+        leg_id="leg-api-long",
+        symbol="BTCUSDT",
+        side="LONG",
+        kind=LegKind.ENTRY,
+        strategy="BREAKOUT",
+        thesis="breakout continuation over 105",
+        base_exit={"type": "PRICE", "trigger": "<=99", "size_pct": 100},
+        invalidation="close below 98",
+        evidence_families=["trend"],
+        reason="momentum entry",
+    )
+    short_contract = HedgeLegContract(
+        leg_id="leg-api-short",
+        symbol="BTCUSDT",
+        side="SHORT",
+        kind=LegKind.HEDGE,
+        strategy="MEAN_REVERT",
+        thesis="range rejection at 112 with exhaustion",
+        base_exit={"type": "PRICE", "trigger": ">=111", "size_pct": 100},
+        invalidation="acceptance above 115",
+        evidence_families=["mean_reversion"],
+        reason="independent reversal thesis",
+    )
+
+    async def seed():
+        assert (
+            await service.register(long_contract, trade_plan_id="plan-l", decision_id="d-l")
+        ).allowed
+        assert (
+            await service.register(short_contract, trade_plan_id="plan-s", decision_id="d-s")
+        ).allowed
+        await service.allocate_fill(
+            fill_id="api-l",
+            leg_id="leg-api-long",
+            side="BUY",
+            price=Decimal("100"),
+            quantity=Decimal("1"),
+        )
+        await service.allocate_fill(
+            fill_id="api-s",
+            leg_id="leg-api-short",
+            side="SELL",
+            price=Decimal("102"),
+            quantity=Decimal("1"),
+        )
+
+    asyncio.run(seed())
+    client = TestClient(create_app(make_state(database)))
+
+    listing = client.get("/position-legs", params={"symbol": "BTCUSDT"}).json()
+    assert listing["count"] == 2
+    by_id = {leg["leg_id"]: leg for leg in listing["position_legs"]}
+    long_leg = by_id["leg-api-long"]
+    assert long_leg["average_entry_price"] == 100
+    assert long_leg["remaining_quantity"] == 1
+    assert long_leg["base_exit"]["trigger"] == "<=99"
+    assert long_leg["orders"] == []
+    assert [fill["fill_id"] for fill in long_leg["fills"]] == ["api-l"]
+    assert long_leg["reconciliation"]["status"] in {"MATCH", "RECOVERED", "PENDING_ORDER"}
+    assert long_leg["authority"] == "POSITION_LEG_ECONOMICS"
+
+    summary = client.get("/position-legs/summary", params={"symbol": "BTCUSDT"}).json()
+    row = summary["symbols"][0]
+    assert row["gross_long_quantity"] == 1
+    assert row["gross_short_quantity"] == 1
+    assert row["net_quantity"] == 0
+    assert row["gross_quantity"] == 2
+    assert row["leg_count"] == 2
+    assert row["both_sides"] is True
+    assert row["netting_hides_gross"] is True
+    assert summary["not_an_order"] is True
+
+    detail = client.get("/position-legs/leg-api-long").json()
+    assert detail["leg_id"] == "leg-api-long"
+    assert detail["strategy"] == "BREAKOUT"
+    assert detail["lineage"] == {
+        "trade_plan_id": "plan-l",
+        "decision_id": "d-l",
+        "state_version": None,
+        "reverse_of": None,
+    }
+    assert detail["orders"] == []
+    assert [fill["fill_id"] for fill in detail["fills"]] == ["api-l"]
+    assert detail["reconciliation"]["status"] in {"MATCH", "RECOVERED"}
+    assert detail["authority"] == "NEW_RISK_REQUIRES_CORE_LLM"
+    assert detail["not_an_order"] is True

@@ -76,6 +76,21 @@ class RuntimeBundle:
     app_state: AppState
 
 
+def leg_execution_enabled_from_env() -> bool:
+    """Operational leg execution is OFF unless explicitly enabled.
+
+    Default-off keeps the pre-closure fail-closed behavior; a PAPER acceptance
+    run may set LEG_EXECUTION_ENABLED=true to accumulate factual hedge/reverse
+    evidence without ever enabling LIVE trading.
+    """
+    return os.environ.get("LEG_EXECUTION_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 async def build_system(settings: Settings) -> RuntimeBundle:
     database = Database(settings.database_url)
     await database.init_schema()
@@ -293,6 +308,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         leg_service=leg_service,
         leg_reconciler=LegPositionReconciler(leg_service),
     )
+    engine.leg_execution_enabled = leg_execution_enabled_from_env()
     runtime_holder["engine"] = engine
     runtime_holder["strategy"] = live_llm
 
