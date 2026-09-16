@@ -48,9 +48,7 @@ class OKXPublicMarketFeed:
         self.warmup_status = "NOT_ATTEMPTED"
         self.warmup_loaded = 0
         self.warmup_error: str | None = None
-        self.min_refresh_interval = timedelta(
-            seconds=max(0.0, min_refresh_interval_seconds)
-        )
+        self.min_refresh_interval = timedelta(seconds=max(0.0, min_refresh_interval_seconds))
 
     def provider_symbol(self, symbol: str) -> str:
         return SymbolMapper().to_okx(symbol)
@@ -105,9 +103,7 @@ class OKXPublicMarketFeed:
 
         symbol = symbol or self.symbol
         try:
-            raw = await self.client.get_candles(
-                self.provider_symbol(symbol), interval, bars
-            )
+            raw = await self.client.get_candles(self.provider_symbol(symbol), interval, bars)
             closed: dict[int, list] = {}
             for row in raw:
                 if not isinstance(row, list) or len(row) < 9 or str(row[8]) != "1":
@@ -159,10 +155,7 @@ class OKXPublicMarketFeed:
         provider_symbol = self.provider_symbol(symbol)
         now = datetime.now(UTC)
         existing = self.states.get(symbol)
-        if (
-            existing is not None
-            and now - existing.received_timestamp < self.min_refresh_interval
-        ):
+        if existing is not None and now - existing.received_timestamp < self.min_refresh_interval:
             self._update_source_ages(existing, now)
             return existing
         state = self._state(symbol)
@@ -252,6 +245,11 @@ class OKXPublicMarketFeed:
             if bid is None or ask is None:
                 raise ValueError("OKX orderbook has no bid or ask")
             state.best_bid, state.best_ask = bid.price, ask.price
+            state.bid_size, state.ask_size = bid.quantity, ask.quantity
+            total = bid.quantity + ask.quantity
+            state.imbalance_l1 = (
+                (bid.quantity - ask.quantity) / total if total > 0 else Decimal("0")
+            )
             state.spread = ask.price - bid.price
             state.depth = sum((level.quantity for level in book.bids.values()), Decimal("0")) + sum(
                 (level.quantity for level in book.asks.values()), Decimal("0")
@@ -261,6 +259,9 @@ class OKXPublicMarketFeed:
         except Exception as exc:
             state.best_bid = Decimal("0")
             state.best_ask = Decimal("0")
+            state.bid_size = Decimal("0")
+            state.ask_size = Decimal("0")
+            state.imbalance_l1 = Decimal("0")
             state.spread = Decimal("0")
             state.depth = Decimal("0")
             state.depth_bid_5 = Decimal("0")
@@ -342,9 +343,7 @@ class OKXPublicMarketFeed:
             parsed.sort(key=lambda entry: entry[0])
             for entry in parsed:
                 window.append(entry)
-            cutoff_ms = int(now.timestamp() * 1000) - int(
-                self.trades_max_window_seconds * 1000
-            )
+            cutoff_ms = int(now.timestamp() * 1000) - int(self.trades_max_window_seconds * 1000)
             live = [entry for entry in window if entry[0] >= cutoff_ms]
             if not live:
                 raise ValueError("no factual trades inside the bounded window")
@@ -361,9 +360,7 @@ class OKXPublicMarketFeed:
                 1 for value in notionals if value >= self.large_trade_notional_usd
             )
             state.largest_trade_notional = largest
-            state.trades_window_seconds = max(
-                0.0, (live[-1][0] - live[0][0]) / 1000.0
-            )
+            state.trades_window_seconds = max(0.0, (live[-1][0] - live[0][0]) / 1000.0)
             state.last_trade_price = live[-1][3]
             self._status(state, "trades", now, DataHealth.HEALTHY)
         except Exception as exc:
@@ -403,9 +400,7 @@ class OKXPublicMarketFeed:
             return list(entry[1])
         provider_bar = OKX_BAR_MAP.get(bar, bar)
         try:
-            rows = await self.client.get_candles(
-                self.provider_symbol(symbol), provider_bar, limit
-            )
+            rows = await self.client.get_candles(self.provider_symbol(symbol), provider_bar, limit)
         except Exception:
             if entry is not None:
                 return list(entry[1])
@@ -463,9 +458,7 @@ def _apply_book_microstructure(state: MarketState, book: OrderBook) -> None:
             ) / top
     mid = (state.best_bid + state.best_ask) / Decimal("2")
     state.spread_bps = (
-        (state.best_ask - state.best_bid) / mid * Decimal("10000")
-        if mid > 0
-        else Decimal("0")
+        (state.best_ask - state.best_bid) / mid * Decimal("10000") if mid > 0 else Decimal("0")
     )
 
 

@@ -71,6 +71,9 @@ class MarketState(BaseModel):
     trades_window_seconds: float = 0.0
     last_trade_price: StrictDecimal | None = None
     # Book microstructure facts derived from the same bounded snapshot.
+    bid_size: StrictDecimal = Decimal("0")
+    ask_size: StrictDecimal = Decimal("0")
+    imbalance_l1: Decimal = Decimal("0")
     depth_bid_5: StrictDecimal = Decimal("0")
     depth_ask_5: StrictDecimal = Decimal("0")
     depth_bid_10: StrictDecimal = Decimal("0")
@@ -150,10 +153,7 @@ class MarketState(BaseModel):
                 reasons.append(f"{name.upper()}_UNAVAILABLE")
             elif status.status == DataHealth.STALE:
                 reasons.append(f"{name.upper()}_STALE")
-            elif (
-                status.age_seconds is not None
-                and status.age_seconds > max_optional_age_seconds
-            ):
+            elif status.age_seconds is not None and status.age_seconds > max_optional_age_seconds:
                 reasons.append(f"{name.upper()}_AGED")
         if core_unavailable:
             quality = DataHealth.UNAVAILABLE

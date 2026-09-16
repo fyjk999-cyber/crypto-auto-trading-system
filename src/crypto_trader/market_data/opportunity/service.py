@@ -218,7 +218,6 @@ class OpportunityScannerService:
             except Exception:
                 pass  # factual states remain whatever the canonical feed already has
 
-
         # ---- per-symbol factual candles + factor scan -----------------------
         facts_by_symbol: dict[str, SymbolFacts] = {}
         candle_fetch_errors = 0
@@ -235,6 +234,8 @@ class OpportunityScannerService:
                 last_price=row["last"],
                 bid=row["bid"],
                 ask=row["ask"],
+                bid_qty=float(state.bid_size) if state is not None else None,
+                ask_qty=float(state.ask_size) if state is not None else None,
                 volume_24h_usd=row["vol_usd_24h"],
                 price_change_24h_pct=row["price_change_24h_pct"],
                 funding_rate=row["funding_rate"],
