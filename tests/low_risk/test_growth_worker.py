@@ -85,7 +85,6 @@ async def test_worker_cycle_idempotent_and_heartbeat(database, tmp_path):
 
 
 async def test_worker_records_degraded_without_trading_impact(database, tmp_path, monkeypatch):
-    from crypto_trader.learning import growth_worker as worker_module
 
     async def boom(*args, **kwargs):
         raise RuntimeError("db_down")
