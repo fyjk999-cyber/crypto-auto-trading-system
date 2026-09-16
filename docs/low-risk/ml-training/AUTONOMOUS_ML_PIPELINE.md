@@ -57,3 +57,5 @@ post-cost + shadow + promotion (`crypto_trader.ml_shadow`) -> registry/lifecycle
 - Factual samples: 0 until services are deployed; `ML_DATA_READY = NO`.
 - `MODEL_21_TRAINING_STATUS = WAITING_FOR_FACTUAL_SAMPLES`;
   `MODEL_25_TRAINING_STATUS = WAITING_FOR_FACTUAL_SAMPLES`.
+- Full repository suite on this SHA: `pytest tests -q` -> **892 passed**, 1 warning, 101.9s
+- Factual deployment status: services not yet installed; `COLLECTOR_RUNNING = NO`; samples 0.
