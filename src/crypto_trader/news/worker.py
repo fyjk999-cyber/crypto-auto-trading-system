@@ -269,10 +269,52 @@ class NewsWorker:
             await provider.close()
 
 
-def _item_priority(item) -> tuple[int, float]:
+_CRITICAL_NEWS_HINTS = (
+    "hack",
+    "exploit",
+    "security incident",
+    "security breach",
+    "outage",
+    "halt",
+    "suspend",
+    "delist",
+    "enforcement",
+    "charges",
+    "lawsuit",
+    "ban",
+    "liquidation",
+    "insolvent",
+    "bankrupt",
+    "depeg",
+)
+_DIRECT_SYMBOL_HINTS = (
+    "bitcoin",
+    "btc",
+    "ethereum",
+    "eth",
+    "solana",
+    "sol",
+    "xrp",
+    "ripple",
+    "dogecoin",
+    "doge",
+    "cardano",
+    "ada",
+    "avalanche",
+    "avax",
+    "chainlink",
+    "link",
+)
+
+
+def _item_priority(item) -> tuple[int, int, int, float]:
+    """Bounded backpressure priority (no authority; ordering only)."""
     source_rank = 0 if item.source_class.value.endswith("OFFICIAL") else 1
+    text = f"{getattr(item, 'title', '')} {getattr(item, 'summary', '')}".lower()
+    critical_rank = 0 if any(hint in text for hint in _CRITICAL_NEWS_HINTS) else 1
+    direct_rank = 0 if any(hint in text for hint in _DIRECT_SYMBOL_HINTS) else 1
     timestamp = item.published_at.timestamp() if item.published_at else 0.0
-    return (source_rank, -timestamp)
+    return (source_rank, critical_rank, direct_rank, -timestamp)
 
 
 def _merge_pipeline_metrics(metrics: NewsCycleMetrics, pipeline_metrics: NewsCycleMetrics) -> None:

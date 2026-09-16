@@ -175,10 +175,11 @@ class NewsRetriever:
             ).all()
         if not rows:
             return AggregateHealth.NO_NEWS_AVAILABLE
-        healthy = [status for status, _errors in rows if status == ProviderHealth.HEALTHY.value]
-        if healthy and len(healthy) == len(rows):
+        statuses = [str(status or "") for status, _errors in rows]
+        healthy = [status for status in statuses if status == ProviderHealth.HEALTHY.value]
+        if healthy and len(healthy) == len(statuses):
             return AggregateHealth.HEALTHY
-        if healthy or any(status not in {ProviderHealth.DISABLED.value} for status, _ in rows):
+        if healthy:
             return AggregateHealth.PARTIAL_NEWS_AVAILABLE
         return AggregateHealth.NO_NEWS_AVAILABLE
 

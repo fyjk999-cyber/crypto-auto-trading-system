@@ -78,13 +78,16 @@ async def news_status(
 
 
 def _aggregate_health(provider_rows: list[dict], event_count: int) -> AggregateHealth:
+    # Provider availability owns aggregate health truth. Cached historical rows
+    # must not paper over a total provider outage (SS26/SS46).
+    del event_count
     if not provider_rows:
         return AggregateHealth.NO_NEWS_AVAILABLE
     statuses = [str(row.get("status") or "") for row in provider_rows]
     healthy = [status for status in statuses if status == ProviderHealth.HEALTHY.value]
     if healthy and len(healthy) == len(statuses):
         return AggregateHealth.HEALTHY
-    if healthy or event_count > 0:
+    if healthy:
         return AggregateHealth.PARTIAL_NEWS_AVAILABLE
     return AggregateHealth.NO_NEWS_AVAILABLE
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -50,7 +51,15 @@ def test_news_launchd_artifacts_exist_and_are_evidence_only():
     assert "manual-orders" not in text
     script_text = script.read_text()
     assert "scripts/news_worker.py" in script_text
-    assert "data/news/news.db" in script_text
+    assert "PYTHONPATH" in script_text
+    assert "ML_PYTHON" in script_text
+    assert "NEWS_DB_PATH" in script_text
+    assert "__PYTHON__" not in script_text
+    assert "__REPO__" not in script_text
+    syntax = subprocess.run(
+        ["/bin/zsh", "-n", str(script)], capture_output=True, text=True
+    )
+    assert syntax.returncode == 0, syntax.stderr
 
 
 async def test_worker_heartbeat_advances_and_circuit_breaker_engages(database, tmp_path):
