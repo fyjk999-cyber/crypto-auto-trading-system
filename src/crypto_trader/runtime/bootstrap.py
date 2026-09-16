@@ -42,6 +42,11 @@ from crypto_trader.market_data.opportunity.service import OpportunityScannerServ
 from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.market_data.service import MarketDataService
 from crypto_trader.news.config import NewsConfig
+from crypto_trader.news.reassessment import (
+    NewsReassessmentRuntime,
+    NewsReassessmentService,
+)
+from crypto_trader.news.repository import NewsRepository
 from crypto_trader.news.retrieval import NewsRetriever
 from crypto_trader.observability.audit import AuditService
 from crypto_trader.order.manager import OrderManager
@@ -161,6 +166,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     llm_decisions = LLMDecisionStore(database.session_factory)
     news_enabled = _news_context_enabled()
     news_retriever = None
+    news_reassessment_runtime = None
     if news_enabled:
         news_config = NewsConfig.from_env()
         news_retriever = NewsRetriever(
@@ -168,6 +174,14 @@ async def build_system(settings: Settings) -> RuntimeBundle:
             top_k=news_config.context_top_k,
             token_budget=news_config.context_token_budget,
             include_broad=news_config.context_include_broad,
+        )
+        # N7: material factual News wakes the same canonical Core LLM path.
+        # This is a dispatch seam, never an order/risk authority.
+        news_reassessment_runtime = NewsReassessmentRuntime(
+            NewsReassessmentService(
+                database.session_factory,
+                repository=NewsRepository(database.session_factory),
+            )
         )
     chief_context = ChiefContextLoader(
         database.session_factory,
@@ -307,6 +321,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         llm_router=llm_provider,
         leg_service=leg_service,
         leg_reconciler=LegPositionReconciler(leg_service),
+        news_reassessment_runtime=news_reassessment_runtime,
     )
     runtime_holder["engine"] = engine
     runtime_holder["strategy"] = live_llm
