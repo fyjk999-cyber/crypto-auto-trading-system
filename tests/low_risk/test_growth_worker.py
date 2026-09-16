@@ -464,3 +464,44 @@ async def test_worker_creates_validated_compression_only_on_validation(
     assert calls == ["g1"]
     assert result["validated_compressed"] == 1
     assert worker.metrics["validated_compressed_created"] == 1
+
+
+def _make_trading_source(path):
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE growth_lifecycle_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, episode_id TEXT, kind TEXT,
+        payload_json TEXT)""")
+    conn.execute(
+        "INSERT INTO growth_lifecycle_events (episode_id, kind, payload_json)"
+        ' VALUES (\'ep-t1\',\'ADD\',\'{"event_id":"e1","symbol":"BTCUSDT",'
+        '"regime":"TREND_UP","strategy":"breakout","direction":"LONG"}\')'
+    )
+    conn.execute(
+        "INSERT INTO growth_lifecycle_events (episode_id, kind, payload_json)"
+        ' VALUES (\'ep-t2\',\'RISK_L1\',\'{"event_id":"e2","symbol":"BTCUSDT"}\')'
+    )
+    conn.commit()
+    conn.close()
+
+
+async def test_worker_ingests_readonly_trading_contract_once(database, tmp_path):
+    from crypto_trader.learning.lifecycle_reviews import LifecycleReviewEngine
+
+    source = tmp_path / "trading.db"
+    _make_trading_source(source)
+    worker = GrowthWorker(
+        database.session_factory,
+        tmp_path,
+        FakeClient(),
+        code_sha="sha",
+        trading_source_db=str(source),
+    )
+    first = await worker._ingest_trading_lifecycle()
+    assert first["status"] == "OK" and first["seen"] == 2 and first["created"] == 2
+    second = await worker._ingest_trading_lifecycle()
+    assert second["created"] == 0  # durable cursor, restart-safe
+    reviews = await LifecycleReviewEngine(database.session_factory).list_reviews(limit=10)
+    assert {r["review_type"] for r in reviews} == {"ADD_REVIEW", "RISK_REVIEW"}
+    assert worker.metrics["trade_events_seen"] == 2

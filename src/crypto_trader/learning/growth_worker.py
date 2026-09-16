@@ -11,9 +11,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
+from crypto_trader.learning.lifecycle_reviews import LifecycleReviewEngine
 from crypto_trader.learning.memory_speed_store import MemorySpeedStore
 from crypto_trader.learning.memory_speeds import MemoryRecord, apply_observation
 from crypto_trader.learning.pattern_profile import GrowthMemoryPipeline
+from crypto_trader.learning.trading_source import GrowthTradingSource
 from crypto_trader.market_data.opportunity import ledger_freeze, outcome_maturer
 from crypto_trader.persistence.models import (
     AIMarketPatternORM,
@@ -293,6 +295,45 @@ class GrowthWorker:
         )
         return updated
 
+    async def _ingest_trading_lifecycle(self, batch: int = 100) -> dict:
+        source = GrowthTradingSource(self.trading_source_db)
+        if not source.available():
+            return {"status": "SOURCE_MISSING", "seen": 0, "created": 0}
+        if not source.has_contract():
+            return {"status": "NO_SOURCE_CONTRACT", "seen": 0, "created": 0}
+        cursor = int(self.state.get("last_trading_event_id", 0))
+        rows = source.events_after(cursor, batch)
+        engine = LifecycleReviewEngine(self._session_factory)
+        created = 0
+        by_episode: dict[str, list[dict]] = {}
+        for row in rows:
+            episode_id = str(row.get("episode_id") or "")
+            if not episode_id:
+                continue
+            payload = row.get("payload_json")
+            if isinstance(payload, str):
+                import json as _json
+
+                try:
+                    payload = _json.loads(payload)
+                except ValueError:
+                    payload = {}
+            event = dict(payload or {})
+            event.setdefault("event_id", f"src-{row.get('id')}")
+            event.setdefault("kind", row.get("kind") or row.get("action") or "")
+            by_episode.setdefault(episode_id, []).append(event)
+        for episode_id, events in by_episode.items():
+            created += await engine.ingest_events(episode_id, events)
+            cursor_id = max(
+                int(row.get("id") or 0) for row in rows if str(row.get("episode_id")) == episode_id
+            )
+            cursor = max(cursor, cursor_id)
+        self.state["last_trading_event_id"] = cursor
+        metrics = self.metrics
+        metrics["trade_events_seen"] = int(metrics.get("trade_events_seen", 0)) + len(rows)
+        metrics["reviews_created"] = int(metrics.get("reviews_created", 0)) + created
+        return {"status": "OK", "seen": len(rows), "created": created}
+
     async def _apply_reviewed_patterns(self, limit: int = 100) -> dict:
         cursor = int(self.state.get("last_applied_review_id", 0))
         async with self._session_factory() as session:
@@ -395,6 +436,7 @@ class GrowthWorker:
             "memory_updates": 0,
             "pattern_profile": {},
             "retrieval_versions": 0,
+            "lifecycle": {},
             "errors": [],
         }
         self._heartbeat_stage("SCAN_INGEST")
@@ -421,6 +463,10 @@ class GrowthWorker:
         except Exception as exc:
             summary["errors"].append(f"outcomes:{type(exc).__name__}")
         self._heartbeat_stage("LIFECYCLE_REVIEW")
+        try:
+            summary["lifecycle"] = await self._ingest_trading_lifecycle(batch=self.review_batch)
+        except Exception as exc:
+            summary["errors"].append(f"lifecycle:{type(exc).__name__}")
         self._heartbeat_stage("MEMORY_UPDATE")
         try:
             summary["memory_updates"] = await self._update_memory(limit=self.memory_batch)
