@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = (
     ("com.lowrisk.mlcollector.plist", "com.lowrisk.mlcollector", "ml_collector"),
     ("com.lowrisk.mltrainer.plist", "com.lowrisk.mltrainer", "ml_trainer"),
+    ("com.lowrisk.growth.plist", "com.lowrisk.growth", "growth"),
 )
 
 

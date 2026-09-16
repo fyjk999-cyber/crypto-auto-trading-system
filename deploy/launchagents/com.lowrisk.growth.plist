@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lowrisk.growth</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/scripts/run_growth_macos.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__REPO__/data/growth/logs/growth.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/data/growth/logs/growth.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ML_PYTHON</key>
+    <string>__PYTHON__</string>
+    <key>RUNNING_SHA</key>
+    <string>__SHA__</string>
+    <key>GROWTH_INTERVAL_SECONDS</key>
+    <string>300</string>
+  </dict>
+</dict>
+</plist>
