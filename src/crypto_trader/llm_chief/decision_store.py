@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import select
 
 from crypto_trader.llm_chief.decision import ChiefTraderDecision, PositionState
+from crypto_trader.llm_chief.growth_context import split_context_refs
 from crypto_trader.persistence.models import LLMDecisionORM
 
 
@@ -49,12 +50,17 @@ class LLMDecisionStore:
         memory_refs: list[str] | None = None,
         research_refs: list[str] | None = None,
         episode_refs: list[str] | None = None,
+        growth_context: dict[str, Any] | None = None,
         parent_decision_id: str | None = None,
         position_context: dict[str, Any] | None = None,
         opportunity_lineage: dict[str, Any] | None = None,
     ) -> LLMDecisionRecord:
         lineage = opportunity_lineage or {}
         position = position_context or {}
+        typed = split_context_refs((growth_context or {}).get("memory_refs", []))
+        memory_refs = list(dict.fromkeys((memory_refs or []) + typed["memory_refs_json"]))
+        episode_refs = list(dict.fromkeys((episode_refs or []) + typed["episode_refs_json"]))
+        research_refs = list(dict.fromkeys((research_refs or []) + typed["research_refs_json"]))
         async with self.session_factory() as session:
             row = await session.get(LLMDecisionORM, decision.decision_id)
             if row is None:
@@ -120,9 +126,7 @@ class LLMDecisionStore:
                     if getattr(row, field) != expected
                 ]
                 if conflicts:
-                    raise ValueError(
-                        "immutable LLM decision conflict: " + ",".join(conflicts)
-                    )
+                    raise ValueError("immutable LLM decision conflict: " + ",".join(conflicts))
             return self._record(row)
 
     async def link_trade_plan(self, decision_id: str, trade_plan_id: str) -> None:
