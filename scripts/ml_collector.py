@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from crypto_trader.exchange.okx import OKXAdapter
+from crypto_trader.factors.expert.engine import ExpertEvidenceEngine
 from crypto_trader.market_data.okx_public_feed import OKXPublicMarketFeed
 from crypto_trader.market_data.opportunity.board import OpportunityBoard
 from crypto_trader.market_data.opportunity.eligibility import EligibilityFilter
@@ -53,6 +54,25 @@ async def main(db, status):
     async def prefetch(symbols):
         await asyncio.gather(*(feed.refresh(sym) for sym in symbols[:24]), return_exceptions=True)
 
+    async def expert_timeframes(symbol):
+        bars = ("4h", "1h", "15m", "5m", "1m")
+        results = await asyncio.gather(
+            *(
+                feed.get_closed_candles(symbol, bar=bar, limit=300)
+                for bar in bars
+            ),
+            return_exceptions=True,
+        )
+        return {
+            bar: ([] if isinstance(result, BaseException) else result)
+            for bar, result in zip(bars, results, strict=False)
+        }
+
+    expert_engine = ExpertEvidenceEngine(
+        timeframe_provider=expert_timeframes,
+        state_provider=lambda symbol: feed.states.get(symbol),
+    )
+
     v = OpportunityScannerService(
         universe=OkxUniverseManager(c),
         okx_client=c,
@@ -66,6 +86,7 @@ async def main(db, status):
         state_prefetch=prefetch,
         snapshot_collector=ScanSnapshotCollector(d.session_factory),
         control_sample_size=20,
+        expert_engine=expert_engine,
     )
     st = {
         "pid": os.getpid(),

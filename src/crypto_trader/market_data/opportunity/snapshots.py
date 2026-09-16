@@ -22,7 +22,99 @@ from crypto_trader.domain.identifiers import new_id
 from crypto_trader.persistence.models import ScanSnapshotORM
 
 SCAN_FEATURE_VERSION = "scan-features-v1"
+MODEL_EVIDENCE_SCHEMA_VERSION = "model-evidence-v1"
 CONTROL_SAMPLING_METHOD = "STRATIFIED_RANDOM"
+MODEL_25_ID = "25_META_FORECAST"
+
+
+def _evidence_dict(item) -> dict:
+    if isinstance(item, dict):
+        return dict(item)
+    as_dict = getattr(item, "as_dict", None)
+    if callable(as_dict):
+        return dict(as_dict())
+    return {
+        key: getattr(item, key, None)
+        for key in (
+            "model_id",
+            "model_version",
+            "family",
+            "direction",
+            "direction_score",
+            "score",
+            "confidence",
+            "available",
+            "theory",
+            "supporting_evidence",
+            "counter_evidence",
+            "neutral_evidence",
+            "regime_compatibility",
+            "strategy_compatibility",
+            "data_quality",
+            "freshness_seconds",
+            "sample_size",
+            "reliability_tier",
+            "metrics",
+            "unavailable_reason",
+        )
+    }
+
+
+def freeze_model_evidence(model_evidence: list | None) -> list[dict]:
+    """Freeze factual ##24 decision-time evidence without reconstruction.
+
+    Unknown fields stay explicit as ``None``/empty lists; #25 is excluded from
+    its own training input to prevent self-feature leakage.
+    """
+    frozen: list[dict] = []
+    for item in model_evidence or []:
+        data = _evidence_dict(item)
+        model_id = data.get("model_id")
+        if not model_id or model_id == MODEL_25_ID:
+            continue
+        metrics = data.get("metrics")
+        metrics = dict(metrics) if isinstance(metrics, dict) else {}
+        direction = data.get("direction")
+        available = data.get("available")
+        if available is None:
+            available = str(direction or "").upper() not in {"", "UNAVAILABLE", "NONE"}
+        score = data.get("score")
+        if score is None:
+            score = data.get("direction_score")
+        frozen.append(
+            {
+                "model_id": str(model_id),
+                "model_version": data.get("model_version"),
+                "family": data.get("family"),
+                "available": bool(available),
+                "direction": str(direction) if direction is not None else None,
+                "score": score,
+                "direction_score": data.get("direction_score", score),
+                "confidence": data.get("confidence"),
+                "quality": data.get("data_quality"),
+                "data_quality": data.get("data_quality"),
+                "freshness": data.get("freshness_seconds"),
+                "freshness_seconds": data.get("freshness_seconds"),
+                "theory": data.get("theory"),
+                "reason": data.get("theory"),
+                "supporting_evidence": list(data.get("supporting_evidence") or []),
+                "counter_evidence": list(data.get("counter_evidence") or []),
+                "neutral_evidence": list(data.get("neutral_evidence") or []),
+                "regime_compatibility": list(data.get("regime_compatibility") or []),
+                "strategy_compatibility": list(data.get("strategy_compatibility") or []),
+                "metrics": metrics,
+                "sample_size": data.get("sample_size"),
+                "reliability_tier": data.get("reliability_tier"),
+                "unavailable_reason": data.get("unavailable_reason"),
+                "source_refs": list(metrics.get("source_refs") or []),
+                "artifact_status": metrics.get("artifact_status"),
+                "artifact_version": metrics.get(
+                    "artifact_version", metrics.get("model_version")
+                ),
+                "artifact_hash": metrics.get("artifact_hash"),
+            }
+        )
+    return frozen
 
 
 def decision_time_features(
@@ -43,25 +135,18 @@ def decision_time_features(
     volume_24h = getattr(facts, "volume_24h_usd", None)
     cohort = getattr(facts, "cohort_median_turnover_usd", None)
     relative_volume = volume_24h / cohort if volume_24h and cohort and cohort > 0 else None
-    evidence = []
-    for item in model_evidence or []:
-        evidence.append(
-            {
-                "model_id": getattr(item, "model_id", None),
-                "direction": str(getattr(item, "direction", "")),
-                "score": getattr(item, "score", None),
-                "confidence": getattr(item, "confidence", None),
-                "family": getattr(item, "family", None),
-                "available": getattr(item, "available", None),
-            }
-        )
+    evidence = freeze_model_evidence(model_evidence)
     cost_dict = None
     if costs is not None:
-        cost_dict = (
-            costs.model_dump()
-            if hasattr(costs, "model_dump")
-            else {k: getattr(costs, k, None) for k in ("total_cost_bps",)}
-        )
+        if hasattr(costs, "model_dump"):
+            cost_dict = costs.model_dump()
+        elif isinstance(costs, dict):
+            cost_dict = dict(costs)
+        else:
+            cost_dict = {
+                k: getattr(costs, k, None)
+                for k in ("total_cost_bps", "fee_bps", "slippage_bps", "funding_bps")
+            }
     return {
         "feature_version": SCAN_FEATURE_VERSION,
         "available_at_decision_time": True,
@@ -97,6 +182,19 @@ def decision_time_features(
         "evidence_degraded_reasons": list(getattr(facts, "evidence_degraded_reasons", []) or []),
         "model_evidence": evidence,
         "model_count": len(evidence),
+        "model_evidence_schema_version": MODEL_EVIDENCE_SCHEMA_VERSION,
+        "model_evidence_01_24_count": len(evidence),
+        "model_evidence_available_count": sum(
+            1 for item in evidence if item.get("available") is True
+        ),
+        "artifact_status": next(
+            (
+                item.get("artifact_status")
+                for item in evidence
+                if item.get("model_id") == "21_ORDER_FLOW_ML"
+            ),
+            None,
+        ),
         "costs": cost_dict,
         "growth_context": dict(growth_context or {}),
         "authority": "LEARNING_ONLY",
