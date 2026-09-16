@@ -150,13 +150,13 @@ async def growth_status(session_factory, growth_dir) -> dict:
             "valid": int(mature),
             "pending": int(pending),
             "inconclusive": int(inconclusive),
-            "by_horizon": metrics.get("outcomes_by_horizon", {}),
+            "by_horizon": outcomes_by_horizon,
         },
         "reviews": {
             "pending": int(reviews_pending),
             "mature": int(reviews_mature),
             "inconclusive": int(reviews_inconclusive),
-            "by_type": metrics.get("reviews_by_type", {}),
+            "by_type": reviews_by_type,
         },
         "memory": {
             "fast": int(fast),
