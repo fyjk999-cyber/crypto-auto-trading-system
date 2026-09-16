@@ -23,6 +23,7 @@ async def news_status(
     provider_rows = await repository.provider_status_rows()
     reassessment_counts = await repository.reassessment_counts()
     outcome_counts = await repository.outcome_counts()
+    last_outcome_review_at = await repository.last_outcome_review_at()
     last_ingest = await repository.latest_raw_ingest_at()
     pending_reassessments = int(
         reassessment_counts.get("PENDING", reassessment_counts.get("pending", 0)) or 0
@@ -33,6 +34,7 @@ async def news_status(
     health = _aggregate_health(provider_rows, event_counts["events"])
     heartbeat = _read_json(Path(news_dir) / "news_heartbeat.json") if news_dir else {}
     state = _read_json(Path(news_dir) / "news_state.json") if news_dir else {}
+    last_metrics = state.get("last_metrics") or heartbeat.get("last_metrics") or {}
     return {
         "service": {
             "state": state.get("state", "UNKNOWN"),
@@ -60,6 +62,16 @@ async def news_status(
         "queue_depth": pending_reassessments,
         "reassessments": reassessment_counts,
         "outcomes": outcome_counts,
+        "outcome_reviews_pending": outcome_counts.get("pending", 0),
+        "outcome_reviews_due": outcome_counts.get("due", 0),
+        "outcome_reviews_completed": outcome_counts.get("completed", 0),
+        "outcome_reviews_transient": outcome_counts.get("transient", 0),
+        "outcome_reviews_inconclusive": outcome_counts.get("inconclusive", 0),
+        "last_outcome_review_at": (
+            last_outcome_review_at.isoformat() if last_outcome_review_at else None
+        ),
+        "outcome_observation_source": last_metrics.get("outcome_observation_source")
+        or "OKX_PUBLIC_CANDLES",
         "configuration": (config or NewsConfig()).as_observable(),
         "last_error": last_error,
     }

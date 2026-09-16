@@ -887,7 +887,9 @@ class NewsRepository:
                     await session.execute(
                         select(NewsOutcomeReviewORM)
                         .where(
-                            NewsOutcomeReviewORM.status == "PENDING",
+                            NewsOutcomeReviewORM.status.in_(
+                                ("PENDING", "TRANSIENT_SOURCE_ERROR")
+                            ),
                             NewsOutcomeReviewORM.due_at <= now,
                         )
                         .order_by(NewsOutcomeReviewORM.due_at)
@@ -901,7 +903,8 @@ class NewsRepository:
 
     async def update_outcome_review(
         self, review_id: str, *, status: str, payload: dict[str, Any]
-    ) -> None:
+    ) -> bool:
+        """Idempotent completion. Final rows are immutable; retryable rows update."""
         async with self.session_factory() as session:
             row = (
                 await session.execute(
@@ -911,7 +914,15 @@ class NewsRepository:
                 )
             ).scalar_one_or_none()
             if row is None:
-                return
+                return False
+            if row.status not in ("PENDING", "TRANSIENT_SOURCE_ERROR"):
+                return False
+            if status not in (
+                "COMPLETED",
+                "TRANSIENT_SOURCE_ERROR",
+                "INCONCLUSIVE_DATA_GAP",
+            ):
+                return False
             row.status = status
             row.observed_at = datetime.now(UTC)
             row.updated_at = datetime.now(UTC)
@@ -940,6 +951,7 @@ class NewsRepository:
                     setattr(row, key, payload[key])
             row.payload_json = payload
             await session.commit()
+            return True
 
     # ---------------------------------------------------------------- status
     async def provider_status_rows(self) -> list[dict[str, Any]]:
@@ -1094,33 +1106,62 @@ class NewsRepository:
 
     async def outcome_counts(self) -> dict[str, int]:
         async with self.session_factory() as session:
+            async def count_status(status: str) -> int:
+                return int(
+                    (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(NewsOutcomeReviewORM)
+                            .where(NewsOutcomeReviewORM.status == status)
+                        )
+                    ).scalar()
+                    or 0
+                )
+
             total = int(
                 (
                     await session.execute(select(func.count()).select_from(NewsOutcomeReviewORM))
                 ).scalar()
                 or 0
             )
-            pending = int(
+            pending = await count_status("PENDING")
+            completed = await count_status("COMPLETED")
+            transient = await count_status("TRANSIENT_SOURCE_ERROR")
+            inconclusive = await count_status("INCONCLUSIVE_DATA_GAP")
+            due = int(
                 (
                     await session.execute(
                         select(func.count())
                         .select_from(NewsOutcomeReviewORM)
-                        .where(NewsOutcomeReviewORM.status == "PENDING")
+                        .where(
+                            NewsOutcomeReviewORM.status.in_(
+                                ("PENDING", "TRANSIENT_SOURCE_ERROR")
+                            ),
+                            NewsOutcomeReviewORM.due_at <= datetime.now(UTC),
+                        )
                     )
                 ).scalar()
                 or 0
             )
-            reviewed = int(
-                (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(NewsOutcomeReviewORM)
-                        .where(NewsOutcomeReviewORM.status == "COMPLETED")
+        return {
+            "total": total,
+            "pending": pending,
+            "completed": completed,
+            "transient": transient,
+            "inconclusive": inconclusive,
+            "due": due,
+        }
+
+    async def last_outcome_review_at(self) -> datetime | None:
+        async with self.session_factory() as session:
+            value = (
+                await session.execute(
+                    select(func.max(NewsOutcomeReviewORM.observed_at)).where(
+                        NewsOutcomeReviewORM.observed_at.is_not(None)
                     )
-                ).scalar()
-                or 0
-            )
-        return {"total": total, "pending": pending, "completed": reviewed}
+                )
+            ).scalar()
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -1334,4 +1375,5 @@ def _outcome_dict(row: NewsOutcomeReviewORM) -> dict[str, Any]:
         "position_existed": row.position_existed,
         "post_cost_result": row.post_cost_result,
         "counterfactual_label": row.counterfactual_label,
+        "payload": row.payload_json or {},
     }

@@ -30,6 +30,8 @@ class NewsConfig:
     news_dir: str = "data/news"
     interval_seconds: float = 180.0
     max_items_per_cycle: int = 50
+    max_outcome_reviews_per_cycle: int = 25
+    outcome_reviews_enabled: bool = True
     overlap_seconds: int = 12 * 3600
     context_top_k: int = 8
     context_token_budget: int = 1400
@@ -62,6 +64,10 @@ class NewsConfig:
             news_dir=news_dir,
             interval_seconds=float(os.environ.get("NEWS_POLL_INTERVAL_SECONDS", "180")),
             max_items_per_cycle=max(1, int(os.environ.get("NEWS_MAX_ITEMS_PER_CYCLE", "50"))),
+            max_outcome_reviews_per_cycle=max(
+                1, int(os.environ.get("NEWS_MAX_OUTCOME_REVIEWS_PER_CYCLE", "25"))
+            ),
+            outcome_reviews_enabled=_bool_env("NEWS_OUTCOME_REVIEWS_ENABLED", True),
             overlap_seconds=int(os.environ.get("NEWS_OVERLAP_SECONDS", str(12 * 3600))),
             context_top_k=max(1, int(os.environ.get("NEWS_CONTEXT_TOP_K", "8"))),
             context_token_budget=max(100, int(os.environ.get("NEWS_CONTEXT_TOKEN_BUDGET", "1400"))),
@@ -77,6 +83,8 @@ class NewsConfig:
             "enabled": self.enabled,
             "interval_seconds": self.interval_seconds,
             "max_items_per_cycle": self.max_items_per_cycle,
+            "max_outcome_reviews_per_cycle": self.max_outcome_reviews_per_cycle,
+            "outcome_reviews_enabled": self.outcome_reviews_enabled,
             "overlap_seconds": self.overlap_seconds,
             "context_top_k": self.context_top_k,
             "context_token_budget": self.context_token_budget,

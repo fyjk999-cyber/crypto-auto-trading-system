@@ -475,6 +475,11 @@ class NewsCycleMetrics:
     stale_discoveries: int = 0
     parse_errors: int = 0
     dropped_or_deferred: int = 0
+    outcome_due: int = 0
+    outcome_completed: int = 0
+    outcome_transient: int = 0
+    outcome_inconclusive: int = 0
+    outcome_observation_source: str = ""
     provider_health: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
