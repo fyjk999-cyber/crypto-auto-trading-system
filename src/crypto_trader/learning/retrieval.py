@@ -1,6 +1,8 @@
 # Canonical Growth SQL retriever with strict as-of version history.
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -21,7 +23,42 @@ _TIER_BONUS = {"VALIDATED_KNOWLEDGE": 20.0, "CANDIDATE": 10.0, "EMERGING": 5.0}
 _SPEED_BONUS = {"VALIDATED_KNOWLEDGE": 8.0, "PATTERN": 4.0, "FAST_EXPERIENCE": 1.0}
 
 
-async def record_version(session_factory, *, object_type: str, object_id: str, **fields) -> int:
+class GrowthPublishInputMissing(RuntimeError):
+    """Raised when a knowledge publication has no exact input to bind."""
+
+
+def proposition_identity(object_type: str, object_id: str) -> str:
+    canonical = (object_type.upper() + "|" + object_id).encode("utf-8")
+    return "prop:" + hashlib.sha256(canonical).hexdigest()[:24]
+
+
+def input_revision_hash(object_type: str, object_id: str, fields: dict) -> str:
+    canonical_input = {
+        "object_type": object_type.upper(),
+        "object_id": object_id,
+        "fields": {key: value for key, value in fields.items() if key not in {"payload_json"}},
+    }
+    payload = json.dumps(canonical_input, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def record_version(
+    session_factory,
+    *,
+    object_type: str,
+    object_id: str,
+    available_at: datetime | None = None,
+    proposition_id: str | None = None,
+    input_hash: str | None = None,
+    expires_at: datetime | None = None,
+    **fields,
+) -> int:
+    if not object_type or not object_id or not fields:
+        raise GrowthPublishInputMissing("NO_PUBLISH_INPUT")
+    payload = dict(fields.get("payload_json") or {})
+    known_at = available_at or datetime.now(UTC)
+    proposition = proposition_id or proposition_identity(object_type, object_id)
+    revision_hash = input_hash or input_revision_hash(object_type, object_id, fields)
     async with session_factory() as session:
         version = 1 + int(
             (
@@ -35,12 +72,20 @@ async def record_version(session_factory, *, object_type: str, object_id: str, *
             ).scalar()
             or 0
         )
+        payload["_meta"] = {
+            "proposition_id": proposition,
+            "input_hash": revision_hash,
+            "known_at": known_at.isoformat(),
+            "revision": version,
+            "expires_at": expires_at.isoformat() if expires_at else None,
+        }
+        fields["payload_json"] = payload
         session.add(
             GrowthMemoryVersionORM(
                 object_type=object_type,
                 object_id=object_id,
                 version=version,
-                available_at=fields.pop("available_at", None) or datetime.now(UTC),
+                available_at=known_at,
                 **fields,
             )
         )
@@ -64,6 +109,9 @@ class GrowthRetriever:
             "invalidations": 0,
             "candidates_scanned": 0,
             "hindsight_filtered": 0,
+            "latest_visible_deduped": 0,
+            "scope_fail_closed": 0,
+            "budget_omitted": 0,
             "returned": 0,
             "score_sum": 0.0,
         }
@@ -83,6 +131,8 @@ class GrowthRetriever:
         setup_signature: str = "",
         as_of_timestamp: datetime | None = None,
         top_k: int = 10,
+        max_serialized_bytes: int = 65536,
+        strict_scope: bool = True,
     ) -> dict:
         as_of = as_of_timestamp or datetime.now(UTC)
         if as_of.tzinfo is None:
@@ -95,7 +145,9 @@ class GrowthRetriever:
             horizon,
             setup_signature,
             as_of.replace(second=0, microsecond=0),
-            top_k,
+            int(top_k),
+            int(max_serialized_bytes),
+            bool(strict_scope),
         )
         self.metrics["queries"] += 1
         if key in self._cache:
@@ -123,16 +175,33 @@ class GrowthRetriever:
             )
         self.metrics["candidates_scanned"] += len(rows)
         self.metrics["hindsight_filtered"] += 1 if future is not None else 0
+
+        # As-of truth is one latest visible version per logical proposition.
+        latest_visible: dict[tuple[str, str], object] = {}
+        for row in rows:
+            identity = (str(row.object_type), str(row.object_id))
+            current = latest_visible.get(identity)
+            if current is None or int(row.version) > int(current.version):
+                latest_visible[identity] = row
+        deduped = list(latest_visible.values())
+        self.metrics["latest_visible_deduped"] += max(0, len(rows) - len(deduped))
+
         results = []
         wanted_symbol = symbol.upper()
-        for row in rows:
+        for row in deduped:
             payload = dict(row.payload_json or {})
             row_symbol = str(payload.get("symbol") or payload.get("asset") or "").upper()
-            if wanted_symbol not in ("", "UNKNOWN") and row_symbol and row_symbol != wanted_symbol:
-                continue
+            if wanted_symbol not in ("", "UNKNOWN"):
+                if strict_scope and not row_symbol:
+                    self.metrics["scope_fail_closed"] += 1
+                    continue
+                if row_symbol and row_symbol != wanted_symbol:
+                    self.metrics["scope_fail_closed"] += 1
+                    continue
             available_at = row.available_at
             if available_at.tzinfo is None:
                 available_at = available_at.replace(tzinfo=UTC)
+            meta = dict(payload.get("_meta") or {})
             components = {
                 "factual_quality": float(row.quality or 0.0) * 20.0,
                 "memory_speed": _SPEED_BONUS.get(row.memory_speed, 0.0),
@@ -163,6 +232,9 @@ class GrowthRetriever:
                     "memory_type": row.object_type,
                     "version": row.version,
                     "available_at": available_at.isoformat(),
+                    "known_at": meta.get("known_at") or available_at.isoformat(),
+                    "proposition_id": meta.get("proposition_id"),
+                    "input_hash": meta.get("input_hash"),
                     "sample_tier": row.sample_tier,
                     "memory_speed": row.memory_speed,
                     "sample_count": row.sample_count,
@@ -178,6 +250,19 @@ class GrowthRetriever:
             )
         results.sort(key=lambda item: item["score"], reverse=True)
         selected = results[: max(1, min(int(top_k), 100))]
+        budget = max(1024, int(max_serialized_bytes))
+        budgeted = []
+        used_bytes = 0
+        omitted = 0
+        for item in selected:
+            item_bytes = len(json.dumps(item, default=str))
+            if used_bytes + item_bytes > budget:
+                omitted += 1
+                continue
+            budgeted.append(item)
+            used_bytes += item_bytes
+        selected = budgeted
+        self.metrics["budget_omitted"] += omitted
         if selected:
             self.metrics["nonempty"] += 1
             self.metrics["returned"] += len(selected)
@@ -190,6 +275,11 @@ class GrowthRetriever:
             "generation": self.generation,
             "result_count": len(selected),
             "results": selected,
+            "budget": {
+                "max_serialized_bytes": budget,
+                "used_serialized_bytes": used_bytes,
+                "omitted_count": omitted,
+            },
             "authority": "LEARNING_ONLY",
             "is_order": False,
         }
