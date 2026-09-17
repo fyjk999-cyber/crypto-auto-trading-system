@@ -24,6 +24,9 @@ export TRADING_LLM_MODEL=deepseek-flash
 # an explicit operator launchd/env authorization by setting LLM_CALLS_PAUSED=false.
 export LLM_CALLS_PAUSED="${LLM_CALLS_PAUSED:-true}"
 export LLM_CALLS_PAUSED_REASON="${LLM_CALLS_PAUSED_REASON:-OPERATOR_PAUSE_REQUEST}"
+# H0-H7 secondary acceptance passed: PAPER-only independent leg execution is
+# enabled for natural hedge/reverse evidence accumulation. LIVE remains false.
+export LEG_EXECUTION_ENABLED="${LEG_EXECUTION_ENABLED:-true}"
 unset LLM_MODEL || true
 export LLM_BASE_URL="${LLM_BASE_URL:-https://api.deepseek.com}"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"

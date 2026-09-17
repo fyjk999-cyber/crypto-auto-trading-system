@@ -109,3 +109,10 @@ def test_growth_and_news_remain_evidence_only() -> None:
     assert "EVIDENCE_ONLY" in news_source
     assert "is_order" in news_source
     assert inspect.getsource(ChiefTraderEngine)  # canonical Core-LLM decision owner
+
+
+def test_paper_wrapper_enables_leg_execution_for_natural_evidence() -> None:
+    wrapper = (ROOT / "scripts" / "run_low_risk_paper_secure.sh").read_text()
+    assert "LEG_EXECUTION_ENABLED" in wrapper
+    assert "true" in wrapper
+    assert "LIVE_TRADING_ENABLED=false" in wrapper
