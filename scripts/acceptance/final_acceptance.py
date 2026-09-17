@@ -66,7 +66,7 @@ def columns(conn: sqlite3.Connection, table: str) -> set[str]:
         return set()
 
 
-def collect_db_metrics(db_path: str) -> dict[str, Any]:
+def collect_db_metrics(db_path: str, *, since: str | None = None) -> dict[str, Any]:
     metrics: dict[str, Any] = {"db_path": db_path, "available": False}
     try:
         conn = db_connect_readonly(db_path)
@@ -106,6 +106,15 @@ def collect_db_metrics(db_path: str) -> dict[str, Any]:
                 + ")",
                 params=NEW_RISK_ACTIONS,
             )
+            if since:
+                metrics["new_risk_decisions_since_pause"] = scalar(
+                    conn,
+                    "SELECT COUNT(*) FROM llm_decisions "
+                    "WHERE UPPER(action) IN ("
+                    + placeholders
+                    + ") AND created_at >= ?",
+                    params=(*NEW_RISK_ACTIONS, since),
+                )
         plan_cols = columns(conn, "trade_plans")
         if "capital_allocation_pct" in plan_cols:
             metrics["plans_over_25pct_allocation"] = scalar(
@@ -173,7 +182,8 @@ def evaluate_p0(
     paused = bool(pause.get("provider_calls_paused")) or bool(
         (llm_health.get("provider_call_pause") or {}).get("provider_calls_paused")
     )
-    if paused and int(db_metrics.get("new_risk_decisions", 0) or 0) > 0:
+    paused_new_risk = db_metrics.get("new_risk_decisions_since_pause", 0)
+    if paused and int(paused_new_risk or 0) > 0:
         add(
             "PAUSED_LLM_NEW_RISK",
             "new-risk decisions present while provider calls are paused",
@@ -255,7 +265,10 @@ def collect_sample(args) -> tuple[dict[str, Any], dict[str, Any], list[dict[str,
     health = try_http_json(args.runtime_url + "/health")
     llm_health = try_http_json(args.runtime_url + "/llm/health")
     leg_summary = try_http_json(args.runtime_url + "/position-legs/summary")
-    db_metrics = collect_db_metrics(args.db)
+    pause_status = (llm_health.get("provider_call_pause") or {})
+    if not pause_status:
+        pause_status = ((ready.get("runtime") or {}).get("llm_router") or {}).get("pause") or {}
+    db_metrics = collect_db_metrics(args.db, since=pause_status.get("paused_since"))
     services = gather_services(args.root)
     running_sha = git_sha(args.root)
     runtime = ready.get("runtime") or {}

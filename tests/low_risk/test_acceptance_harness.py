@@ -37,6 +37,7 @@ def test_evaluate_p0_flags_live_lease_sha_duplicate_and_paused_new_risk():
         {
             "duplicate_client_order_ids": 1,
             "new_risk_decisions": 1,
+            "new_risk_decisions_since_pause": 1,
             "plans_over_25pct_allocation": 1,
             "plans_over_20x_leverage": 1,
             "plans_missing_base_exit": 1,
