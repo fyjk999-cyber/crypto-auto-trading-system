@@ -32,6 +32,11 @@ def proposition_identity(object_type: str, object_id: str) -> str:
     return "prop:" + hashlib.sha256(canonical).hexdigest()[:24]
 
 
+def growth_trace_id(proposition_id: str, version: int) -> str:
+    canonical = (proposition_id + ":" + str(int(version))).encode("utf-8")
+    return "trace:" + hashlib.sha256(canonical).hexdigest()[:24]
+
+
 def input_revision_hash(object_type: str, object_id: str, fields: dict) -> str:
     canonical_input = {
         "object_type": object_type.upper(),
@@ -78,6 +83,7 @@ async def record_version(
             "input_hash": revision_hash,
             "known_at": known_at.isoformat(),
             "revision": version,
+            "trace_id": growth_trace_id(proposition, version),
             "expires_at": expires_at.isoformat() if expires_at else None,
             "revoked_at": revoked_at.isoformat() if revoked_at else None,
         }
@@ -257,6 +263,7 @@ class GrowthRetriever:
                     "known_at": meta.get("known_at") or available_at.isoformat(),
                     "proposition_id": meta.get("proposition_id"),
                     "input_hash": meta.get("input_hash"),
+                    "trace_id": meta.get("trace_id"),
                     "sample_tier": row.sample_tier,
                     "memory_speed": row.memory_speed,
                     "sample_count": row.sample_count,

@@ -49,6 +49,7 @@ async def test_record_version_binds_proposition_input_and_known_at(database):
     assert meta["revision"] == 1
     assert meta["proposition_id"] == proposition_identity("REGIME_PATTERN", "p1")
     assert len(meta["input_hash"]) == 64
+    assert meta["trace_id"].startswith("trace:")
     assert meta["known_at"].startswith(row.available_at.isoformat())
 
 
@@ -80,6 +81,7 @@ async def test_latest_visible_version_is_selected_per_proposition(database):
     late = await retriever.search(symbol="BTCUSDT", as_of_timestamp=T + timedelta(hours=2))
     assert [item["version"] for item in early["results"]] == [1]
     assert [item["version"] for item in late["results"]] == [2]
+    assert early["results"][0]["trace_id"] != late["results"][0]["trace_id"]
 
 
 async def test_unscoped_truth_fails_closed_for_symbol_queries(database):
