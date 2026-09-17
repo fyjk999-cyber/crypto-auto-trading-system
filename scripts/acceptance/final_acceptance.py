@@ -106,6 +106,24 @@ def collect_db_metrics(db_path: str) -> dict[str, Any]:
                 + ")",
                 params=NEW_RISK_ACTIONS,
             )
+        plan_cols = columns(conn, "trade_plans")
+        if "capital_allocation_pct" in plan_cols:
+            metrics["plans_over_25pct_allocation"] = scalar(
+                conn,
+                "SELECT COUNT(*) FROM trade_plans WHERE capital_allocation_pct > 25",
+            )
+        if "leverage_request" in plan_cols:
+            metrics["plans_over_20x_leverage"] = scalar(
+                conn,
+                "SELECT COUNT(*) FROM trade_plans WHERE leverage_request > 20",
+            )
+        if "base_exit_json" in plan_cols:
+            metrics["plans_missing_base_exit"] = scalar(
+                conn,
+                "SELECT COUNT(*) FROM trade_plans "
+                "WHERE base_exit_json IS NULL OR base_exit_json = '' "
+                "OR base_exit_json = '{}'",
+            )
         metrics["available"] = True
         return metrics
     finally:
@@ -139,6 +157,18 @@ def evaluate_p0(
         add("MULTIPLE_WRITERS", "single_writer is not true")
     if int(db_metrics.get("duplicate_client_order_ids", 0) or 0) > 0:
         add("DUPLICATE_ORDER_ID", "duplicate client_order_id detected")
+    if int(db_metrics.get("plans_over_25pct_allocation", 0) or 0) > 0:
+        add("CHILD_ALLOCATION_OVER_25", "trade plan allocation exceeds 25 percent")
+    if int(db_metrics.get("plans_over_20x_leverage", 0) or 0) > 0:
+        add("LEVERAGE_OVER_20", "trade plan leverage exceeds 20x")
+    if int(db_metrics.get("plans_missing_base_exit", 0) or 0) > 0:
+        add("MISSING_BASE_EXIT", "trade plan is missing a Base Exit contract")
+    configured_provider = str(llm_health.get("configured_provider") or "").lower()
+    configured_model = str(llm_health.get("configured_model") or "").lower()
+    if configured_provider and configured_provider != "deepseek":
+        add("PROVIDER_MODEL_DRIFT", "configured provider is not deepseek")
+    if configured_model and configured_model != "deepseek-flash":
+        add("PROVIDER_MODEL_DRIFT", "configured model is not deepseek-flash")
     pause = (runtime.get("llm_router") or {}).get("pause") or {}
     paused = bool(pause.get("provider_calls_paused")) or bool(
         (llm_health.get("provider_call_pause") or {}).get("provider_calls_paused")

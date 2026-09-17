@@ -146,3 +146,35 @@ No PR is closed yet.
 
 `NEEDS_DUPLICATE_STACK_AUDIT`: final import-smoke/active-use matrix still
 required before any quarantine or supersession decision.
+
+
+## Round 2 closure addendum
+
+### PR #2 final checklist status
+
+- wall-clock tool budget: PORTED
+- OKX SWAP volume semantics: ALREADY_PRESENT
+- exact-symbol episode retrieval: ALREADY_PRESENT in final episode/decision stores
+- research applicability fail-closed: PORTED with migration 0043
+- tool contract versioning: PORTED
+- execution-cost evidence semantics: ALREADY_PRESENT in cost-aware evidence and
+  fast-profit/risk tests
+- OPEN-position review priority: PORTED (`review_priority`)
+- bounded concurrency: PORTED_BY_DESIGN (single-writer sequential review loop,
+  `position_review_concurrency=1` default)
+- review deadline: PORTED (`position_review_deadline_seconds`,
+  `POSITION_REVIEW_DEADLINE_EXCEEDED` fail-closed audit)
+
+Disposition: `PORTED`.
+
+### PR #5 final status
+
+`SUPERSEDED_WITH_EVIDENCE`:
+
+- exactly one runtime `build_system` exists (`runtime/bootstrap.py`);
+- exactly one local runner entrypoint exists (`runtime/local_runner.py`);
+- `runtime/bootstrap.py` does not import or expose the legacy
+  `AIPositionRuntimeBridge`;
+- runtime modules other than the isolated `ai_position_bridge.py` do not import
+  `crypto_trader.ai_brain`;
+- guard tests added in `tests/low_risk/test_final_landing_duplicate_stack.py`.
