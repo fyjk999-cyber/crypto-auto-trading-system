@@ -71,6 +71,8 @@ function backend(overrides: Record<string, unknown | Response> = {}) {
     if (path === "/trade-plans") return json({ trade_plans: [], count: 0 });
     if (path === "/trade-episodes") return json({ trade_episodes: [], count: 0 });
     if (path === "/llm/health") return json({ provider: "deepseek", configured: true, health: "HEALTHY" });
+    if (path === "/position-legs") return json({ position_legs: [], count: 0 });
+    if (path === "/position-legs/summary") return json({ symbols: [], count: 0 });
     return json({ detail: "not found" }, 404);
   });
 }
@@ -112,9 +114,9 @@ describe("中文加密交易终端 V2", () => {
 
   it("当前判断明确来自 canonical DeepSeek 权威而非量化证据", async () => {
     setup(backend({
-      "/signals": { signals: [{ decision_id: "llm-1", decision: "WAIT", side: "WAIT", authority: "CHIEF_TRADER_LLM", provider: "deepseek", model: "deepseek-v4-pro" }], quant_direct_trade_authority: 0 },
+      "/signals": { signals: [{ decision_id: "llm-1", decision: "WAIT", side: "WAIT", authority: "CHIEF_TRADER_LLM", provider: "deepseek", model: "deepseek-flash" }], quant_direct_trade_authority: 0 },
     }));
-    await waitFor(() => expect(screen.getByText("决策权威：DeepSeek ChiefTrader · deepseek-v4-pro")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("决策权威：DeepSeek ChiefTrader · deepseek-flash")).toBeTruthy());
     expect(screen.getByText("量化证据（不可执行）")).toBeTruthy();
   });
 
@@ -323,7 +325,7 @@ describe("中文加密交易终端 V2", () => {
         { decision_id: "llm-no", symbol: "BTCUSDT", position_state: "FLAT", action: "NO_TRADE", thesis: "no edge", created_at: "2026-09-08T00:00:00Z" },
         { decision_id: "llm-wait", symbol: "BTCUSDT", position_state: "FLAT", action: "WAIT", thesis: "wait for breakout", created_at: "2026-09-08T00:01:00Z" },
       ], count: 2 },
-      "/llm/decisions/llm-no": { decision_id: "llm-no", tool_refs: ["funding", "orderbook"], thesis: "no edge", model_provider: "deepseek", model: "deepseek-v4-pro", requested_quantity: null, requested_leverage: null, trade_plan_id: null, action: "NO_TRADE", market_regime: "RANGE" },
+      "/llm/decisions/llm-no": { decision_id: "llm-no", tool_refs: ["funding", "orderbook"], thesis: "no edge", model_provider: "deepseek", model: "deepseek-flash", requested_quantity: null, requested_leverage: null, trade_plan_id: null, action: "NO_TRADE", market_regime: "RANGE" },
     }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "AI 交易决策流" })).toBeTruthy());
     expect(screen.getByText("NO_TRADE")).toBeTruthy();
@@ -345,4 +347,35 @@ describe("中文加密交易终端 V2", () => {
     expect(screen.getByText("暂无数据")).toBeTruthy();
   });
 
+
+  it("positions page renders independent legs and gross exposure read-only", async () => {
+    window.location.hash = "#/positions";
+    const fetchMock = backend({
+      "/position-legs": { position_legs: [
+        { leg_id: "leg-long", symbol: "BTCUSDT", side: "LONG", state: "OPEN", quantity: "1", remaining_quantity: "0.6", average_entry_price: "50000", mark_price: "51000", realized_pnl: "12", unrealized_pnl: "20", fees: "1.5", funding: "0.2", lineage: { trade_plan_id: "p-long", decision_id: "d-long", reverse_of: null }, base_exit: { type: "PRICE", trigger: "55000" }, orders: [{ internal_order_id: "o1" }], fills: [{ fill_id: "f1" }], reconciliation: { status: "MATCHED", leg_execution_safe: true } },
+        { leg_id: "leg-short", symbol: "BTCUSDT", side: "SHORT", state: "OPEN", quantity: "0.4", remaining_quantity: "0.4", average_entry_price: "52000", mark_price: "51000", realized_pnl: "0", unrealized_pnl: "5", fees: "0.5", funding: "0.1", lineage: { trade_plan_id: "p-short", decision_id: "d-short", reverse_of: "leg-long" }, base_exit: { type: "PRICE", trigger: "50000" }, orders: [], fills: [], reconciliation: { status: "MATCHED", leg_execution_safe: true } },
+      ], count: 2 },
+      "/position-legs/summary": { symbols: [{ symbol: "BTCUSDT", gross_long_quantity: "0.6", gross_short_quantity: "0.4", gross_quantity: "1", net_quantity: "0.2", both_sides: true, gross_pnl: "25" }], count: 1 },
+    });
+    setup(fetchMock);
+    await waitFor(() => expect(screen.getAllByText("leg-short").length).toBeGreaterThan(0));
+    expect(screen.getAllByText("leg-long").length).toBeGreaterThan(0);
+    expect(screen.getByText("LONG 0.6")).toBeTruthy();
+    expect(screen.getByText("SHORT 0.4")).toBeTruthy();
+    expect(screen.getByText("\u603b\u655e\u53e3 1")).toBeTruthy();
+    const writes = fetchMock.mock.calls.filter((call) => call[1] !== undefined && ["POST", "DELETE"].includes(String(call[1].method)));
+    expect(writes).toHaveLength(0);
+  });
+
+  it("positions page explicitly reports unavailable leg API", async () => {
+    window.location.hash = "#/positions";
+    setup(backend({ "/position-legs": json({ detail: "not found" }, 404), "/position-legs/summary": json({ detail: "not found" }, 404) }));
+    await waitFor(() => expect(screen.getAllByText("\u4ed3\u4f4d\u817f\u63a5\u53e3\u6682\u672a\u5f00\u653e").length).toBeGreaterThan(0));
+  });
+
+  it("positions page reports an empty leg state explicitly", async () => {
+    window.location.hash = "#/positions";
+    setup(backend());
+    await waitFor(() => expect(screen.getByText("\u5f53\u524d\u65e0\u4ed3\u4f4d\u817f")).toBeTruthy());
+  });
 });

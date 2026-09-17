@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { MarketChart } from "./components/MarketChart";
 import { API_BASE_URL, getJson, sendJson, WS_URL } from "./api/client";
+import { PositionLegsPanel } from "./components/PositionLegsPanel";
 import { useKlines } from "./hooks/useKlines";
 import { useTradingSnapshot } from "./hooks/useTradingSnapshot";
 import type { ApiState, KlineInterval, Order, Position, TradingSnapshot } from "./types/api";
@@ -410,7 +411,7 @@ function PageContent({ page, snapshot }: { page: Page; snapshot: TradingSnapshot
   if (page === "orders") return <OrdersPage snapshot={snapshot} />;
   if (page === "risk") return <RiskPage snapshot={snapshot} />;
   if (page === "execution") return <ExecutionPage snapshot={snapshot} />;
-  if (page === "positions") return <PositionsPage snapshot={snapshot} />;
+  if (page === "positions") return <><PositionsPage snapshot={snapshot} /><PositionLegsPanel snapshot={snapshot} /></>;
   if (page === "episodes") return <EpisodesPage snapshot={snapshot} />;
   if (page === "review") return <ReviewPage snapshot={snapshot} />;
   return <SystemPage snapshot={snapshot} />;

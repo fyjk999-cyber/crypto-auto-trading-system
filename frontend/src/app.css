@@ -313,3 +313,26 @@ td, .order-row summary { font-size: var(--font-md); }
 .system-grid > .full-panel { grid-column: 1 / -1; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag-list span { padding: 4px 8px; border-radius: 8px; color: #203d34; background: #eef5f2; font-size: var(--font-sm); }
+
+.leg-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.leg-summary article {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: baseline;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+}
+
+.position-legs-panel small {
+  display: block;
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
