@@ -243,7 +243,9 @@ class LLMRuntimeStatus:
                 snapshot["effective_model"] = actual["effective_model"]
             if isinstance(offline, dict):
                 snapshot["llm_offline_mode"] = bool(offline.get("offline"))
-        if snapshot.get("model"):
+        from crypto_trader.llm_chief.provider import provider_calls_paused
+
+        if snapshot.get("model") and not provider_calls_paused():
             if not snapshot.get("effective_model"):
                 snapshot["effective_model"] = snapshot.get("model")
             if not snapshot.get("effective_provider"):

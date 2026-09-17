@@ -125,6 +125,8 @@ async def test_pause_suppresses_runtime_health_probe(monkeypatch) -> None:
     assert status.provider_state == "PROVIDER_PAUSED"
     assert status.last_error == "LLM_CALLS_PAUSED_BY_CONFIG"
     snapshot = status.snapshot()
+    assert snapshot["effective_provider"] is None
+    assert snapshot["effective_model"] is None
     assert snapshot["provider_call_pause"]["provider_calls_paused"] is True
     assert snapshot["provider_call_pause"]["probe_suppressed"] >= 1
 
