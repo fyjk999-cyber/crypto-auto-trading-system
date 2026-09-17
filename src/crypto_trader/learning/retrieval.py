@@ -51,6 +51,7 @@ async def record_version(
     proposition_id: str | None = None,
     input_hash: str | None = None,
     expires_at: datetime | None = None,
+    revoked_at: datetime | None = None,
     **fields,
 ) -> int:
     if not object_type or not object_id or not fields:
@@ -78,6 +79,7 @@ async def record_version(
             "known_at": known_at.isoformat(),
             "revision": version,
             "expires_at": expires_at.isoformat() if expires_at else None,
+            "revoked_at": revoked_at.isoformat() if revoked_at else None,
         }
         fields["payload_json"] = payload
         session.add(
@@ -91,6 +93,16 @@ async def record_version(
         )
         await session.commit()
         return version
+
+
+def _aware_datetime(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 class GrowthRetriever:
@@ -111,6 +123,8 @@ class GrowthRetriever:
             "hindsight_filtered": 0,
             "latest_visible_deduped": 0,
             "scope_fail_closed": 0,
+            "expired_filtered": 0,
+            "revoked_filtered": 0,
             "budget_omitted": 0,
             "returned": 0,
             "score_sum": 0.0,
@@ -202,6 +216,14 @@ class GrowthRetriever:
             if available_at.tzinfo is None:
                 available_at = available_at.replace(tzinfo=UTC)
             meta = dict(payload.get("_meta") or {})
+            expires_at = _aware_datetime(meta.get("expires_at"))
+            if expires_at is not None and expires_at <= as_of:
+                self.metrics["expired_filtered"] += 1
+                continue
+            revoked_at = _aware_datetime(meta.get("revoked_at"))
+            if revoked_at is not None and revoked_at <= as_of:
+                self.metrics["revoked_filtered"] += 1
+                continue
             components = {
                 "factual_quality": float(row.quality or 0.0) * 20.0,
                 "memory_speed": _SPEED_BONUS.get(row.memory_speed, 0.0),

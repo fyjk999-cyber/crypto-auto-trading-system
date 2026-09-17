@@ -118,3 +118,47 @@ async def test_no_publish_input_is_explicit(database):
         await record_version(
             database.session_factory, object_type="REGIME_PATTERN", object_id="p1"
         )
+
+
+async def test_expired_and_revoked_truth_is_not_visible(database):
+    await record_version(
+        database.session_factory,
+        object_type="REGIME_PATTERN",
+        object_id="expired",
+        available_at=T - timedelta(hours=2),
+        expires_at=T - timedelta(hours=1),
+        sample_count=60,
+        sample_tier="CANDIDATE",
+        payload_json={"symbol": "BTCUSDT"},
+    )
+    await record_version(
+        database.session_factory,
+        object_type="REGIME_PATTERN",
+        object_id="revoked",
+        available_at=T - timedelta(hours=2),
+        revoked_at=T - timedelta(minutes=30),
+        sample_count=60,
+        sample_tier="CANDIDATE",
+        payload_json={"symbol": "BTCUSDT"},
+    )
+    retriever = GrowthRetriever(database.session_factory)
+    response = await retriever.search(symbol="BTCUSDT", as_of_timestamp=T)
+    assert response["result_count"] == 0
+    assert retriever.metrics["expired_filtered"] >= 1
+    assert retriever.metrics["revoked_filtered"] >= 1
+
+
+async def test_future_revocation_is_not_visible_before_known_at(database):
+    await record_version(
+        database.session_factory,
+        object_type="REGIME_PATTERN",
+        object_id="future-revoke",
+        available_at=T,
+        revoked_at=T + timedelta(hours=1),
+        sample_count=60,
+        sample_tier="CANDIDATE",
+        payload_json={"symbol": "BTCUSDT"},
+    )
+    retriever = GrowthRetriever(database.session_factory)
+    response = await retriever.search(symbol="BTCUSDT", as_of_timestamp=T)
+    assert response["result_count"] == 1
