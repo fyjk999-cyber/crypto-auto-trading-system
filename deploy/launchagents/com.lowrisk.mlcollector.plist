@@ -21,8 +21,6 @@
   <dict>
     <key>ML_PYTHON</key>
     <string>__PYTHON__</string>
-    <key>RUNNING_SHA</key>
-    <string>__SHA__</string>
   </dict>
 </dict>
 </plist>

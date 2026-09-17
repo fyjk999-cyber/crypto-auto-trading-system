@@ -8,6 +8,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from sqlalchemy import func, select
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
@@ -24,12 +26,17 @@ from crypto_trader.market_data.opportunity.universe import OkxUniverseManager
 from crypto_trader.ml_artifacts import ArtifactResolver
 from crypto_trader.ml_labels import (
     HORIZON_SECONDS,
+    STATUS_IMMATURE,
+    STATUS_INCONCLUSIVE_ALIGNMENT,
+    STATUS_INCONCLUSIVE_DATA_GAP,
     STATUS_MATURE_VALID,
+    STATUS_TRANSIENT_SOURCE_ERROR,
     LabelV2Maturer,
     OkxHistoricalCandleProvider,
 )
 from crypto_trader.ml_registry import ModelRegistry
 from crypto_trader.persistence import Database
+from crypto_trader.persistence.models import ScanSnapshotLabelORM
 
 H = HORIZON_SECONDS
 STOP = False
@@ -40,21 +47,37 @@ def _sig(*_):
     STOP = True
 
 
-LABEL_BATCH_LIMIT = 50
+LABEL_BATCH_LIMIT = 30
 LABEL_TIMEOUT_SECONDS = 120.0
 
 
-async def label(db, provider, now, *, limit: int = LABEL_BATCH_LIMIT):
+async def label(db, provider, now, *, limit: int = LABEL_BATCH_LIMIT, observer=None):
     """Exact factual label-v2 maturity; label-v1 is archival only.
 
     Bounded batch keeps the collector loop live when the external history
-    provider is slow or unavailable; the loop writes a heartbeat before and
-    after this call.
+    provider is slow or unavailable. Persistence is committed per snapshot so
+    completed factual work survives a later timeout/cancellation.
     """
     maturer = LabelV2Maturer()
     return await maturer.mature_pending(
-        db.session_factory, provider, now=now, limit=limit
+        db.session_factory, provider, now=now, limit=limit, on_result=observer
     )
+
+
+async def label_v2_counts(db) -> dict[str, int]:
+    """Current DB truth for the label-v2 table, by maturation status."""
+    async with db.session_factory() as session:
+        rows = (
+            await session.execute(
+                select(
+                    ScanSnapshotLabelORM.maturation_status,
+                    func.count(ScanSnapshotLabelORM.id),
+                )
+                .where(ScanSnapshotLabelORM.label_version == "label-v2")
+                .group_by(ScanSnapshotLabelORM.maturation_status)
+            )
+        ).all()
+    return {str(status): int(count) for status, count in rows}
 
 
 async def main(db, status):
@@ -114,7 +137,32 @@ async def main(db, status):
         "labels": 0,
         "errors": 0,
         "label_v2": {},
+        "last_label_symbol": None,
+        "last_label_horizon": None,
+        "last_label_status": None,
+        "last_successful_label_at": None,
+        "label_v2_total": 0,
+        "label_v2_mature_valid": 0,
+        "label_v2_immature": 0,
+        "label_v2_inconclusive": 0,
+        "label_v2_transient": 0,
+        "history_requests": 0,
+        "history_errors": 0,
+        "history_latency_seconds": 0.0,
+        "history_page_requests": 0,
+        "history_cache_hits": 0,
+        "label_batches_started": 0,
+        "label_batches_completed": 0,
+        "label_batch_timeouts": 0,
     }
+
+    def on_label_result(meta):
+        st["last_label_symbol"] = meta.get("symbol")
+        st["last_label_horizon"] = meta.get("horizon")
+        st["last_label_status"] = meta.get("status")
+        if meta.get("status") == STATUS_MATURE_VALID:
+            st["last_successful_label_at"] = datetime.now(UTC).isoformat()
+
     while not STOP:
         st["cycles"] += 1
         try:
@@ -126,18 +174,40 @@ async def main(db, status):
             # Liveness first: scanner facts are durable even if the external
             # history provider is slow or unavailable.
             Path(status).write_text(json.dumps(st))
+
+            st["label_batches_started"] += 1
             try:
                 statuses = await asyncio.wait_for(
-                    label(d, label_provider, datetime.now(UTC)),
+                    label(d, label_provider, datetime.now(UTC), observer=on_label_result),
                     timeout=LABEL_TIMEOUT_SECONDS,
                 )
             except TimeoutError:
                 statuses = {}
                 st["errors"] += 1
+                st["label_batch_timeouts"] += 1
                 st["last_error"] = "LABEL_MATURATION_TIMEOUT"
+            else:
+                st["label_batches_completed"] += 1
+
             for status_key, status_count in statuses.items():
                 st["label_v2"][status_key] = st["label_v2"].get(status_key, 0) + int(status_count)
             st["labels"] += int(statuses.get(STATUS_MATURE_VALID, 0))
+
+            summary = await label_v2_counts(d)
+            st["label_v2_total"] = sum(summary.values())
+            st["label_v2_mature_valid"] = summary.get(STATUS_MATURE_VALID, 0)
+            st["label_v2_immature"] = summary.get(STATUS_IMMATURE, 0)
+            st["label_v2_inconclusive"] = summary.get(
+                STATUS_INCONCLUSIVE_DATA_GAP, 0
+            ) + summary.get(STATUS_INCONCLUSIVE_ALIGNMENT, 0)
+            st["label_v2_transient"] = summary.get(STATUS_TRANSIENT_SOURCE_ERROR, 0)
+
+            provider_stats = label_provider.stats()
+            st["history_requests"] = provider_stats["history_requests"]
+            st["history_errors"] = provider_stats["history_errors"]
+            st["history_latency_seconds"] = provider_stats["history_latency_seconds"]
+            st["history_page_requests"] = provider_stats["history_page_requests"]
+            st["history_cache_hits"] = provider_stats["history_cache_hits"]
         except Exception as e:
             st["errors"] += 1
             st["last_error"] = f"{type(e).__name__}: {e}"[:200]

@@ -66,7 +66,10 @@ async def test_label_v2_maturity_and_idempotency(database):
     async with database.session_factory() as s:
         row = (
             await s.execute(
-                select(ScanSnapshotLabelORM).where(ScanSnapshotLabelORM.snapshot_id == "s1")
+                select(ScanSnapshotLabelORM).where(
+                    ScanSnapshotLabelORM.snapshot_id == "s1",
+                    ScanSnapshotLabelORM.horizon == "1m",
+                )
             )
         ).scalar_one()
     assert row.horizon == "1m"
@@ -85,3 +88,49 @@ def test_collector_reuses_canonical_state_feed():
     assert "state_prefetch=prefetch" in source
     assert "OkxHistoricalCandleProvider" in source
     assert "prices(" not in source
+
+
+async def test_label_observer_receives_truthful_status(database):
+    from datetime import UTC, datetime
+
+    from crypto_trader.ml_labels import STATUS_MATURE_VALID, Candle
+    from crypto_trader.persistence.models import ScanSnapshotORM
+
+    captured = datetime(2026, 1, 1, tzinfo=UTC)
+    async with database.session_factory() as s:
+        s.add(
+            ScanSnapshotORM(
+                snapshot_id="observer",
+                captured_at=captured,
+                cycle_id="c1",
+                symbol="BTCUSDT",
+                candidate=True,
+                control=False,
+                features_json={"price": 100.0},
+                outcome_status="PENDING",
+            )
+        )
+        await s.commit()
+
+    class Provider:
+        async def closed_candles(self, symbol, bar, start_ms, end_ms):
+            return [
+                Candle(
+                    ts_ms=start_ms,
+                    open=100.0,
+                    high=101.0,
+                    low=99.0,
+                    close=101.0,
+                    bar_ms=end_ms - start_ms,
+                )
+            ]
+
+    observed = []
+    counts = await mod.label(
+        database, Provider(), captured + timedelta(days=1), observer=observed.append
+    )
+    assert counts[STATUS_MATURE_VALID] == 6
+    assert observed[-1]["snapshot_id"] == "observer"
+    assert observed[-1]["symbol"] == "BTCUSDT"
+    assert observed[-1]["horizon"] == "4h"
+    assert observed[-1]["status"] == STATUS_MATURE_VALID

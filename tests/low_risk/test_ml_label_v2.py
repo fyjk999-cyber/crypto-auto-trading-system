@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import func, select
 
 from crypto_trader import ml_labels
@@ -228,19 +229,32 @@ async def test_cost_versioning_is_explicit_when_missing(database) -> None:
     assert row.cost_components_json["quality"] == "estimated_missing"
 
 
-async def test_historical_pagination_beyond_300_bars() -> None:
+async def test_okx_history_pagination_uses_after_and_moves_backward() -> None:
     class FakeClient:
         def __init__(self):
-            self.calls = 0
+            self.calls: list[tuple[int | None, int | None]] = []
 
-        async def get_history_candles(self, inst_id, bar, *, before=None, limit=100):
-            self.calls += 1
+        async def get_history_candles(
+            self, inst_id, bar, *, after=None, before=None, limit=100
+        ):
+            self.calls.append((after, before))
             rows = []
-            for i in range(limit):
-                ts = int(before) - 1 - i * 60_000
-                confirm = "1" if i % 10 != 9 else "0"  # unconfirmed rows must be dropped
-                rows.append([str(ts), "100", "101", "99", "100.5", "1", "1", "1", confirm])
-            return rows
+            if after is not None:
+                # Empirical OKX semantics: after=X returns rows earlier than X.
+                base = int(after) - 1
+                for i in range(limit):
+                    ts = base - i * 60_000
+                    confirm = "1" if i % 10 != 9 else "0"
+                    rows.append([str(ts), "100", "101", "99", "100.5", "1", "1", "1", confirm])
+                return rows
+            if before is not None:
+                # before=X returns rows newer than X (provider must never use it).
+                base = int(before) + 1
+                for i in range(limit):
+                    ts = base + i * 60_000
+                    rows.append([str(ts), "100", "101", "99", "100.5", "1", "1", "1", "1"])
+                return rows
+            return []
 
     client = FakeClient()
     provider = OkxHistoricalCandleProvider(
@@ -248,12 +262,280 @@ async def test_historical_pagination_beyond_300_bars() -> None:
     )
     end_ms = 1_800_000_000_000
     candles = await provider.closed_candles("BTCUSDT", "1m", end_ms - 500 * 60_000, end_ms)
-    assert client.calls > 3
+
+    assert client.calls
+    assert all(after is not None and before is None for after, before in client.calls)
+    cursors = [after for after, _before in client.calls if after is not None]
+    assert all(cursors[i] < cursors[i - 1] for i in range(1, len(cursors)))
+    assert all(c.ts_ms <= end_ms for c in candles)
+    assert all(c.ts_ms >= end_ms - 500 * 60_000 for c in candles)
     assert len(candles) > 300
     assert all(c.confirm for c in candles)
     assert [c.ts_ms for c in candles] == sorted(c.ts_ms for c in candles)
     assert len({c.ts_ms for c in candles}) == len(candles)
+
     # window-aware cache: second call should not hit the client again
-    calls_before = client.calls
+    calls_before = list(client.calls)
     await provider.closed_candles("BTCUSDT", "1m", end_ms - 500 * 60_000, end_ms)
     assert client.calls == calls_before
+    assert provider.stats()["history_cache_hits"] >= 1
+
+
+async def test_mid_bar_t0_endpoint_without_pre_t0_path_contamination() -> None:
+    t0 = datetime(2026, 1, 1, 11, 50, 15, 500713, tzinfo=UTC)
+    bar_ms = 60_000
+    t0_ms = int(t0.timestamp() * 1000)
+    bar_start_ms = (t0_ms // bar_ms) * bar_ms
+    covering = Candle(
+        ts_ms=bar_start_ms,
+        open=100.0,
+        high=130.0,
+        low=70.0,
+        close=101.0,
+        bar_ms=bar_ms,
+    )
+    snap = _snap(snapshot_id="midbar", ts=t0, price=100.0, costs={"total_cost_bps": 1.0})
+    result = LabelV2Maturer().build_label(
+        snap, "1m", candles=[covering], now=t0 + timedelta(minutes=5)
+    )
+    assert result.maturity_status == ml_labels.STATUS_MATURE_VALID
+    assert result.usable_for_training is True
+    assert result.entry_price == 100.0
+    assert result.partial_start_bar is True
+    assert result.path_quality == ml_labels.PATH_QUALITY_UNAVAILABLE_PARTIAL_START
+    assert result.endpoint_quality == ml_labels.ENDPOINT_QUALITY_CLOSED
+    assert result.raw_t0 == t0
+    assert result.aligned_bar_start == datetime.fromtimestamp(bar_start_ms / 1000, tz=UTC)
+    assert result.actual_target_ts == datetime.fromtimestamp(
+        (bar_start_ms + bar_ms) / 1000, tz=UTC
+    )
+    assert result.alignment_error_seconds == pytest.approx(15.500713, abs=0.001)
+    assert result.future_high is None
+    assert result.future_low is None
+    assert result.realized_volatility is None
+
+    # A candle that closes after the requested target must never become endpoint.
+    future = Candle(
+        ts_ms=bar_start_ms + bar_ms,
+        open=101.0,
+        high=140.0,
+        low=80.0,
+        close=139.0,
+        bar_ms=bar_ms,
+    )
+    result_future = LabelV2Maturer().build_label(
+        snap, "1m", candles=[future], now=t0 + timedelta(minutes=5)
+    )
+    assert result_future.maturity_status == ml_labels.STATUS_INCONCLUSIVE_DATA_GAP
+
+
+async def test_exact_bar_boundary_keeps_full_post_t0_path() -> None:
+    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    endpoint = Candle(
+        ts_ms=int(t0.timestamp() * 1000),
+        open=100.0,
+        high=105.0,
+        low=95.0,
+        close=102.0,
+        bar_ms=900_000,
+    )
+    result = LabelV2Maturer().build_label(
+        _snap(ts=t0, price=100.0),
+        "15m",
+        candles=[endpoint],
+        now=t0 + timedelta(hours=2),
+    )
+    assert result.maturity_status == ml_labels.STATUS_MATURE_VALID
+    assert result.partial_start_bar is False
+    assert result.path_quality == ml_labels.PATH_QUALITY_FULL
+    assert result.future_high == 105.0
+    assert result.future_low == 95.0
+
+
+async def test_completed_snapshot_commits_before_later_snapshot_failure(database) -> None:
+    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    await _seed(database, _snap(snapshot_id="first", ts=t0))
+    await _seed(database, _snap(snapshot_id="second", ts=t0 + timedelta(minutes=1)))
+
+    class LaterFailureProvider:
+        def __init__(self):
+            self.calls = 0
+
+        async def closed_candles(self, symbol, bar, start_ms, end_ms):
+            self.calls += 1
+            if self.calls > 6:
+                raise RuntimeError("simulated later snapshot failure")
+            return [
+                Candle(
+                    ts_ms=start_ms,
+                    open=100.0,
+                    high=101.0,
+                    low=99.0,
+                    close=101.0,
+                    bar_ms=end_ms - start_ms,
+                )
+            ]
+
+    with pytest.raises(RuntimeError):
+        await LabelV2Maturer().mature_pending(
+            database.session_factory,
+            LaterFailureProvider(),
+            now=t0 + timedelta(days=1),
+            limit=2,
+        )
+
+    async with database.session_factory() as s:
+        first_rows = int(
+            await s.scalar(
+                select(func.count())
+                .select_from(ScanSnapshotLabelORM)
+                .where(
+                    ScanSnapshotLabelORM.snapshot_id == "first",
+                    ScanSnapshotLabelORM.label_version == "label-v2",
+                )
+            )
+        )
+        second_rows = int(
+            await s.scalar(
+                select(func.count())
+                .select_from(ScanSnapshotLabelORM)
+                .where(
+                    ScanSnapshotLabelORM.snapshot_id == "second",
+                    ScanSnapshotLabelORM.label_version == "label-v2",
+                )
+            )
+        )
+    assert first_rows == 6
+    assert second_rows == 0
+
+
+async def test_backlog_recovers_and_label_v1_is_preserved(database) -> None:
+    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    await _seed(database, _snap(snapshot_id="backlog", ts=t0, price=100.0))
+    async with database.session_factory() as s:
+        s.add(
+            ScanSnapshotLabelORM(
+                snapshot_id="backlog",
+                symbol="BTCUSDT",
+                snapshot_ts=t0,
+                horizon="1h",
+                feature_version="scan-features-v1",
+                label_version="label-v1",
+                long_label="PROFITABLE",
+                short_label="NOT_PROFITABLE",
+                matured_at=t0,
+            )
+        )
+        await s.commit()
+
+    class BoundaryProvider:
+        async def closed_candles(self, symbol, bar, start_ms, end_ms):
+            return [
+                Candle(
+                    ts_ms=start_ms,
+                    open=100.0,
+                    high=101.0,
+                    low=99.0,
+                    close=101.0,
+                    bar_ms=end_ms - start_ms,
+                )
+            ]
+
+    counts = await LabelV2Maturer().mature_pending(
+        database.session_factory, BoundaryProvider(), now=t0 + timedelta(days=1)
+    )
+    assert counts[ml_labels.STATUS_MATURE_VALID] == 6
+    async with database.session_factory() as s:
+        label_v1_count = int(
+            await s.scalar(
+                select(func.count())
+                .select_from(ScanSnapshotLabelORM)
+                .where(ScanSnapshotLabelORM.label_version == "label-v1")
+            )
+        )
+        label_v2_count = int(
+            await s.scalar(
+                select(func.count())
+                .select_from(ScanSnapshotLabelORM)
+                .where(ScanSnapshotLabelORM.label_version == "label-v2")
+            )
+        )
+        snapshot = (
+            await s.execute(
+                select(ScanSnapshotORM).where(ScanSnapshotORM.snapshot_id == "backlog")
+            )
+        ).scalar_one()
+    assert label_v1_count == 1
+    assert label_v2_count == 6
+    assert snapshot.outcome_status == "LABELED"
+
+
+async def test_backlog_advances_past_terminal_inconclusive_snapshot(database) -> None:
+    t0 = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    await _seed(database, _snap(snapshot_id="bad", ts=t0, symbol="BADUSDT"))
+    await _seed(
+        database,
+        _snap(snapshot_id="good", ts=t0 + timedelta(minutes=10), symbol="BTCUSDT"),
+    )
+
+    class MixedProvider:
+        async def closed_candles(self, symbol, bar, start_ms, end_ms):
+            if symbol == "BADUSDT":
+                return []
+            return [
+                Candle(
+                    ts_ms=start_ms,
+                    open=100.0,
+                    high=101.0,
+                    low=99.0,
+                    close=101.0,
+                    bar_ms=end_ms - start_ms,
+                )
+            ]
+
+    counts = await LabelV2Maturer().mature_pending(
+        database.session_factory, MixedProvider(), now=t0 + timedelta(days=1), limit=2
+    )
+    assert counts[ml_labels.STATUS_INCONCLUSIVE_DATA_GAP] == 6
+    assert counts[ml_labels.STATUS_MATURE_VALID] == 6
+    async with database.session_factory() as s:
+        bad = (
+            await s.execute(
+                select(ScanSnapshotORM).where(ScanSnapshotORM.snapshot_id == "bad")
+            )
+        ).scalar_one()
+        good = (
+            await s.execute(
+                select(ScanSnapshotORM).where(ScanSnapshotORM.snapshot_id == "good")
+            )
+        ).scalar_one()
+    assert bad.outcome_status == "LABELED"
+    assert good.outcome_status == "LABELED"
+
+
+async def test_provider_fetches_bar_covering_mid_bar_start() -> None:
+    class FakeClient:
+        def __init__(self):
+            self.after = None
+
+        async def get_history_candles(self, inst_id, bar, *, after=None, before=None, limit=100):
+            self.after = after
+            base = ((int(after) - 1) // 60_000) * 60_000
+            rows = []
+            for i in range(limit):
+                ts = base - i * 60_000
+                rows.append([str(ts), "100", "101", "99", "100.5", "1", "1", "1", "1"])
+            return rows
+
+    t0 = datetime(2026, 1, 1, 12, 0, 22, 762831, tzinfo=UTC)
+    start_ms = int(t0.timestamp() * 1000)
+    end_ms = start_ms + 60_000
+    client = FakeClient()
+    provider = OkxHistoricalCandleProvider(
+        client, page_limit=100, max_pages=4, page_delay_seconds=0
+    )
+    candles = await provider.closed_candles("BTCUSDT", "1m", start_ms, end_ms)
+    covering_start_ms = (start_ms // 60_000) * 60_000
+    assert client.after == end_ms + 1
+    assert any(c.ts_ms == covering_start_ms for c in candles)
+    assert all(covering_start_ms <= c.ts_ms <= end_ms for c in candles)

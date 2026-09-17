@@ -59,6 +59,6 @@ def test_ml_outputs_are_learning_only_not_orders() -> None:
 def test_ml_migration_head_is_single_and_forward_schema_present() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     heads = list(script.get_heads())
-    assert heads == ["0034_ml_forward_model21_lineage"]
-    revision = script.get_revision("0034_ml_forward_model21_lineage")
+    assert heads == ["0035_ml_label_v2_alignment"]
+    revision = script.get_revision("0035_ml_label_v2_alignment")
     assert revision is not None

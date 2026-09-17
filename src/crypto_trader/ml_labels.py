@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -27,6 +28,12 @@ COST_VERSION_ESTIMATE = "label-cost-v2-fallback-estimate"
 FALLBACK_COST_BPS = 22.0
 MIN_EDGE_BPS_DEFAULT = 10.0
 ALIGNMENT_TOLERANCE_SECONDS = 60.0
+ALIGNMENT_POLICY_VERSION = "label-alignment-v2.0"
+PATH_QUALITY_FULL = "FULL"
+PATH_QUALITY_UNAVAILABLE_PARTIAL_START = "UNAVAILABLE_PARTIAL_START"
+PATH_QUALITY_UNAVAILABLE = "UNAVAILABLE"
+ENDPOINT_QUALITY_CLOSED = "CLOSED_AT_OR_BEFORE_TARGET"
+ENDPOINT_QUALITY_NOT_EVALUATED = "NOT_EVALUATED"
 
 HORIZON_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -102,7 +109,15 @@ def parse_okx_candles(rows: list[list[str]], bar_ms: int) -> list[Candle]:
 
 
 class OkxHistoricalCandleProvider:
-    """Bounded pagination over OKX public history-candles with a small cache."""
+    """Bounded backward pagination over OKX public history-candles.
+
+    Empirical OKX semantics on ``/api/v5/market/history-candles``:
+      after=X  -> rows earlier than X (older)
+      before=X -> rows newer than X (newer)
+
+    Backward traversal therefore uses ``after`` and walks timestamps downward
+    until the requested start boundary or a bounded page cap is reached.
+    """
 
     def __init__(
         self,
@@ -112,6 +127,7 @@ class OkxHistoricalCandleProvider:
         max_pages: int = 12,
         cache_ttl_seconds: float = 300.0,
         page_delay_seconds: float = 0.05,
+        max_cache_entries: int = 512,
     ) -> None:
         from crypto_trader.exchange.symbol_mapper import SymbolMapper
 
@@ -120,50 +136,95 @@ class OkxHistoricalCandleProvider:
         self.max_pages = max(1, int(max_pages))
         self.cache_ttl_seconds = float(cache_ttl_seconds)
         self.page_delay_seconds = float(page_delay_seconds)
+        self.max_cache_entries = max(1, int(max_cache_entries))
         self.mapper = SymbolMapper()
         self._cache: dict[tuple[str, str, int, int], tuple[float, list[Candle]]] = {}
+        self.history_requests = 0
+        self.history_errors = 0
+        self.pages_fetched = 0
+        self.cache_hits = 0
+        self.history_latency_seconds = 0.0
+        self.last_history_error: str | None = None
 
     async def closed_candles(
         self, symbol: str, bar: str, start_ms: int, end_ms: int
     ) -> list[Candle]:
         key = (symbol, bar, int(start_ms), int(end_ms))
-        now_mono = asyncio.get_running_loop().time()
+        loop = asyncio.get_running_loop()
+        now_mono = loop.time()
         cached = self._cache.get(key)
         if cached and now_mono - cached[0] <= self.cache_ttl_seconds:
+            self.cache_hits += 1
             return list(cached[1])
 
         inst_id = self.mapper.to_okx(symbol)
         bar_ms = self._bar_ms(bar)
+        # A raw decision T0 can be mid-bar. Fetch from the bar-aligned start so
+        # the candle covering T0 is available for the endpoint rule; build_label
+        # still excludes pre-T0 high/low from path metrics.
+        fetch_start_ms = (int(start_ms) // bar_ms) * bar_ms
         collected: dict[int, Candle] = {}
-        before = int(end_ms) + 1
+        after = int(end_ms) + 1
         pages = 0
         while pages < self.max_pages:
+            started = loop.time()
             try:
                 rows = await self.client.get_history_candles(
-                    inst_id, bar, before=before, limit=self.page_limit
+                    inst_id, bar, after=after, limit=self.page_limit
                 )
             except OKXDiagnosticError as exc:
+                self.history_errors += 1
+                self.last_history_error = f"OKXDiagnosticError:{exc.reason_code}:{exc.safe_message}"
                 raise TransientSourceError("HISTORY_CANDLES_FAILED") from exc
             except Exception as exc:  # network/transport
+                self.history_errors += 1
+                self.last_history_error = type(exc).__name__
                 raise TransientSourceError("HISTORY_CANDLES_TRANSPORT") from exc
+            finally:
+                self.history_latency_seconds += max(0.0, loop.time() - started)
+
+            self.history_requests += 1
+            self.pages_fetched += 1
             if not rows:
                 break
-            parsed = parse_okx_candles(rows, bar_ms)
-            if not parsed:
+            timestamps = [
+                int(row[0]) for row in rows if len(row) >= 1 and str(row[0]).isdigit()
+            ]
+            if not timestamps:
                 break
-            for candle in parsed:
-                if start_ms <= candle.ts_ms <= end_ms:
+            page_oldest = min(timestamps)
+            for candle in parse_okx_candles(rows, bar_ms):
+                if fetch_start_ms <= candle.ts_ms <= int(end_ms):
                     collected[candle.ts_ms] = candle
-            oldest = min(int(row[0]) for row in rows if len(row) >= 1 and str(row[0]).isdigit())
+
             pages += 1
-            if oldest <= int(start_ms):
+            if page_oldest <= fetch_start_ms:
                 break
-            before = oldest
+            if page_oldest >= after:  # cursor did not move strictly backward
+                break
+            after = page_oldest
             if self.page_delay_seconds:
                 await asyncio.sleep(self.page_delay_seconds)
+
         candles = [collected[ts] for ts in sorted(collected)]
         self._cache[key] = (now_mono, candles)
+        self._evict_cache()
         return candles
+
+    def stats(self) -> dict[str, Any]:
+        return {
+            "history_requests": self.history_requests,
+            "history_errors": self.history_errors,
+            "history_page_requests": self.pages_fetched,
+            "history_latency_seconds": round(self.history_latency_seconds, 3),
+            "history_cache_hits": self.cache_hits,
+            "last_history_error": self.last_history_error,
+        }
+
+    def _evict_cache(self) -> None:
+        while len(self._cache) > self.max_cache_entries:
+            oldest_key = min(self._cache, key=lambda key: self._cache[key][0])
+            self._cache.pop(oldest_key, None)
 
     @staticmethod
     def _bar_ms(bar: str) -> int:
@@ -243,6 +304,12 @@ class LabelResult:
     long_label: str
     short_label: str
     cost: CostTruth
+    raw_t0: datetime | None = None
+    aligned_bar_start: datetime | None = None
+    partial_start_bar: bool = False
+    path_quality: str = PATH_QUALITY_UNAVAILABLE
+    endpoint_quality: str = ENDPOINT_QUALITY_NOT_EVALUATED
+    alignment_policy_version: str = ALIGNMENT_POLICY_VERSION
     factual_source: str = "OKX_HISTORY_CANDLES"
 
 
@@ -251,7 +318,19 @@ def _utc(dt: datetime) -> datetime:
 
 
 class LabelV2Maturer:
-    """Builds exact post-cost labels or an explicit inconclusive status."""
+    """Builds exact post-cost labels or an explicit inconclusive status.
+
+    Alignment policy v2:
+
+    * ``requested_target_ts`` remains raw T0 + horizon.
+    * The endpoint may be the last closed candle whose close time is at or
+      before the requested target, even if that candle opened before raw T0,
+      because that close is a factual observation by the target time.
+    * Path MFE/MAE is computed only from candles whose *open* is at or after
+      raw T0. If the only closed endpoint candle covers T0, endpoint return is
+      still factual while path metrics are marked explicitly unavailable rather
+      than using pre-decision extrema.
+    """
 
     def __init__(
         self, *, min_edge_bps: float = MIN_EDGE_BPS_DEFAULT, gap_ratio: float = 0.75
@@ -270,13 +349,18 @@ class LabelV2Maturer:
     ) -> LabelResult:
         now = _utc(now or datetime.now(UTC))
         t0 = _utc(snapshot.captured_at)
-        requested_target = t0 + timedelta(seconds=HORIZON_SECONDS[horizon])
         bar_ms = _bar_ms(horizon)
+        requested_target = t0 + timedelta(seconds=HORIZON_SECONDS[horizon])
+        raw_t0_ms = int(t0.timestamp() * 1000)
+        aligned_bar_start_ms = (raw_t0_ms // bar_ms) * bar_ms
+        aligned_bar_start = datetime.fromtimestamp(aligned_bar_start_ms / 1000, tz=UTC)
+
         features = snapshot.features_json or {}
         entry = features.get("price")
         entry_price = float(entry) if isinstance(entry, (int, float)) else None
         cost = decision_time_cost(features)
-        empty = dict(
+
+        empty: dict[str, Any] = dict(
             usable_for_training=False,
             requested_target_ts=requested_target,
             actual_target_ts=None,
@@ -296,6 +380,12 @@ class LabelV2Maturer:
             long_label="NOT_PROFITABLE",
             short_label="NOT_PROFITABLE",
             cost=cost,
+            raw_t0=t0,
+            aligned_bar_start=aligned_bar_start,
+            partial_start_bar=False,
+            path_quality=PATH_QUALITY_UNAVAILABLE,
+            endpoint_quality=ENDPOINT_QUALITY_NOT_EVALUATED,
+            alignment_policy_version=ALIGNMENT_POLICY_VERSION,
         )
         if now < requested_target:
             return LabelResult(maturity_status=STATUS_IMMATURE, **empty)
@@ -305,105 +395,85 @@ class LabelV2Maturer:
             return LabelResult(maturity_status=STATUS_INCONCLUSIVE_DATA_GAP, **empty)
 
         target_ms = int(requested_target.timestamp() * 1000)
-        usable = [c for c in (candles or []) if c.confirm and c.close_ts_ms <= target_ms]
-        usable = [c for c in usable if c.ts_ms >= int(t0.timestamp() * 1000)]
-        if not usable:
+        candidates = [
+            candle
+            for candle in (candles or [])
+            if candle.confirm
+            and candle.close_ts_ms <= target_ms
+            and candle.close_ts_ms > raw_t0_ms
+        ]
+        if not candidates:
             return LabelResult(maturity_status=STATUS_INCONCLUSIVE_DATA_GAP, **empty)
-        usable.sort(key=lambda c: (c.ts_ms, c.close_ts_ms))
-        endpoint = max(usable, key=lambda c: c.close_ts_ms)
+
+        candidates.sort(key=lambda candle: (candle.close_ts_ms, candle.ts_ms))
+        endpoint = candidates[-1]
         actual_target = datetime.fromtimestamp(endpoint.close_ts_ms / 1000, tz=UTC)
         alignment_error = max(0.0, (target_ms - endpoint.close_ts_ms) / 1000.0)
-        expected_bars = max(1, HORIZON_SECONDS[horizon] * 1000 // bar_ms)
-        if len(usable) < max(1, int(expected_bars * self.gap_ratio)):
-            return LabelResult(
-                maturity_status=STATUS_INCONCLUSIVE_DATA_GAP,
-                actual_target_ts=actual_target,
-                alignment_error_seconds=alignment_error,
-                path_start_ts=datetime.fromtimestamp(usable[0].ts_ms / 1000, tz=UTC),
-                path_end_ts=actual_target,
-                data_gap=True,
-                entry_price=entry_price,
-                **{
-                    k: empty[k]
-                    for k in (
-                        "requested_target_ts",
-                        "usable_for_training",
-                        "all_in_cost_bps",
-                        "future_high",
-                        "future_low",
-                        "realized_volatility",
-                        "long_gross_bps",
-                        "short_gross_bps",
-                        "long_net_bps",
-                        "short_net_bps",
-                        "long_label",
-                        "short_label",
-                        "cost",
-                    )
-                },
-            )
+        partial_start_bar = endpoint.ts_ms < raw_t0_ms
+        path_candles = [candle for candle in candidates if candle.ts_ms >= raw_t0_ms]
+        if path_candles:
+            path_quality = PATH_QUALITY_FULL
+        elif partial_start_bar:
+            path_quality = PATH_QUALITY_UNAVAILABLE_PARTIAL_START
+        else:
+            path_quality = PATH_QUALITY_UNAVAILABLE
+        endpoint_quality = ENDPOINT_QUALITY_CLOSED
+
         if alignment_error > ALIGNMENT_TOLERANCE_SECONDS:
-            return LabelResult(
-                maturity_status=STATUS_INCONCLUSIVE_ALIGNMENT,
+            inconclusive = dict(empty)
+            inconclusive.update(
                 actual_target_ts=actual_target,
                 alignment_error_seconds=alignment_error,
-                path_start_ts=datetime.fromtimestamp(usable[0].ts_ms / 1000, tz=UTC),
-                path_end_ts=actual_target,
                 data_gap=False,
-                entry_price=entry_price,
-                **{
-                    k: empty[k]
-                    for k in (
-                        "requested_target_ts",
-                        "usable_for_training",
-                        "all_in_cost_bps",
-                        "future_high",
-                        "future_low",
-                        "realized_volatility",
-                        "long_gross_bps",
-                        "short_gross_bps",
-                        "long_net_bps",
-                        "short_net_bps",
-                        "long_label",
-                        "short_label",
-                        "cost",
-                    )
-                },
+                partial_start_bar=partial_start_bar,
+                path_quality=path_quality,
+                endpoint_quality=endpoint_quality,
             )
+            return LabelResult(maturity_status=STATUS_INCONCLUSIVE_ALIGNMENT, **inconclusive)
 
         long_gross = (endpoint.close - entry_price) / entry_price * 10000.0
         short_gross = -long_gross
         long_net = long_gross - cost.all_in_cost_bps
         short_net = short_gross - cost.all_in_cost_bps
-        closes = [c.close for c in usable if c.close > 0]
-        realized = (
-            statistics.pstdev([math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))])
+
+        future_high = max((candle.high for candle in path_candles), default=None)
+        future_low = min((candle.low for candle in path_candles), default=None)
+        path_closes = [candle.close for candle in path_candles if candle.close > 0]
+        realized_volatility = (
+            statistics.pstdev(
+                [math.log(path_closes[i] / path_closes[i - 1]) for i in range(1, len(path_closes))]
+            )
             * 10000.0
-            if len(closes) >= 2
-            else 0.0
+            if len(path_closes) >= 2
+            else None
         )
-        return LabelResult(
-            maturity_status=STATUS_MATURE_VALID,
+        path_start_ts = (
+            datetime.fromtimestamp(path_candles[0].ts_ms / 1000, tz=UTC) if path_candles else None
+        )
+        path_end_ts = actual_target if path_candles else None
+
+        mature = dict(empty)
+        mature.update(
             usable_for_training=True,
-            requested_target_ts=requested_target,
             actual_target_ts=actual_target,
             alignment_error_seconds=alignment_error,
-            path_start_ts=datetime.fromtimestamp(usable[0].ts_ms / 1000, tz=UTC),
-            path_end_ts=actual_target,
+            path_start_ts=path_start_ts,
+            path_end_ts=path_end_ts,
             data_gap=False,
-            entry_price=entry_price,
-            future_high=max(c.high for c in usable),
-            future_low=min(c.low for c in usable),
-            realized_volatility=realized,
+            future_high=future_high,
+            future_low=future_low,
+            realized_volatility=realized_volatility,
             long_gross_bps=long_gross,
             short_gross_bps=short_gross,
-            all_in_cost_bps=cost.all_in_cost_bps,
             long_net_bps=long_net,
             short_net_bps=short_net,
             long_label="PROFITABLE" if long_net > self.min_edge_bps else "NOT_PROFITABLE",
             short_label="PROFITABLE" if short_net > self.min_edge_bps else "NOT_PROFITABLE",
-            cost=cost,
+            partial_start_bar=partial_start_bar,
+            path_quality=path_quality,
+            endpoint_quality=endpoint_quality,
         )
+        return LabelResult(maturity_status=STATUS_MATURE_VALID, **mature)
 
     async def mature_pending(
         self,
@@ -412,6 +482,7 @@ class LabelV2Maturer:
         *,
         now: datetime | None = None,
         limit: int = 400,
+        on_result: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, int]:
         now = _utc(now or datetime.now(UTC))
         counts = {
@@ -453,22 +524,26 @@ class LabelV2Maturer:
                 t0 = _utc(snap.captured_at)
                 for horizon, seconds in HORIZON_SECONDS.items():
                     requested = t0 + timedelta(seconds=seconds)
-                    if requested > now:
-                        counts[STATUS_IMMATURE] += 1
-                        continue
                     row = existing.get((snap.snapshot_id, horizon))
-                    if row is not None and row.maturation_status == STATUS_MATURE_VALID:
-                        continue
-                    try:
-                        candles = await provider.closed_candles(
-                            snap.symbol,
-                            BAR_FOR_HORIZON[horizon],
-                            int(t0.timestamp() * 1000),
-                            int(requested.timestamp() * 1000),
-                        )
-                        result = self.build_label(snap, horizon, candles=candles, now=now)
-                    except TransientSourceError:
-                        result = self.build_label(snap, horizon, source_error=True, now=now)
+                    if requested > now:
+                        # Persist an explicit IMMATURE row so the backlog and
+                        # heartbeat expose truthful progress before maturity.
+                        result = self.build_label(snap, horizon, now=now)
+                    else:
+                        if row is not None and row.maturation_status == STATUS_MATURE_VALID:
+                            continue
+                        try:
+                            candles = await provider.closed_candles(
+                                snap.symbol,
+                                BAR_FOR_HORIZON[horizon],
+                                int(t0.timestamp() * 1000),
+                                int(requested.timestamp() * 1000),
+                            )
+                            result = self.build_label(snap, horizon, candles=candles, now=now)
+                        except TransientSourceError:
+                            result = self.build_label(
+                                snap, horizon, source_error=True, now=now
+                            )
                     counts[result.maturity_status] += 1
                     target_row = row
                     if target_row is None:
@@ -483,14 +558,44 @@ class LabelV2Maturer:
                         s.add(target_row)
                         existing[(snap.snapshot_id, horizon)] = target_row
                     self._apply(target_row, result, now)
+                    self._notify(on_result, snap, horizon, result.maturity_status)
+
+                terminal_statuses = {
+                    STATUS_MATURE_VALID,
+                    STATUS_INCONCLUSIVE_DATA_GAP,
+                    STATUS_INCONCLUSIVE_ALIGNMENT,
+                }
                 if all(
                     (snap.snapshot_id, h) in existing
-                    and existing[(snap.snapshot_id, h)].maturation_status == STATUS_MATURE_VALID
+                    and existing[(snap.snapshot_id, h)].maturation_status in terminal_statuses
                     for h in HORIZON_SECONDS
                 ):
                     snap.outcome_status = "LABELED"
-            await s.commit()
+                # Per-snapshot transaction: completed factual work survives a
+                # later timeout/cancellation on any subsequent snapshot.
+                await s.commit()
         return counts
+
+    @staticmethod
+    def _notify(
+        on_result: Callable[[dict[str, Any]], None] | None,
+        snap: ScanSnapshotORM,
+        horizon: str,
+        status: str,
+    ) -> None:
+        if on_result is None:
+            return
+        try:
+            on_result(
+                {
+                    "snapshot_id": snap.snapshot_id,
+                    "symbol": snap.symbol,
+                    "horizon": horizon,
+                    "status": status,
+                }
+            )
+        except Exception:
+            pass
 
     @staticmethod
     def _apply(row: ScanSnapshotLabelORM, r: LabelResult, now: datetime) -> None:
@@ -508,6 +613,12 @@ class LabelV2Maturer:
         row.cost_version = r.cost.cost_version
         row.cost_components_json = {**r.cost.components, "quality": r.cost.quality}
         row.label_config_version = LABEL_CONFIG_VERSION
+        row.alignment_policy_version = r.alignment_policy_version
+        row.raw_t0 = r.raw_t0
+        row.aligned_bar_start = r.aligned_bar_start
+        row.partial_start_bar = bool(r.partial_start_bar)
+        row.path_quality = r.path_quality
+        row.endpoint_quality = r.endpoint_quality
         row.future_high = r.future_high
         row.future_low = r.future_low
         row.realized_volatility = r.realized_volatility
