@@ -61,7 +61,17 @@ jobs:
       - run: uv sync --dev
       - run: sudo apt-get update && sudo apt-get install -y zsh
       - run: uv run ruff check src scripts tests
-      - run: uv run pytest tests -q
+      - name: Run full pytest
+        id: pytest
+        continue-on-error: true
+        run: uv run pytest tests -q --junitxml=/tmp/pytest.xml
+      - name: Surface pytest failures
+        if: steps.pytest.outcome == 'failure'
+        run: >-
+          python3 -c "import xml.etree.ElementTree as ET; tree=ET.parse('/tmp/pytest.xml'); [print('::error title=pytest::' + (test.get('classname') or '') + '.' + (test.get('name') or '')) for test in tree.iter('testcase') if test.find('failure') is not None or test.find('error') is not None]"
+      - name: Fail on pytest failure
+        if: steps.pytest.outcome == 'failure'
+        run: exit 1
 
   final-frontend:
     runs-on: ubuntu-latest
