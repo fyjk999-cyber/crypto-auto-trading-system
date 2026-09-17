@@ -31,11 +31,15 @@ class ChiefContextLoader:
         limit: int = 5,
         news_retriever=None,
         token_budget: int | None = None,
+        growth_session_factory=None,
     ) -> None:
         self.session_factory = session_factory
         self.limit = limit
         self.news_retriever = news_retriever
         self.token_budget = token_budget
+        # Growth worker owns its durable derived DB; core PAPER facts stay in
+        # session_factory. Growth retrieval must read the authorized Growth DB.
+        self.growth_session_factory = growth_session_factory or session_factory
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
         async with self.session_factory() as session:
@@ -185,7 +189,7 @@ class ChiefContextLoader:
 
     async def _growth_retrieval_evidence(self, context: ChiefTraderContext):
         """Canonical as-of Growth retrieval for Chief context (read-only)."""
-        retriever = GrowthRetriever(self.session_factory)
+        retriever = GrowthRetriever(self.growth_session_factory)
         enriched = await build_growth_context(
             retriever,
             symbol=context.symbol,

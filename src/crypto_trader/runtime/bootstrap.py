@@ -88,6 +88,7 @@ class RuntimeBundle:
     position_manager: LiveLLMPositionManager | None
     app_state: AppState
     news_database: Database | None = None
+    growth_database: Database | None = None
 
 
 def leg_execution_enabled_from_env() -> bool:
@@ -214,12 +215,19 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 repository=NewsRepository(news_session_factory),
             )
         )
+    growth_database = None
+    growth_session_factory = database.session_factory
+    growth_url = os.environ.get("GROWTH_DATABASE_URL", "").strip()
+    if growth_url and growth_url != settings.database_url:
+        growth_database = Database(growth_url)
+        growth_session_factory = growth_database.session_factory
     chief_context = ChiefContextLoader(
         database.session_factory,
         news_retriever=news_retriever,
         token_budget=(news_retriever.token_budget if news_retriever is not None else None),
+        growth_session_factory=growth_session_factory,
     )
-    runtime_context_loader = chief_context if news_enabled else None
+    runtime_context_loader = chief_context
     # Core LLM router: DeepSeek -> GLM (fresh factual state only) -> offline.
     # Until the runtime supplies a fresh-state prompt rebuilder, the backup is
     # deliberately skipped rather than replaying a stale prompt; the router then
@@ -404,6 +412,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         position_manager=position_manager,
         app_state=app_state,
         news_database=news_database,
+        growth_database=growth_database,
     )
 
 

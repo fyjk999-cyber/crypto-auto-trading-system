@@ -42,6 +42,8 @@ async def main_async(host: str, port: int) -> None:
     finally:
         if bundle.news_database is not None:
             await bundle.news_database.close()
+        if bundle.growth_database is not None:
+            await bundle.growth_database.close()
 
 
 def main() -> None:
