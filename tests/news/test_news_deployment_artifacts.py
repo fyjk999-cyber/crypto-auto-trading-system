@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+
+import pytest
 
 from crypto_trader.news.config import NewsConfig, NewsProviderConfig
 from crypto_trader.news.models import ProviderHealth, SourceClass
@@ -37,6 +40,7 @@ def _provider_config(provider_id: str = "p1") -> NewsProviderConfig:
     )
 
 
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh unavailable")
 def test_news_launchd_artifacts_exist_and_are_evidence_only():
     plist = ROOT / "deploy" / "launchagents" / "com.lowrisk.news.plist"
     script = ROOT / "scripts" / "run_news_macos.sh"
