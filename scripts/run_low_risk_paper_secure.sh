@@ -24,6 +24,9 @@ export TRADING_LLM_MODEL=deepseek-flash
 # an explicit operator launchd/env authorization by setting LLM_CALLS_PAUSED=false.
 export LLM_CALLS_PAUSED="${LLM_CALLS_PAUSED:-true}"
 export LLM_CALLS_PAUSED_REASON="${LLM_CALLS_PAUSED_REASON:-OPERATOR_PAUSE_REQUEST}"
+# News is evidence-only. The dedicated News DB target must be supplied by the
+# launch environment; enabling context/reassessment keeps the dispatch seam live.
+export NEWS_ENABLED="${NEWS_ENABLED:-1}"
 # H0-H7 secondary acceptance passed: PAPER-only independent leg execution is
 # enabled for natural hedge/reverse evidence accumulation. LIVE remains false.
 export LEG_EXECUTION_ENABLED="${LEG_EXECUTION_ENABLED:-true}"

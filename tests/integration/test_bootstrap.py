@@ -7,7 +7,8 @@ from crypto_trader.config import Settings
 from crypto_trader.domain.enums import OrderSide
 from crypto_trader.domain.errors import LeaseNotHeld
 from crypto_trader.domain.models import SignalIntent
-from crypto_trader.persistence.models import EngineRunORM
+from crypto_trader.persistence.database import Database
+from crypto_trader.persistence.models import EngineRunORM, NewsReassessmentEventORM
 from crypto_trader.runtime.bootstrap import build_system
 
 
@@ -168,3 +169,58 @@ async def test_failed_lease_acquisition_never_closes_other_runtime_row(database)
         fence_generation=held.fence_generation,
     )
     await bundle.database.close()
+
+
+async def test_bootstrap_reads_news_dispatch_from_dedicated_news_database(
+    database, tmp_path, monkeypatch
+):
+    from datetime import UTC, datetime
+
+    news_url = f"sqlite+aiosqlite:///{tmp_path}/news-dispatch.db"
+    news_db = Database(news_url)
+    await news_db.init_schema()
+    async with news_db.session_factory() as session:
+        session.add(
+            NewsReassessmentEventORM(
+                request_id="newsreq-cross-db",
+                event_id="news-e1",
+                event_version=1,
+                news_evidence_id="ev1",
+                symbol="BTCUSDT",
+                dedup_key="cross-db-1",
+                priority="HIGH",
+                materiality_tier="HIGH",
+                reason="TEST_CROSS_DB",
+                position_state="UNKNOWN",
+                requested_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setenv("NEWS_ENABLED", "1")
+    monkeypatch.setenv("NEWS_DATABASE_URL", news_url)
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        trading_mode="PAPER",
+        live_trading_enabled=False,
+        database_url=database.url,
+        auto_start_runtime=False,
+        paper_mode="PAPER_SYNTHETIC",
+        paper_initial_equity="100000",
+        engine_tick_seconds=3600,
+        reconciliation_interval_seconds=3600,
+        run_lease_renew_interval_seconds=3600,
+    )
+    bundle = await build_system(settings)
+    try:
+        assert bundle.news_database is not None
+        assert bundle.engine.news_reassessment_runtime is not None
+        repository = bundle.engine.news_reassessment_runtime.service.repository
+        pending = await repository.list_pending_reassessments(limit=10)
+        assert [row["request_id"] for row in pending] == ["newsreq-cross-db"]
+    finally:
+        await bundle.database.close()
+        if bundle.news_database is not None:
+            await bundle.news_database.close()
+        await news_db.close()

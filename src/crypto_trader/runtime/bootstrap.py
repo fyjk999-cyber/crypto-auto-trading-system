@@ -87,6 +87,7 @@ class RuntimeBundle:
     engine: TradingEngine
     position_manager: LiveLLMPositionManager | None
     app_state: AppState
+    news_database: Database | None = None
 
 
 def leg_execution_enabled_from_env() -> bool:
@@ -189,10 +190,18 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     news_enabled = _news_context_enabled()
     news_retriever = None
     news_reassessment_runtime = None
+    news_database = None
     if news_enabled:
         news_config = NewsConfig.from_env()
+        # The News worker owns its own durable DB. The PAPER runtime must read
+        # and claim reassessments from that same DB, not from the core PAPER
+        # DB, otherwise natural News requests can never reach the dispatch seam.
+        news_session_factory = database.session_factory
+        if news_config.database_url and news_config.database_url != settings.database_url:
+            news_database = Database(news_config.database_url)
+            news_session_factory = news_database.session_factory
         news_retriever = NewsRetriever(
-            database.session_factory,
+            news_session_factory,
             top_k=news_config.context_top_k,
             token_budget=news_config.context_token_budget,
             include_broad=news_config.context_include_broad,
@@ -201,8 +210,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         # This is a dispatch seam, never an order/risk authority.
         news_reassessment_runtime = NewsReassessmentRuntime(
             NewsReassessmentService(
-                database.session_factory,
-                repository=NewsRepository(database.session_factory),
+                news_session_factory,
+                repository=NewsRepository(news_session_factory),
             )
         )
     chief_context = ChiefContextLoader(
@@ -394,6 +403,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         position_manager=position_manager,
         app_state=app_state,
+        news_database=news_database,
     )
 
 

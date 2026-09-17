@@ -37,7 +37,11 @@ async def main_async(host: str, port: int) -> None:
     app = create_app(bundle.app_state)
     config = uvicorn.Config(app, host=host, port=port, log_level=settings.log_level.lower())
     server = uvicorn.Server(config)
-    await server.serve()
+    try:
+        await server.serve()
+    finally:
+        if bundle.news_database is not None:
+            await bundle.news_database.close()
 
 
 def main() -> None:
