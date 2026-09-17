@@ -505,3 +505,23 @@ async def test_worker_ingests_readonly_trading_contract_once(database, tmp_path)
     reviews = await LifecycleReviewEngine(database.session_factory).list_reviews(limit=10)
     assert {r["review_type"] for r in reviews} == {"ADD_REVIEW", "RISK_REVIEW"}
     assert worker.metrics["trade_events_seen"] == 2
+
+
+async def test_worker_records_resume_source_and_plan_identity(database, tmp_path):
+    source = tmp_path / "scan.db"
+    source.write_bytes(b"sqlite-placeholder")
+    growth_dir = tmp_path / "growth"
+    worker = GrowthWorker(
+        database.session_factory,
+        growth_dir,
+        FakeClient(),
+        code_sha="sha-resume",
+        scan_source_db=str(source),
+    )
+    assert worker.resume_source_identity is not None
+    assert str(source) in worker.resume_source_identity
+    assert len(worker.resume_plan_hash) == 64
+    worker._save(state="TEST_RESUME")
+    state = json.loads((growth_dir / "growth_state.json").read_text())
+    assert state["resume_source_identity"] == worker.resume_source_identity
+    assert state["resume_plan_hash"] == worker.resume_plan_hash

@@ -2,6 +2,7 @@
 # Autonomous Growth worker orchestration (LEARNING_ONLY; restart-safe).
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -37,6 +38,22 @@ def _write_json(path: Path, payload: dict) -> None:
     temp.replace(path)
 
 
+def _source_identity(source_path: str | None) -> str | None:
+    if not source_path:
+        return None
+    path = Path(source_path)
+    try:
+        stat = path.stat()
+        return f"{path.resolve()}:{stat.st_dev}:{stat.st_ino}"
+    except OSError:
+        return str(path.resolve())
+
+
+def _resume_plan_hash(payload: dict) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class GrowthWorker:
     authority = "LEARNING_ONLY"
     is_order = False
@@ -62,6 +79,18 @@ class GrowthWorker:
         self.outcome_batch = self._int_env("GROWTH_OUTCOME_BATCH", 25, 1, 1000)
         self.memory_batch = self._int_env("GROWTH_MEMORY_BATCH", 200, 1, 5000)
         self.review_batch = self._int_env("GROWTH_REVIEW_BATCH", 100, 1, 1000)
+        self.resume_source_identity = _source_identity(scan_source_db or trading_source_db)
+        self.resume_plan_hash = _resume_plan_hash(
+            {
+                "code_sha": code_sha,
+                "scan_source_db": scan_source_db,
+                "trading_source_db": trading_source_db,
+                "GROWTH_SCAN_BATCH": self.scan_batch,
+                "GROWTH_OUTCOME_BATCH": self.outcome_batch,
+                "GROWTH_MEMORY_BATCH": self.memory_batch,
+                "GROWTH_REVIEW_BATCH": self.review_batch,
+            }
+        )
         self.state_path = self.base_dir / STATE_FILE
         self.heartbeat_path = self.base_dir / HEARTBEAT_FILE
         self.metrics_path = self.base_dir / METRICS_FILE
@@ -98,6 +127,8 @@ class GrowthWorker:
                 "runtime_sha": self.code_sha,
                 "updated_at": datetime.now(UTC).isoformat(),
                 "metrics": self.metrics,
+                "resume_source_identity": self.resume_source_identity,
+                "resume_plan_hash": self.resume_plan_hash,
             }
         )
         _write_json(self.state_path, self.state)
@@ -118,6 +149,8 @@ class GrowthWorker:
                 "derived_db_path": str(self.base_dir),
                 "last_error": last_error,
                 "metrics": self.metrics,
+                "resume_source_identity": self.resume_source_identity,
+                "resume_plan_hash": self.resume_plan_hash,
             },
         )
 
