@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 
 import httpx
+import pytest
 
 from crypto_trader.api.deps import LLMRuntimeStatus
 from crypto_trader.llm_chief.coin_profile import CoinProfileStore
@@ -33,14 +34,14 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
 
     provider = DeepSeekProvider(
         api_key="test-secret",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         transport=httpx.MockTransport(handler),
     )
     result = await provider.complete_json(prompt="JSON", retries=0, max_tokens=64)
     diagnostics = provider.diagnostics()
     assert result.ok is True
     assert diagnostics["provider"] == "deepseek"
-    assert diagnostics["model"] == "deepseek-v4-pro"
+    assert diagnostics["model"] == "deepseek-flash"
     assert diagnostics["last_token_usage"] == {
         "prompt_tokens": 4,
         "completion_tokens": 2,
@@ -154,11 +155,27 @@ def test_llm_provider_abstraction_without_key():
 
 
 def test_deepseek_provider_uses_non_secret_runtime_configuration(monkeypatch):
+    monkeypatch.setenv("TRADING_LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
     provider = DeepSeekProvider(api_key=None)
-    assert provider.model == "deepseek-v4-pro"
+    assert provider.model == "deepseek-flash"
     assert provider.base_url == "https://api.deepseek.com"
+
+
+def test_forbidden_production_llm_model_fails_closed(monkeypatch):
+    from crypto_trader.llm_chief.provider import resolve_trading_model
+
+    monkeypatch.delenv("TRADING_LLM_MODEL", raising=False)
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    with pytest.raises(ValueError):
+        resolve_trading_model()
+    provider = DeepSeekProvider(api_key="test-secret")
+    assert provider.healthy() is False
+    assert provider.model == "unconfigured"
+    assert provider.diagnostics()["configuration_error"] == (
+        "forbidden production LLM_MODEL: deepseek-v4-pro"
+    )
 
 
 async def test_llm_runtime_health_is_explicit_when_not_configured(monkeypatch):
@@ -256,7 +273,7 @@ def test_chief_trader_decision_schema_and_fail_safe():
 async def test_chief_trader_reserves_output_budget_after_reasoning_tokens():
     class CapturingProvider:
         name = "deepseek"
-        model = "deepseek-v4-pro"
+        model = "deepseek-flash"
 
         async def complete_json(self, **kwargs):
             self.kwargs = kwargs
@@ -331,7 +348,7 @@ def test_chief_trader_owns_identity_timestamp_and_model_version():
         },
         ctx,
         provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     assert decision.decision_id.startswith("llm_")
     assert decision.decision_id != "model-controlled-id"
@@ -344,7 +361,7 @@ def test_chief_trader_owns_identity_timestamp_and_model_version():
 async def test_chief_trader_missing_action_is_durable_fail_closed_input():
     class MissingActionProvider:
         name = "deepseek"
-        model = "deepseek-v4-pro"
+        model = "deepseek-flash"
 
         async def complete_json(self, **_kwargs):
             return LLMResponse(

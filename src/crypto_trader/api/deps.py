@@ -95,7 +95,19 @@ class LLMRuntimeStatus:
         from crypto_trader.llm_chief.provider import DeepSeekProvider, resolve_trading_model
 
         self.provider = (os.environ.get("LLM_PROVIDER") or "none").lower()
-        self.model = resolve_trading_model()
+        try:
+            self.model = resolve_trading_model()
+        except ValueError:
+            self.model = None
+            self.configured = False
+            self.reachable = False
+            self.provider_state = "PROVIDER_UNCONFIGURED"
+            self.configured_provider = "none"
+            self.configured_model = None
+            self.effective_provider = None
+            self.effective_model = None
+            self.last_error = "FORBIDDEN_MODEL"
+            return
         self.configured = self.provider == "deepseek" and bool(
             os.environ.get("DEEPSEEK_API_KEY")
         )

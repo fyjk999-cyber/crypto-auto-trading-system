@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: CANONICAL_RUNTIME_ENTRY (single lifecycle owner)
 # Canonical secure PAPER runtime launcher for Low-Risk V2.
 # DEEPSEEK_API_KEY is read from macOS Keychain in memory only and exported to the
 # child process; it is never written to plist, disk, logs, diagnostics or argv.

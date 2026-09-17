@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: MANUAL_WRAPPER_ONLY (PAPER only; never a launchd owner)
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"

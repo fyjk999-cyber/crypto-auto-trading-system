@@ -43,13 +43,13 @@ class Chief:
             thesis=f"canonical {self.action.lower()}",
             position_size_request=float(self.quantity),
             model_provider="deepseek",
-            model="deepseek-v4-pro",
+            model="deepseek-flash",
         )
 
 
 class MalformedOpenProvider:
     name = "deepseek"
-    model = "deepseek-v4-pro"
+    model = "deepseek-flash"
 
     async def complete_json(self, **_kwargs):
         return LLMResponse(

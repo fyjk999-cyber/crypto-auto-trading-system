@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 
 from crypto_trader.api.deps import LLMRuntimeStatus
 from crypto_trader.llm_chief.provider import DeepSeekProvider, resolve_trading_model
@@ -47,7 +48,8 @@ def test_generic_llm_model_cannot_override_trading_model(monkeypatch):
     assert resolve_trading_model() == "deepseek-flash"
     assert DeepSeekProvider(api_key="test").model == "deepseek-flash"
     monkeypatch.delenv("TRADING_LLM_MODEL")
-    assert resolve_trading_model() == "deepseek-v4-pro"
+    with pytest.raises(ValueError):
+        resolve_trading_model()
 
 
 async def test_missing_key_is_explicit_fail_closed_without_crashing(monkeypatch):
