@@ -3,6 +3,6 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${ML_PYTHON:-__PYTHON__}"
 export PYTHONPATH="$REPO/src"
-export RUNNING_SHA="${RUNNING_SHA:-unknown}"
+export RUNNING_SHA="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "${RUNNING_SHA:-unknown}")"
 mkdir -p "$REPO/data/ml/logs" "$REPO/data/ml/datasets" "$REPO/data/ml/models" "$REPO/data/ml/shadow"
 exec "$PYTHON" "$REPO/scripts/ml_trainer.py" "$REPO/data/ml/scan_dataset.db" "$REPO/data/ml"

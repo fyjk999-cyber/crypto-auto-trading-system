@@ -31,3 +31,14 @@ def test_macos_wrappers_are_llm_free_and_use_durable_paths():
         assert "PYTHONPATH" in text and "__PYTHON__" in text
         assert "data/ml" in text and script in text
         assert "/tmp" not in text
+
+
+def test_ml_launchagents_do_not_hardcode_running_sha():
+    for filename, _label, _token in ARTIFACTS:
+        text = (ROOT / "deploy/launchagents" / filename).read_text()
+        assert "__SHA__" not in text
+        assert "<key>RUNNING_SHA</key>" not in text
+
+    for name in ("run_ml_collector_macos.sh", "run_ml_trainer_macos.sh"):
+        text = (ROOT / "scripts" / name).read_text()
+        assert 'git -C "$REPO" rev-parse HEAD' in text

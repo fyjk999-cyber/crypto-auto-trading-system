@@ -58,6 +58,7 @@ class OpportunityScannerService:
         state_prefetch=None,
         snapshot_collector=None,
         control_sample_size: int = 20,
+        expert_engine=None,
     ) -> None:
         self.universe = universe
         self.client = okx_client
@@ -76,6 +77,8 @@ class OpportunityScannerService:
         self.state_prefetch = state_prefetch
         self.snapshot_collector = snapshot_collector
         self.control_sample_size = max(0, int(control_sample_size))
+        # Canonical ##24 evidence engine (expert evidence only, no orders).
+        self.expert_engine = expert_engine
         self.collection_error: str | None = None
         self.collection_stats: dict = {}
         # Optional factual microstructure/taker-flow source (e.g. the canonical
@@ -307,10 +310,16 @@ class OpportunityScannerService:
                 facts = facts_by_symbol.get(candidate.symbol)
                 if facts is None:
                     continue
+                evidence, regime, costs = await self._decision_time_evidence(candidate.symbol)
                 rows.append(
                     build_scan_snapshot(
                         symbol=candidate.symbol,
-                        features=decision_time_features(facts),
+                        features=decision_time_features(
+                            facts,
+                            model_evidence=evidence,
+                            costs=costs,
+                            market_regime=regime,
+                        ),
                         captured_at=captured_at,
                         cycle_id=cycle_id,
                         candidate=True,
@@ -319,6 +328,7 @@ class OpportunityScannerService:
                         scanner_score=float(candidate.priority),
                         selection_reason=candidate.nominated_reason or "FACTOR_SCANNER",
                         sampling_method="CANDIDATE",
+                        market_regime=regime,
                     )
                 )
             controls = select_control_samples(
@@ -328,10 +338,16 @@ class OpportunityScannerService:
             )
             for item in controls:
                 facts = facts_by_symbol[item["symbol"]]
+                evidence, regime, costs = await self._decision_time_evidence(item["symbol"])
                 rows.append(
                     build_scan_snapshot(
                         symbol=item["symbol"],
-                        features=decision_time_features(facts),
+                        features=decision_time_features(
+                            facts,
+                            model_evidence=evidence,
+                            costs=costs,
+                            market_regime=regime,
+                        ),
                         captured_at=captured_at,
                         cycle_id=cycle_id,
                         candidate=False,
@@ -339,6 +355,7 @@ class OpportunityScannerService:
                         selection_reason="CONTROL_SAMPLE",
                         sampling_method=item["sampling_method"],
                         selection_probability=item["selection_probability"],
+                        market_regime=regime,
                     )
                 )
             written = await self.snapshot_collector.persist(rows)
@@ -353,6 +370,40 @@ class OpportunityScannerService:
         except Exception as exc:  # data-quality only; trading must continue
             self.collection_error = f"{type(exc).__name__}: {exc}"[:200]
             self.collection_stats = {"persisted": 0, "error": self.collection_error}
+
+    async def _decision_time_evidence(self, symbol: str) -> tuple[list, str | None, dict | None]:
+        """Run canonical ##24 evidence for one decision-time symbol.
+
+        The same engine/contract is used for candidate and control rows; results
+        stay evidence-only and can never become an order.
+        """
+        engine = getattr(self, "expert_engine", None)
+        if engine is None:
+            return [], None, None
+        try:
+            package = await engine.evaluate(symbol=symbol, state=self._state_for(symbol))
+        except Exception:
+            return [], None, None
+        if package is None:
+            return [], None, None
+        models = getattr(package, "model_evidence", None) or {}
+        if isinstance(models, dict):
+            evidence = [
+                value
+                for key, value in models.items()
+                if str(getattr(value, "model_id", key)) != "25_META_FORECAST"
+                and str(key) != "25_META_FORECAST"
+            ]
+        else:
+            evidence = [
+                value
+                for value in models
+                if str(_evidence_model_id(value)) != "25_META_FORECAST"
+            ]
+        regime = getattr(package, "regime", None)
+        costs = getattr(engine, "costs", None)
+        cost_dict = costs.as_dict() if hasattr(costs, "as_dict") else costs
+        return evidence, str(regime) if regime is not None else None, cost_dict
 
     async def _safe_batch(self, method, inst_type: str) -> list[dict]:
         try:
@@ -424,6 +475,12 @@ class OpportunityScannerService:
                 "grants nor denies any symbol the possibility of DeepSeek review"
             ),
         }
+
+
+def _evidence_model_id(item) -> str | None:
+    if isinstance(item, dict):
+        return item.get("model_id")
+    return getattr(item, "model_id", None)
 
 
 def _f(value) -> float | None:

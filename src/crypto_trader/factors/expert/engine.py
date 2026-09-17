@@ -208,6 +208,7 @@ class ExpertEvidenceEngine:
         timeframe_provider=None,
         state_provider=None,
         costs: AllInCostEstimate | None = None,
+        model_runtime=None,
     ) -> None:
         self.candle_provider = candle_provider
         # Preferred factual provider: async (symbol) -> {timeframe: candles}.
@@ -215,6 +216,9 @@ class ExpertEvidenceEngine:
         self.timeframe_provider = timeframe_provider
         self.state_provider = state_provider
         self.costs = costs or AllInCostEstimate()
+        # Immutable ACTIVE artifact resolver for #21/#25 runtime cutover.
+        # Evidence-only; it never reaches an order path.
+        self.model_runtime = model_runtime
         self.evaluations = 0
         self.last_error: str | None = None
 
@@ -233,6 +237,11 @@ class ExpertEvidenceEngine:
             candles=timeframes,
             state=state,
             costs=self.costs,
+            extra=(
+                {"model_runtime": self.model_runtime}
+                if self.model_runtime is not None
+                else {}
+            ),
         )
         outputs = evaluate_all(inputs)
         evidence = [outputs[model_id] for model_id in REQUIRED_MODEL_IDS if model_id in outputs]

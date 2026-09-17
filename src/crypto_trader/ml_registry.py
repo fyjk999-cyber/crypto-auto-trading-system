@@ -47,9 +47,15 @@ class ModelRegistry:
         artifact_path: str,
         artifact_hash: str,
         dataset_version: str = "",
+        dataset_hash: str = "",
         feature_version: str = "",
+        feature_schema_hash: str = "",
         label_version: str = "",
         code_sha: str = "",
+        algorithm: str = "",
+        xgboost_version: str = "",
+        training_cutoff_ts: str = "",
+        seed: int | None = None,
         training_window: dict | None = None,
         validation_windows: list | None = None,
         hyperparameters: dict | None = None,
@@ -67,9 +73,15 @@ class ModelRegistry:
             "artifact_path": artifact_path,
             "artifact_hash": artifact_hash,
             "dataset_version": dataset_version,
+            "dataset_hash": dataset_hash,
             "feature_version": feature_version,
+            "feature_schema_hash": feature_schema_hash,
             "label_version": label_version,
             "code_sha": code_sha,
+            "algorithm": algorithm,
+            "xgboost_version": xgboost_version,
+            "training_cutoff_ts": training_cutoff_ts,
+            "seed": seed,
             "training_window": training_window or {},
             "validation_windows": validation_windows or [],
             "hyperparameters": hyperparameters or {},
@@ -92,6 +104,7 @@ class ModelRegistry:
         *,
         reason: str = "",
         metrics: dict | None = None,
+        details: dict | None = None,
     ) -> dict:
         entry = self.get(model_id, version)
         if entry is None:
@@ -99,7 +112,15 @@ class ModelRegistry:
         if state not in MODEL_STATES:
             raise ValueError(f"invalid_state:{state}")
         now = datetime.now(UTC).isoformat()
-        entry["history"].append({"from": entry["state"], "to": state, "at": now, "reason": reason})
+        entry["history"].append(
+            {
+                "from": entry["state"],
+                "to": state,
+                "at": now,
+                "reason": reason,
+                "details": dict(details or {}),
+            }
+        )
         entry["state"] = state
         if metrics:
             entry["metrics"].update(metrics)
@@ -122,3 +143,7 @@ class ModelRegistry:
     def active_version(self, model_id: str) -> str | None:
         current = self.data["active"].get(model_id) or {}
         return current.get("model_version")
+
+    def active_entry(self, model_id: str) -> dict | None:
+        version = self.active_version(model_id)
+        return self.get(model_id, version) if version else None

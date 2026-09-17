@@ -447,6 +447,37 @@ class OKXAdapter(ExchangeAdapter):
             )
         return rows
 
+    async def get_history_candles(
+        self,
+        inst_id: str,
+        bar: str,
+        *,
+        after: int | None = None,
+        before: int | None = None,
+        limit: int = 100,
+    ) -> list[list[str]]:
+        """Fetch public OKX history candles for bounded historical pagination.
+
+        OKX returns newest-first rows; ``before`` paginates to older timestamps.
+        Only the public market endpoint is used (no credentials).
+        """
+        params: dict[str, object] = {"instId": inst_id, "bar": bar, "limit": limit}
+        if after is not None:
+            params["after"] = str(after)
+        if before is not None:
+            params["before"] = str(before)
+        data = await self._public_request("GET", "/api/v5/market/history-candles", params=params)
+        rows = data.get("data")
+        if not isinstance(rows, list):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX history candle response is incomplete"
+            )
+        if not all(isinstance(row, list) and len(row) >= 9 for row in rows):
+            raise OKXDiagnosticError(
+                "MALFORMED_RESPONSE", "OKX history candle response contains invalid rows"
+            )
+        return rows
+
     def _cl_ord_id(self, client_order_id: str) -> str:
         digest = hashlib.sha256(client_order_id.encode()).hexdigest()[:28].upper()
         return f"C{digest}"
