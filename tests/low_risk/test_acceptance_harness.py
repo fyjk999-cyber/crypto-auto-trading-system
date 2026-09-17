@@ -66,7 +66,9 @@ def test_collect_db_metrics_detects_duplicate_client_order_ids(tmp_path):
     connection.execute("INSERT INTO orders VALUES ('c1', 'o1')")
     connection.execute("INSERT INTO orders VALUES ('c1', 'o2')")
     connection.execute(
-        "CREATE TABLE trade_plans (capital_allocation_pct REAL, leverage_request REAL, base_exit_json TEXT)"
+        "CREATE TABLE trade_plans ("
+        "capital_allocation_pct REAL, leverage_request REAL, base_exit_json TEXT"
+        ")"
     )
     connection.execute("INSERT INTO trade_plans VALUES (30, 25, '')")
     connection.commit()
