@@ -100,7 +100,7 @@ class ChiefTraderEngine:
         return selection.tools, None, None
 
     async def select_tools(
-        self, ctx: ChiefTraderContext, available_tools: list[str]
+        self, ctx: ChiefTraderContext, available_tools: list[str] | dict[str, Any]
     ) -> tuple[list[str] | None, str | None]:
         self.last_tool_selection_trace = None
         if self.provider is None:

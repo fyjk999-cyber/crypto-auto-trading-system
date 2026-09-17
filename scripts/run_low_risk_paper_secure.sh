@@ -20,6 +20,10 @@ export LIVE_TRADING_ENABLED=false
 export AUTO_START_RUNTIME=true
 export LLM_PROVIDER=deepseek
 export TRADING_LLM_MODEL=deepseek-flash
+# Explicit provider-call pause gate: defaults to PAUSED. Resume only through
+# an explicit operator launchd/env authorization by setting LLM_CALLS_PAUSED=false.
+export LLM_CALLS_PAUSED="${LLM_CALLS_PAUSED:-true}"
+export LLM_CALLS_PAUSED_REASON="${LLM_CALLS_PAUSED_REASON:-OPERATOR_PAUSE_REQUEST}"
 unset LLM_MODEL || true
 export LLM_BASE_URL="${LLM_BASE_URL:-https://api.deepseek.com}"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -54,6 +58,7 @@ fi
 # runtime continues in fail-closed LLM_OFFLINE_MODE rather than crash-looping.
 echo "LLM_PROVIDER_STATE=$PROVIDER_STATE" >&2
 echo "LLM_PROVIDER=deepseek TRADING_LLM_MODEL=deepseek-flash FAIL_CLOSED_NEW_RISK=true" >&2
+echo "LLM_CALLS_PAUSED=${LLM_CALLS_PAUSED} LLM_CALLS_PAUSED_REASON=${LLM_CALLS_PAUSED_REASON}" >&2
 if [ "$PROVIDER_STATUS_CODE" != "0" ]; then
   echo "PROVIDER_UNCONFIGURED: DEEPSEEK_API_KEY not loaded from Keychain; new risk remains blocked." >&2
 fi

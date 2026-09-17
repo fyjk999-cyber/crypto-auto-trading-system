@@ -15,7 +15,7 @@ from alembic.script import ScriptDirectory
 
 def test_pre_ml_convergence_has_single_migration_head() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert list(script.get_heads()) == ["0042_final_convergence_merge"]
+    assert list(script.get_heads()) == ["0043_research_scope"]
 
 
 def test_clean_upgrade_creates_growth_and_position_leg_tables(tmp_path) -> None:

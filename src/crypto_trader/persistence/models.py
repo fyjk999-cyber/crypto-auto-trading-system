@@ -828,6 +828,11 @@ class ResearchReportORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     research_id: Mapped[str] = mapped_column(String(64), unique=True)
+    # Explicit applicability scope. Legacy rows are UNSCOPED and therefore
+    # never retrieved into a live Chief context.
+    scope_type: Mapped[str] = mapped_column(String(24), default="UNSCOPED", index=True)
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    regime: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     summary: Mapped[str] = mapped_column(String(500), default="")
     conclusion: Mapped[str] = mapped_column(String(500), default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)

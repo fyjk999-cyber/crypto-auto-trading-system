@@ -94,9 +94,36 @@ class LLMRuntimeStatus:
 
         from crypto_trader.llm_chief.provider import (
             DeepSeekProvider,
+            provider_calls_paused,
+            record_probe_suppressed,
             resolve_trading_llm_config,
             resolve_trading_model,
         )
+
+        if provider_calls_paused():
+            # Zero outbound provider calls while paused, including health probes.
+            record_probe_suppressed()
+            self.reachable = False
+            self.provider_state = "PROVIDER_PAUSED"
+            self.effective_provider = None
+            self.effective_model = None
+            self.last_success_ts = None
+            self.last_error = "LLM_CALLS_PAUSED_BY_CONFIG"
+            try:
+                trading_config = resolve_trading_llm_config()
+            except (ValueError, RuntimeError):
+                self.provider = "none"
+                self.model = None
+                self.configured = False
+                self.configured_provider = "none"
+                self.configured_model = None
+            else:
+                self.provider = trading_config.provider
+                self.model = trading_config.model
+                self.configured = True
+                self.configured_provider = trading_config.provider
+                self.configured_model = trading_config.model
+            return
 
         self.reachable = False
         self.provider_state = "UNKNOWN"
@@ -167,6 +194,8 @@ class LLMRuntimeStatus:
         self.last_error = "PROBE_EXCEPTION:" + type(exc).__name__
 
     def snapshot(self) -> dict:
+        from crypto_trader.llm_chief.provider import provider_pause_snapshot
+
         snapshot = {
             "provider": self.provider,
             "model": self.model,
@@ -179,6 +208,7 @@ class LLMRuntimeStatus:
             "effective_model": self.effective_model,
             "last_success_ts": self.last_success_ts,
             "last_error": self.last_error,
+            "provider_call_pause": provider_pause_snapshot(),
         }
         diagnostics = getattr(self.provider_instance, "diagnostics", None)
         if callable(diagnostics):

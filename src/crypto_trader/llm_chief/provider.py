@@ -51,6 +51,79 @@ class LLMResponse:
     served_by: str | None = None
 
 
+PAUSE_ENV = "LLM_CALLS_PAUSED"
+PAUSE_REASON_ENV = "LLM_CALLS_PAUSED_REASON"
+_PAUSE_TRUE = frozenset({"1", "true", "yes", "on", "paused"})
+
+
+@dataclass
+class _ProviderCallPauseState:
+    paused: bool = False
+    reason: str | None = None
+    paused_since: datetime | None = None
+    outbound_calls_blocked: int = 0
+    probe_suppressed: int = 0
+
+
+_PAUSE_STATE = _ProviderCallPauseState()
+
+
+def _sync_provider_pause_state() -> _ProviderCallPauseState:
+    requested = os.environ.get(PAUSE_ENV, "").strip().lower() in _PAUSE_TRUE
+    if requested:
+        if not _PAUSE_STATE.paused:
+            _PAUSE_STATE.paused = True
+            _PAUSE_STATE.paused_since = datetime.now(UTC)
+            _PAUSE_STATE.reason = (
+                os.environ.get(PAUSE_REASON_ENV, "").strip() or "OPERATOR_PAUSE_REQUEST"
+            )
+    else:
+        _PAUSE_STATE.paused = False
+        _PAUSE_STATE.reason = None
+        _PAUSE_STATE.paused_since = None
+    return _PAUSE_STATE
+
+
+def provider_calls_paused() -> bool:
+    return _sync_provider_pause_state().paused
+
+
+def provider_pause_snapshot() -> dict:
+    state = _sync_provider_pause_state()
+    return {
+        "provider_calls_paused": state.paused,
+        "pause_reason": state.reason,
+        "paused_since": state.paused_since.isoformat() if state.paused_since else None,
+        "outbound_calls_blocked": state.outbound_calls_blocked,
+        "probe_suppressed": state.probe_suppressed,
+    }
+
+
+def record_outbound_blocked() -> None:
+    _sync_provider_pause_state().outbound_calls_blocked += 1
+
+
+def record_probe_suppressed() -> None:
+    _sync_provider_pause_state().probe_suppressed += 1
+
+
+def reset_provider_pause_counters() -> None:
+    state = _sync_provider_pause_state()
+    state.outbound_calls_blocked = 0
+    state.probe_suppressed = 0
+
+
+def paused_llm_response(provider: str, model: str) -> LLMResponse:
+    return LLMResponse(
+        text="",
+        provider=provider,
+        model=model,
+        latency_ms=0.0,
+        ok=False,
+        error="LLM_CALLS_PAUSED_BY_CONFIG",
+    )
+
+
 class LLMProvider(Protocol):
     name: str
 
@@ -126,6 +199,11 @@ class DeepSeekProvider:
         reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse:
+        if provider_calls_paused():
+            record_outbound_blocked()
+            result = paused_llm_response(self.name, self.model)
+            self._record_operation(operation, result, attempts=0)
+            return result
         import json
         import time
 
@@ -333,6 +411,11 @@ class GLMProvider:
         reasoning_effort: str = "high",
         operation: str = "completion",
     ) -> LLMResponse:
+        if provider_calls_paused():
+            record_outbound_blocked()
+            result = paused_llm_response(self.name, self.model)
+            self._record_operation(operation, result, attempts=0)
+            return result
         import json
         import time
 

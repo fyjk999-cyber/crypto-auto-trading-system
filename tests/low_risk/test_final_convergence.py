@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_final_convergence_has_exactly_one_migration_head() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert list(script.get_heads()) == ["0042_final_convergence_merge"]
+    assert list(script.get_heads()) == ["0043_research_scope"]
 
 
 def test_flash_high_wins_and_provider_policy_fails_closed(monkeypatch) -> None:

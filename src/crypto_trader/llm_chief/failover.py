@@ -18,7 +18,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from crypto_trader.llm_chief.provider import LLMProvider, LLMResponse
+from crypto_trader.llm_chief.provider import (
+    LLMProvider,
+    LLMResponse,
+    paused_llm_response,
+    provider_calls_paused,
+    provider_pause_snapshot,
+    record_outbound_blocked,
+)
 
 OFFLINE_WINDOW_SECONDS = 300.0
 
@@ -167,6 +174,7 @@ class CoreLLMRouter:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "router": self.name,
+            "pause": provider_pause_snapshot(),
             "primary": getattr(self.primary, "diagnostics", lambda: {})(),
             "backup": (getattr(self.backup, "diagnostics", lambda: {})() if self.backup else None),
             "glm": {
@@ -212,6 +220,10 @@ class CoreLLMRouter:
         state_version: str | None = None,
         prompt_rebuilder=None,
     ) -> LLMResponse:
+        if provider_calls_paused():
+            # Explicit operator pause: zero provider calls, zero auto-probes.
+            record_outbound_blocked()
+            return paused_llm_response(self.name, self.name)
         now = self._now()
         if self.status.offline and self.status.next_probe_at is not None:
             if now < self.status.next_probe_at:

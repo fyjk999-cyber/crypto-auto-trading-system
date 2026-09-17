@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime
 
-from sqlalchemy import case, select
+from sqlalchemy import and_, case, or_, select
 
 from crypto_trader.learning.retrieval import GrowthRetriever
 from crypto_trader.llm.tools.registry import ToolEvidence
@@ -79,6 +79,10 @@ class ChiefContextLoader:
                 (
                     await session.execute(
                         select(ResearchReportORM)
+                        .where(
+                            ResearchReportORM.created_at <= _context_as_of(context),
+                            _research_scope_clause(context),
+                        )
                         .order_by(ResearchReportORM.created_at.desc())
                         .limit(self.limit)
                     )
@@ -121,6 +125,9 @@ class ChiefContextLoader:
                 {
                     "kind": "RESEARCH",
                     "research_id": row.research_id,
+                    "scope_type": row.scope_type,
+                    "symbol": row.symbol,
+                    "regime": row.regime,
                     "summary": row.summary,
                     "conclusion": row.conclusion,
                     "confidence": row.confidence,
@@ -364,12 +371,16 @@ class ChiefContextLoader:
         )
         return finding, refs, timestamp
 
-    async def _research_evidence(self, _context: ChiefTraderContext):
+    async def _research_evidence(self, context: ChiefTraderContext):
         async with self.session_factory() as session:
             rows = (
                 (
                     await session.execute(
                         select(ResearchReportORM)
+                        .where(
+                            ResearchReportORM.created_at <= _context_as_of(context),
+                            _research_scope_clause(context),
+                        )
                         .order_by(ResearchReportORM.created_at.desc())
                         .limit(self.limit)
                     )
@@ -382,6 +393,9 @@ class ChiefContextLoader:
                 "research": [
                     {
                         "research_id": row.research_id,
+                        "scope_type": row.scope_type,
+                        "symbol": row.symbol,
+                        "regime": row.regime,
                         "summary": row.summary,
                         "conclusion": row.conclusion,
                         "confidence": row.confidence,
@@ -481,6 +495,39 @@ def _news_unavailable(reason: str) -> dict:
         "is_order": False,
         "reason": reason,
     }
+
+
+def _context_as_of(context: ChiefTraderContext) -> datetime:
+    """Decision as-of boundary; legacy contexts fall back to now (fail-safe)."""
+    raw = getattr(context, "prepared_at", None)
+    if isinstance(raw, str):
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC)
+
+
+def _research_scope_clause(context: ChiefTraderContext):
+    """Only research explicitly applicable to this decision may be retrieved."""
+    return or_(
+        ResearchReportORM.scope_type == "GLOBAL",
+        and_(
+            ResearchReportORM.scope_type == "SYMBOL",
+            ResearchReportORM.symbol == context.symbol,
+        ),
+        and_(
+            ResearchReportORM.scope_type == "REGIME",
+            ResearchReportORM.regime == context.regime,
+        ),
+        and_(
+            ResearchReportORM.scope_type == "SYMBOL_REGIME",
+            ResearchReportORM.symbol == context.symbol,
+            ResearchReportORM.regime == context.regime,
+        ),
+    )
 
 
 def _latest(rows, field: str):
