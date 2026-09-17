@@ -51,6 +51,8 @@ class LLMDecisionStore:
         research_refs: list[str] | None = None,
         episode_refs: list[str] | None = None,
         growth_context: dict[str, Any] | None = None,
+        news_context: dict[str, Any] | None = None,
+        state_version: str | None = None,
         parent_decision_id: str | None = None,
         position_context: dict[str, Any] | None = None,
         opportunity_lineage: dict[str, Any] | None = None,
@@ -58,7 +60,12 @@ class LLMDecisionStore:
         lineage = opportunity_lineage or {}
         position = position_context or {}
         typed = split_context_refs((growth_context or {}).get("memory_refs", []))
-        memory_refs = list(dict.fromkeys((memory_refs or []) + typed["memory_refs_json"]))
+        news_refs = [
+            str(ref) for ref in (news_context or {}).get("news_evidence_refs", []) if ref
+        ]
+        memory_refs = list(
+            dict.fromkeys((memory_refs or []) + typed["memory_refs_json"] + news_refs)
+        )
         episode_refs = list(dict.fromkeys((episode_refs or []) + typed["episode_refs_json"]))
         research_refs = list(dict.fromkeys((research_refs or []) + typed["research_refs_json"]))
         async with self.session_factory() as session:
@@ -127,6 +134,15 @@ class LLMDecisionStore:
                 ]
                 if conflicts:
                     raise ValueError("immutable LLM decision conflict: " + ",".join(conflicts))
+            if news_context:
+                from crypto_trader.news.repository import NewsRepository
+
+                await NewsRepository(self.session_factory).insert_decision_refs(
+                    decision_id=decision.decision_id,
+                    news_context=news_context,
+                    state_version=state_version,
+                    created_at=_created_at(decision.created_at),
+                )
             return self._record(row)
 
     async def link_trade_plan(self, decision_id: str, trade_plan_id: str) -> None:

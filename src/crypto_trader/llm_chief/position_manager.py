@@ -390,6 +390,8 @@ class LiveLLMPositionManager:
             episode_refs=episode_refs,
             parent_decision_id=plan.decision_id,
             position_context=position_context,
+            news_context=chief_ctx.news_context,
+            state_version=chief_ctx.state_version,
         )
         if state_version_after != state_version_before:
             # Factual state moved while the LLM was thinking (Base Exit fill,

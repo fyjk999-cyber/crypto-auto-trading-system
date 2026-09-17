@@ -89,6 +89,43 @@ def serialize_position(position, *, price: Decimal | None = None) -> dict:
     return payload
 
 
+def _serialize_news_event(event) -> dict:
+    return {
+        "event_id": event.event_id,
+        "event_version": event.event_version,
+        "event_type": event.event_type.value,
+        "fact_class": event.fact_class.value,
+        "canonical_title": event.canonical_title,
+        "factual_summary": event.factual_summary,
+        "earliest_published_at": event.earliest_published_at.isoformat()
+        if event.earliest_published_at
+        else None,
+        "latest_update_at": event.latest_update_at.isoformat()
+        if event.latest_update_at
+        else None,
+        "first_seen_at": event.first_seen_at.isoformat() if event.first_seen_at else None,
+        "event_status": event.event_status.value,
+        "symbols": list(event.symbols or []),
+        "entities": list(event.entities or []),
+        "source_count": event.source_count,
+        "independent_source_count": event.independent_source_count,
+        "contradiction_state": event.contradiction_state.value,
+        "novelty": event.novelty_state.value,
+        "freshness": event.freshness_state.value,
+        "materiality_score": event.materiality_score,
+        "materiality": event.materiality_tier.value,
+        "direction": event.direction.value,
+        "direction_score": event.direction_score,
+        "impact_horizon": event.impact_horizon.value,
+        "confidence": event.confidence,
+        "uncertainty_notes": list(event.uncertainty_notes or []),
+        "expires_at": event.expires_at.isoformat() if event.expires_at else None,
+        "source_refs": list((event.payload or {}).get("sources") or []),
+        "authority": "EVIDENCE_ONLY",
+        "is_order": False,
+    }
+
+
 def create_app(state: AppState) -> FastAPI:
     okx_broker = BrokerClient()
 
@@ -188,6 +225,51 @@ def create_app(state: AppState) -> FastAPI:
 
         growth_dir = os.environ.get("GROWTH_DIR", "data/growth")
         return await growth_status(state.database.session_factory, growth_dir)
+
+    @app.get("/news/status")
+    async def news_status_endpoint():
+        import os
+
+        from crypto_trader.news.config import NewsConfig
+        from crypto_trader.news.status import news_status
+
+        news_dir = os.environ.get("NEWS_DIR", "data/news")
+        return await news_status(
+            state.database.session_factory,
+            news_dir=news_dir,
+            config=NewsConfig.from_env(),
+        )
+
+    @app.get("/news/events")
+    async def news_events_endpoint(limit: int = 50):
+        from crypto_trader.news.repository import NewsRepository
+
+        repository = NewsRepository(state.database.session_factory)
+        events = await repository.list_recent_events(limit=limit)
+        return {
+            "events": [_serialize_news_event(event) for event in events],
+            "count": len(events),
+            "authority": "EVIDENCE_ONLY",
+            "is_order": False,
+        }
+
+    @app.get("/news/events/{event_id}")
+    async def news_event_detail_endpoint(event_id: str):
+        from crypto_trader.news.repository import NewsRepository
+
+        repository = NewsRepository(state.database.session_factory)
+        event = await repository.get_current_event_snapshot(event_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail="news event not found")
+        return {
+            "event": _serialize_news_event(event),
+            "items": await repository.list_event_items(event_id),
+            "entity_links": await repository.list_entity_links(event_id),
+            "evidence": await repository.list_event_evidence(event_id),
+            "decision_refs": await repository.list_event_decision_refs(event_id),
+            "authority": "EVIDENCE_ONLY",
+            "is_order": False,
+        }
 
     @app.get("/llm/health")
     async def llm_health():

@@ -37,6 +37,10 @@ class ChiefTraderContext:
     # Low-Risk V2 Phase 2: the 25-model expert evidence package (factual model
     # outputs with support/counter/neutral evidence). Evidence only.
     model_evidence: dict | None = None
+    # Frozen News 28: bounded as-of-safe external evidence. This is
+    # untrusted quoted data, never authority. It must not crowd out position,
+    # Base Exit, market, 25-model, economics or Growth context.
+    news_context: dict | None = None
     prepared_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def estimate_tokens(self) -> int:
@@ -59,6 +63,7 @@ class ChiefTraderContext:
                         "experience": self.compressed_experience,
                         "opportunity": self.opportunity_context or {},
                         "model_evidence": self.model_evidence or {},
+                        "news": self.news_context or {},
                     }
                 )
             )

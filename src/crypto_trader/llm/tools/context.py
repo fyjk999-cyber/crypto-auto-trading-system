@@ -21,6 +21,7 @@ def register_context_tools(
         "research_retrieval",
         "coin_profile",
         "factor_intelligence",
+        "news_context",
     ):
         registry.register(name, _tool(loader, name))
 
