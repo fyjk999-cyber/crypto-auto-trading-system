@@ -13,6 +13,7 @@ from crypto_trader.learning.retrieval import (
     GrowthRetriever,
     proposition_identity,
     record_version,
+    rollback_version,
 )
 from crypto_trader.persistence.models import GrowthMemoryVersionORM
 
@@ -164,3 +165,74 @@ async def test_future_revocation_is_not_visible_before_known_at(database):
     retriever = GrowthRetriever(database.session_factory)
     response = await retriever.search(symbol="BTCUSDT", as_of_timestamp=T)
     assert response["result_count"] == 1
+
+
+async def test_authorized_rollback_is_append_only_and_requires_authority(database):
+    await _version(database.session_factory, payload={"symbol": "BTCUSDT", "grade": 1})
+    await _version(
+        database.session_factory,
+        payload={"symbol": "BTCUSDT", "grade": 2},
+        available_at=T + timedelta(hours=1),
+    )
+    with pytest.raises(PermissionError):
+        await rollback_version(
+            database.session_factory,
+            object_type="REGIME_PATTERN",
+            object_id="p1",
+            target_version=1,
+            authorized_by="",
+            reason="not authorized",
+        )
+    version = await rollback_version(
+        database.session_factory,
+        object_type="REGIME_PATTERN",
+        object_id="p1",
+        target_version=1,
+        authorized_by="operator-1",
+        reason="bad promotion",
+        available_at=T + timedelta(hours=2),
+    )
+    assert version == 3
+    async with database.session_factory() as session:
+        row = (
+            await session.execute(
+                select(GrowthMemoryVersionORM).where(
+                    GrowthMemoryVersionORM.version == 3
+                )
+            )
+        ).scalar_one()
+    payload = dict(row.payload_json)
+    meta = dict(payload.pop("_meta"))
+    assert payload["grade"] == 1
+    assert meta["rollback_of"] == 1
+    assert meta["authorized_by"] == "operator-1"
+    assert meta["rollback_reason"] == "bad promotion"
+
+
+async def test_legacy_import_requires_exact_real_target_binding(tmp_path):
+    from crypto_trader.learning.growth_import_binding import (
+        ImportBindingError,
+        bind_import_target,
+        target_fingerprint,
+    )
+
+    source = tmp_path / "legacy_growth.db"
+    target = tmp_path / "scan_dataset.db"
+    source.write_bytes(b"legacy")
+    target.write_bytes(b"canonical-target")
+    fingerprint = target_fingerprint(str(target))
+
+    with pytest.raises(ImportBindingError):
+        bind_import_target(
+            str(source), str(target), confirm_target_fingerprint="sha256:wrong"
+        )
+    with pytest.raises(ImportBindingError):
+        bind_import_target(
+            str(source), str(source), confirm_target_fingerprint=fingerprint
+        )
+    binding = bind_import_target(
+        str(source), str(target), confirm_target_fingerprint=fingerprint
+    )
+    assert binding.source_path != binding.target_path
+    assert binding.target_sha256 == fingerprint
+    assert binding.source_size == 6

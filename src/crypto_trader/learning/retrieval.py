@@ -41,7 +41,7 @@ def input_revision_hash(object_type: str, object_id: str, fields: dict) -> str:
     canonical_input = {
         "object_type": object_type.upper(),
         "object_id": object_id,
-        "fields": {key: value for key, value in fields.items() if key not in {"payload_json"}},
+        "fields": fields,
     }
     payload = json.dumps(canonical_input, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -57,10 +57,15 @@ async def record_version(
     input_hash: str | None = None,
     expires_at: datetime | None = None,
     revoked_at: datetime | None = None,
+    rollback_of: int | None = None,
+    authorized_by: str | None = None,
+    rollback_reason: str | None = None,
     **fields,
 ) -> int:
     if not object_type or not object_id or not fields:
         raise GrowthPublishInputMissing("NO_PUBLISH_INPUT")
+    if rollback_of is not None and not authorized_by:
+        raise PermissionError("AUTHORIZED_ROLLBACK_REQUIRED")
     payload = dict(fields.get("payload_json") or {})
     known_at = available_at or datetime.now(UTC)
     proposition = proposition_id or proposition_identity(object_type, object_id)
@@ -84,6 +89,9 @@ async def record_version(
             "known_at": known_at.isoformat(),
             "revision": version,
             "trace_id": growth_trace_id(proposition, version),
+            "rollback_of": rollback_of,
+            "authorized_by": authorized_by if rollback_of is not None else None,
+            "rollback_reason": rollback_reason if rollback_of is not None else None,
             "expires_at": expires_at.isoformat() if expires_at else None,
             "revoked_at": revoked_at.isoformat() if revoked_at else None,
         }
@@ -99,6 +107,55 @@ async def record_version(
         )
         await session.commit()
         return version
+
+
+async def rollback_version(
+    session_factory,
+    *,
+    object_type: str,
+    object_id: str,
+    target_version: int,
+    authorized_by: str,
+    reason: str,
+    available_at: datetime | None = None,
+) -> int:
+    """Authorized append-only rollback: publish a copy of an older version."""
+    if not authorized_by:
+        raise PermissionError("AUTHORIZED_ROLLBACK_REQUIRED")
+    async with session_factory() as session:
+        target = (
+            await session.execute(
+                select(GrowthMemoryVersionORM)
+                .where(GrowthMemoryVersionORM.object_type == object_type)
+                .where(GrowthMemoryVersionORM.object_id == object_id)
+                .where(GrowthMemoryVersionORM.version == int(target_version))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if target is None:
+        raise KeyError("TARGET_VERSION_NOT_FOUND")
+    payload = dict(target.payload_json or {})
+    payload.pop("_meta", None)
+    fields = {
+        "sample_count": target.sample_count,
+        "sample_tier": target.sample_tier,
+        "memory_speed": target.memory_speed,
+        "quality": target.quality,
+        "post_cost_expectancy_bps": target.post_cost_expectancy_bps,
+        "contradictions": target.contradictions,
+        "payload_json": payload,
+        "source_refs_json": dict(target.source_refs_json or {}),
+    }
+    return await record_version(
+        session_factory,
+        object_type=object_type,
+        object_id=object_id,
+        available_at=available_at,
+        rollback_of=int(target_version),
+        authorized_by=authorized_by,
+        rollback_reason=reason,
+        **fields,
+    )
 
 
 def _aware_datetime(value) -> datetime | None:
