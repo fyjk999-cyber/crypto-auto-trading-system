@@ -35,6 +35,8 @@ def load_installer():
 
 @pytest.fixture
 def host(monkeypatch, tmp_path):
+    if sys.platform != "darwin":
+        pytest.skip("macOS installer preflight requires macOS host tool paths")
     mod = load_installer()
     monkeypatch.setattr(mod, "BASE", tmp_path / "install")
     monkeypatch.setattr(mod, "HOME", tmp_path / "broker")
