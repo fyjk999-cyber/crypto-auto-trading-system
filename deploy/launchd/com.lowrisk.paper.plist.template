@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+<key>Label</key>
+<string>com.lowrisk.paper</string>
+<key>ProgramArguments</key>
+<array>
+<string>__REPO_ROOT__/scripts/run_low_risk_paper_secure.sh</string>
+</array>
+<key>WorkingDirectory</key>
+<string>__REPO_ROOT__</string>
+<key>EnvironmentVariables</key>
+<dict>
+<key>PAPER_RUNTIME_HOST</key>
+<string>127.0.0.1</string>
+<key>PAPER_RUNTIME_PORT</key>
+<string>8010</string>
+<key>TRADING_MODE</key>
+<string>PAPER</string>
+<key>PAPER_MODE</key>
+<string>PAPER_REAL_MARKET</string>
+<key>LIVE_TRADING_ENABLED</key>
+<string>false</string>
+</dict>
+<key>RunAtLoad</key>
+<true/>
+<key>KeepAlive</key>
+<true/>
+<key>ThrottleInterval</key>
+<integer>15</integer>
+<key>StandardOutPath</key>
+<string>__HOME__/Library/Logs/low-risk-paper.stdout.log</string>
+<key>StandardErrorPath</key>
+<string>__HOME__/Library/Logs/low-risk-paper.stderr.log</string>
+</dict>
+</plist>

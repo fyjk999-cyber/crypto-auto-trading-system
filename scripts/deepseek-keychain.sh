@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: MANUAL_WRAPPER_ONLY (delegates to canonical wrapper)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -24,20 +25,9 @@ case "${1:-}" in
     if swift "$HELPER" exists; then echo "DeepSeek credential exists in macOS Keychain."; else echo "DeepSeek credential is not configured."; exit 1; fi
     ;;
   run)
-    require_macos
-    key=$(swift "$HELPER" load) || { echo "DeepSeek credential is not configured." >&2; exit 1; }
-    [[ -n "$key" ]] || { echo "DeepSeek credential is empty." >&2; exit 1; }
-    export DEEPSEEK_API_KEY="$key"
-    export LLM_PROVIDER=deepseek
-    # Canonical trading selector; generic LLM_MODEL is never consulted for
-    # trading decisions. Both are pinned so a developer shell cannot leak an
-    # invalid trading model into the PAPER runtime.
-    export TRADING_LLM_MODEL="${TRADING_LLM_MODEL:-deepseek-flash}"
-    export LLM_MODEL="${LLM_MODEL:-deepseek-flash}"
-    export LLM_BASE_URL=https://api.deepseek.com
-    export LIVE_TRADING_ENABLED=false
-    unset key
-    exec "$ROOT/scripts/start-paper.sh"
+    # One canonical secure PAPER path: the wrapper loads the Keychain credential
+    # in memory, pins deepseek-flash and starts fail-closed when it is absent.
+    exec "$ROOT/scripts/run_low_risk_paper_secure.sh"
     ;;
   delete)
     require_macos

@@ -2,6 +2,14 @@
 set -euo pipefail
 
 TASK_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# CLASSIFICATION: DEV_UI_ONLY / NOT_RUNTIME_OWNER
+# Starts the API/UI for local development. It never owns the PAPER runtime,
+# never starts crypto_trader.runtime.local_runner and never gets order authority.
+export TRADING_MODE=PAPER
+export PAPER_MODE=PAPER_REAL_MARKET
+export LIVE_TRADING_ENABLED=false
+export TRADING_LLM_MODEL=deepseek-flash
+unset LLM_MODEL || true
 BACKEND_HOST="127.0.0.1"
 BACKEND_PORT="8000"
 BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_PORT}/ready"

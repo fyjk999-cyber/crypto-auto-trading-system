@@ -11,7 +11,7 @@ from crypto_trader.llm_chief.tool_orchestrator import ToolDrivenChiefTrader
 
 class Provider:
     name = "deepseek"
-    model = "deepseek-v4-pro"
+    model = "deepseek-flash"
 
     def __init__(self, payloads: list[dict]) -> None:
         self.payloads = payloads

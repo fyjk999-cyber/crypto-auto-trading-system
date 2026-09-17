@@ -21,7 +21,7 @@ def decision(action: str, *, state: str = "FLAT") -> ChiefTraderDecision:
         action=action,
         market_regime="RANGE",
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         model_version="live-v1",
         thesis="factual directional thesis" if directional else "",
         position_size_request=0.5 if action == "REDUCE" or directional else 0,
@@ -99,7 +99,7 @@ async def test_store_rejects_conflicting_reuse_of_application_decision_id(databa
 
 class InvalidProvider:
     name = "deepseek"
-    model = "deepseek-v4-pro"
+    model = "deepseek-flash"
 
     async def complete_json(self, **_kwargs):
         return LLMResponse(
@@ -125,4 +125,4 @@ async def test_malformed_provider_output_becomes_application_owned_fail_closed()
     assert result.action == "FAIL_CLOSED"
     assert result.decision_id.startswith("llm_")
     assert result.model_provider == "deepseek"
-    assert result.model == "deepseek-v4-pro"
+    assert result.model == "deepseek-flash"

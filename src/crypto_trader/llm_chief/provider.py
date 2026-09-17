@@ -7,6 +7,32 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+TRADING_MODEL_ENV = "TRADING_LLM_MODEL"
+DEFAULT_TRADING_MODEL = "deepseek-flash"
+FORBIDDEN_PRODUCTION_MODELS = frozenset({"deepseek-v4-pro", "deepseek-flash-high"})
+
+
+def resolve_trading_model(explicit: str | None = None) -> str:
+    """Canonical trading-model precedence and production model policy.
+
+    ``TRADING_LLM_MODEL`` always wins over a generic ``LLM_MODEL`` and may only
+    be ``deepseek-flash``. Forbidden production models fail closed instead of
+    being silently used. An explicit constructor value is reserved for tests
+    and dependency injection.
+    """
+
+    if explicit:
+        return explicit
+    trading_model = os.environ.get(TRADING_MODEL_ENV)
+    if trading_model:
+        if trading_model not in ALLOWED_TRADING_MODELS:
+            raise ValueError(f"forbidden TRADING_LLM_MODEL: {trading_model}")
+        return trading_model
+    generic_model = os.environ.get("LLM_MODEL")
+    if generic_model and generic_model in FORBIDDEN_PRODUCTION_MODELS:
+        raise ValueError(f"forbidden production LLM_MODEL: {generic_model}")
+    return generic_model or DEFAULT_TRADING_MODEL
+
 
 @dataclass
 class LLMResponse:
@@ -54,13 +80,28 @@ class DeepSeekProvider:
         base_url: str | None = None,
         transport=None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        # One canonical trading-model resolver: generic LLM_MODEL is ignored,
-        # invalid trading models fail closed. Non-trading callers that need a
-        # different model must use a different provider class.
-        trading_config = resolve_trading_llm_config(explicit_model=model)
-        self.model = trading_config.model
-        self.model_config_source = trading_config.config_source
+        self._configuration_error: str | None = None
+        try:
+            # Provider durability policy: forbidden production models fail
+            # closed before any credential is attached.
+            resolve_trading_model(model)
+        except ValueError as exc:
+            self._configuration_error = str(exc)
+            self.model = model or "unconfigured"
+            self.model_config_source = "unconfigured"
+        else:
+            try:
+                trading_config = resolve_trading_llm_config(explicit_model=model)
+                self.model = trading_config.model
+                self.model_config_source = trading_config.config_source
+            except DisallowedTradingLLMModel as exc:
+                self._configuration_error = str(exc)
+                self.model = model or "unconfigured"
+                self.model_config_source = "unconfigured"
+        resolved_api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
+        if self._configuration_error is not None:
+            resolved_api_key = None
+        self.api_key = resolved_api_key
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         self._transport = transport
         self.last_success_ts: str | None = None
@@ -235,6 +276,7 @@ class DeepSeekProvider:
             "provider": self.name,
             "model": self.model,
             "configured": self.healthy(),
+            "configuration_error": self._configuration_error,
             "last_success_ts": self.last_success_ts,
             "last_error": self.last_error,
             "last_latency_ms": self.last_latency_ms,

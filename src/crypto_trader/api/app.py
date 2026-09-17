@@ -136,8 +136,12 @@ def create_app(state: AppState) -> FastAPI:
         if state.supervisor is not None:
             await state.supervisor.start(run_id=state.engine.run_id if state.engine else None)
         # Provider reachability is observability only.  A failed probe leaves
-        # the PAPER runtime running and must never synthesize a trade decision.
-        await state.llm_runtime.probe()
+        # the PAPER runtime running fail-closed and must never synthesize a
+        # trade decision or crash startup.
+        try:
+            await state.llm_runtime.probe()
+        except Exception as exc:  # noqa: BLE001 - startup must survive probe faults
+            state.llm_runtime.record_probe_exception(exc)
         yield
         if state.supervisor is not None:
             await state.supervisor.stop()

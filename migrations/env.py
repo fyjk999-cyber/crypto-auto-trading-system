@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -14,8 +15,21 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def database_url() -> str:
+    """Resolve the migration target from DATABASE_URL when present.
+
+    The canonical runtime uses an async SQLAlchemy URL; Alembic's synchronous
+    migration engine needs the corresponding sqlite URL.
+    """
+
+    url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or ""
+    if url.startswith("sqlite+aiosqlite://"):
+        url = "sqlite://" + url[len("sqlite+aiosqlite://"):]
+    return url
+
+
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = database_url()
     context.configure(url=url, target_metadata=target_metadata, literal_binds=True,
                       dialect_opts={"paramstyle": "named"})
     with context.begin_transaction():
@@ -23,8 +37,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    section = dict(config.get_section(config.config_ini_section, {}))
+    section["sqlalchemy.url"] = database_url()
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

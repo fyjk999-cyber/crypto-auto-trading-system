@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: MANUAL_WRAPPER_ONLY (PAPER only; never a launchd owner)
 set -euo pipefail
 cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
 HOST="${PAPER_RUNTIME_HOST:-127.0.0.1}"
 PORT="${PAPER_RUNTIME_PORT:-8000}"
 PID_FILE="data/paper-runtime.pid"
@@ -35,7 +37,9 @@ echo "Market Provider: OKX_PUBLIC"
 echo "Execution: PAPER / LOCAL_SIMULATOR"
 echo "Live Trading: DISABLED"
 export AUTO_START_RUNTIME=true
-nohup python -m crypto_trader.runtime.local_runner --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
+export PAPER_RUNTIME_HOST="$HOST"
+export PAPER_RUNTIME_PORT="$PORT"
+nohup "$ROOT/scripts/run_low_risk_paper_secure.sh" > "$LOG_FILE" 2>&1 &
 PID=$!
 printf '%s\n' "$PID" > "$PID_FILE"
 

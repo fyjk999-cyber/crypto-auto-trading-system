@@ -92,7 +92,7 @@ class SequencedChief:
             thesis=f"factual {action.lower()} decision",
             position_size_request=float(quantity),
             model_provider="deepseek",
-            model="deepseek-v4-pro",
+            model="deepseek-flash",
             **contract_fields,
         )
 
@@ -118,7 +118,7 @@ class ModifyExitChief:
             ),
             based_on_state_version=self.based_on,
             model_provider="deepseek",
-            model="deepseek-v4-pro",
+            model="deepseek-flash",
         )
 
 
@@ -139,7 +139,7 @@ async def _open_v2_position(engine, decisions, plans, decision_id: str, quantity
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -176,7 +176,7 @@ async def test_long_hold_reduce_exit_closes_only_after_factual_zero_position(dat
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -353,7 +353,7 @@ async def test_short_reduce_exit_is_factual_reduce_only_and_never_reverses(datab
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -428,7 +428,7 @@ async def test_partial_exit_fill_stays_active_until_factual_remaining_position_c
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -509,7 +509,7 @@ async def test_position_action_waits_until_partially_filled_entry_order_is_termi
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -590,7 +590,7 @@ async def test_expected_holding_horizon_triggers_reassessment_not_forced_exit(da
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(
@@ -833,7 +833,7 @@ async def test_duplicate_exit_ticks_create_one_pending_close_lifecycle(database)
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -894,7 +894,7 @@ async def test_expired_entry_is_terminal_before_order_creation(database):
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -931,7 +931,7 @@ async def test_cancelled_unfilled_entry_cancels_approved_trade_plan(database):
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -971,7 +971,7 @@ async def test_paper_restart_restores_active_position_without_fabricating_fill(d
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=first.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(
@@ -1045,7 +1045,7 @@ async def test_risk_scale_down_no_longer_resizes_v2_child(
             type="PRICE", trigger="110", size_pct=100.0, reason_code="BASE_EXIT"
         ),
         model_provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     await decisions.save(entry, run_id=engine.run_id, prompt_version="entry-v1")
     plan, signal = await LiveLLMTradePlanner(plans).create_entry_signal(

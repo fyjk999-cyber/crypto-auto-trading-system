@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -19,6 +23,15 @@ from crypto_trader.market_data.opportunity.context import (
     render_opportunity_context_block,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
+_REPAIRABLE_RESPONSE_ERRORS = frozenset(
+    {"MALFORMED_PROVIDER_RESPONSE", "EMPTY_CONTENT", "INVALID_JSON"}
+)
+_NON_REPAIRABLE_PROVIDER_ERRORS = frozenset(
+    {"LLM_TIMEOUT", "LLM_TRANSPORT_ERROR", "NO_API_KEY", "LLM_PROVIDER_ERROR", "LLM_UNAVAILABLE"}
+)
+
 
 class ToolSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -30,12 +43,26 @@ class ChiefTraderEngine:
     def __init__(self, provider: LLMProvider | None = None, model_version: str = "0.1.0") -> None:
         self.provider = provider
         self.model_version = model_version
+        self.last_tool_selection_trace: dict[str, Any] | None = None
 
-    async def select_tools(
-        self, ctx: ChiefTraderContext, available_tools: list[str]
-    ) -> tuple[list[str] | None, str | None]:
-        if self.provider is None:
-            return None, "LLM_UNAVAILABLE"
+    @staticmethod
+    def _response_fingerprint(response: Any) -> str:
+        """Non-secret fingerprint of one provider response."""
+        text = getattr(response, "text", "") or ""
+        if not text:
+            payload = getattr(response, "parsed_json", None)
+            if payload is not None:
+                text = json.dumps(payload, sort_keys=True, default=str)
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16] if text else ""
+
+    def _tool_selection_prompt(
+        self,
+        ctx: ChiefTraderContext,
+        available_tools: list[str],
+        *,
+        repair: bool = False,
+        validation_error: str = "",
+    ) -> str:
         prompt = (
             "You are the same Chief Trader that will make the final decision. "
             "Select only the factual read-only tools needed for this context. "
@@ -43,8 +70,45 @@ class ChiefTraderEngine:
             f"Symbol: {ctx.symbol}\nPositionState: {ctx.position_state.value}\n"
             f"Market: {ctx.market_snapshot}\nAvailableTools: {available_tools}"
         )
+        if repair:
+            prompt += (
+                "\nREPAIR REQUIRED. The previous answer failed deterministic "
+                f"validation: {validation_error}. Return JSON only as {{\"tools\":[...]}} "
+                "using ONLY the same AvailableTools. Do not add tools, do not change the "
+                "trading question, and do not emit any other keys."
+            )
+        return prompt
+
+    @staticmethod
+    def _validate_tool_selection(
+        response: Any, available_tools: list[str]
+    ) -> tuple[list[str] | None, str | None, str | None]:
+        if response is None or not getattr(response, "ok", False) or (
+            getattr(response, "parsed_json", None) is None
+        ):
+            error = getattr(response, "error", None) or "TOOL_SELECTION_FAILED"
+            return None, error, error
+        try:
+            selection = ToolSelection(**response.parsed_json)
+        except ValidationError as exc:
+            return None, "INVALID_TOOL_SELECTION", str(exc).replace("\n", " ")[:240]
+        if len(selection.tools) != len(set(selection.tools)):
+            return None, "INVALID_TOOL_SELECTION", "duplicate tools in selection"
+        unknown = [tool for tool in selection.tools if tool not in available_tools]
+        if unknown:
+            return None, "UNKNOWN_TOOL_SELECTED", "unknown tools: " + ",".join(unknown[:5])
+        return selection.tools, None, None
+
+    async def select_tools(
+        self, ctx: ChiefTraderContext, available_tools: list[str]
+    ) -> tuple[list[str] | None, str | None]:
+        self.last_tool_selection_trace = None
+        if self.provider is None:
+            return None, "LLM_UNAVAILABLE"
+        available = list(available_tools)
+        request_id = new_id("toolsel")
         response = await self.provider.complete_json(
-            prompt=prompt,
+            prompt=self._tool_selection_prompt(ctx, available),
             temperature=0.0,
             timeout_seconds=20.0,
             retries=1,
@@ -52,17 +116,77 @@ class ChiefTraderEngine:
             thinking=False,
             operation="tool_selection",
         )
-        if not response.ok or response.parsed_json is None:
-            return None, response.error or "TOOL_SELECTION_FAILED"
-        try:
-            selection = ToolSelection(**response.parsed_json)
-        except ValidationError:
-            return None, "INVALID_TOOL_SELECTION"
-        if len(selection.tools) != len(set(selection.tools)):
-            return None, "INVALID_TOOL_SELECTION"
-        if any(tool not in available_tools for tool in selection.tools):
-            return None, "UNKNOWN_TOOL_SELECTED"
-        return selection.tools, None
+        selected, error, validation_detail = self._validate_tool_selection(response, available)
+        trace: dict[str, Any] = {
+            "request_id": request_id,
+            "provider": getattr(response, "provider", None)
+            or getattr(self.provider, "name", "unknown"),
+            "model": getattr(response, "model", None)
+            or getattr(self.provider, "model", "unknown"),
+            "original_response_fingerprint": self._response_fingerprint(response),
+            "validation_error": validation_detail,
+            "repair_attempted": False,
+            "repair_response_fingerprint": None,
+            "final_status": "VALID" if selected is not None else "FAIL_CLOSED_NO_REPAIR",
+        }
+        if selected is not None:
+            self.last_tool_selection_trace = trace
+            return selected, None
+
+        response_error = getattr(response, "error", None) or ""
+        repairable = error == "INVALID_TOOL_SELECTION" or (
+            not getattr(response, "ok", False)
+            and response_error in _REPAIRABLE_RESPONSE_ERRORS
+        )
+        if not repairable:
+            trace["original_error"] = error
+            self.last_tool_selection_trace = trace
+            return None, error
+
+        repair_request_id = new_id("toolsel")
+        repair_response = await self.provider.complete_json(
+            prompt=self._tool_selection_prompt(
+                ctx, available, repair=True, validation_error=validation_detail or error or ""
+            ),
+            temperature=0.0,
+            timeout_seconds=20.0,
+            retries=0,
+            max_tokens=768,
+            thinking=False,
+            operation="tool_selection_repair",
+        )
+        repaired, repair_error, repair_detail = self._validate_tool_selection(
+            repair_response, available
+        )
+        trace.update(
+            {
+                "repair_attempted": True,
+                "repair_request_id": repair_request_id,
+                "repair_response_fingerprint": self._response_fingerprint(repair_response),
+                "repair_validation_error": repair_detail,
+            }
+        )
+        if repaired is not None:
+            trace["final_status"] = "REPAIRED_VALID"
+            self.last_tool_selection_trace = trace
+            return repaired, None
+        trace["final_status"] = "FAIL_CLOSED"
+        trace["final_error"] = repair_error
+        self.last_tool_selection_trace = trace
+        _LOGGER.warning(
+            "tool_selection repair failed: %s",
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "provider": trace["provider"],
+                    "model": trace["model"],
+                    "validation_error": validation_detail,
+                    "repair_validation_error": repair_detail,
+                },
+                sort_keys=True,
+            ),
+        )
+        return None, repair_error or "INVALID_TOOL_SELECTION"
 
     async def decide(self, ctx: ChiefTraderContext, *, rebuild_context=None) -> ChiefTraderDecision:
         prompt = self.render_prompt(ctx)

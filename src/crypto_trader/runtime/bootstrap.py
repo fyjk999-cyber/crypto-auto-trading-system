@@ -273,7 +273,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         opportunity_service.expert_engine = expert_engine
     tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)
-    tool_chief = ToolDrivenChiefTrader(chief, tools)
+    tool_chief = ToolDrivenChiefTrader(chief, tools, audit=audit)
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
         max_order_notional=risk.config.max_order_notional,

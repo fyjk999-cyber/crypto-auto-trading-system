@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: MANUAL_WRAPPER_ONLY (PAPER only; never a launchd owner)
 set -euo pipefail
-cd "$(dirname "$0")/.."
-if [ ! -f .venv/bin/python ]; then
-  echo "Missing .venv/bin/python. Run: uv sync" >&2
-  exit 1
-fi
-if [ -f alembic.ini ]; then
-  .venv/bin/python -m alembic -c alembic.ini upgrade head
-fi
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$ROOT"
 export TRADING_MODE=PAPER
 export PAPER_MODE=PAPER_REAL_MARKET
 export LIVE_TRADING_ENABLED=false
 export AUTO_START_RUNTIME=true
-export RUNNING_SHA="$(git rev-parse HEAD)"
+export RUNNING_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 echo "Trading Mode: PAPER"
 echo "Market Provider: OKX_PUBLIC"
 echo "Execution: PAPER / LOCAL_SIMULATOR"
 echo "Live Trading: DISABLED"
-exec .venv/bin/python -m crypto_trader.runtime.local_runner --host 127.0.0.1 --port 8000
+# Canonical secure path: scripts/run_low_risk_paper_secure.sh loads the DeepSeek
+# Keychain credential in memory and execs crypto_trader.runtime.local_runner.
+# No alternate path may start the runtime with an implicit/unsecure provider.
+exec "$ROOT/scripts/run_low_risk_paper_secure.sh"
