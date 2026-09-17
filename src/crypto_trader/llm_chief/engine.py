@@ -14,6 +14,12 @@ from crypto_trader.llm_chief.decision import (
     OpenAction,
     PositionState,
 )
+from crypto_trader.llm_chief.policy import (
+    OPERATION_TOOL_SELECTION,
+    OPERATION_TRADING_DECISION,
+    reasoning_effort_for,
+    thinking_for,
+)
 from crypto_trader.llm_chief.provider import LLMProvider
 from crypto_trader.market_data.opportunity.context import (
     render_opportunity_context_block,
@@ -49,8 +55,9 @@ class ChiefTraderEngine:
             timeout_seconds=20.0,
             retries=1,
             max_tokens=768,
-            thinking=False,
-            operation="tool_selection",
+            # Pure tool routing: intentionally no hidden reasoning.
+            thinking=thinking_for(OPERATION_TOOL_SELECTION),
+            operation=OPERATION_TOOL_SELECTION,
         )
         if not response.ok or response.parsed_json is None:
             return None, response.error or "TOOL_SELECTION_FAILED"
@@ -72,9 +79,12 @@ class ChiefTraderEngine:
             timeout_seconds=30.0,
             retries=1,
             max_tokens=2400,
-            thinking=True,
-            reasoning_effort="low",
-            operation="trading_decision",
+            # The real trading decision (and, because PositionReview reuses this
+            # same path, every HOLD/REDUCE/EXIT) takes its reasoning budget from
+            # the canonical policy. It must never be hard-coded low here.
+            thinking=thinking_for(OPERATION_TRADING_DECISION),
+            reasoning_effort=reasoning_effort_for(OPERATION_TRADING_DECISION),
+            operation=OPERATION_TRADING_DECISION,
         )
         # Phase 4A seam: a Core LLM router may use a per-call fresh-state
         # rebuilder so the GLM backup never receives a stale prompt.

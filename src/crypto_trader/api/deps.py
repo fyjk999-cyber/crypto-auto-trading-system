@@ -87,17 +87,30 @@ class LLMRuntimeStatus:
     async def probe(self) -> None:
         import os
 
+        from crypto_trader.llm_chief.credentials import load_credential
+        from crypto_trader.llm_chief.policy import ForbiddenModelError, canonical_model
         from crypto_trader.llm_chief.provider import DeepSeekProvider
 
         self.provider = os.environ.get("LLM_PROVIDER", "none").lower()
-        self.model = os.environ.get("LLM_MODEL")
-        self.configured = self.provider == "deepseek" and bool(
-            os.environ.get("DEEPSEEK_API_KEY")
-        )
+        # Canonical model visibility: the effective model is what the provider
+        # will actually send, resolved through the allow-listed policy.
+        try:
+            self.model = canonical_model()
+        except ForbiddenModelError as exc:
+            self.model = None
+            self.configured = False
+            self.reachable = False
+            self.last_error = str(exc)
+            return
+        # Credential presence comes from the canonical loader (file-first), so
+        # the health surface agrees with what the provider actually uses.
+        credential = load_credential()
+        self.credential_source = credential.source
+        self.configured = self.provider == "deepseek" and credential.configured
         self.reachable = False
         self.last_error = None
         if not self.configured:
-            self.last_error = "NOT_CONFIGURED"
+            self.last_error = credential.error or "NOT_CONFIGURED"
             return
         provider = self.provider_instance or DeepSeekProvider()
         result = await provider.complete_json(
@@ -106,7 +119,11 @@ class LLMRuntimeStatus:
             timeout_seconds=10.0,
             retries=0,
             max_tokens=64,
+            # Health probe keeps its original explicit semantics: it must not
+            # become a reasoning call, and it must not depend on whatever the
+            # policy default for an unknown operation happens to be.
             thinking=False,
+            reasoning_effort="low",
             operation="health_probe",
         )
         self.reachable = result.ok and result.parsed_json is not None

@@ -21,8 +21,9 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
         assert request.headers["authorization"] == "Bearer test-secret"
         payload = json.loads(request.content)
         assert payload["max_tokens"] == 64
-        assert payload["thinking"] == {"type": "enabled"}
-        assert payload["reasoning_effort"] == "low"
+        # `completion` is not a reasoning operation under the canonical policy,
+        # so thinking is off unless the caller asks for it.
+        assert payload["thinking"] == {"type": "disabled"}
         return httpx.Response(
             200,
             json={
@@ -33,14 +34,14 @@ async def test_deepseek_provider_captures_sanitized_operational_diagnostics():
 
     provider = DeepSeekProvider(
         api_key="test-secret",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
         transport=httpx.MockTransport(handler),
     )
     result = await provider.complete_json(prompt="JSON", retries=0, max_tokens=64)
     diagnostics = provider.diagnostics()
     assert result.ok is True
     assert diagnostics["provider"] == "deepseek"
-    assert diagnostics["model"] == "deepseek-v4-pro"
+    assert diagnostics["model"] == "deepseek-flash"
     assert diagnostics["last_token_usage"] == {
         "prompt_tokens": 4,
         "completion_tokens": 2,
@@ -105,7 +106,10 @@ async def test_deepseek_provider_retries_invalid_json_then_accepts_valid_json():
     provider = DeepSeekProvider(
         api_key="test-secret", transport=httpx.MockTransport(handler)
     )
-    result = await provider.complete_json(prompt="JSON", retries=1)
+    # Thinking is requested explicitly here: the test is about the bounded
+    # recovery attempt, not about what an unspecified operation defaults to
+    # (the canonical policy leaves non-reasoning operations with thinking off).
+    result = await provider.complete_json(prompt="JSON", retries=1, thinking=True)
     assert result.ok is True
     assert result.parsed_json == {"action": "WAIT"}
     assert calls == 2
@@ -154,10 +158,10 @@ def test_llm_provider_abstraction_without_key():
 
 
 def test_deepseek_provider_uses_non_secret_runtime_configuration(monkeypatch):
-    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-flash")
     monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com")
     provider = DeepSeekProvider(api_key=None)
-    assert provider.model == "deepseek-v4-pro"
+    assert provider.model == "deepseek-flash"
     assert provider.base_url == "https://api.deepseek.com"
 
 
@@ -168,7 +172,8 @@ async def test_llm_runtime_health_is_explicit_when_not_configured(monkeypatch):
     await status.probe()
     assert status.snapshot()["configured"] is False
     assert status.snapshot()["reachable"] is False
-    assert status.snapshot()["last_error"] == "NOT_CONFIGURED"
+    # The canonical credential loader reports a precise unconfigured reason.
+    assert status.snapshot()["last_error"] == "PROVIDER_UNCONFIGURED"
 
 
 async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatch):
@@ -185,7 +190,7 @@ async def test_llm_health_does_not_mislabel_probe_as_trading_decision(monkeypatc
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-secret")
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
-    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-flash")
     provider = DeepSeekProvider(
         api_key="test-secret", transport=httpx.MockTransport(handler)
     )
@@ -249,7 +254,7 @@ def test_chief_trader_decision_schema_and_fail_safe():
 async def test_chief_trader_reserves_output_budget_after_reasoning_tokens():
     class CapturingProvider:
         name = "deepseek"
-        model = "deepseek-v4-pro"
+        model = "deepseek-flash"
 
         async def complete_json(self, **kwargs):
             self.kwargs = kwargs
@@ -324,7 +329,7 @@ def test_chief_trader_owns_identity_timestamp_and_model_version():
         },
         ctx,
         provider="deepseek",
-        model="deepseek-v4-pro",
+        model="deepseek-flash",
     )
     assert decision.decision_id.startswith("llm_")
     assert decision.decision_id != "model-controlled-id"
@@ -337,7 +342,7 @@ def test_chief_trader_owns_identity_timestamp_and_model_version():
 async def test_chief_trader_missing_action_is_durable_fail_closed_input():
     class MissingActionProvider:
         name = "deepseek"
-        model = "deepseek-v4-pro"
+        model = "deepseek-flash"
 
         async def complete_json(self, **_kwargs):
             return LLMResponse(

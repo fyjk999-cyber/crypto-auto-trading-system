@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from crypto_trader.llm_chief.credentials import load_credential
+from crypto_trader.llm_chief.policy import (
+    canonical_model,
+    reasoning_effort_for,
+    thinking_for,
+    validate_model,
+)
+
 
 @dataclass
 class LLMResponse:
@@ -54,8 +62,13 @@ class DeepSeekProvider:
         base_url: str | None = None,
         transport=None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("DEEPSEEK_API_KEY")
-        self.model = model or os.environ.get("LLM_MODEL", "deepseek-chat")
+        # Credential resolution is canonical (file-first, memory-only). Only the
+        # SOURCE is recorded for diagnostics; the secret never leaves this object.
+        self._credential = load_credential(api_key)
+        self.api_key = self._credential.api_key
+        # Model selection is allow-listed: an unknown or forbidden model raises
+        # rather than silently degrading to a different reasoning engine.
+        self.model = canonical_model() if model is None else validate_model(model)
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", "https://api.deepseek.com")
         self._transport = transport
         self.last_success_ts: str | None = None
@@ -76,12 +89,20 @@ class DeepSeekProvider:
         timeout_seconds: float = 30.0,
         retries: int = 1,
         max_tokens: int = 1200,
-        thinking: bool = True,
-        reasoning_effort: str = "low",
+        thinking: bool | None = None,
+        reasoning_effort: str | None = None,
         operation: str = "completion",
     ) -> LLMResponse:
         import json
         import time
+
+        # The canonical policy owns the reasoning budget per operation. Call
+        # sites may still override explicitly, but nothing inherits a silent
+        # default, and a real trading decision can no longer be hard-coded low.
+        if thinking is None:
+            thinking = thinking_for(operation)
+        if reasoning_effort is None:
+            reasoning_effort = reasoning_effort_for(operation)
 
         if not self.api_key:
             result = LLMResponse(
@@ -119,14 +140,8 @@ class DeepSeekProvider:
                             "messages": [{"role": "user", "content": prompt}],
                             "temperature": temperature,
                             "max_tokens": max_tokens,
-                            "thinking": {
-                                "type": "enabled" if attempt_thinking else "disabled"
-                            },
-                            **(
-                                {"reasoning_effort": reasoning_effort}
-                                if attempt_thinking
-                                else {}
-                            ),
+                            "thinking": {"type": "enabled" if attempt_thinking else "disabled"},
+                            **({"reasoning_effort": reasoning_effort} if attempt_thinking else {}),
                             "response_format": {"type": "json_object"},
                         },
                     )
@@ -214,20 +229,14 @@ class DeepSeekProvider:
             error=self.last_error or "LLM_PROVIDER_ERROR",
         )
         self.last_latency_ms = result.latency_ms
-        self._record_operation(
-            operation, result, attempts=self.last_attempt_count or retries + 1
-        )
+        self._record_operation(operation, result, attempts=self.last_attempt_count or retries + 1)
         return result
 
-    def _record_operation(
-        self, operation: str, response: LLMResponse, *, attempts: int
-    ) -> None:
+    def _record_operation(self, operation: str, response: LLMResponse, *, attempts: int) -> None:
         previous = self._operation_diagnostics.get(operation, {})
         self._operation_diagnostics[operation] = {
             "last_success_ts": (
-                datetime.now(UTC).isoformat()
-                if response.ok
-                else previous.get("last_success_ts")
+                datetime.now(UTC).isoformat() if response.ok else previous.get("last_success_ts")
             ),
             "last_error": response.error,
             "last_latency_ms": response.latency_ms,
@@ -247,9 +256,12 @@ class DeepSeekProvider:
             "last_latency_ms": self.last_latency_ms,
             "last_token_usage": self.last_token_usage,
             "last_attempt_count": self.last_attempt_count,
+            # Runtime-visible policy facts (never credential material).
+            "configured_model": self.model,
+            "effective_model": self.model,
+            **self._credential.describe(),
             "operations": {
-                operation: dict(values)
-                for operation, values in self._operation_diagnostics.items()
+                operation: dict(values) for operation, values in self._operation_diagnostics.items()
             },
         }
 
@@ -434,7 +446,6 @@ class GLMProvider:
             "last_token_usage": self.last_token_usage,
             "last_attempt_count": self.last_attempt_count,
             "operations": {
-                operation: dict(values)
-                for operation, values in self._operation_diagnostics.items()
+                operation: dict(values) for operation, values in self._operation_diagnostics.items()
             },
         }
