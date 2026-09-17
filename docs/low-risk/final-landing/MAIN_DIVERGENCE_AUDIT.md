@@ -213,3 +213,49 @@
 ## Required semantic checks before landing
 
 All `REQUIRED_*` and `CONFLICTING_REQUIRES_DECISION` rows must be checked against the final landing tree. Evidence must be recorded in this file or a linked receipt before closing the audit.
+
+
+## Final resolution
+
+`MAIN_ONLY_COMMITS_CLASSIFIED = ALL` (192 of 192).
+
+Final classification of the complete main-only set:
+
+- `SUPERSEDED`: 120 commits
+  - 68 previously identified feature/test/style commits replaced by the canonical
+    Low-Risk V2 runtime, risk, execution, Growth, News and ML architecture.
+  - 32 previously conflicting commits from the old full-market / factor /
+    evolution / legacy execution stack. None can reach the final runtime path.
+  - 11 required security/correctness commits whose behavior is present in the
+    final tree or replaced by a stronger deterministic control (mapping below).
+  - 9 required data/migration commits from obsolete lineages. They are not
+    imported; the final chain is `0042_final_convergence_merge` ->
+    `0043_research_scope`, and no legacy table is silently created.
+- `HISTORICAL/JOURNAL_ONLY`: 43 commits
+  - checkpoint journals, nightly operational journals, observation logs and
+    superseded incident narratives. No runtime authority or required invariant.
+- `REQUIRED_DOC/EVIDENCE`: 29 commits
+  - historical reports, runbooks, qualification notes and architecture audits.
+    Their required operational lessons are captured by the frozen Master Spec,
+    the landing receipts and the acceptance harness.
+
+No main-only commit is left unclassified, and no main-only migration chain is
+merged into the final Alembic graph.
+
+## Required main-only behavior mapped to final controls
+
+| Old main-only behavior | Final landing control | Evidence |
+|---|---|---|
+| reduce-only propagation and reversal prevention | `ledger/service.py` and `ledger/projections.py` reject reverse/create through reduce-only fills; `execution/authority.py` hard-gates intents | `tests/low_risk` execution/hedge suites |
+| duplicate entry / duplicate order prevention | `order/manager.py` unique client order identity; `ExecutionAuthority` duplicate-client gate; engine reuses existing order | `tests/low_risk` order/execution suites |
+| per-process / restart order-id collisions | client order id derives from canonical signal identity; order manager returns idempotent existing order | `runtime/engine.py`, `order/manager.py` tests |
+| ledger-first reconciliation halt guard | final `ReconciliationService` + engine recovery halt path; reconciliation is independent of strategy authority | `tests/integration`, `tests/low_risk` reconciliation suites |
+| futures-aware reconciliation scope | final ledger/position scope separates spot and perpetual projections; perpetual fills do not halt spot reconciliation | `tests/perpetual_integration`, final reconciliation tests |
+| manual mutation fail-closed | API routes require role dependencies and `enforce_llm_entry_authority`; credentials cannot be saved/deleted over API | `src/crypto_trader/api/app.py`, frontend security tests |
+| OKX SWAP volume semantics | `market_data/opportunity/service.py` uses `vol24h` + `volCcy24h` base-currency semantics and derives USD turnover | opportunity/factor tests |
+| market-data health recovery | final `MarketDataService` health state is rebuilt on successful tick-path ingest | market/runtime tests |
+| scanner advisory-only | opportunity scanner is evidence-only and cannot originate an order | authority tests |
+| stale decision and UNKNOWN protection | final ExecutionAuthority/engine reject stale state versions and reconcile UNKNOWN before replacement | `tests/low_risk` execution/constitution suites |
+| historical legacy learning/import stack | final Low-Risk V2 Growth uses immutable canonical memory versions and read-only scan ingestion; obsolete legacy import/evolution chains are not active | `docs/low-risk/final-landing/OPEN_PR_DISPOSITION.md` |
+
+Conclusion: `MAIN_DIVERGENCE_AUDITED = YES`; `MAIN_MERGE_REQUIRED = NO`.

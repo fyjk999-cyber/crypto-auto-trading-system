@@ -90,3 +90,59 @@ No open PR may be considered closed until:
 1. every unique required behavior is either ported to the landing branch or shown superseded by exact final-tree code/tests;
 2. the disposition is recorded here;
 3. the PR is explicitly classified PORTED, SUPERSEDED, or REJECTED_WITH_REASON.
+
+
+## Round 2 disposition update
+
+### PR #2
+
+`PARTIALLY_PORTED` on final landing tree:
+
+- wall-clock tool-round budget: PORTED in `ToolDrivenChiefTrader`
+- tool timeout: PORTED in `LLMToolRegistry.call` / `build_package`
+- tool contract versioning: PORTED via `ToolContract` and `contract_catalog`
+- OKX SWAP volume semantics: ALREADY_PRESENT in opportunity service
+- research applicability fail-closed: PORTED via scoped/as-of research retrieval
+  and `0043_research_scope`
+- OPEN-position review priority: still open (PORT_REQUIRED)
+- bounded concurrency: still open (PORT_REQUIRED)
+- explicit review deadline: still open (PORT_REQUIRED)
+- execution-cost evidence semantics: still needs final targeted proof
+
+### PR #3
+
+`SUPERSEDED_WITH_EVIDENCE`: final Growth branch architecture is integrated;
+Growth remains `LEARNING_ONLY` with no order path and its own worker/memory
+versioning.
+
+### PR #4
+
+`PARTIALLY_PORTED` on final landing tree:
+
+- fenced atomic publication: PORTED/EQUIVALENT via DB unique version fence and
+  single-transaction immutable version insert; duplicate-version test added
+- exact job input/revision binding: PORTED via `_meta.input_hash` + revision
+- NO_PUBLISH_INPUT: PORTED via explicit `GrowthPublishInputMissing`
+- latest visible version handling: PORTED in `GrowthRetriever.search`
+- proposition identity: PORTED via deterministic `proposition_identity`
+- known_at correctness: PORTED via `_meta.known_at`; expiry/revocation filters
+- scoped retrieval fail-closed: PORTED via strict symbol scope
+- hard serialized evidence budget: PORTED via `max_serialized_bytes`
+- evidence taxonomy: ALREADY_PRESENT in final review taxonomy
+- attempt recovery: worker cycle state/cursor/heartbeat already restart-safe;
+  targeted regression evidence still to be attached
+- durable provider exceptions: provider durability suite already covers
+  fail-closed provider exceptions
+- canonical V2 trace path: still open (PORT_REQUIRED)
+- real DB import target binding: still open (PORT_REQUIRED)
+- authorized Growth rollback: still open (PORT_REQUIRED)
+- resume source/plan identity: still open (PORT_REQUIRED)
+- revoke/expire known_at: ported for version visibility; admin revocation
+  workflow still open
+
+No PR is closed yet.
+
+### PR #5
+
+`NEEDS_DUPLICATE_STACK_AUDIT`: final import-smoke/active-use matrix still
+required before any quarantine or supersession decision.
