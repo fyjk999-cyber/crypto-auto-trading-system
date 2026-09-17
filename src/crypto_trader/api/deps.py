@@ -213,6 +213,11 @@ class LLMRuntimeStatus:
                 snapshot["effective_model"] = actual["effective_model"]
             if isinstance(offline, dict):
                 snapshot["llm_offline_mode"] = bool(offline.get("offline"))
+        if snapshot.get("model"):
+            if not snapshot.get("effective_model"):
+                snapshot["effective_model"] = snapshot.get("model")
+            if not snapshot.get("effective_provider"):
+                snapshot["effective_provider"] = snapshot.get("provider")
         return snapshot
 
 

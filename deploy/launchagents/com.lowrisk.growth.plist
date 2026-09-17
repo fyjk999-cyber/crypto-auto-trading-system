@@ -21,8 +21,6 @@
   <dict>
     <key>ML_PYTHON</key>
     <string>__PYTHON__</string>
-    <key>RUNNING_SHA</key>
-    <string>__SHA__</string>
     <key>GROWTH_INTERVAL_SECONDS</key>
     <string>300</string>
     <key>GROWTH_SCAN_SOURCE_DB</key>
