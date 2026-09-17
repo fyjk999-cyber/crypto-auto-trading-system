@@ -232,3 +232,19 @@ async def test_malformed_open_decision_is_durable_fail_closed_and_throttled(data
     assert rows[0].position_state == PositionState.OPEN
     assert rows[0].action == "FAIL_CLOSED"
     assert rows[0].trade_plan_id is not None
+
+
+def test_review_priority_prefers_never_reviewed_then_longest_waiting():
+    from types import SimpleNamespace
+
+    subject = object.__new__(LiveLLMPositionManager)
+    subject._last_review_attempt = {
+        "A": datetime(2026, 9, 16, tzinfo=UTC),
+        "B": datetime(2026, 9, 15, tzinfo=UTC),
+    }
+    never = SimpleNamespace(symbol="C")
+    longest = SimpleNamespace(symbol="B")
+    recent = SimpleNamespace(symbol="A")
+    assert subject.review_priority(never)[0] == 0
+    assert subject.review_priority(longest)[0] == 1
+    assert subject.review_priority(longest) < subject.review_priority(recent)

@@ -67,6 +67,14 @@ def test_runtime_constitution_replaces_time_stop_with_reassessment() -> None:
     assert "NEXT_REASSESSMENT_WAKE" in engine_source
 
 
+def test_open_position_review_priority_and_deadline_are_wired() -> None:
+    engine_source = inspect.getsource(TradingEngine)
+    manager_source = inspect.getsource(LiveLLMPositionManager)
+    assert "review_priority" in engine_source
+    assert "POSITION_REVIEW_DEADLINE_EXCEEDED" in engine_source
+    assert "def review_priority" in manager_source
+
+
 def test_hedge_switch_is_configurable_and_news_runtime_is_wired(monkeypatch) -> None:
     monkeypatch.delenv("LEG_EXECUTION_ENABLED", raising=False)
     assert leg_execution_enabled_from_env() is False

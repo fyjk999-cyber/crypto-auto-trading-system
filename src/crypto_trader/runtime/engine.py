@@ -704,12 +704,24 @@ class TradingEngine:
                             if decision is not None:
                                 decisions.append(decision)
         positions = await self.portfolio.get_positions()
-        for position in positions.values():
-            if position.quantity == 0:
-                continue
-            if position.symbol in leg_symbols:
-                # Already handled by the independent leg scan above.
-                continue
+        active_positions = [
+            position
+            for position in positions.values()
+            if position.quantity != 0 and position.symbol not in leg_symbols
+        ]
+        priority = (
+            getattr(self.position_manager, "review_priority", None)
+            if self.position_manager is not None
+            else None
+        )
+        if callable(priority):
+            active_positions.sort(key=priority)
+        else:
+            active_positions.sort(key=lambda position: position.symbol)
+        review_deadline = max(
+            0.001, float(getattr(self.settings, "position_review_deadline_seconds", 90.0))
+        )
+        for position in active_positions:
             ctx = await self._strategy_context(position.symbol)
             if ctx is None:
                 continue
@@ -787,11 +799,22 @@ class TradingEngine:
                     },
                 )
             try:
-                signal = await self.position_manager.review(
-                    ctx,
-                    position,
-                    force=wake_required or horizon_wake or reassessment_wake,
+                async with asyncio.timeout(review_deadline):
+                    signal = await self.position_manager.review(
+                        ctx,
+                        position,
+                        force=wake_required or horizon_wake or reassessment_wake,
+                    )
+            except TimeoutError:
+                self.consecutive_failures += 1
+                self.health.set("position_manager", False, "review deadline exceeded")
+                await self.audit.log(
+                    "POSITION_REVIEW_DEADLINE_EXCEEDED",
+                    target=position.symbol,
+                    run_id=self.run_id,
+                    after={"deadline_seconds": review_deadline},
                 )
+                continue
             except Exception as exc:
                 self.consecutive_failures += 1
                 self.health.set("position_manager", False, type(exc).__name__)
