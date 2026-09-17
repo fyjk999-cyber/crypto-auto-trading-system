@@ -8,13 +8,35 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from crypto_trader.llm.tools.registry import DynamicEvidencePackage, LLMToolRegistry
+from crypto_trader.llm.tools.registry import (
+    CANONICAL_MAX_SELECTED_TOOLS,
+    DynamicEvidencePackage,
+    LLMToolRegistry,
+)
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import ChiefTraderDecision
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _sanitize_router_reason(stage: str, exc: Exception, selected_count: int) -> str:
+    """Return a compact, non-secret reason code for a tool-router failure."""
+    text = str(exc).lower()
+    if "tool budget exceeded" in text or "limit" in text:
+        code = "TOOL_COUNT_LIMIT_EXCEEDED"
+    elif "unknown or duplicate" in text:
+        code = "TOOL_NOT_REGISTERED"
+    elif isinstance(exc, KeyError):
+        code = "TOOL_NOT_REGISTERED"
+    elif isinstance(exc, TypeError):
+        code = "TOOL_ARGUMENT_INVALID"
+    else:
+        code = "TOOL_ROUTER_INTERNAL_ERROR"
+    return (
+        f"{code}:stage={stage}:error_class={type(exc).__name__}:"
+        f"selected={int(selected_count)}:limit={CANONICAL_MAX_SELECTED_TOOLS}"
+    )
 
 class ToolDrivenChiefTrader:
     """The same Chief selects evidence tools and makes the final decision."""
@@ -73,16 +95,25 @@ class ToolDrivenChiefTrader:
                         self.chief.fail_closed(ctx, error or "TOOL_SELECTION_FAILED"),
                         None,
                     )
-                package = await self.tools.build_package(
-                    selected,
-                    ctx.symbol,
-                    {**tool_context, "chief_context": ctx},
-                    now=now,
-                )
+                try:
+                    package = await self.tools.build_package(
+                        selected,
+                        ctx.symbol,
+                        {**tool_context, "chief_context": ctx},
+                        now=now,
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    reason = _sanitize_router_reason(
+                        "build_package", exc, len(selected)
+                    )
+                    _LOGGER.warning("tool package build failed: %s", reason)
+                    return self.chief.fail_closed(ctx, reason), None
         except TimeoutError:
             return self.chief.fail_closed(ctx, "TOOL_ROUND_TIMEOUT"), None
-        except (KeyError, TypeError, ValueError):
-            return self.chief.fail_closed(ctx, "TOOL_ROUTER_FAILED"), None
+        except (KeyError, TypeError, ValueError) as exc:
+            reason = _sanitize_router_reason("select_tools", exc, 0)
+            _LOGGER.warning("tool router stage failed: %s", reason)
+            return self.chief.fail_closed(ctx, reason), None
         enriched = replace(
             ctx,
             quant_evidence=[package.model_dump(mode="json")],

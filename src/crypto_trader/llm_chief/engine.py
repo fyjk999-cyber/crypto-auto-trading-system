@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from crypto_trader.domain.identifiers import new_id
+from crypto_trader.llm.tools.registry import CANONICAL_MAX_SELECTED_TOOLS
 from crypto_trader.llm_chief.context import ChiefTraderContext
 from crypto_trader.llm_chief.decision import (
     ChiefTraderDecision,
@@ -28,6 +29,9 @@ _LOGGER = logging.getLogger(__name__)
 _REPAIRABLE_RESPONSE_ERRORS = frozenset(
     {"MALFORMED_PROVIDER_RESPONSE", "EMPTY_CONTENT", "INVALID_JSON"}
 )
+_REPAIRABLE_SELECTION_ERRORS = frozenset(
+    {"INVALID_TOOL_SELECTION", "TOOL_COUNT_LIMIT_EXCEEDED"}
+)
 _NON_REPAIRABLE_PROVIDER_ERRORS = frozenset(
     {"LLM_TIMEOUT", "LLM_TRANSPORT_ERROR", "NO_API_KEY", "LLM_PROVIDER_ERROR", "LLM_UNAVAILABLE"}
 )
@@ -36,7 +40,9 @@ _NON_REPAIRABLE_PROVIDER_ERRORS = frozenset(
 class ToolSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tools: list[str] = Field(default_factory=list, max_length=12)
+    tools: list[str] = Field(
+        default_factory=list, max_length=CANONICAL_MAX_SELECTED_TOOLS
+    )
 
 
 class ChiefTraderEngine:
@@ -88,8 +94,15 @@ class ChiefTraderEngine:
         ):
             error = getattr(response, "error", None) or "TOOL_SELECTION_FAILED"
             return None, error, error
+        payload = response.parsed_json
+        raw_tools = payload.get("tools") if isinstance(payload, dict) else None
+        if isinstance(raw_tools, list) and len(raw_tools) > CANONICAL_MAX_SELECTED_TOOLS:
+            detail = (
+                f"selected={len(raw_tools)} limit={CANONICAL_MAX_SELECTED_TOOLS}"
+            )
+            return None, "TOOL_COUNT_LIMIT_EXCEEDED", detail
         try:
-            selection = ToolSelection(**response.parsed_json)
+            selection = ToolSelection(**payload)
         except ValidationError as exc:
             return None, "INVALID_TOOL_SELECTION", str(exc).replace("\n", " ")[:240]
         if len(selection.tools) != len(set(selection.tools)):
@@ -134,7 +147,7 @@ class ChiefTraderEngine:
             return selected, None
 
         response_error = getattr(response, "error", None) or ""
-        repairable = error == "INVALID_TOOL_SELECTION" or (
+        repairable = error in _REPAIRABLE_SELECTION_ERRORS or (
             not getattr(response, "ok", False)
             and response_error in _REPAIRABLE_RESPONSE_ERRORS
         )
