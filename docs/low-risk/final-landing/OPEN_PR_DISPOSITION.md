@@ -178,3 +178,54 @@ Disposition: `PORTED`.
 - runtime modules other than the isolated `ai_position_bridge.py` do not import
   `crypto_trader.ai_brain`;
 - guard tests added in `tests/low_risk/test_final_landing_duplicate_stack.py`.
+
+
+## Final PR disposition (round 2 closure)
+
+### PR TWO - PORTED
+
+All checklist behaviors now have final-tree evidence:
+
+- wall-clock tool budget: `ToolDrivenChiefTrader` + tool registry tests
+- OKX SWAP volume semantics: opportunity service and factor tests
+- exact-symbol episode retrieval: final decision/episode stores
+- research applicability fail-closed: scoped/as-of context + migration 0043
+- tool contract versioning: `ToolContract` / `contract_catalog`
+- execution-cost evidence: final cost-aware evidence and fast-profit tests
+- OPEN-position review priority: `review_priority`
+- bounded concurrency: single-writer sequential loop with bounded setting
+- review deadline: `POSITION_REVIEW_DEADLINE_EXCEEDED` fail-closed audit path
+
+### PR THREE - SUPERSEDED_WITH_EVIDENCE
+
+Final Growth/Memory architecture is the canonical integrated Growth system.
+The PR #3 migration lineage was not imported.
+
+### PR FOUR - PORTED
+
+- fenced atomic publication: unique version fence plus immutable append; test
+  `test_duplicate_version_fence_is_atomic`
+- exact input/revision binding: `_meta.input_hash` and revision
+- attempt recovery: GrowthWorker cycle state/cursor/heartbeat recovery and
+  degraded-state tests in `tests/low_risk/test_growth_worker.py`
+- NO_PUBLISH_INPUT: explicit `GrowthPublishInputMissing`
+- durable provider exceptions: provider durability suite
+- latest visible version: latest-version dedupe in `GrowthRetriever.search`
+- revoke/expire known_at: `_meta.known_at`, expiry and revocation filters
+- proposition identity: deterministic `proposition_identity`
+- real DB import target binding: `growth_import_binding.bind_import_target`
+- authorized rollback: `rollback_version` append-only copy with audit metadata
+- resume source/plan identity: `GrowthWorker.resume_source_identity` and
+  `resume_plan_hash`
+- scoped retrieval fail-closed: strict symbol scope in retriever
+- hard serialized evidence budget: `max_serialized_bytes` with omitted count
+- canonical V2 trace path: deterministic `trace_id` on every published version
+- evidence taxonomy: final review taxonomy
+
+### PR FIVE - SUPERSEDED_WITH_EVIDENCE
+
+Single bootstrap, single local runner, no legacy `ai_brain` wiring into runtime.
+Guard tests: `tests/low_risk/test_final_landing_duplicate_stack.py`.
+
+All four PRs are now fully dispositioned and safe to close/archive after final
+candidate review.
