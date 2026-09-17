@@ -144,6 +144,9 @@ async def evaluate_readiness(session_factory) -> Readiness:
         reasons.append(f"insufficient_label_v2:{q.final_label_count}<{MIN_LABELED}")
     if sum(v for k, v in q.label_counts_by_version.items() if k != FINAL_LABEL_VERSION) > 0:
         # label-v1 is archival only; it may never satisfy final training readiness.
+        # Its presence is retained as an audit reason, but it must not block
+        # readiness when valid label-v2 rows exist: freeze_dataset hard-excludes
+        # every non-label-v2 row, so final training still sees label-v2 only.
         reasons.append(LABEL_V1_EXCLUDED_REASON)
     if q.duplicate_rate > MAX_DUPLICATE_RATE:
         reasons.append(f"duplicate_rate:{q.duplicate_rate}>{MAX_DUPLICATE_RATE}")
@@ -157,7 +160,8 @@ async def evaluate_readiness(session_factory) -> Readiness:
         span = (datetime.fromisoformat(q.last_ts) - datetime.fromisoformat(q.first_ts)).days
         if span < MIN_COVERAGE_DAYS:
             reasons.append(f"insufficient_time_coverage:{span}<{MIN_COVERAGE_DAYS}")
-    return Readiness(ready=not reasons, reasons=reasons, quality=q.as_dict())
+    blocking_reasons = [r for r in reasons if r != LABEL_V1_EXCLUDED_REASON]
+    return Readiness(ready=not blocking_reasons, reasons=reasons, quality=q.as_dict())
 
 
 async def freeze_dataset(

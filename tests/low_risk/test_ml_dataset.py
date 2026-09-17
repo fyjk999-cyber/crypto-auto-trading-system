@@ -143,3 +143,50 @@ async def test_label_v1_only_is_excluded_from_final_training(database, tmp_path)
     assert frozen["reason"] == "NO_LABEL_V2"
     assert frozen["label_v1_excluded"] == 1
     assert not any(item.suffix == ".json" for item in tmp_path.iterdir())
+
+
+async def test_label_v2_with_archival_label_v1_remains_ready(database, tmp_path, monkeypatch):
+    monkeypatch.setattr(ml_dataset, "MIN_SNAPSHOTS", 1)
+    monkeypatch.setattr(ml_dataset, "MIN_CANDIDATES", 1)
+    monkeypatch.setattr(ml_dataset, "MIN_CONTROLS", 0)
+    monkeypatch.setattr(ml_dataset, "MIN_SYMBOLS", 1)
+    monkeypatch.setattr(ml_dataset, "MIN_LABELED", 1)
+    monkeypatch.setattr(ml_dataset, "MIN_COVERAGE_DAYS", 0)
+    now = datetime.now(UTC)
+    async with database.session_factory() as s:
+        s.add(_snap(1, now))
+        s.add(
+            ScanSnapshotLabelORM(
+                snapshot_id="s1",
+                symbol="BTCUSDT",
+                snapshot_ts=now,
+                horizon="1m",
+                matured_at=now,
+                label_version="label-v2",
+                maturation_status="MATURE_VALID",
+                usable_for_training=True,
+                long_net_bps=10.0,
+                short_net_bps=-10.0,
+            )
+        )
+        s.add(
+            ScanSnapshotLabelORM(
+                snapshot_id="s1",
+                symbol="BTCUSDT",
+                snapshot_ts=now,
+                horizon="1m",
+                matured_at=now,
+                label_version="label-v1",
+                long_net_bps=10.0,
+                short_net_bps=-10.0,
+            )
+        )
+        await s.commit()
+    r = await ml_dataset.evaluate_readiness(database.session_factory)
+    assert r.ready is True, r.reasons
+    assert ml_dataset.LABEL_V1_EXCLUDED_REASON in r.reasons
+    frozen = await ml_dataset.freeze_dataset(database.session_factory, tmp_path, code_sha="abc")
+    assert frozen["ready"] is True
+    assert frozen["label_version"] == "label-v2"
+    assert frozen["row_count"] == 1
+    assert frozen["exclusions"]["label_v1_excluded"] == 1
