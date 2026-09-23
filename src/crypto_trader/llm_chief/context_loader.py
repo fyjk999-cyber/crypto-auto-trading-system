@@ -42,6 +42,7 @@ class ChiefContextLoader:
         self.growth_session_factory = growth_session_factory or session_factory
 
     async def enrich(self, context: ChiefTraderContext) -> ChiefTraderContext:
+        as_of = _context_as_of(context)
         async with self.session_factory() as session:
             episodes = (
                 (
@@ -50,6 +51,7 @@ class ChiefContextLoader:
                         .where(
                             TradeEpisodeORM.factual.is_(True),
                             TradeEpisodeORM.review_status == "REVIEWED",
+                            TradeEpisodeORM.closed_at <= as_of,
                         )
                         .order_by(
                             case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
@@ -72,7 +74,8 @@ class ChiefContextLoader:
                     (
                         await session.execute(
                             select(AITradeReviewORM).where(
-                                AITradeReviewORM.episode_id.in_(episode_ids)
+                                AITradeReviewORM.episode_id.in_(episode_ids),
+                                AITradeReviewORM.created_at <= as_of,
                             )
                         )
                     )
@@ -98,6 +101,7 @@ class ChiefContextLoader:
                 (
                     await session.execute(
                         select(AICompressedExperienceORM)
+                        .where(AICompressedExperienceORM.created_at <= as_of)
                         .order_by(AICompressedExperienceORM.created_at.desc())
                         .limit(self.limit)
                     )
@@ -107,14 +111,20 @@ class ChiefContextLoader:
             )
             profile = (
                 await session.execute(
-                    select(AICoinProfileORM).where(AICoinProfileORM.symbol == context.symbol)
+                    select(AICoinProfileORM).where(
+                        AICoinProfileORM.symbol == context.symbol,
+                        AICoinProfileORM.updated_at <= as_of,
+                    )
                 )
             ).scalar_one_or_none()
             patterns = (
                 (
                     await session.execute(
                         select(AIMarketPatternORM)
-                        .where(AIMarketPatternORM.regime == context.regime)
+                        .where(
+                            AIMarketPatternORM.regime == context.regime,
+                            AIMarketPatternORM.created_at <= as_of,
+                        )
                         .order_by(AIMarketPatternORM.sample_count.desc())
                         .limit(self.limit)
                     )
@@ -197,6 +207,7 @@ class ChiefContextLoader:
             strategy=getattr(context, "strategy", "") or "",
             horizon=getattr(context, "horizon", "") or "",
             setup_signature=getattr(context, "setup_signature", "") or "",
+            as_of_timestamp=_context_as_of(context),
             top_k=self.limit,
         )
         finding = {
@@ -279,6 +290,7 @@ class ChiefContextLoader:
         )
 
     async def _episode_evidence(self, context: ChiefTraderContext):
+        as_of = _context_as_of(context)
         async with self.session_factory() as session:
             rows = (
                 (
@@ -287,6 +299,7 @@ class ChiefContextLoader:
                         .where(
                             TradeEpisodeORM.factual.is_(True),
                             TradeEpisodeORM.review_status == "REVIEWED",
+                            TradeEpisodeORM.closed_at <= as_of,
                         )
                         .order_by(
                             case((TradeEpisodeORM.symbol == context.symbol, 0), else_=1),
@@ -322,6 +335,7 @@ class ChiefContextLoader:
         return finding, [f"episode:{row.episode_id}" for row in rows], _latest(rows, "closed_at")
 
     async def _memory_evidence(self, context: ChiefTraderContext):
+        as_of = _context_as_of(context)
         async with self.session_factory() as session:
             reviews = (
                 (
@@ -331,7 +345,10 @@ class ChiefContextLoader:
                             TradeEpisodeORM,
                             TradeEpisodeORM.episode_id == AITradeReviewORM.episode_id,
                         )
-                        .where(TradeEpisodeORM.symbol == context.symbol)
+                        .where(
+                            TradeEpisodeORM.symbol == context.symbol,
+                            AITradeReviewORM.created_at <= as_of,
+                        )
                         .order_by(AITradeReviewORM.created_at.desc())
                         .limit(self.limit)
                     )
@@ -343,6 +360,7 @@ class ChiefContextLoader:
                 (
                     await session.execute(
                         select(AICompressedExperienceORM)
+                        .where(AICompressedExperienceORM.created_at <= as_of)
                         .order_by(AICompressedExperienceORM.created_at.desc())
                         .limit(self.limit)
                     )
@@ -413,10 +431,14 @@ class ChiefContextLoader:
         return finding, [f"research:{row.research_id}" for row in rows], _latest(rows, "created_at")
 
     async def _coin_profile_evidence(self, context: ChiefTraderContext):
+        as_of = _context_as_of(context)
         async with self.session_factory() as session:
             row = (
                 await session.execute(
-                    select(AICoinProfileORM).where(AICoinProfileORM.symbol == context.symbol)
+                    select(AICoinProfileORM).where(
+                        AICoinProfileORM.symbol == context.symbol,
+                        AICoinProfileORM.updated_at <= as_of,
+                    )
                 )
             ).scalar_one_or_none()
         finding = (
@@ -440,12 +462,16 @@ class ChiefContextLoader:
         )
 
     async def _pattern_evidence(self, context: ChiefTraderContext):
+        as_of = _context_as_of(context)
         async with self.session_factory() as session:
             rows = (
                 (
                     await session.execute(
                         select(AIMarketPatternORM)
-                        .where(AIMarketPatternORM.regime == context.regime)
+                        .where(
+                            AIMarketPatternORM.regime == context.regime,
+                            AIMarketPatternORM.created_at <= as_of,
+                        )
                         .order_by(AIMarketPatternORM.sample_count.desc())
                         .limit(self.limit)
                     )

@@ -124,3 +124,24 @@ async def test_existing_chief_loader_exposes_growth_memory(database):
     assert evidence.features["direction"] == "LONG"  # never direction=row.strategy
     assert evidence.features["patterns"][0]["direction"] == "LONG"
     assert evidence.source_refs[0]["memory_ref"].startswith(("pattern:", "generalized:"))
+
+
+async def test_chief_loader_growth_memory_respects_decision_as_of(database):
+    from types import SimpleNamespace
+
+    from crypto_trader.llm_chief.context_loader import ChiefContextLoader
+
+    await _seed(database.session_factory, T + timedelta(hours=5))
+    loader = ChiefContextLoader(database.session_factory, limit=5)
+    context = SimpleNamespace(
+        symbol="BTCUSDT",
+        regime="TREND_UP",
+        strategy="breakout",
+        horizon="1h",
+        setup_signature="s1",
+        prepared_at=T.isoformat(),
+    )
+    evidence = await loader.load_tool("growth_memory", context)
+    assert evidence.features["patterns"] == []
+    assert evidence.features["generalized_knowledge"] == []
+    assert evidence.source_refs == []

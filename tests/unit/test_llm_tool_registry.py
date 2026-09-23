@@ -148,3 +148,11 @@ async def test_real_alpha_selective_strategy_does_not_evaluate_unselected_strate
 
     assert calls == ["trend_following"]
     assert result.features["strategy_evidence"][0]["strategy"] == "trend_following"
+
+
+async def test_canonical_context_tools_include_growth_memory():
+    from crypto_trader.llm.tools.context import register_context_tools
+
+    registry = LLMToolRegistry()
+    register_context_tools(registry, object())  # loader is only called at execution time
+    assert "growth_memory" in registry.available()
