@@ -166,3 +166,171 @@ def _summarize(market_state: dict) -> str:
         + ("crowded long" if funding > 0.5 else "normal" if funding > -0.5 else "crowded short")
     )
     return "; ".join(parts)
+
+
+_FACTOR_TOOL_NAMES = (
+    "factor_snapshot",
+    "factor_history",
+    "market_factor_context",
+    "factor_performance",
+    "factor_health",
+    "factor_attribution",
+    "factor_decay",
+)
+
+
+def register_factor_tools(registry, factor_tools: FactorTools) -> None:
+    """Register existing read-only FactorTools in the single canonical registry."""
+    for name in _FACTOR_TOOL_NAMES:
+        registry.register(
+            name,
+            _adapter(factor_tools, name),
+            description=f"Read-only factor evidence: {name}",
+            version="1.0.0",
+            source="FactorService+runtime_db",
+            data_time_semantics="factor data timestamp must be <= decision_as_of",
+            quality_semantics="EXPLICIT_AVAILABLE_UNAVAILABLE_STALE_NO_DATA",
+        )
+
+
+def _decision_as_of(context: dict):
+    raw = context.get("decision_as_of")
+    if raw is None:
+        chief = context.get("chief_context")
+        raw = getattr(chief, "prepared_at", None)
+    if raw is None:
+        strategy = context.get("strategy_context")
+        raw = getattr(strategy, "clock_time", None)
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
+    if isinstance(raw, str):
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _parse_ts(raw):
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
+    if isinstance(raw, str):
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    return None
+
+
+def _adapter(factor_tools: FactorTools, name: str):
+    async def execute(symbol: str, context: dict):
+        from crypto_trader.llm.tools.registry import ToolEvidence
+
+        as_of = _decision_as_of(context)
+        if as_of is None:
+            return ToolEvidence(
+                tool_name=name,
+                symbol=symbol,
+                timestamp=datetime.now(UTC),
+                features={},
+                supporting_evidence=[],
+                contrary_evidence=["DECISION_AS_OF_REQUIRED"],
+                confidence_of_measurement=0.0,
+                data_quality="UNAVAILABLE",
+                source_refs=[f"tool:{name}", "factor:UNAVAILABLE"],
+            )
+        factor = str(context.get("factor_name") or context.get("factor") or "")
+        timeframe = str(context.get("timeframe") or "15m")
+        trade_id = str(context.get("trade_id") or context.get("position_id") or "")
+        try:
+            if name == "factor_snapshot":
+                result = await factor_tools.get_factor_snapshot(symbol)
+            elif name == "market_factor_context":
+                result = await factor_tools.get_market_factor_context(symbol)
+            elif name == "factor_history":
+                result = await factor_tools.get_factor_history(
+                    symbol, factor or "UNKNOWN", limit=int(context.get("limit") or 100)
+                )
+            elif name == "factor_performance":
+                result = await factor_tools.get_factor_performance(
+                    factor or "UNKNOWN", symbol, timeframe
+                )
+            elif name == "factor_health":
+                result = await factor_tools.get_factor_health(factor or "UNKNOWN", symbol)
+            elif name == "factor_attribution":
+                if not trade_id:
+                    return ToolEvidence(
+                        tool_name=name,
+                        symbol=symbol,
+                        timestamp=as_of,
+                        features={},
+                        supporting_evidence=[],
+                        contrary_evidence=["TRADE_ID_REQUIRED"],
+                        confidence_of_measurement=0.0,
+                        data_quality="UNAVAILABLE",
+                        source_refs=[f"tool:{name}"],
+                    )
+                result = await factor_tools.get_trade_factor_attribution(trade_id)
+            elif name == "factor_decay":
+                result = await factor_tools.get_factor_decay_status(factor or "UNKNOWN", symbol)
+            else:
+                raise ValueError(f"unknown factor tool adapter: {name}")
+        except Exception as exc:
+            return ToolEvidence(
+                tool_name=name,
+                symbol=symbol,
+                timestamp=as_of,
+                features={},
+                supporting_evidence=[],
+                contrary_evidence=[f"factor tool unavailable: {type(exc).__name__}"],
+                confidence_of_measurement=0.0,
+                data_quality="UNAVAILABLE",
+                source_refs=[f"tool:{name}"],
+            )
+        data = getattr(result, "data", None)
+        data_ts = None
+        if isinstance(data, dict):
+            data_ts = _parse_ts(data.get("timestamp"))
+        ts = data_ts or as_of
+        if data_ts is not None and data_ts > as_of:
+            data_quality = "UNAVAILABLE"
+            contrary = ["FUTURE_FACTOR_DATA"]
+            features = {}
+            confidence = 0.0
+        elif not getattr(result, "ok", False):
+            data_quality = "UNAVAILABLE"
+            contrary = [str(getattr(result, "error", None) or "FACTOR_UNAVAILABLE")]
+            features = {}
+            confidence = 0.0
+        else:
+            if data is None or data == {} or data == []:
+                data_quality = "NO_DATA"
+                features = {}
+                confidence = 0.0
+                contrary = ["NO_FACTOR_DATA"]
+            elif isinstance(data, dict) and str(data.get("status") or "") == "NO_DATA":
+                data_quality = "NO_DATA"
+                features = {}
+                confidence = 0.0
+                contrary = ["NO_FACTOR_DATA"]
+            else:
+                age = max(0.0, (as_of - ts).total_seconds())
+                data_quality = "STALE" if age > 3600 else "AVAILABLE"
+                features = data if isinstance(data, dict) else {"data": data}
+                confidence = 1.0
+                contrary = []
+        return ToolEvidence(
+            tool_name=name,
+            symbol=symbol,
+            timestamp=ts,
+            features=features,
+            supporting_evidence=[],
+            contrary_evidence=contrary,
+            confidence_of_measurement=confidence,
+            data_quality=data_quality,
+            source_refs=[f"tool:{name}", "factor_service"],
+        )
+
+    return execute

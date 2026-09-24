@@ -20,11 +20,13 @@ from crypto_trader.config import Settings
 from crypto_trader.execution.authority import ExecutionAuthority
 from crypto_trader.execution.hedge_legs import LegPositionReconciler, PositionLegService
 from crypto_trader.factors.expert.engine import ExpertEvidenceEngine
+from crypto_trader.factors.service import FactorService
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.service import LedgerService
 from crypto_trader.llm.tools.alpha import build_canonical_tool_registry
 from crypto_trader.llm.tools.context import register_context_tools
+from crypto_trader.llm.tools.factor_tools import FactorTools, register_factor_tools
 from crypto_trader.llm_chief.context_loader import ChiefContextLoader
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.llm_chief.engine import ChiefTraderEngine
@@ -150,6 +152,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         # Failure is explicit on the feed and never replaced with fake data.
         await adapter.feed.warmup(alpha.mde, alpha.symbol)
 
+    factor_service = FactorService(database.session_factory)
     # MASTER DIRECTIVE §26/§27: per-symbol factual evidence. Every symbol's
     # quant tools run on that symbol's own engine warmed from factual closed
     # OKX candles; BTC history is never reused as another symbol's evidence.
@@ -184,6 +187,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
                 if getattr(adapter, "feed", None) is not None
                 else None
             ),
+            factor_service=factor_service,
         )
     trade_plans = TradePlanService(database.session_factory)
     trade_episodes = TradeEpisodeStore(database.session_factory)
@@ -290,6 +294,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         opportunity_service.expert_engine = expert_engine
     tools = build_canonical_tool_registry(evidence_router)
     register_context_tools(tools, chief_context)
+    register_factor_tools(tools, FactorTools(factor_service))
     tool_chief = ToolDrivenChiefTrader(chief, tools, audit=audit)
     sizer = LiveEntrySizingService(
         risk_fraction=Decimal(alpha.risk_per_trade),
@@ -383,6 +388,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     app_state = AppState(
         settings=settings,
         database=database,
+        growth_database=growth_database,
         order_manager=order_manager,
         ledger=ledger,
         portfolio=portfolio,

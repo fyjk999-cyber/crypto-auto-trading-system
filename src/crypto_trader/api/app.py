@@ -224,11 +224,21 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/growth/status")
     async def growth_status_endpoint():
         import os
+        from pathlib import Path
 
         from crypto_trader.growth_status import growth_status
 
-        growth_dir = os.environ.get("GROWTH_DIR", "data/growth")
-        return await growth_status(state.database.session_factory, growth_dir)
+        growth_db = getattr(state, "growth_database", None)
+        session_factory = (
+            growth_db.session_factory if growth_db is not None else state.database.session_factory
+        )
+        growth_dir = os.environ.get("GROWTH_DIR", "").strip()
+        if not growth_dir:
+            url = os.environ.get("GROWTH_DATABASE_URL", "").strip()
+            if ":///" in url:
+                growth_dir = str(Path(url.split(":///", 1)[1]).parent)
+        growth_dir = growth_dir or "data/growth"
+        return await growth_status(session_factory, growth_dir)
 
     @app.get("/news/status")
     async def news_status_endpoint():

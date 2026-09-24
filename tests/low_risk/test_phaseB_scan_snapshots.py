@@ -142,3 +142,37 @@ async def test_collector_persists_candidate_and_control_same_schema(database) ->
     features = [row.features_json for row in rows]
     assert all(item["available_at_decision_time"] is True for item in features)
     assert all(set(item) == set(features[0]) for item in features)  # same schema
+
+
+async def test_scan_cycle_persists_factor_observations(database) -> None:
+    from types import SimpleNamespace
+
+    from sqlalchemy import func, select
+
+    from crypto_trader.factors.service import FactorService
+    from crypto_trader.market_data.opportunity.factors import FactorObservation
+    from crypto_trader.market_data.opportunity.service import OpportunityScannerService
+    from crypto_trader.persistence.models import FactorSnapshotORM, FactorValueORM
+
+    now = datetime.now(UTC)
+    service = object.__new__(OpportunityScannerService)
+    service.factor_service = FactorService(database.session_factory)
+    service.factor_persist_error = None
+    service.scanner = SimpleNamespace(
+        last_observations_by_symbol={
+            "BTCUSDT": [
+                FactorObservation(
+                    symbol="BTCUSDT",
+                    factor="MOMENTUM_EXPANSION",
+                    status="TRIGGERED",
+                    strength=0.9,
+                    observed_at=now.isoformat(),
+                )
+            ]
+        }
+    )
+    await service._persist_factor_observations(captured_at=now)
+    assert service.factor_persist_error is None
+    async with database.session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(FactorSnapshotORM)) == 1
+        assert await session.scalar(select(func.count()).select_from(FactorValueORM)) == 1

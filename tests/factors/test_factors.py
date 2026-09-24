@@ -137,3 +137,58 @@ async def test_factor_service_persists(database):
     history = await service.history("BTC-USDT-SWAP", "trend", limit=10)
     assert len(history) == 1
     await service.ensure_registry()
+
+
+async def test_factor_service_persists_scan_observations(database):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import func, select
+
+    from crypto_trader.factors.service import FactorService
+    from crypto_trader.market_data.opportunity.factors import FactorObservation
+    from crypto_trader.persistence.models import FactorSnapshotORM, FactorValueORM
+
+    now = datetime.now(UTC)
+    observations = {
+        "BTCUSDT": [
+            FactorObservation(
+                symbol="BTCUSDT",
+                factor="MOMENTUM_EXPANSION",
+                status="TRIGGERED",
+                strength=0.8,
+                observed_at=now.isoformat(),
+            ),
+            FactorObservation(
+                symbol="BTCUSDT",
+                factor="FUNDING_EXTREME",
+                status="UNAVAILABLE",
+                observed_at=now.isoformat(),
+                unavailable_reason="NO_FUNDING",
+            ),
+        ]
+    }
+    written = await FactorService(database.session_factory).persist_scan_observations(
+        observations, observed_at=now
+    )
+    assert written == 2
+    async with database.session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(FactorSnapshotORM)) == 1
+        assert await session.scalar(select(func.count()).select_from(FactorValueORM)) == 2
+
+
+def test_factor_tools_register_in_single_canonical_registry():
+    from crypto_trader.llm.tools.factor_tools import register_factor_tools
+    from crypto_trader.llm.tools.registry import LLMToolRegistry
+
+    registry = LLMToolRegistry()
+    register_factor_tools(registry, FactorTools())
+    expected = {
+        "factor_snapshot",
+        "factor_history",
+        "market_factor_context",
+        "factor_performance",
+        "factor_health",
+        "factor_attribution",
+        "factor_decay",
+    }
+    assert expected.issubset(set(registry.available()))

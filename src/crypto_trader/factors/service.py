@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy import select
 
 from crypto_trader.factors.models import FactorResult, FactorSnapshot
@@ -102,6 +104,52 @@ class FactorService:
                         )
                     )
             await session.commit()
+
+
+    async def persist_scan_observations(self, observations_by_symbol: dict, observed_at) -> int:
+        """Persist factual scanner observations (realtime factor evidence)."""
+        from crypto_trader.persistence.models import (
+            FactorSnapshotORM,
+            FactorValueORM,
+        )
+
+        written = 0
+        async with self.session_factory() as session:
+            for symbol, observations in (observations_by_symbol or {}).items():
+                obs_list = list(observations or [])
+                if not obs_list:
+                    continue
+                session.add(
+                    FactorSnapshotORM(
+                        symbol=str(symbol),
+                        timeframe="scan",
+                        snapshot_json={
+                            "symbol": str(symbol),
+                            "timeframe": "scan",
+                            "timestamp": observed_at.isoformat(),
+                            "observations": [o.as_dict() for o in obs_list],
+                        },
+                    )
+                )
+                for obs in obs_list:
+                    strength = getattr(obs, "strength", None)
+                    value = Decimal(str(strength)) if strength is not None else Decimal("0")
+                    status = str(getattr(obs, "status", ""))
+                    session.add(
+                        FactorValueORM(
+                            symbol=str(symbol),
+                            factor=str(getattr(obs, "factor", "UNKNOWN")),
+                            timeframe="scan",
+                            value=value,
+                            confidence=Decimal("1") if status == "TRIGGERED" else Decimal("0"),
+                            metadata_json=obs.as_dict()
+                            if hasattr(obs, "as_dict")
+                            else {"status": status},
+                        )
+                    )
+                    written += 1
+            await session.commit()
+        return written
 
     async def save_performance(self, performance) -> None:
         async with self.session_factory() as session:

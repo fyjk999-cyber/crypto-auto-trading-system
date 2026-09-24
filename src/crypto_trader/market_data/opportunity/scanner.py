@@ -124,6 +124,7 @@ class FactorScanner:
         self.factors = list(factors)
         self.max_candidates = int(max_candidates)
         self.stats = ScanStats()
+        self.last_observations_by_symbol: dict = {}
 
     def scan_symbol(self, facts: SymbolFacts) -> tuple[list[FactorObservation], bool]:
         """Evaluate all detectors for one symbol.
@@ -182,10 +183,12 @@ class FactorScanner:
         self.stats.symbols_eligible = 0
         self.stats.observations_triggered = 0
         self.stats.observations_unavailable = 0
+        self.last_observations_by_symbol = {}
         for symbol, facts in facts_by_symbol.items():
             observations, scanned = self.scan_symbol(facts)
             if not scanned:
                 continue
+            self.last_observations_by_symbol[symbol] = observations
             self.stats.symbols_scanned += 1
             self.stats.symbols_eligible += 1
             candidate = self.admit(symbol, observations, context=self._context(facts))

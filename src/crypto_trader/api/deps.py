@@ -271,6 +271,7 @@ class AppState:
     opportunity_board: Any | None = None
     okx_connection: OKXConnectionState = field(default_factory=OKXConnectionState)
     llm_runtime: LLMRuntimeStatus = field(default_factory=LLMRuntimeStatus)
+    growth_database: Database | None = None
 
 
 async def require_api_key(

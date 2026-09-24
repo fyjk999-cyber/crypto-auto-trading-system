@@ -134,9 +134,15 @@ async def growth_status(session_factory, growth_dir) -> dict:
         ).all()
         outcomes_by_horizon = {str(row[0]): int(row[1]) for row in horizon_rows}
     metrics = dict(state.get("metrics", heartbeat.get("metrics", {})))
+    heartbeat_state = heartbeat.get("state") or state.get("state")
+    status_reason = None
+    if not heartbeat_state:
+        heartbeat_state = "NOT_INVOKED"
+        status_reason = "NO_HEARTBEAT_OR_STATE_FILE"
     return {
         "service": {
-            "state": heartbeat.get("state", state.get("state", "UNKNOWN")),
+            "state": heartbeat_state,
+            "status_reason": status_reason,
             "pid": heartbeat.get("pid"),
             "runtime_sha": heartbeat.get("runtime_sha", state.get("runtime_sha")),
             "stage": heartbeat.get("stage"),

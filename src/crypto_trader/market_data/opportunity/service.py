@@ -59,6 +59,7 @@ class OpportunityScannerService:
         snapshot_collector=None,
         control_sample_size: int = 20,
         expert_engine=None,
+        factor_service=None,
     ) -> None:
         self.universe = universe
         self.client = okx_client
@@ -77,6 +78,8 @@ class OpportunityScannerService:
         self.state_prefetch = state_prefetch
         self.snapshot_collector = snapshot_collector
         self.control_sample_size = max(0, int(control_sample_size))
+        self.factor_service = factor_service
+        self.factor_persist_error: str | None = None
         # Canonical ##24 evidence engine (expert evidence only, no orders).
         self.expert_engine = expert_engine
         self.collection_error: str | None = None
@@ -261,6 +264,7 @@ class OpportunityScannerService:
             )
 
         candidates = self.scanner.scan(facts_by_symbol)
+        await self._persist_factor_observations(captured_at=now)
         await self._collect_ml_snapshots(candidates, facts_by_symbol, eligible, captured_at=now)
 
         broad_summary = self._broad_summary(facts_rows)
@@ -289,6 +293,19 @@ class OpportunityScannerService:
         }
 
     # -------------------------------------------------------------- internals
+
+    async def _persist_factor_observations(self, *, captured_at) -> None:
+        """Persist realtime factual factor observations via existing FactorService."""
+        if self.factor_service is None:
+            return
+        try:
+            await self.factor_service.persist_scan_observations(
+                self.scanner.last_observations_by_symbol,
+                observed_at=captured_at,
+            )
+            self.factor_persist_error = None
+        except Exception as exc:  # evidence persistence must never stop scanning
+            self.factor_persist_error = f"{type(exc).__name__}: {exc}"[:200]
 
     async def _collect_ml_snapshots(
         self, candidates, facts_by_symbol, eligible, *, captured_at
