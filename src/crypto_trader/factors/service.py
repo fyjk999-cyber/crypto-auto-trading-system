@@ -48,29 +48,27 @@ class FactorService:
             )
             await session.commit()
 
-    async def latest_snapshot(self, symbol: str) -> dict | None:
+    async def latest_snapshot(self, symbol: str, *, as_of=None) -> dict | None:
         async with self.session_factory() as session:
+            stmt = select(FactorSnapshotORM).where(FactorSnapshotORM.symbol == symbol)
+            if as_of is not None:
+                stmt = stmt.where(FactorSnapshotORM.created_at <= as_of)
             row = (
-                await session.execute(
-                    select(FactorSnapshotORM)
-                    .where(FactorSnapshotORM.symbol == symbol)
-                    .order_by(FactorSnapshotORM.id.desc())
-                    .limit(1)
-                )
+                await session.execute(stmt.order_by(FactorSnapshotORM.id.desc()).limit(1))
             ).scalar_one_or_none()
             return row.snapshot_json if row else None
 
-    async def history(self, symbol: str, factor: str, limit: int = 100) -> list[dict]:
+    async def history(
+        self, symbol: str, factor: str, limit: int = 100, *, as_of=None
+    ) -> list[dict]:
         async with self.session_factory() as session:
+            stmt = select(FactorValueORM).where(
+                FactorValueORM.symbol == symbol, FactorValueORM.factor == factor
+            )
+            if as_of is not None:
+                stmt = stmt.where(FactorValueORM.created_at <= as_of)
             rows = (
-                (
-                    await session.execute(
-                        select(FactorValueORM)
-                        .where(FactorValueORM.symbol == symbol, FactorValueORM.factor == factor)
-                        .order_by(FactorValueORM.id.desc())
-                        .limit(limit)
-                    )
-                )
+                (await session.execute(stmt.order_by(FactorValueORM.id.desc()).limit(limit)))
                 .scalars()
                 .all()
             )
@@ -168,18 +166,18 @@ class FactorService:
             )
             await session.commit()
 
-    async def latest_performance(self, factor_name: str, symbol: str) -> dict | None:
+    async def latest_performance(
+        self, factor_name: str, symbol: str, *, as_of=None
+    ) -> dict | None:
         async with self.session_factory() as session:
+            stmt = select(FactorPerformanceORM).where(
+                FactorPerformanceORM.factor_name == factor_name,
+                FactorPerformanceORM.symbol == symbol,
+            )
+            if as_of is not None:
+                stmt = stmt.where(FactorPerformanceORM.created_at <= as_of)
             row = (
-                await session.execute(
-                    select(FactorPerformanceORM)
-                    .where(
-                        FactorPerformanceORM.factor_name == factor_name,
-                        FactorPerformanceORM.symbol == symbol,
-                    )
-                    .order_by(FactorPerformanceORM.id.desc())
-                    .limit(1)
-                )
+                await session.execute(stmt.order_by(FactorPerformanceORM.id.desc()).limit(1))
             ).scalar_one_or_none()
             if row is None:
                 return None
@@ -218,19 +216,12 @@ class FactorService:
                 )
             await session.commit()
 
-    async def attribution_for_trade(self, trade_id: str) -> list[dict]:
+    async def attribution_for_trade(self, trade_id: str, *, as_of=None) -> list[dict]:
         async with self.session_factory() as session:
-            rows = (
-                (
-                    await session.execute(
-                        select(FactorAttributionORM).where(
-                            FactorAttributionORM.trade_id == trade_id
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
+            stmt = select(FactorAttributionORM).where(FactorAttributionORM.trade_id == trade_id)
+            if as_of is not None:
+                stmt = stmt.where(FactorAttributionORM.created_at <= as_of)
+            rows = (await session.execute(stmt)).scalars().all()
             return [
                 {
                     "factor_name": r.factor_name,
@@ -254,17 +245,17 @@ class FactorService:
             )
             await session.commit()
 
-    async def latest_decay(self, factor_name: str, symbol: str) -> dict | None:
+    async def latest_decay(
+        self, factor_name: str, symbol: str, *, as_of=None
+    ) -> dict | None:
         async with self.session_factory() as session:
+            stmt = select(FactorDecayORM).where(
+                FactorDecayORM.factor_name == factor_name, FactorDecayORM.symbol == symbol
+            )
+            if as_of is not None:
+                stmt = stmt.where(FactorDecayORM.created_at <= as_of)
             row = (
-                await session.execute(
-                    select(FactorDecayORM)
-                    .where(
-                        FactorDecayORM.factor_name == factor_name, FactorDecayORM.symbol == symbol
-                    )
-                    .order_by(FactorDecayORM.id.desc())
-                    .limit(1)
-                )
+                await session.execute(stmt.order_by(FactorDecayORM.id.desc()).limit(1))
             ).scalar_one_or_none()
             if row is None:
                 return None

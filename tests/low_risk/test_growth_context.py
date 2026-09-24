@@ -145,3 +145,100 @@ async def test_chief_loader_growth_memory_respects_decision_as_of(database):
     assert evidence.features["patterns"] == []
     assert evidence.features["generalized_knowledge"] == []
     assert evidence.source_refs == []
+
+
+async def test_memory_context_sources_future_rows_are_invisible(database):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from crypto_trader.llm_chief.context_loader import ChiefContextLoader
+    from crypto_trader.persistence.models import (
+        AICoinProfileORM,
+        AICompressedExperienceORM,
+        AIMarketPatternORM,
+        AITradeReviewORM,
+        TradeEpisodeORM,
+    )
+
+    decision_t = datetime(2026, 9, 16, 0, 0, tzinfo=UTC)
+    future = decision_t + timedelta(hours=2)
+    async with database.session_factory() as s:
+        s.add(
+            TradeEpisodeORM(
+                episode_id="future-ep",
+                trade_plan_id="future-plan",
+                symbol="BTCUSDT",
+                direction="LONG",
+                entry_decision_id="entry-1",
+                entry_price=Decimal("100"),
+                exit_price=Decimal("101"),
+                opened_quantity=Decimal("1"),
+                closed_quantity=Decimal("1"),
+                leverage=Decimal("1"),
+                fees=Decimal("0"),
+                funding_pnl=Decimal("0"),
+                gross_pnl=Decimal("1"),
+                net_pnl=Decimal("1"),
+                holding_time_seconds=60.0,
+                entry_market_regime="TREND_UP",
+                terminal_reason="TEST",
+                factual=True,
+                review_status="REVIEWED",
+                opened_at=future,
+                closed_at=future,
+                created_at=future,
+            )
+        )
+        s.add(
+            AITradeReviewORM(
+                episode_id="future-ep",
+                success_factors_json=[],
+                failure_factors_json=[],
+                lessons_json=[],
+                future_rules_json=[],
+                created_at=future,
+            )
+        )
+        s.add(
+            AICompressedExperienceORM(
+                rule_id="future-rule",
+                title="future",
+                content="future rule",
+                created_at=future,
+            )
+        )
+        s.add(
+            AICoinProfileORM(
+                symbol="BTCUSDT",
+                profile_summary="future profile",
+                updated_at=future,
+            )
+        )
+        s.add(
+            AIMarketPatternORM(
+                pattern_id="future-pattern",
+                regime="TREND_UP",
+                strategy="breakout",
+                created_at=future,
+            )
+        )
+        await s.commit()
+
+    loader = ChiefContextLoader(database.session_factory, limit=5)
+    context = SimpleNamespace(
+        symbol="BTCUSDT",
+        regime="TREND_UP",
+        strategy="breakout",
+        horizon="1h",
+        setup_signature="s1",
+        prepared_at=decision_t.isoformat(),
+    )
+    episode = await loader._episode_evidence(context)
+    memory = await loader._memory_evidence(context)
+    profile = await loader._coin_profile_evidence(context)
+    pattern = await loader._pattern_evidence(context)
+    assert episode[0] == {}
+    assert memory[0] == {}
+    assert profile[0] == {}
+    assert pattern[0] == {}

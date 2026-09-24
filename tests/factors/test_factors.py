@@ -192,3 +192,73 @@ def test_factor_tools_register_in_single_canonical_registry():
         "factor_decay",
     }
     assert expected.issubset(set(registry.available()))
+
+
+async def test_factor_service_as_of_excludes_future_rows(database):
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from crypto_trader.factors.service import FactorService
+    from crypto_trader.persistence.models import (
+        FactorAttributionORM,
+        FactorDecayORM,
+        FactorPerformanceORM,
+        FactorSnapshotORM,
+        FactorValueORM,
+    )
+
+    decision_t = datetime(2026, 9, 16, 0, 0, tzinfo=UTC)
+    future = decision_t + timedelta(hours=1)
+    async with database.session_factory() as s:
+        s.add(
+            FactorSnapshotORM(
+                symbol="BTCUSDT",
+                timeframe="scan",
+                snapshot_json={"symbol": "BTCUSDT", "timestamp": future.isoformat()},
+                created_at=future,
+            )
+        )
+        s.add(
+            FactorValueORM(
+                symbol="BTCUSDT",
+                factor="MOMENTUM_EXPANSION",
+                timeframe="scan",
+                value=Decimal("0.9"),
+                confidence=Decimal("1"),
+                metadata_json={"status": "TRIGGERED"},
+                created_at=future,
+            )
+        )
+        s.add(
+            FactorPerformanceORM(
+                factor_name="momentum",
+                symbol="BTCUSDT",
+                timeframe="15m",
+                sample_size=10,
+                created_at=future,
+            )
+        )
+        s.add(
+            FactorDecayORM(
+                factor_name="momentum",
+                symbol="BTCUSDT",
+                status="DEGRADING",
+                created_at=future,
+            )
+        )
+        s.add(
+            FactorAttributionORM(
+                trade_id="t1",
+                factor_name="momentum",
+                contribution=Decimal("1"),
+                direction="positive",
+                created_at=future,
+            )
+        )
+        await s.commit()
+    service = FactorService(database.session_factory)
+    assert await service.latest_snapshot("BTCUSDT", as_of=decision_t) is None
+    assert await service.history("BTCUSDT", "MOMENTUM_EXPANSION", as_of=decision_t) == []
+    assert await service.latest_performance("momentum", "BTCUSDT", as_of=decision_t) is None
+    assert await service.latest_decay("momentum", "BTCUSDT", as_of=decision_t) is None
+    assert await service.attribution_for_trade("t1", as_of=decision_t) == []

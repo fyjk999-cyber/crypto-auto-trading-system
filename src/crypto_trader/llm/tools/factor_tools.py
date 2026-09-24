@@ -18,11 +18,11 @@ class FactorTools:
     def __init__(self, factor_service=None) -> None:
         self.factor_service = factor_service
 
-    async def get_factor_snapshot(self, symbol: str) -> FactorToolResult:
+    async def get_factor_snapshot(self, symbol: str, *, as_of=None) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, {}, "FACTOR_SERVICE_UNAVAILABLE")
         try:
-            snapshot = await self.factor_service.latest_snapshot(symbol)
+            snapshot = await self.factor_service.latest_snapshot(symbol, as_of=as_of)
             if snapshot is None:
                 return FactorToolResult(True, {"symbol": symbol, "status": "NO_DATA"}, None)
             return FactorToolResult(True, snapshot, None)
@@ -30,20 +30,20 @@ class FactorTools:
             return FactorToolResult(False, {}, f"FACTOR_UNAVAILABLE:{type(exc).__name__}")
 
     async def get_factor_history(
-        self, symbol: str, factor: str, limit: int = 100
+        self, symbol: str, factor: str, limit: int = 100, *, as_of=None
     ) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, [], "FACTOR_SERVICE_UNAVAILABLE")
         try:
-            rows = await self.factor_service.history(symbol, factor, limit)
+            rows = await self.factor_service.history(symbol, factor, limit, as_of=as_of)
             return FactorToolResult(True, rows, None)
         except Exception as exc:
             return FactorToolResult(False, [], f"FACTOR_UNAVAILABLE:{type(exc).__name__}")
 
-    async def get_market_factor_context(self, symbol: str) -> FactorToolResult:
+    async def get_market_factor_context(self, symbol: str, *, as_of=None) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, {}, "FACTOR_SERVICE_UNAVAILABLE")
-        snapshot_result = await self.get_factor_snapshot(symbol)
+        snapshot_result = await self.get_factor_snapshot(symbol, as_of=as_of)
         if not snapshot_result.ok:
             return snapshot_result
         data = snapshot_result.data if isinstance(snapshot_result.data, dict) else {}
@@ -59,12 +59,12 @@ class FactorTools:
         )
 
     async def get_factor_performance(
-        self, factor: str, symbol: str, timeframe: str = "15m"
+        self, factor: str, symbol: str, timeframe: str = "15m", *, as_of=None
     ) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, {}, "FACTOR_SERVICE_UNAVAILABLE")
         try:
-            perf = await self.factor_service.latest_performance(factor, symbol)
+            perf = await self.factor_service.latest_performance(factor, symbol, as_of=as_of)
             return FactorToolResult(
                 True,
                 perf
@@ -79,10 +79,12 @@ class FactorTools:
         except Exception as exc:
             return FactorToolResult(False, {}, f"FACTOR_UNAVAILABLE:{type(exc).__name__}")
 
-    async def get_factor_health(self, factor: str, symbol: str) -> FactorToolResult:
+    async def get_factor_health(
+        self, factor: str, symbol: str, *, as_of=None
+    ) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, {}, "FACTOR_SERVICE_UNAVAILABLE")
-        perf = await self.get_factor_performance(factor, symbol)
+        perf = await self.get_factor_performance(factor, symbol, as_of=as_of)
         if not perf.ok or not isinstance(perf.data, dict):
             return FactorToolResult(
                 True,
@@ -112,20 +114,24 @@ class FactorTools:
             None,
         )
 
-    async def get_trade_factor_attribution(self, trade_id: str) -> FactorToolResult:
+    async def get_trade_factor_attribution(
+        self, trade_id: str, *, as_of=None
+    ) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, [], "FACTOR_SERVICE_UNAVAILABLE")
         try:
-            rows = await self.factor_service.attribution_for_trade(trade_id)
+            rows = await self.factor_service.attribution_for_trade(trade_id, as_of=as_of)
             return FactorToolResult(True, rows, None)
         except Exception as exc:
             return FactorToolResult(False, [], f"FACTOR_UNAVAILABLE:{type(exc).__name__}")
 
-    async def get_factor_decay_status(self, factor: str, symbol: str) -> FactorToolResult:
+    async def get_factor_decay_status(
+        self, factor: str, symbol: str, *, as_of=None
+    ) -> FactorToolResult:
         if self.factor_service is None:
             return FactorToolResult(False, {}, "FACTOR_SERVICE_UNAVAILABLE")
         try:
-            decay = await self.factor_service.latest_decay(factor, symbol)
+            decay = await self.factor_service.latest_decay(factor, symbol, as_of=as_of)
             return FactorToolResult(
                 True, decay or {"factor_name": factor, "symbol": symbol, "status": "HEALTHY"}, None
             )
@@ -246,19 +252,24 @@ def _adapter(factor_tools: FactorTools, name: str):
         trade_id = str(context.get("trade_id") or context.get("position_id") or "")
         try:
             if name == "factor_snapshot":
-                result = await factor_tools.get_factor_snapshot(symbol)
+                result = await factor_tools.get_factor_snapshot(symbol, as_of=as_of)
             elif name == "market_factor_context":
-                result = await factor_tools.get_market_factor_context(symbol)
+                result = await factor_tools.get_market_factor_context(symbol, as_of=as_of)
             elif name == "factor_history":
                 result = await factor_tools.get_factor_history(
-                    symbol, factor or "UNKNOWN", limit=int(context.get("limit") or 100)
+                    symbol,
+                    factor or "UNKNOWN",
+                    limit=int(context.get("limit") or 100),
+                    as_of=as_of,
                 )
             elif name == "factor_performance":
                 result = await factor_tools.get_factor_performance(
-                    factor or "UNKNOWN", symbol, timeframe
+                    factor or "UNKNOWN", symbol, timeframe, as_of=as_of
                 )
             elif name == "factor_health":
-                result = await factor_tools.get_factor_health(factor or "UNKNOWN", symbol)
+                result = await factor_tools.get_factor_health(
+                    factor or "UNKNOWN", symbol, as_of=as_of
+                )
             elif name == "factor_attribution":
                 if not trade_id:
                     return ToolEvidence(
@@ -272,9 +283,11 @@ def _adapter(factor_tools: FactorTools, name: str):
                         data_quality="UNAVAILABLE",
                         source_refs=[f"tool:{name}"],
                     )
-                result = await factor_tools.get_trade_factor_attribution(trade_id)
+                result = await factor_tools.get_trade_factor_attribution(trade_id, as_of=as_of)
             elif name == "factor_decay":
-                result = await factor_tools.get_factor_decay_status(factor or "UNKNOWN", symbol)
+                result = await factor_tools.get_factor_decay_status(
+                    factor or "UNKNOWN", symbol, as_of=as_of
+                )
             else:
                 raise ValueError(f"unknown factor tool adapter: {name}")
         except Exception as exc:
