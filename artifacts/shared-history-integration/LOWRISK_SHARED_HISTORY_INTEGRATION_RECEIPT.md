@@ -323,6 +323,48 @@ SCANNER_RULES_PROVEN_ABLE_TO_FIRE   = YES (10 synthetic violators detected)
                                        missing one")
 ```
 
+## ACCEPTANCE GATES (G1–G21)
+
+Note on provenance: the gate definitions below are enumerated from the directive's own
+stated requirements (read-only transport, zero write/admin/direct paths, temporal
+integrity, fail-closed semantics, authority neutrality, PAPER safety, suite results,
+client reuse, default-off integration, single writer, frozen non-deployed candidate,
+receipt). Each row is PASS only where a measured value proves it.
+
+| # | Gate | Result | Proving measurement |
+| --- | --- | --- | --- |
+| G1 | Read-only transport: GET only, loopback only | PASS | only HTTP verb found in source is `GET`; non-loopback URL refused at construction |
+| G2 | Zero LowRisk Shared History write paths | PASS | `LOWRISK_SHARED_HISTORY_WRITE_PATHS = 0` |
+| G3 | Zero LowRisk Shared History admin paths | PASS | `LOWRISK_SHARED_HISTORY_ADMIN_PATHS = 0` |
+| G4 | Zero direct runtime Parquet access | PASS | `LOWRISK_DIRECT_PARQUET_PATHS = 0`; `LOWRISK_DIRECT_FDS_ON_SHARED_HISTORY = 0` |
+| G5 | Zero direct runtime DuckDB access | PASS | `LOWRISK_DIRECT_DUCKDB_PATHS = 0` (no duckdb import anywhere in the package) |
+| G6 | As-of temporal integrity, zero future rows visible | PASS | `SHARED_HISTORY_FUTURE_ROWS_VISIBLE = 0`; whole-payload rejection + counter proven to fire; 9 tests |
+| G7 | `DATA_UNAVAILABLE != ZERO` | PASS | unavailable results carry zero rows; `ZERO_FILLED_VALUES = 0`; fail-closed tests |
+| G8 | No authority change | PASS | Shared History = DATA ONLY; no new authority granted |
+| G9 | No strategy change | PASS | `STRATEGY_FILES_MODIFIED = 0` |
+| G10 | No Risk change | PASS | `RISK_FILES_MODIFIED = 0`; Risk thresholds unchanged |
+| G11 | No leverage change | PASS | `LEVERAGE_CHANGED = NO` |
+| G12 | Provider state preserved (DeepSeek paused) | PASS | `PROVIDER_STATE_CHANGED = NO`; `DEEPSEEK_CALLS = 0`; `GLM_CALLS = 0` |
+| G13 | `PAPER_ONLY = TRUE` | PASS | production PAPER runtime unchanged and still running |
+| G14 | `LIVE_TRADING = FALSE` | PASS | no LIVE path added or enabled |
+| G15 | Full LowRisk pytest PASS | PASS | 1 263 passed, 0 failed (83 new) |
+| G16 | Full LowRisk ruff PASS | PASS | `ruff check` clean; new files also `ruff format` clean |
+| G17 | Existing client reused, no duplicate created | PASS | `EXISTING_CLIENT_REUSED = YES`; `NEW_DUPLICATE_CLIENT_CREATED = false`; provenance recorded |
+| G18 | Integration default-off, zero production I/O | PASS | `LOWRISK_SHARED_HISTORY_ENABLED = false`; package and flag absent from the deployment |
+| G19 | Single-writer architecture preserved | PASS | `SHARED_HISTORY_WRITER_COUNT = 1`; `LOWRISK_WRITER_COUNT = 0`; lock held only by PID 48026 |
+| G20 | Exact candidate pushed and frozen, NOT deployed | PASS | branch pushed; remote ref matches local HEAD; `DEPLOYMENT_AUTHORIZED = false` |
+| G21 | Receipt produced with required classifications | PASS | this document, with all four classifications stated |
+
+```
+GATES_PASSED                       = 21 / 21
+GATES_FAILED                       = 0
+```
+
+A note on scope: `SHARED_HISTORY_SERVICE_ACCEPTANCE = PARTIAL` records a **producer**
+condition (the four HTTP 500 endpoints). It is not a failure of any LowRisk gate — the
+integration handles that condition correctly and fails closed, which is exactly what
+G6/G7 require.
+
 ## FINAL
 
 ```
