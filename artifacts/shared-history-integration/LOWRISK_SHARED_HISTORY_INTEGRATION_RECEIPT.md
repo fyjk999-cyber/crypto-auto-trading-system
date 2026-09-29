@@ -327,8 +327,18 @@ SCANNER_RULES_PROVEN_ABLE_TO_FIRE   = YES (10 synthetic violators detected)
 
 ```
 LOWRISK_INTEGRATION_CODE_SHA        = 76564e7440e67dfda2e87050d94575056873d8bf
+                                      (the integration commit: src, tests, probe, docs, evidence)
+LOWRISK_INTEGRATION_RECEIPT_SHA     = 4bf860e02c4f27c15d6fcf1ac4d6f8ada3aa5658
+                                      (this receipt; the branch tip carries the push record
+                                       on top of it — a commit cannot name its own SHA, so the
+                                       tip SHA is reported in the delivery message)
 LOWRISK_INTEGRATION_BRANCH          = codex/lowrisk-shared-history-readonly-integration
 WORKTREE_CLEAN_AT_CODE_COMMIT       = YES
+GITHUB_REMOTE                       = PUSHED
+REVIEW_REF                          = origin/codex/lowrisk-shared-history-readonly-integration
+REMOTE_REF_SHA_AT_PUSH              = 4bf860e02c4f27c15d6fcf1ac4d6f8ada3aa5658
+REMOTE_REF_MATCHED_LOCAL_HEAD       = YES (verified with git ls-remote at push time)
+PULL_REQUEST_OPENED                 = NO (review ref only; no merge, no main landing)
 
 SHARED_HISTORY_SERVICE_ACCEPTANCE       = PARTIAL
 LOWRISK_INTEGRATION_ENGINEERING_ACCEPTANCE = PASS
