@@ -1,0 +1,48 @@
+{
+  "measured_at_ms": 1790643164058,
+  "CURRENT_LOWRISK_RUNTIME_PIDS": [
+    "871",
+    "882"
+  ],
+  "CURRENT_LOWRISK_RUNTIME_CMD": [
+    "Mon Sep 28 09:52:26 2026     /Users/huhongjie/lowrisk-final-landing/.venv/bin/python -m crypto_trader.runtime.local_runner --host 127.0.0.1 --port 801",
+    "Mon Sep 28 09:52:26 2026     /Users/huhongjie/Documents/ChatGPT/crypto-auto-trading-system-growth-chief-domain/.venv/bin/python -m crypto_trader.runti"
+  ],
+  "CURRENT_LOWRISK_RUNTIME_CWD": "/Users/huhongjie/Library/Application Support/LowRisk/deployments/final-candidate-2-6ced1da",
+  "CURRENT_RUNTIME_SHA": "6ced1da3008edf49eac086596ff4f208ee7b0821",
+  "LOWRISK_BASELINE_SHA_USED_FOR_INTEGRATION": "6ced1da3008edf49eac086596ff4f208ee7b0821",
+  "SHARED_HISTORY_SERVICE_PIDS": [
+    "48026"
+  ],
+  "SHARED_HISTORY_IMPLEMENTATION_SHA": "4fd7e3419dc4022f1389902c433283d28a876787",
+  "SHARED_HISTORY_WRITER_COUNT": 1,
+  "SHARED_HISTORY_EXTERNAL_WRITER_ACTIVE": true,
+  "LOWRISK_WRITER_COUNT": 0,
+  "LOWRISK_SHARED_HISTORY_ENABLED_IN_PRODUCTION": false,
+  "SHARED_HISTORY_SERVICE_STATUS": "OK",
+  "SHARED_HISTORY_FULL_MARKET": "PASS",
+  "SHARED_HISTORY_UNIVERSE_SIZE": 478,
+  "SHARED_HISTORY_UNIVERSE_PROCESSED": 478,
+  "SHARED_HISTORY_SOAK": "WAITING_FOR_GATES",
+  "LLM_CONTRACT": {
+    "DEEPSEEK_CALLS": 0,
+    "GLM_CALLS": 0
+  },
+  "PAPER_ONLY": true,
+  "LIVE_TRADING": false,
+  "DEPLOYMENT_AUTHORIZED": false,
+  "LOWRISK_SHARED_HISTORY_INTEGRATION_BEFORE": "UNUSED",
+  "LOWRISK_SHARED_HISTORY_INTEGRATION_AFTER": "IMPLEMENTED_NOT_DEPLOYED",
+  "CURRENT_RUNTIME_SHA_EVIDENCE": {
+    "deployment_dir": "/Users/huhongjie/Library/Application Support/LowRisk/deployments/final-candidate-2-6ced1da",
+    "deployment_dir_head": "6ced1da3008edf49eac086596ff4f208ee7b0821",
+    "deployment_dir_tree": "b93a9c51194433d11a483f15f48e40e7dd85b373",
+    "baseline_6ced1da_tree": "b93a9c51194433d11a483f15f48e40e7dd85b373",
+    "trees_identical": true,
+    "deployment_dir_clean": true,
+    "note": "The detached HEAD 374ee96022d0360d49dc4a8dbaa1619e2a1fbe54 in /Users/huhongjie/lowrisk-final-landing is the PARENT of 6ced1da, not the running code."
+  },
+  "SHARED_HISTORY_SERVICE_COUNT": 1,
+  "SHARED_HISTORY_WRITER_LOCK_HOLDER_PID": 48026,
+  "SHARED_HISTORY_WRITER_LOCK_PATH": "Application Support/SharedMarketHistory/logs/history-writer.lock"
+}

@@ -1,0 +1,41 @@
+{
+  "funding": {
+    "with_appledouble": 442,
+    "without_appledouble": 36,
+    "total": 478,
+    "sample": {
+      "dirty": {
+        "symbol": "0GUSDT",
+        "http": 500,
+        "files": 7
+      },
+      "clean": {
+        "symbol": "AKEUSDT",
+        "http": 200,
+        "files": 1
+      }
+    }
+  },
+  "open_interest": {
+    "with_appledouble": 442,
+    "without_appledouble": 36,
+    "total": 478,
+    "sample": {
+      "dirty": {
+        "symbol": "0GUSDT",
+        "http": 500,
+        "files": 5
+      },
+      "clean": {
+        "symbol": "AKEUSDT",
+        "http": 200,
+        "files": 1
+      }
+    }
+  },
+  "apple_double_total": {
+    "candles": 31207,
+    "funding": 1246,
+    "open_interest": 867
+  }
+}

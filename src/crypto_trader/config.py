@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     opportunity_active_set_size: int = 40
     opportunity_rotation_size: int = 10
 
+    # Shared Market History (read-only historical evidence; §11/§29).
+    # Disabled by default so the untouched production runtime performs no
+    # shared-history I/O and its trading behavior is unchanged. Shared History is
+    # EVIDENCE ONLY and never gains direction, risk, sizing, leverage, order or
+    # exit authority.
+    shared_history_enabled: bool = False
+    shared_history_base_url: str = "http://127.0.0.1:8770"
+    shared_history_timeout_seconds: float = 20.0
+    shared_history_cache_ttl_seconds: float = 60.0
+    shared_history_cache_max_entries: int = 256
+
     # Runtime
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3

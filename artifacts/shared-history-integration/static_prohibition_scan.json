@@ -1,0 +1,24 @@
+{
+  "files_scanned": [
+    "__init__.py",
+    "adapter.py",
+    "client.py"
+  ],
+  "LOWRISK_SHARED_HISTORY_WRITE_PATHS": 0,
+  "LOWRISK_SHARED_HISTORY_ADMIN_PATHS": 0,
+  "LOWRISK_DIRECT_PARQUET_PATHS": 0,
+  "LOWRISK_DIRECT_DUCKDB_PATHS": 0,
+  "LOWRISK_CHECKPOINT_MUTATION_PATHS": 0,
+  "NO_INSERT_NO_UPDATE_NO_DELETE_NO_ALTER": 0,
+  "NO_POST_NO_PUT_NO_PATCH_NO_DELETE_HTTP": 0,
+  "http_verbs_found": [
+    "GET"
+  ],
+  "raw_rule_totals": {
+    "forbidden_import": 0,
+    "forbidden_name": 0,
+    "forbidden_sql": 0,
+    "forbidden_write_mode": 0,
+    "forbidden_http_verb": 0
+  }
+}
