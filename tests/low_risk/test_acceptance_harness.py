@@ -82,3 +82,38 @@ def test_collect_db_metrics_detects_duplicate_client_order_ids(tmp_path):
     assert metrics["plans_over_25pct_allocation"] == 1
     assert metrics["plans_over_20x_leverage"] == 1
     assert metrics["plans_missing_base_exit"] == 1
+
+def test_missing_readiness_does_not_fabricate_live_or_writer_p0():
+    events = harness.evaluate_p0({}, {}, {}, expected_sha="expected", running_sha="expected")
+    assert [event["code"] for event in events] == ["RUNTIME_UNAVAILABLE"]
+    assert "LIVE_TRADING_ENABLED" not in {event["code"] for event in events}
+    assert "NON_PAPER_MODE" not in {event["code"] for event in events}
+    assert "MULTIPLE_WRITERS" not in {event["code"] for event in events}
+
+
+def test_partial_readiness_reports_unknown_not_false_factual_violation():
+    events = harness.evaluate_p0({"mode": "PAPER"}, {}, {}, expected_sha=None, running_sha=None)
+    codes = {event["code"] for event in events}
+    assert "READINESS_UNKNOWN" in codes
+    assert "LEASE_UNAVAILABLE" in codes
+    assert "LIVE_TRADING_ENABLED" not in codes
+    assert "MULTIPLE_WRITERS" not in codes
+    assert "WRITER_STATE_UNKNOWN" in codes
+
+
+def test_factual_live_and_writer_still_raise_p0():
+    events = harness.evaluate_p0(
+        _ready(live=True, held=True, single=False), {}, {}, expected_sha=None, running_sha=None
+    )
+    codes = {event["code"] for event in events}
+    assert "LIVE_TRADING_ENABLED" in codes
+    assert "MULTIPLE_WRITERS" in codes
+
+
+def test_missing_lease_fields_are_unknown_not_lease_lost():
+    ready = {"mode": "PAPER", "live_trading_enabled": False, "runtime": {}}
+    events = harness.evaluate_p0(ready, {}, {}, expected_sha=None, running_sha=None)
+    codes = {event["code"] for event in events}
+    assert "LEASE_UNAVAILABLE" in codes
+    assert "WRITER_STATE_UNKNOWN" in codes
+    assert "LEASE_NOT_HELD" not in codes

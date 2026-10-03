@@ -152,18 +152,41 @@ def evaluate_p0(
     def add(code: str, detail: str) -> None:
         events.append({"code": code, "detail": detail, "at": utc_now()})
 
-    if ready.get("live_trading_enabled") is not False:
+    if not isinstance(ready, dict) or not ready:
+        add("RUNTIME_UNAVAILABLE", "runtime readiness endpoint unavailable")
+        return events
+
+    live = ready.get("live_trading_enabled")
+    if live is None:
+        add("READINESS_UNKNOWN", "live_trading_enabled is absent from readiness")
+    elif live is not False:
         add("LIVE_TRADING_ENABLED", "live_trading_enabled is not false")
-    if str(ready.get("mode", "")).upper() != "PAPER":
+
+    mode = ready.get("mode")
+    if mode is None:
+        add("READINESS_UNKNOWN", "runtime mode is absent from readiness")
+    elif str(mode).upper() != "PAPER":
         add("NON_PAPER_MODE", "runtime mode is not PAPER")
+
     if expected_sha and running_sha and running_sha != expected_sha:
         add("RUNTIME_SHA_DRIFT", "running SHA " + running_sha + " != expected " + expected_sha)
+
     runtime = ready.get("runtime") or {}
-    lease = runtime.get("execution_lease") or {}
-    if lease.get("held") is not True:
-        add("LEASE_NOT_HELD", "execution lease is not held")
-    if lease.get("single_writer") is not True:
-        add("MULTIPLE_WRITERS", "single_writer is not true")
+    lease = runtime.get("execution_lease")
+    if not isinstance(lease, dict):
+        add("LEASE_UNAVAILABLE", "execution lease state unavailable")
+        add("WRITER_STATE_UNKNOWN", "single_writer state unavailable")
+    else:
+        held = lease.get("held")
+        if held is None:
+            add("LEASE_UNAVAILABLE", "execution lease held state unavailable")
+        elif held is not True:
+            add("LEASE_NOT_HELD", "execution lease is not held")
+        single_writer = lease.get("single_writer")
+        if single_writer is None:
+            add("WRITER_STATE_UNKNOWN", "single_writer state unavailable")
+        elif single_writer is not True:
+            add("MULTIPLE_WRITERS", "single_writer is not true")
     if int(db_metrics.get("duplicate_client_order_ids", 0) or 0) > 0:
         add("DUPLICATE_ORDER_ID", "duplicate client_order_id detected")
     if int(db_metrics.get("plans_over_25pct_allocation", 0) or 0) > 0:

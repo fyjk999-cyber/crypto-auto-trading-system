@@ -10,7 +10,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-MAX_SELECTED_TOOLS = 8
+CANONICAL_MAX_SELECTED_TOOLS = 8
+# Backward-compatible alias: there must be one canonical tool-count limit.
+MAX_SELECTED_TOOLS = CANONICAL_MAX_SELECTED_TOOLS
 
 
 class ToolContract(BaseModel):
@@ -175,12 +177,15 @@ class LLMToolRegistry:
         now: datetime,
         max_age_seconds: float = 30.0,
         timeout_seconds: float = 10.0,
-        max_tools: int = MAX_SELECTED_TOOLS,
+        max_tools: int = CANONICAL_MAX_SELECTED_TOOLS,
     ) -> DynamicEvidencePackage:
         if len(names) != len(set(names)) or any(name not in self._tools for name in names):
             raise ValueError("tool selection contains unknown or duplicate tools")
-        if len(names) > max_tools:
-            raise ValueError("tool budget exceeded")
+        effective_max = min(int(max_tools), CANONICAL_MAX_SELECTED_TOOLS)
+        if len(names) > effective_max:
+            raise ValueError(
+                f"tool budget exceeded: selected={len(names)} limit={effective_max}"
+            )
         items: list[EvidenceItem] = []
         for name in names:
             evidence = await self.call(

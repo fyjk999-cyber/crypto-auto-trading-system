@@ -69,6 +69,24 @@ if [ "$PROVIDER_STATUS_CODE" != "0" ]; then
   echo "PROVIDER_UNCONFIGURED: DEEPSEEK_API_KEY not loaded from Keychain; new risk remains blocked." >&2
 fi
 
+# Durable-state preflight: canonical PAPER runtime may not store its DB under /tmp.
+if [ "${LOWRISK_ALLOW_EPHEMERAL_DB:-0}" != "1" ]; then
+  case "${DATABASE_URL:-}" in
+    *:////private/tmp/*|*:////tmp/*|*:////private/var/tmp/*|*:////var/tmp/*)
+      echo "EPHEMERAL_CANONICAL_DB=BLOCKED reason=DATABASE_URL_UNDER_EPHEMERAL_TMP" >&2
+      exit 1
+      ;;
+  esac
+fi
+# The configured durable parent must exist before alembic/runtime startup.
+case "${DATABASE_URL:-}" in
+  *:////*)
+    DB_FILE="${DATABASE_URL#*:////}"
+    DB_DIR=$(dirname "$DB_FILE")
+    mkdir -p "$DB_DIR"
+    ;;
+esac
+
 if [ "${LOWRISK_SKIP_MIGRATIONS:-0}" != "1" ] && [ -x "$ROOT/.venv/bin/alembic" ] && [ -f "$ROOT/alembic.ini" ]; then
   "$ROOT/.venv/bin/alembic" -c "$ROOT/alembic.ini" upgrade head >&2
 fi
