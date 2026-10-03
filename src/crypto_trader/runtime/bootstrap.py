@@ -385,6 +385,9 @@ async def build_system(settings: Settings) -> RuntimeBundle:
     runtime_holder["engine"] = engine
     runtime_holder["strategy"] = live_llm
 
+    from crypto_trader.shared_history import shared_history_from_settings
+    from crypto_trader.shared_history.consumer import RuntimeHistoryConsumer
+
     app_state = AppState(
         settings=settings,
         database=database,
@@ -400,6 +403,7 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         engine=engine,
         llm_runtime=LLMRuntimeStatus(provider_instance=llm_provider),
         opportunity_board=opportunity_board,
+        historical_evidence=RuntimeHistoryConsumer(shared_history_from_settings(settings)),
     )
     return RuntimeBundle(
         settings=settings,

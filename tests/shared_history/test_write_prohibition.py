@@ -210,7 +210,7 @@ def test_scanner_still_reads_real_code_strings():
 # ----------------------------------------------------------------------
 def test_package_files_were_actually_found():
     names = {p.name for p in SOURCE_FILES}
-    assert names == {"__init__.py", "adapter.py", "client.py"}, names
+    assert names == {"__init__.py", "adapter.py", "client.py", "readiness.py", "consumer.py"}, names
 
 
 def test_no_write_or_admin_paths_in_package():

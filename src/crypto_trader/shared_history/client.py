@@ -58,6 +58,11 @@ class SharedHistoryClientError(RuntimeError):
     """
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise SharedHistoryClientError("Shared History redirects are forbidden")
+
+
 def is_loopback_url(url: str) -> bool:
     """True when the URL targets the local loopback interface only."""
     try:
@@ -229,7 +234,8 @@ class SharedHistoryClient:
 
     def _execute(self, request: urllib.request.Request) -> dict[str, Any]:
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+            with opener.open(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""

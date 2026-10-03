@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     shared_history_cache_ttl_seconds: float = 60.0
     shared_history_cache_max_entries: int = 256
 
+    # Interface preparation only. No production backend or backfill is activated.
+    lowrisk_symbol_memory_enabled: bool = False
+
     # Runtime
     run_lease_ttl_seconds: int = 10
     run_lease_renew_interval_seconds: int = 3

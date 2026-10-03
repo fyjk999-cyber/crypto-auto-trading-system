@@ -163,6 +163,7 @@ class SharedHistoryEvidence:
         self.cache_eviction_count = 0
         self.unavailable_count = 0
         self.future_data_rejections = 0
+        self._health_blocked = False
 
     # ------------------------------------------------------------------
     # Client lifecycle
@@ -259,6 +260,7 @@ class SharedHistoryEvidence:
                 symbol, as_of=decision_as_of, feature_set_version=feature_set_version
             ),
             decision_as_of=decision_as_of,
+            requested_version=feature_set_version,
         )
 
     def regime(self, symbol: str, decision_as_of: int | None = None) -> HistoricalEvidence:
@@ -312,15 +314,26 @@ class SharedHistoryEvidence:
         limit: int | None = None,
         window: tuple[int | None, int | None] | None = None,
         allow_stale: bool = False,
+        requested_version: str | None = None,
     ) -> HistoricalEvidence:
         symbol = _norm(symbol)
         if not self.enabled:
             self.unavailable_count += 1
             return self._disabled(dataset, symbol, timeframe)
 
-        key = _cache_key(dataset, symbol, timeframe, decision_as_of, limit, window)
+        if dataset != "health" and self._health_blocked:
+            return HistoricalEvidence(
+                available=False, status=DATA_UNAVAILABLE, dataset=dataset,
+                symbol=symbol, timeframe=timeframe, read_at=_now_ms(),
+                reason="HISTORICAL_DATA_UNAVAILABLE",
+            )
+
+        key = (*_cache_key(dataset, symbol, timeframe, decision_as_of, limit, window),
+               requested_version)
         entry = self._cache.get(key)
-        if entry is not None and (time.monotonic() - entry.stored_at) < self.cache_ttl_seconds:
+        if dataset != "health" and entry is not None and (
+            time.monotonic() - entry.stored_at
+        ) < self.cache_ttl_seconds:
             self.cache_hit_count += 1
             self._cache.move_to_end(key)
             return _with_cached(entry.evidence, True)
@@ -358,6 +371,16 @@ class SharedHistoryEvidence:
             )
 
         evidence = self._normalize(dataset, symbol, timeframe, payload, decision_as_of)
+        if requested_version is not None and evidence.schema_version != requested_version:
+            return HistoricalEvidence(
+                available=False, status=DATA_UNAVAILABLE, dataset=dataset,
+                symbol=symbol, timeframe=timeframe, read_at=_now_ms(),
+                reason="FEATURE_VERSION_MISMATCH", requested_as_of=decision_as_of,
+            )
+        if dataset == "health":
+            self._health_blocked = not evidence.available
+            if self._health_blocked:
+                self._cache.clear()
         if evidence.available:
             self._store(key, evidence)
         return evidence
@@ -374,6 +397,19 @@ class SharedHistoryEvidence:
         decision_as_of: int | None,
     ) -> HistoricalEvidence:
         read_at = _now_ms()
+        service_state = str(payload.get("service_status") or "").upper()
+        resource_state = str(payload.get("resource_state") or "").upper()
+        if (
+            service_state in {"PAUSED_RESOURCE_CRITICAL", "STALE", "UNAVAILABLE"}
+            or resource_state in {"PAUSED_RESOURCE_CRITICAL", "CRITICAL"}
+            or payload.get("health_snapshot_stale") is True
+        ):
+            return HistoricalEvidence(
+                available=False, status=DATA_UNAVAILABLE, dataset=dataset,
+                symbol=symbol, timeframe=timeframe, read_at=read_at,
+                reason="HISTORICAL_DATA_UNAVAILABLE",
+                requested_as_of=decision_as_of, extra=_envelope_extra(dataset, payload),
+            )
         rows = _rows_of(dataset, payload)
         coverage = str(payload.get("coverage") or payload.get("historical_coverage") or "").upper()
         source = payload.get("source")
@@ -429,8 +465,11 @@ class SharedHistoryEvidence:
             else:
                 # Conservative default for a market series that states no coverage.
                 status = PARTIAL_HISTORY
-            available = True
+            available = status != DATA_UNAVAILABLE
             reason = None
+            if not available:
+                rows = []
+                reason = "HISTORICAL_DATA_UNAVAILABLE"
         elif dataset in DOCUMENT_DATASETS:
             # A service/document read: a successful read is the availability signal.
             # There are no market rows to fill, so nothing can be fabricated here.
@@ -568,6 +607,8 @@ def _row_ts(dataset: str, row: dict[str, Any]) -> int | None:
 # data_root, storage paths and any writer/admin handle. The consumer never learns
 # storage internals.
 _HEALTH_EXTRA_KEYS = (
+    "resource_state",
+    "health_snapshot_generated_at",
     "service_status",
     "parquet_status",
     "implementation_sha",

@@ -1045,6 +1045,14 @@ def create_app(state: AppState) -> FastAPI:
             "build_timestamp": os.environ.get("BUILD_TIMESTAMP", ""),
         }
 
+    @app.get("/historical-evidence/health")
+    async def historical_evidence_health():
+        # Observation only; no admin/writer or trading behavior is exposed.
+        if state.historical_evidence is None:
+            return {"available": False, "status": "HISTORICAL_DATA_UNAVAILABLE"}
+        evidence = await asyncio.to_thread(state.historical_evidence.health)
+        return evidence.as_dict()
+
     @app.get("/internal/runtime-health")
     async def internal_runtime_health():
         if state.supervisor is not None:
