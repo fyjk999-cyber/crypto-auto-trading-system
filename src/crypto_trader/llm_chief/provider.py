@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
+
+from crypto_trader.llm_chief.failure_telemetry import (
+    decoding_failure,
+    publish_failure,
+    response_metadata,
+    validation_failure,
+)
 
 TRADING_MODEL_ENV = "TRADING_LLM_MODEL"
 DEFAULT_TRADING_MODEL = "deepseek-flash"
@@ -49,6 +56,8 @@ class LLMResponse:
     state_version: str | None = None
     attempts: int | None = None
     served_by: str | None = None
+    response_metadata: dict | None = None
+    failure_metadata: list[dict] = field(default_factory=list)
 
 
 PAUSE_ENV = "LLM_CALLS_PAUSED"
@@ -221,6 +230,8 @@ class DeepSeekProvider:
         import httpx
 
         start = time.monotonic()
+        failures: list[dict] = []
+        safe_metadata = None
         async with httpx.AsyncClient(
             base_url=self.base_url,
             timeout=timeout_seconds,
@@ -263,9 +274,23 @@ class DeepSeekProvider:
                         break
                     latency_ms = (time.monotonic() - start) * 1000
                     usage = payload.get("usage")
+                    safe_metadata = response_metadata(
+                        provider=self.name,
+                        model=self.model,
+                        content=content,
+                        payload=payload,
+                        http_status=response.status_code,
+                        request_id=response.headers.get("x-request-id"),
+                        attempt=attempt + 1,
+                        max_attempts=retries + 1,
+                        max_tokens=max_tokens,
+                    )
                     try:
                         parsed = json.loads(content)
                         if not isinstance(parsed, dict):
+                            diagnostic = validation_failure(safe_metadata, TypeError(), set())
+                            failures.append(diagnostic)
+                            publish_failure(diagnostic, operation=operation)
                             self.last_error = "INVALID_JSON_OBJECT"
                             self.last_latency_ms = latency_ms
                             self.last_token_usage = usage
@@ -278,6 +303,8 @@ class DeepSeekProvider:
                             parsed_json=parsed,
                             ok=True,
                             token_usage=usage,
+                            response_metadata=safe_metadata,
+                            failure_metadata=list(failures),
                         )
                         self.last_success_ts = datetime.now(UTC).isoformat()
                         self.last_error = None
@@ -285,7 +312,10 @@ class DeepSeekProvider:
                         self.last_token_usage = result.token_usage
                         self._record_operation(operation, result, attempts=attempt + 1)
                         return result
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as exc:
+                        diagnostic = decoding_failure(safe_metadata, exc)
+                        failures.append(diagnostic)
+                        publish_failure(diagnostic, operation=operation)
                         self.last_error = (
                             "EMPTY_CONTENT"
                             if not content.strip()
@@ -303,6 +333,8 @@ class DeepSeekProvider:
                             ok=False,
                             error=self.last_error,
                             token_usage=usage,
+                            response_metadata=safe_metadata,
+                            failure_metadata=list(failures),
                         )
                         # Empty, truncated, or prose-contaminated JSON is a
                         # recoverable provider response, not a trading signal.
@@ -330,6 +362,8 @@ class DeepSeekProvider:
             latency_ms=(time.monotonic() - start) * 1000,
             ok=False,
             error=self.last_error or "LLM_PROVIDER_ERROR",
+            response_metadata=safe_metadata,
+            failure_metadata=list(failures),
         )
         self.last_latency_ms = result.latency_ms
         self._record_operation(operation, result, attempts=self.last_attempt_count or retries + 1)
@@ -345,6 +379,7 @@ class DeepSeekProvider:
             "last_latency_ms": response.latency_ms,
             "last_token_usage": response.token_usage,
             "last_attempt_count": attempts,
+            "failure_metadata": list(response.failure_metadata),
         }
 
     def diagnostics(self) -> dict:

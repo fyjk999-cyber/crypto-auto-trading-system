@@ -19,6 +19,7 @@ from crypto_trader.llm_chief.decision import (
     OpenAction,
     PositionState,
 )
+from crypto_trader.llm_chief.failure_telemetry import publish_failure, validation_failure
 from crypto_trader.llm_chief.provider import LLMProvider
 from crypto_trader.market_data.opportunity.context import (
     render_opportunity_context_block,
@@ -231,7 +232,19 @@ class ChiefTraderEngine:
                 # never execute a partially parsed decision.
                 detail = str(exc).replace("\n", " ")[:240]
                 keys = ",".join(sorted(str(key) for key in response.parsed_json))
-                return self.fail_closed(ctx, f"INVALID_LLM_OUTPUT:{detail}|keys={keys[:120]}")
+                decision = self.fail_closed(ctx, f"INVALID_LLM_OUTPUT:{detail}|keys={keys[:120]}")
+                publish_failure(
+                    validation_failure(
+                        getattr(response, "response_metadata", None) or {},
+                        exc,
+                        set(ChiefTraderDecision.model_fields),
+                    ),
+                    decision_id=decision.decision_id,
+                    operation="trading_decision",
+                    model_version=self.model_version,
+                    position_state=ctx.position_state.value,
+                )
+                return decision
         return self.fail_closed(ctx, response.error if response is not None else "LLM_UNAVAILABLE")
 
     def fail_closed(self, ctx: ChiefTraderContext, reason: str | None) -> ChiefTraderDecision:
