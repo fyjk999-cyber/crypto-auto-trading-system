@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
-import time
 
 from crypto_trader.shared_history.adapter import DATA_UNAVAILABLE, HistoricalEvidence
-from crypto_trader.shared_history.readiness import FRESHNESS_THRESHOLD_SECONDS
+from crypto_trader.shared_history.readiness import (
+    FRESHNESS_THRESHOLD_SECONDS,
+    operational_health_failure,
+)
 
 
 class RuntimeHistoryConsumer:
@@ -21,16 +23,9 @@ class RuntimeHistoryConsumer:
         result = self.evidence.health()
         facts = result.extra
         lag = facts.get("latest_1m_freshness_seconds")
-        generated = facts.get("health_snapshot_generated_at")
         valid = (
             result.available
-            and facts.get("resource_state") == "NORMAL"
-            and facts.get("writer_count") == 1
-            and not isinstance(facts.get("writer_count"), bool)
-            and facts.get("service_status") == "OK"
-            and facts.get("health_snapshot_stale") is False
-            and isinstance(generated, (int, float))
-            and 0 <= time.time() * 1000 - generated <= 60_000
+            and operational_health_failure(facts) is None
             and not isinstance(lag, bool)
             and isinstance(lag, (int, float))
             and math.isfinite(lag)

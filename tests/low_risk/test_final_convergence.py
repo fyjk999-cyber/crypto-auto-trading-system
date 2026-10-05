@@ -33,7 +33,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_final_convergence_has_exactly_one_migration_head() -> None:
-    script = ScriptDirectory.from_config(Config("alembic.ini"))
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "migrations"))
+    script = ScriptDirectory.from_config(config)
     assert list(script.get_heads()) == ["0043_research_scope"]
 
 

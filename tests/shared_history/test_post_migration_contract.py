@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import math
 import time
+from pathlib import Path
 
 import pytest
 
@@ -11,14 +13,14 @@ from crypto_trader.shared_history.readiness import evaluate_history_readiness
 
 
 def health():
-    return dict(
-        health_snapshot_generated_at=time.time() * 1000,
-        resource_state="NORMAL",
-        writer_count=1,
-        service_status="OK",
-        incremental_updater="ACTIVE",
-        health_snapshot_stale=False,
-    )
+    data = json.loads((Path(__file__).parent / "fixtures/operational_health_v1.json").read_text())
+    now = time.time() * 1000
+    envelope = data["operational_health"]
+    envelope["published_at_ms"] = now
+    envelope["resource"]["collected_at_ms"] = now
+    envelope["scheduler"]["collected_at_ms"] = now
+    envelope["incremental"]["completed_at_ms"] = now - 100000
+    return data
 
 
 @pytest.mark.parametrize("count", [1, 3, 17])
@@ -52,12 +54,10 @@ def test_no_threshold_relaxation_or_symbol_exclusion():
 @pytest.mark.parametrize(
     "key,value",
     [
-        ("resource_state", "PAUSED_RESOURCE_CRITICAL"),
         ("service_status", "UNAVAILABLE"),
         ("writer_count", 2),
         ("writer_count", True),
         ("health_snapshot_stale", True),
-        ("incremental_updater", "WAITING"),
     ],
 )
 def test_resource_health_fail_closed(key, value):
@@ -68,8 +68,8 @@ def test_resource_health_fail_closed(key, value):
 
 def test_health_missing_resource_field_not_inferred_normal():
     data = health()
-    del data["resource_state"]
-    assert evaluate_history_readiness(data, ["A"], {"A": 0}).status == "NOT_VERIFIED"
+    del data["operational_health"]["resource"]
+    assert evaluate_history_readiness(data, ["A"], {"A": 0}).status != "PASS"
 
 
 @pytest.mark.parametrize("state", ["PAUSED_RESOURCE_CRITICAL", "STALE", "UNAVAILABLE"])

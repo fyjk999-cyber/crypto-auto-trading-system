@@ -197,10 +197,12 @@ async def test_completed_review_is_immutable_and_idempotent(database):
     assert row.price_return == 0.01
 
 
-async def test_restart_safe_pending_review_resumes_after_restart(database):
+async def test_restart_safe_pending_review_resumes_after_restart(database, tmp_path):
     repository = NewsRepository(database.session_factory)
     review_id = await _insert_review(repository, review_id="out_restart")
-    config = NewsConfig(enabled=True, max_outcome_reviews_per_cycle=5)
+    config = NewsConfig(
+        enabled=True, news_dir=str(tmp_path / "news"), max_outcome_reviews_per_cycle=5,
+    )
     first_worker = NewsWorker(
         database.session_factory, config, providers=[], repository=repository,
         outcome_provider=FakeOutcomeProvider(),
@@ -230,12 +232,14 @@ async def test_restart_safe_pending_review_resumes_after_restart(database):
     assert count == 1
 
 
-async def test_worker_bounds_due_reviews_per_cycle(database):
+async def test_worker_bounds_due_reviews_per_cycle(database, tmp_path):
     repository = NewsRepository(database.session_factory)
     for index in range(3):
         await _insert_review(repository, review_id=f"out_bound_{index}")
     provider = FakeOutcomeProvider()
-    config = NewsConfig(enabled=True, max_outcome_reviews_per_cycle=2)
+    config = NewsConfig(
+        enabled=True, news_dir=str(tmp_path / "news"), max_outcome_reviews_per_cycle=2,
+    )
     worker = NewsWorker(
         database.session_factory, config, providers=[], repository=repository,
         outcome_provider=provider,

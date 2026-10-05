@@ -10,6 +10,70 @@ from typing import Any
 FRESHNESS_THRESHOLD_SECONDS = 300
 
 
+def _timestamp(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
+def operational_health_failure(
+    health: dict[str, Any], *, now_ms: float | None = None
+) -> str | None:
+    """Single operational safety predicate shared by readiness and runtime.
+
+    Market freshness is independent: callers still must validate their factual
+    market evidence. Legacy heavy snapshot age is NOT the operational clock.
+    """
+    observed = time.time() * 1000 if now_ms is None else now_ms
+    envelope = health.get("operational_health")
+    if not isinstance(envelope, dict):
+        return "CURRENT_HEALTH_EVIDENCE_MISSING"
+    if type(envelope.get("schema_version")) is not int or envelope["schema_version"] != 1:
+        return "OPERATIONAL_SCHEMA_UNSUPPORTED"
+    if type(envelope.get("generation")) is not int or envelope["generation"] < 1:
+        return "OPERATIONAL_GENERATION_INVALID"
+    published = envelope.get("published_at_ms")
+    if (
+        not _timestamp(observed)
+        or not _timestamp(published)
+        or not 0 <= observed - published <= 60000
+    ):
+        return "OPERATIONAL_PUBLICATION_STALE_OR_INVALID"
+    for component in ("resource", "scheduler"):
+        fact = envelope.get(component)
+        if not isinstance(fact, dict):
+            return "CURRENT_HEALTH_EVIDENCE_MISSING"
+        timestamp = fact.get("collected_at_ms")
+        if (
+            not _timestamp(timestamp)
+            or not 0 <= observed - timestamp <= 60000
+            or timestamp > published
+            or fact.get("error") is not None
+        ):
+            return "CURRENT_HEALTH_TIMESTAMP_MISSING_OR_STALE"
+    if envelope["resource"].get("state") != "NORMAL":
+        return "RESOURCE_NOT_NORMAL"
+    if envelope["scheduler"].get("running") is not True:
+        return "SCHEDULER_NOT_RUNNING"
+    incremental = envelope.get("incremental")
+    if not isinstance(incremental, dict) or incremental.get("last_outcome") != "PASS":
+        return "INCREMENTAL_NOT_PASS"
+    completed = incremental.get("completed_at_ms")
+    if not _timestamp(completed) or completed > published:
+        return "INCREMENTAL_TIMESTAMP_INVALID"
+    if (
+        type(health.get("writer_count")) is not int
+        or health["writer_count"] != 1
+        or health.get("service_status") != "OK"
+        or health.get("health_snapshot_stale") is not False
+    ):
+        return "SERVICE_NOT_READY"
+    return None
+
+
 @dataclass(frozen=True)
 class HistoryReadiness:
     status: str
@@ -39,29 +103,9 @@ def evaluate_history_readiness(
         return HistoryReadiness("NOT_VERIFIED", "EMPTY_OR_INVALID_UNIVERSE", count)
     if set(freshness_by_symbol) != symbols:
         return HistoryReadiness("NOT_VERIFIED", "UNIVERSE_COVERAGE_MISMATCH", count)
-    required = ("resource_state", "writer_count", "service_status", "incremental_updater")
-    if any(key not in health for key in required):
-        return HistoryReadiness("NOT_VERIFIED", "CURRENT_HEALTH_EVIDENCE_MISSING", count)
-    generated = health.get("health_snapshot_generated_at")
-    observed = time.time() * 1000 if now_ms is None else now_ms
-    if (
-        isinstance(generated, bool)
-        or not isinstance(generated, (int, float))
-        or not math.isfinite(generated)
-        or not math.isfinite(observed)
-        or not 0 <= observed - generated <= 60_000
-    ):
-        return HistoryReadiness("NOT_VERIFIED", "CURRENT_HEALTH_TIMESTAMP_MISSING_OR_STALE", count)
-    if health["resource_state"] != "NORMAL":
-        return HistoryReadiness("HISTORICAL_DATA_UNAVAILABLE", "RESOURCE_NOT_NORMAL", count)
-    if (
-        health["writer_count"] != 1
-        or isinstance(health["writer_count"], bool)
-        or health["service_status"] != "OK"
-        or health["incremental_updater"] != "ACTIVE"
-        or health.get("health_snapshot_stale") is not False
-    ):
-        return HistoryReadiness("HISTORICAL_DATA_UNAVAILABLE", "SERVICE_NOT_READY", count)
+    failure = operational_health_failure(health, now_ms=now_ms)
+    if failure:
+        return HistoryReadiness("HISTORICAL_DATA_UNAVAILABLE", failure, count)
     values = list(freshness_by_symbol.values())
     if any(
         isinstance(value, bool)

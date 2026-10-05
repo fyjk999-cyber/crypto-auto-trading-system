@@ -323,17 +323,25 @@ class SharedHistoryEvidence:
 
         if dataset != "health" and self._health_blocked:
             return HistoricalEvidence(
-                available=False, status=DATA_UNAVAILABLE, dataset=dataset,
-                symbol=symbol, timeframe=timeframe, read_at=_now_ms(),
+                available=False,
+                status=DATA_UNAVAILABLE,
+                dataset=dataset,
+                symbol=symbol,
+                timeframe=timeframe,
+                read_at=_now_ms(),
                 reason="HISTORICAL_DATA_UNAVAILABLE",
             )
 
-        key = (*_cache_key(dataset, symbol, timeframe, decision_as_of, limit, window),
-               requested_version)
+        key = (
+            *_cache_key(dataset, symbol, timeframe, decision_as_of, limit, window),
+            requested_version,
+        )
         entry = self._cache.get(key)
-        if dataset != "health" and entry is not None and (
-            time.monotonic() - entry.stored_at
-        ) < self.cache_ttl_seconds:
+        if (
+            dataset != "health"
+            and entry is not None
+            and (time.monotonic() - entry.stored_at) < self.cache_ttl_seconds
+        ):
             self.cache_hit_count += 1
             self._cache.move_to_end(key)
             return _with_cached(entry.evidence, True)
@@ -373,9 +381,14 @@ class SharedHistoryEvidence:
         evidence = self._normalize(dataset, symbol, timeframe, payload, decision_as_of)
         if requested_version is not None and evidence.schema_version != requested_version:
             return HistoricalEvidence(
-                available=False, status=DATA_UNAVAILABLE, dataset=dataset,
-                symbol=symbol, timeframe=timeframe, read_at=_now_ms(),
-                reason="FEATURE_VERSION_MISMATCH", requested_as_of=decision_as_of,
+                available=False,
+                status=DATA_UNAVAILABLE,
+                dataset=dataset,
+                symbol=symbol,
+                timeframe=timeframe,
+                read_at=_now_ms(),
+                reason="FEATURE_VERSION_MISMATCH",
+                requested_as_of=decision_as_of,
             )
         if dataset == "health":
             self._health_blocked = not evidence.available
@@ -399,16 +412,27 @@ class SharedHistoryEvidence:
         read_at = _now_ms()
         service_state = str(payload.get("service_status") or "").upper()
         resource_state = str(payload.get("resource_state") or "").upper()
+        operational_invalid = False
+        if dataset == "health" and "operational_health" in payload:
+            from crypto_trader.shared_history.readiness import operational_health_failure
+
+            operational_invalid = operational_health_failure(payload, now_ms=read_at) is not None
         if (
-            service_state in {"PAUSED_RESOURCE_CRITICAL", "STALE", "UNAVAILABLE"}
+            operational_invalid
+            or service_state in {"PAUSED_RESOURCE_CRITICAL", "STALE", "UNAVAILABLE"}
             or resource_state in {"PAUSED_RESOURCE_CRITICAL", "CRITICAL"}
             or payload.get("health_snapshot_stale") is True
         ):
             return HistoricalEvidence(
-                available=False, status=DATA_UNAVAILABLE, dataset=dataset,
-                symbol=symbol, timeframe=timeframe, read_at=read_at,
+                available=False,
+                status=DATA_UNAVAILABLE,
+                dataset=dataset,
+                symbol=symbol,
+                timeframe=timeframe,
+                read_at=read_at,
                 reason="HISTORICAL_DATA_UNAVAILABLE",
-                requested_as_of=decision_as_of, extra=_envelope_extra(dataset, payload),
+                requested_as_of=decision_as_of,
+                extra=_envelope_extra(dataset, payload),
             )
         rows = _rows_of(dataset, payload)
         coverage = str(payload.get("coverage") or payload.get("historical_coverage") or "").upper()
@@ -607,6 +631,7 @@ def _row_ts(dataset: str, row: dict[str, Any]) -> int | None:
 # data_root, storage paths and any writer/admin handle. The consumer never learns
 # storage internals.
 _HEALTH_EXTRA_KEYS = (
+    "operational_health",
     "resource_state",
     "health_snapshot_generated_at",
     "service_status",

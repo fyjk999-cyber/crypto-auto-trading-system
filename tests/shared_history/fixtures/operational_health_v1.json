@@ -1,0 +1,16 @@
+{
+  "health_snapshot_generated_at": 1000000,
+  "health_snapshot_stale": false,
+  "service_status": "OK",
+  "writer_count": 1,
+  "incremental_updater": "PASS",
+  "latest_1m_freshness_seconds": 10,
+  "operational_health": {
+    "schema_version": 1,
+    "generation": 1,
+    "published_at_ms": 1200000,
+    "resource": {"state": "NORMAL", "collected_at_ms": 1200000, "error": null},
+    "scheduler": {"running": true, "collected_at_ms": 1200000, "error": null},
+    "incremental": {"last_outcome": "PASS", "completed_at_ms": 1100000, "cycle_id": "1090000"}
+  }
+}
