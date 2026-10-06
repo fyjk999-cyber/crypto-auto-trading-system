@@ -49,7 +49,7 @@ class AccountReadBarrierAdapter(DeliveryBarrierAdapter):
 
 
 @pytest.fixture
-async def settlement_subject(database):
+async def settlement_subject(database, request):
     adapter = AccountReadBarrierAdapter(
         instruments=[
             Instrument(
@@ -69,6 +69,15 @@ async def settlement_subject(database):
         ]
     )
     engine = make_paper_engine(database, simulator=adapter, engine_tick_seconds=3600)
+    if getattr(request.node, "callspec", None) is not None and (
+        request.node.callspec.params.get("failed_table") == "POSITION_LEG_FILLS"
+    ):
+        from crypto_trader.execution.hedge_legs import LegPositionReconciler
+
+        # Required dependencies must be assembled before factual startup;
+        # injecting only a leg writer into a running engine is now fail-closed.
+        engine.leg_service = PositionLegService(database.session_factory)
+        engine.leg_reconciler = LegPositionReconciler(engine.leg_service)
     # Real runtime initialization, including current safety state; no mocked
     # "healthy" authorization predicate for the coordinator regressions.
     await engine.start()
@@ -292,7 +301,6 @@ async def test_durable_write_failure_remains_faulted_after_late_duplicate(
     engine, adapter, submit = settlement_subject
     failed_writes = []
     if failed_table == "POSITION_LEG_FILLS":
-        engine.leg_service = PositionLegService(database.session_factory)
         registered = await engine.leg_service.register(
             HedgeLegContract(
                 leg_id="fixture-leg",

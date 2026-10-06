@@ -154,6 +154,7 @@ class TradingEngine:
         # Phase 4D: per-leg fill attribution for hedge/reverse legs.
         self.leg_service = leg_service
         self.leg_reconciler = leg_reconciler
+        self._leg_recovery_required = leg_service is not None or leg_reconciler is not None
         self.lineage_auditor = LineageCoverageAuditor(database.session_factory)
         # Flip only when the portfolio tracks legs (not net) as source of truth.
         self.leg_execution_enabled = False
@@ -169,7 +170,7 @@ class TradingEngine:
         self.run_id: str | None = None
         self.lease: Lease | None = None
         self._lease_valid = not require_lease
-        self.reconciliation_halted = False
+        self._account_reconciliation_halted = False
         self._event_queue: asyncio.Queue[ExchangeEvent] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
         self._running = False
@@ -228,7 +229,7 @@ class TradingEngine:
         # before trading tasks exist. Faults/unknown remain fail-closed.
         initial_report = await self.reconciliation.reconcile(self.adapter)
         self.reconciliation_current_state = initial_report.state
-        self.reconciliation_halted = initial_report.halt
+        self._account_reconciliation_halted = initial_report.halt
         self.health.set("reconciliation", initial_report.ok is True,
                         initial_report.state, checked_at=initial_report.checked_at)
 
@@ -453,7 +454,6 @@ class TradingEngine:
             # Local factual fills imply exposure the portfolio/exchange does not
             # show (e.g. a PAPER simulator restart): halt new risk until a human
             # or reconciliation resolves it. Fail closed, never guess.
-            self.reconciliation_halted = True
             self.settlement.fault("recovery", "FACTUAL_EXPOSURE_DIVERGENCE")
             self.health.set("recovery_factual_state", False, "FACTUAL_EXPOSURE_DIVERGENCE")
             await self.audit.log(
@@ -464,7 +464,15 @@ class TradingEngine:
             actions.append("RECOVERY_FACTUAL_DIVERGENCE")
         else:
             self.health.set("recovery_factual_state", True, "MATCHED")
+        # Account reconciliation owns its own halt. Required-leg recovery is
+        # independent and only this factual recovery path publishes its result.
+        self.health.set("leg_reconciliation", False, "NOT_RUN")
+        self._leg_recovery_required = (
+            self._leg_recovery_required or self.leg_service is not None
+            or self.leg_reconciler is not None or self.leg_execution_enabled
+        )
         if self.leg_service is not None and self.leg_reconciler is not None:
+            leg_failures = []
             open_legs = await self.leg_service.open_legs_all()
             for symbol in sorted({str(leg["symbol"]) for leg in open_legs}):
                 position = await self.portfolio.get_position(symbol)
@@ -476,8 +484,7 @@ class TradingEngine:
                     after_restart=True,
                 )
                 if not leg_report["leg_execution_safe"]:
-                    self.reconciliation_halted = True
-                    self.health.set("leg_reconciliation", False, str(leg_report["status"]))
+                    leg_failures.append(str(leg_report["status"]))
                     await self.audit.log(
                         "LEG_RECONCILIATION_HALTED",
                         target=symbol,
@@ -492,8 +499,12 @@ class TradingEngine:
                         },
                     )
                     actions.append("LEG_RECONCILIATION_HALTED")
-                else:
-                    self.health.set("leg_reconciliation", True, str(leg_report["status"]))
+            self.health.set(
+                "leg_reconciliation", not leg_failures,
+                ";".join(leg_failures) if leg_failures else "MATCH",
+            )
+        elif self._leg_recovery_required:
+            self.health.set("leg_reconciliation", False, "LEG_SERVICE_MISSING")
         report = await self.lineage_auditor.audit()
         self.health.set("factual_fill_lineage", bool(report["ok"]), report.get("flag") or "OK")
         if not report["ok"]:
@@ -648,7 +659,7 @@ class TradingEngine:
             if report.state == "PENDING_SETTLEMENT":
                 # No successful check occurred: preserve prior result/time/halt.
                 continue
-            self.reconciliation_halted = report.halt
+            self._account_reconciliation_halted = report.halt
             if report.state in {"SETTLEMENT_FAULT", "SETTLEMENT_STALE"}:
                 self.health.set("settlement", False, report.state)
                 continue
@@ -2285,6 +2296,21 @@ class TradingEngine:
     def kill_switch_snapshot(self) -> dict:
         return self.risk_engine.kill_switch.snapshot()
 
+    def _required_leg_recovery_healthy(self) -> bool:
+        required = (self._leg_recovery_required or self.leg_service is not None
+                    or self.leg_reconciler is not None or self.leg_execution_enabled)
+        return not required or (
+            self.leg_service is not None and self.leg_reconciler is not None
+            and self.health.components.get("leg_reconciliation", {}).get("ok") is True
+        )
+
+    @property
+    def reconciliation_halted(self) -> bool:
+        """Legacy aggregate view; account success cannot erase another failure."""
+        return (self._account_reconciliation_halted
+                or not self._required_leg_recovery_healthy()
+                or self.health.components.get("recovery_factual_state", {}).get("ok") is False)
+
     def trading_safety_failures(self) -> tuple[str, ...]:
         """Live execution-safety evidence, not aggregate/cosmetic health."""
         failures = []
@@ -2292,6 +2318,8 @@ class TradingEngine:
                      "recovery_factual_state", "factual_fill_lineage", "lifecycle_recovery"):
             if self.health.components.get(name, {}).get("ok") is not True:
                 failures.append(name.upper() + "_NOT_HEALTHY")
+        if not self._required_leg_recovery_healthy():
+            failures.append("LEG_RECONCILIATION_NOT_HEALTHY")
         if not self._running or self.state_machine.state != RuntimeState.RUNNING:
             failures.append("RUNTIME_NOT_RUNNING")
         for worker_name, failure in (

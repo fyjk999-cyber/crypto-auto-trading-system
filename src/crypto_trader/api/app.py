@@ -693,22 +693,24 @@ def create_app(state: AppState) -> FastAPI:
         )
         return PerpetualPaperEngine(state.database.session_factory, contract)
 
+    def _require_risk_increasing_authority():
+        engine = state.engine
+        if engine is None:
+            raise HTTPException(status_code=409, detail="TRADING_SAFETY_NOT_INITIALIZED")
+        if engine.enforce_llm_entry_authority:
+            raise HTTPException(status_code=403, detail="NEW_DIRECTION_REQUIRES_LIVE_LLM")
+        failures = engine.trading_safety_failures()
+        if failures:
+            raise HTTPException(
+                status_code=409, detail="TRADING_SAFETY_INVALID:" + ",".join(failures),
+            )
+        return engine
+
     @app.post(
         "/paper/perpetual/open", dependencies=[Depends(require_role_dependency(Role.OPERATOR))]
     )
     async def paper_perpetual_open(body: dict):
-        if state.engine is not None and state.engine.enforce_llm_entry_authority:
-            raise HTTPException(status_code=403, detail="NEW_DIRECTION_REQUIRES_LIVE_LLM")
-        if state.engine is not None:
-            # The direct PAPER perpetual path writes positions and ledger; it
-            # must obey the same central live execution-safety predicate as the
-            # canonical order path. Missing/invalid runtime state stays closed.
-            failures = state.engine.trading_safety_failures()
-            if failures:
-                raise HTTPException(
-                    status_code=409,
-                    detail="TRADING_SAFETY_INVALID:" + ",".join(failures),
-                )
+        _require_risk_increasing_authority()
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
         pos = await engine.open_position(
@@ -1187,10 +1189,7 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/manual-orders", dependencies=[Depends(require_role_dependency(Role.OPERATOR))])
     async def manual_order(body: ManualOrderBody):
         """Manual order entry through the same core path (authority + engine required)."""
-        if state.engine is None:
-            raise HTTPException(status_code=409, detail="engine not running")
-        if state.engine.enforce_llm_entry_authority:
-            raise HTTPException(status_code=403, detail="NEW_DIRECTION_REQUIRES_LIVE_LLM")
+        _require_risk_increasing_authority()
         existing = await state.order_manager.get_by_client(body.client_order_id)
         if existing is not None:
             return {"idempotent": True, "order": serialize_order(existing)}

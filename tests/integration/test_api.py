@@ -2,9 +2,9 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
-from crypto_trader.api.app import create_app, serialize_position
+from crypto_trader.api.app import build_default_app, create_app, serialize_position
 from crypto_trader.api.deps import AppState
-from crypto_trader.config import Settings
+from crypto_trader.config import Settings, get_settings
 from crypto_trader.domain.enums import LedgerDirection, LedgerEntryType
 from crypto_trader.domain.models import Position
 from crypto_trader.ledger.service import LedgerPosting, LedgerService
@@ -458,3 +458,19 @@ async def test_paper_perpetual_open_obeys_central_safety_gate(database):
         await state.engine.stop()
     blocked_again = client.post("/paper/perpetual/open", json=body)
     assert blocked_again.status_code == 409
+
+
+async def test_supported_default_app_without_engine_cannot_increase_risk(database, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", database.url)
+    monkeypatch.setenv("APP_ENV", "test")
+    get_settings.cache_clear()
+    client = TestClient(build_default_app())
+    get_settings.cache_clear()
+    before = client.get("/paper/perpetual/positions").json()
+    response = client.post("/paper/perpetual/open", json={
+        "side": "LONG", "quantity": "0.1", "price": "100", "leverage": "3",
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"] == "TRADING_SAFETY_NOT_INITIALIZED"
+    assert client.get("/paper/perpetual/positions").json() == before
+    assert client.get("/ledger").json() == []
