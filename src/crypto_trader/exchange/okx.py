@@ -485,6 +485,14 @@ class OKXAdapter(ExchangeAdapter):
     async def submit_order(self, order: Order):
         from crypto_trader.exchange.symbol_mapper import SymbolMapper
 
+        # Wired by the runtime. A real submission must obey the same central
+        # live execution-safety predicate as the PAPER native boundary.
+        # Transport-internal retries reuse this client order id.
+        guard = getattr(self, "execution_guard", None)
+        if guard is not None:
+            failures = guard()
+            if failures:
+                raise OrderRejected("TRADING_SAFETY_INVALID:" + ",".join(failures))
         inst_id = SymbolMapper().to_okx(order.symbol)
         body = {
             "instId": inst_id,

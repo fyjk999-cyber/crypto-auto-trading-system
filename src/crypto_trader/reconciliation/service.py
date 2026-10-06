@@ -26,15 +26,41 @@ class ReconciliationReport:
     local_balances: dict = field(default_factory=dict)
     exchange_balances: dict = field(default_factory=dict)
     positions_diff: dict = field(default_factory=dict)
+    state: str | None = None
+    checked_at: datetime | None = None
+    generation: int | None = None
+
+    def __post_init__(self):
+        if self.state is None:
+            self.state = "COHERENT_OK" if self.ok else "COHERENT_MISMATCH"
 
 
 class ReconciliationService:
     def __init__(self, session_factory) -> None:
         self.session_factory = session_factory
+        self.settlement_coordinator = None
+
+    def _fenced(self, run_id, generation):
+        c = self.settlement_coordinator
+        snapshot = c.snapshot()
+        state = snapshot["state"]
+        if state == "COHERENT" and c.generation == generation:
+            return None
+        if state == "COHERENT":
+            state = "PENDING_SETTLEMENT"  # Generation changed during reads.
+        return ReconciliationReport(run_id=run_id, ok=False,
+                                    halt=state != "PENDING_SETTLEMENT", state=state,
+                                    generation=c.generation)
 
     async def reconcile(self, adapter) -> ReconciliationReport:
         """Compare ledger projections with exchange state. Persist result."""
         run_id = new_id("recon")
+        c = self.settlement_coordinator
+        generation = c.generation if c is not None else None
+        if c is not None:
+            pending = self._fenced(run_id, generation)
+            if pending is not None:
+                return pending
         alerts: list[str] = []
         async with self.session_factory() as session:
             local = await replay_projections(session)
@@ -50,6 +76,10 @@ class ReconciliationService:
                 )
 
         exchange_positions = {p.symbol: p for p in (await adapter.get_positions())}
+        if c is not None:
+            pending = self._fenced(run_id, generation)
+            if pending is not None:
+                return pending
         positions_diff: dict[str, dict] = {}
         for symbol, pos in local.positions.items():
             ex = exchange_positions.get(symbol)
@@ -82,12 +112,14 @@ class ReconciliationService:
             local_balances=local_balances,
             exchange_balances=exchange_balances,
             positions_diff=positions_diff,
+            checked_at=datetime.now(UTC),
+            generation=generation,
         )
         async with self.session_factory() as session:
             session.add(
                 ReconciliationRunORM(
                     run_id=run_id,
-                    compared_at=datetime.now(UTC),
+                    compared_at=report.checked_at,
                     status="OK" if report.ok else "ALERT",
                     local_balances_json=local_balances,
                     exchange_balances_json=exchange_balances,
@@ -96,4 +128,8 @@ class ReconciliationService:
                 )
             )
             await session.commit()
+        if c is not None:
+            pending = self._fenced(run_id, generation)
+            if pending is not None:
+                return pending
         return report

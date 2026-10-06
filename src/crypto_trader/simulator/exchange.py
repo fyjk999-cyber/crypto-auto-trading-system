@@ -55,6 +55,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self._sub_counter = 0
         self.next_exchange_order_id = 1000
         self.event_log: list[ExchangeEvent] = []
+        self.settlement_coordinator = None  # Bound by the account's TradingEngine.
+        self.execution_guard = None
+        self._matching_batch = None
 
         # chaos / fault injection hooks
         self.fail_submit_with: Exception | None = None
@@ -214,6 +217,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
     async def submit_order(self, order: Order) -> Order:
         self._ensure_connected()
+        if self.settlement_coordinator is not None:
+            if self.settlement_coordinator.snapshot()["state"] != "COHERENT":
+                raise OrderRejected("settlement account not coherent; new submission blocked")
         if self.rate_limit_next:
             self.rate_limit_next = False
             raise RateLimited("simulated rate limit")
@@ -228,6 +234,13 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         if self.submit_delay_seconds:
             await asyncio.sleep(self.submit_delay_seconds)
 
+        # Revalidate after all pre-submit awaits, immediately before native
+        # PAPER acceptance. An already accepted factual fill still settles.
+        if self.execution_guard is not None:
+            failures = self.execution_guard()
+            if failures:
+                raise OrderRejected("TRADING_SAFETY_INVALID:" + ",".join(failures))
+
         local = self._local_order_for(order)
         self.next_exchange_order_id += 1
         self.orders[local.exchange_order_id] = local
@@ -239,7 +252,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             )
 
         ack_event = self._order_event(ExchangeEventType.ORDER_ACK, local, payload={"status": "ACK"})
-        fill_events = self._match_order(local)
+        fill_events = await self._match_guarded(local)
 
         # Ordering hooks: normal = ack first; chaos = fill before ack
         if self.fill_before_ack:
@@ -281,6 +294,23 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             },
         )
 
+    async def _match_guarded(self, order: Order) -> list[ExchangeEvent]:
+        coordinator = self.settlement_coordinator
+        if coordinator is None:
+            return self._match_order(order)
+        batch = new_id("settlement")
+        await coordinator.begin_batch(batch, order.internal_order_id)
+        self._matching_batch = batch
+        try:
+            events = self._match_order(order)
+        except BaseException as exc:
+            coordinator.fault(batch, type(exc).__name__)
+            raise
+        finally:
+            self._matching_batch = None  # Only context cleanup; never clear tokens.
+        await coordinator.seal_batch(batch)
+        return events
+
     def _match_order(self, order: Order) -> list[ExchangeEvent]:
         """Match a resting/marketable order against the simulated book."""
         book = self.books.get(order.symbol)
@@ -297,7 +327,8 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 f"book symbol mismatch for {order.symbol}: book is {book.symbol}"
             )
         instrument = self.instruments.get(order.symbol, self.default_instrument)
-        remaining = order.quantity
+        # Later matching must consume only the unfilled portion of the intent.
+        remaining = order.remaining_quantity
         fill_events: list[ExchangeEvent] = []
         limit = order.price if order.order_type == OrderType.LIMIT else None
 
@@ -379,6 +410,20 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         return fill_events
 
     def _apply_fill_to_balances(self, fill: Fill, instrument: Instrument) -> None:
+        coordinator = self.settlement_coordinator
+        if coordinator is not None:
+            if self._matching_batch is None:
+                coordinator.fault(fill.fill_id, "UNFENCED_EXTERNAL_MUTATION")
+                raise InvalidOrder("external account mutation outside settlement batch")
+            coordinator.begin(fill.fill_id, parent=self._matching_batch)
+        try:
+            self._apply_account_fill(fill, instrument)
+        except BaseException as exc:
+            if coordinator is not None:
+                coordinator.fault(fill.fill_id, type(exc).__name__)
+            raise
+
+    def _apply_account_fill(self, fill: Fill, instrument: Instrument) -> None:
         quote = instrument.quote_asset
         base = instrument.base_asset
         gross = fill.price * fill.quantity
@@ -470,35 +515,12 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         if order.status == OrderStatus.FILLED:
             return order
         if self.cancel_fill_race and order.remaining_quantity > 0:
-            fill = Fill(
-                fill_id=new_id("fill"),
-                trade_id=new_id("trade"),
-                order_id=order.internal_order_id,
-                client_order_id=order.client_order_id,
-                exchange_order_id=order.exchange_order_id,
-                symbol=order.symbol,
-                side=order.side,
-                price=(order.price or self.books[symbol].mid_price() or Decimal("100")),
-                quantity=order.remaining_quantity,
-                fee=Decimal("0"),
-                fee_currency=None,
-                timestamp=datetime.now(UTC),
-            )
-            order.filled_quantity = order.quantity
-            order.status = OrderStatus.FILLED
-            await self._emit(
-                self._order_event(
-                    ExchangeEventType.ORDER_FILLED,
-                    order,
-                    payload={
-                        "fill_id": fill.fill_id,
-                        "fill_price": format_decimal(fill.price),
-                        "fill_quantity": format_decimal(fill.quantity),
-                        "fee": "0",
-                    },
-                )
-            )
-            return order
+            # Chaos timing may race matching against cancellation, but must
+            # not invent fills or skip the actual account mutation/fence.
+            for fill_event in await self._match_guarded(order):
+                await self._emit(fill_event)
+            if order.status == OrderStatus.FILLED:
+                return order
         order.status = OrderStatus.CANCELLED
         await self._emit(
             self._order_event(
@@ -545,12 +567,27 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         """
 
         self._ensure_connected()
-        self.balances = {currency: D(amount) for currency, amount in balances.items()}
-        self.positions = {
-            symbol: position.model_copy(deep=True)
-            for symbol, position in positions.items()
-            if position.quantity != 0
-        }
+        coordinator = self.settlement_coordinator
+        token = new_id("canonical_restore")
+        if coordinator is not None:
+            coordinator.begin(token, "CANONICAL_REHYDRATION")
+        try:
+            # Build both projections before publishing either. This block has
+            # no await and cannot expose mixed restoration on the event loop.
+            restored_balances = {currency: D(amount) for currency, amount in balances.items()}
+            restored_positions = {
+                symbol: position.model_copy(deep=True)
+                for symbol, position in positions.items()
+                if position.quantity != 0
+            }
+            self.balances = restored_balances
+            self.positions = restored_positions
+        except BaseException as exc:
+            if coordinator is not None:
+                coordinator.fault(token, type(exc).__name__)
+            raise
+        if coordinator is not None:
+            coordinator.complete(token)
 
     # ------------------------------------------------------------ normalize
     def normalize_symbol(self, raw: object) -> str:

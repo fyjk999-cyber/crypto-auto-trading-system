@@ -23,11 +23,22 @@ from crypto_trader.domain.enums import (
     TimeInForce,
     TradingMode,
 )
-from crypto_trader.domain.errors import IdempotencyConflict, InvalidStateTransition, OrderNotFound
+from crypto_trader.domain.errors import (
+    IdempotencyConflict,
+    InvalidStateTransition,
+    OrderNotFound,
+    OrderRejected,
+)
 from crypto_trader.domain.identifiers import new_id
 from crypto_trader.domain.models import Fill, Order, OrderEvent, OrderIntent
 from crypto_trader.order.state_machine import OrderStateMachine
-from crypto_trader.persistence.models import FillORM, OrderEventORM, OrderORM
+from crypto_trader.persistence.models import (
+    AuditEventORM,
+    FillORM,
+    LedgerTransactionORM,
+    OrderEventORM,
+    OrderORM,
+)
 
 SettlementCallback = Callable[[Fill], Awaitable[None]]
 
@@ -95,13 +106,21 @@ class OrderManager:
     ) -> None:
         self.session_factory = session_factory
         self.settlement_callback = settlement_callback
+        self.settlement_coordinator = None
 
-    async def create_from_intent(self, intent: OrderIntent, *, trading_mode: TradingMode) -> Order:
+    async def create_from_intent(self, intent: OrderIntent, *, trading_mode: TradingMode,
+                                 authorize_current=None) -> Order:
         now = datetime.now(UTC)
         async with self.session_factory() as session:
             existing = await self.get_by_client(intent.client_order_id)
             if existing is not None:
                 return await self._reuse_or_conflict(existing, intent)
+            # The lookup awaits I/O after final authorization. Re-evaluate the
+            # same central safety predicate before constructing a new order.
+            if authorize_current is not None:
+                failures = authorize_current()
+                if failures:
+                    raise OrderRejected("TRADING_SAFETY_INVALID:" + ",".join(failures))
             order_id = new_id("ord")
             row = OrderORM(
                 internal_order_id=order_id,
@@ -370,6 +389,38 @@ class OrderManager:
         )
 
     async def apply_fill(self, fill: Fill) -> tuple[Order, Fill, bool]:
+        coordinator = self.settlement_coordinator
+        owned = coordinator is not None and fill.fill_id not in coordinator.active
+        if coordinator is not None:
+            coordinator.begin(fill.fill_id, "LOCAL_FILL_DELIVERY")
+        try:
+            result = await self._apply_durable_fill(fill)
+            if coordinator is not None:
+                if result[2] and self.settlement_callback is not None:
+                    await coordinator.complete_local(fill.fill_id)
+                elif owned:
+                    # Never guess that an existing fill row means the callback
+                    # completed (fill commit precedes ledger/projection commit).
+                    if await self._settlement_completed_durably(fill.fill_id):
+                        await coordinator.complete_local(fill.fill_id)
+                    else:
+                        coordinator.fault(fill.fill_id, "DURABLE_SETTLEMENT_NOT_VERIFIED")
+            return result
+        except BaseException as exc:
+            if coordinator is not None:
+                coordinator.fault(fill.fill_id, type(exc).__name__)
+            raise
+
+    async def _settlement_completed_durably(self, fill_id):
+        async with self.session_factory() as session:
+            transaction = (await session.execute(select(LedgerTransactionORM.transaction_id).where(
+                LedgerTransactionORM.fill_id == fill_id).limit(1))).scalar_one_or_none()
+            completed = (await session.execute(select(AuditEventORM.id).where(
+                AuditEventORM.action == "FILL_SETTLED", AuditEventORM.target == fill_id
+            ).limit(1))).scalar_one_or_none()
+        return transaction is not None and completed is not None
+
+    async def _apply_durable_fill(self, fill: Fill) -> tuple[Order, Fill, bool]:
         """Apply a normalized fill exactly once. Returns (order, fill, newly_applied)."""
         async with self.session_factory() as session:
             existing = (
@@ -395,6 +446,12 @@ class OrderManager:
 
             new_filled = order_row.filled_quantity + fill.quantity
             if new_filled > order_row.quantity:
+                # Another delivery can commit this exact fill between the
+                # absent-fill read and the order read. Only its durable fact
+                # makes this idempotent; a new overfill still faults below.
+                raced_fill = await self.get_fill(fill.fill_id)
+                if raced_fill is not None and raced_fill.order_id == order_row.internal_order_id:
+                    return await self.get(raced_fill.order_id), raced_fill, False
                 raise InvalidStateTransition(
                     f"fill quantity {fill.quantity} exceeds remaining "
                     f"{order_row.quantity - order_row.filled_quantity}"
@@ -457,7 +514,7 @@ class OrderManager:
                     ).scalar_one_or_none()
                 if existing_after_race is not None:
                     return (
-                        _orm_to_order(await self.get(existing_after_race.order_id)),
+                        await self.get(existing_after_race.order_id),
                         _orm_to_fill(existing_after_race),
                         False,
                     )

@@ -226,6 +226,14 @@ class BinanceAdapter(ExchangeAdapter):
         }
 
     async def submit_order(self, order: Order) -> Order:
+        # Wired by the runtime. A real submission must obey the same central
+        # live execution-safety predicate as the PAPER native boundary.
+        # Transport-internal retries reuse this client order id.
+        guard = getattr(self, "execution_guard", None)
+        if guard is not None:
+            failures = guard()
+            if failures:
+                raise OrderRejected("TRADING_SAFETY_INVALID:" + ",".join(failures))
         params: dict = {
             "symbol": order.symbol,
             "side": order.side.value,

@@ -87,6 +87,15 @@ async def test_engine_executes_active_base_exit_without_llm(database) -> None:
     assert all(order.metadata.get("reduce_only") is True for order in exit_orders)
     assert all(order.metadata.get("trade_plan_id") == plan_id for order in exit_orders)
 
+    # The factual zero position must finalize the lifecycle, not only the order.
+    closed = await engine.trade_plans.get(plan_id)
+    assert closed is not None and closed.state == TradePlanState.CLOSED
+    episode = await engine.trade_episodes.build_for_closed_plan(plan_id)
+    assert episode is not None
+    assert episode.exit_decision_id == exit_orders[0].metadata["decision_id"]
+    assert engine.settlement.snapshot()["state"] == "COHERENT"
+    assert "SETTLEMENT_NOT_COHERENT" not in engine.trading_safety_failures()
+
     snapshot = engine.exit_controller.snapshot(plan_id)
     assert snapshot["registered"] is True
     assert snapshot["coordinator"]["invariant_holds"] is True

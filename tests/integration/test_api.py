@@ -437,3 +437,24 @@ def test_position_legs_summary_and_detail_expose_economics_and_lineage(database)
     assert detail["reconciliation"]["status"] in {"MATCH", "RECOVERED"}
     assert detail["authority"] == "NEW_RISK_REQUIRES_CORE_LLM"
     assert detail["not_an_order"] is True
+
+
+async def test_paper_perpetual_open_obeys_central_safety_gate(database):
+    from tests.conftest import make_paper_engine
+
+    state = make_state(database)
+    state.engine = make_paper_engine(database)
+    client = TestClient(create_app(state))
+    body = {"side": "LONG", "quantity": "0.1", "price": "100", "leverage": "3"}
+    blocked = client.post("/paper/perpetual/open", json=body)
+    assert blocked.status_code == 409
+    assert "TRADING_SAFETY_INVALID" in blocked.json()["detail"]
+    await state.engine.start("isolated-api-perpetual-safety")
+    try:
+        allowed = client.post("/paper/perpetual/open", json=body)
+        assert allowed.status_code == 200
+        assert allowed.json()["side"] == "LONG"
+    finally:
+        await state.engine.stop()
+    blocked_again = client.post("/paper/perpetual/open", json=body)
+    assert blocked_again.status_code == 409

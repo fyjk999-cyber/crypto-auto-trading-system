@@ -41,6 +41,7 @@ def ctx(**kw):
             min_notional="5",
         ),
         rate_limiter=RateLimiter(100, 10),
+        trading_safety=lambda: (),  # Explicit healthy safety evidence for this unit fixture.
     )
     base.update(kw)
     return AuthorizationContext(**base)
@@ -63,6 +64,14 @@ async def test_kill_switch_rejects():
     decision, notes = await ExecutionAuthority().authorize(make_intent(), ctx(kill_switch=ks))
     assert decision == ExecutionDecision.REJECT
     assert "GLOBAL_KILL_SWITCH" in notes
+
+
+async def test_missing_trading_safety_wiring_holds():
+    decision, notes = await ExecutionAuthority().authorize(
+        make_intent(), ctx(trading_safety=None)
+    )
+    assert decision == ExecutionDecision.HOLD
+    assert notes == ["TRADING_SAFETY_NOT_INITIALIZED"]
 
 
 async def test_lease_not_held_rejects():

@@ -12,8 +12,9 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from crypto_trader.config import Settings
 from crypto_trader.domain.clock import Clock, SystemClock
@@ -50,6 +51,7 @@ from crypto_trader.domain.money import D
 from crypto_trader.exchange.base import ExchangeAdapter
 from crypto_trader.execution.authority import AuthorizationContext, ExecutionAuthority
 from crypto_trader.execution.contract import derive_execution_terms
+from crypto_trader.execution.settlement import SettlementCoordinator
 from crypto_trader.governance.scheduler import DailyReviewScheduler
 from crypto_trader.governance.trade_episode import TradeEpisodeStore
 from crypto_trader.ledger.projections import replay_projections
@@ -127,7 +129,15 @@ class TradingEngine:
         self.market_data = market_data
         self.lease_manager = lease_manager
         self.reconciliation = reconciliation or ReconciliationService(database.session_factory)
+        self.settlement = getattr(adapter, "settlement_coordinator", None) or SettlementCoordinator(
+            stale_seconds=settings.settlement_stale_seconds)
+        self.adapter.settlement_coordinator = self.settlement
+        self.order_manager.settlement_coordinator = self.settlement
+        self.reconciliation.settlement_coordinator = self.settlement
+        self.reconciliation_current_state = "NOT_VERIFIED"
         self.audit = audit or AuditService(database.session_factory)
+        self.settlement.journal = self._journal_settlement
+        self.adapter.execution_guard = self.trading_safety_failures
         self.strategies = strategies or []
         self.clock = clock or SystemClock()
         self.authority = authority or ExecutionAuthority()
@@ -174,6 +184,7 @@ class TradingEngine:
         self.run_id = run_id or new_id("run")
         self.state_machine.transition(RuntimeState.STARTING)
         await self._persist_run(RuntimeState.STARTING)
+        await self._restore_settlement_journal()
         await self.adapter.connect()
         self.health.set("adapter_connection", True)
 
@@ -210,6 +221,16 @@ class TradingEngine:
                     after={"stale_run_ids": stale_runs},
                 )
         self.health.set("execution_lease", self.lease is not None or not self.require_lease)
+        await self._finalize_zero_position_lifecycles()
+
+        # No initial healthy reconciliation may be inferred from a live loop.
+        # The periodic loop sleeps first; collect the real startup comparison
+        # before trading tasks exist. Faults/unknown remain fail-closed.
+        initial_report = await self.reconciliation.reconcile(self.adapter)
+        self.reconciliation_current_state = initial_report.state
+        self.reconciliation_halted = initial_report.halt
+        self.health.set("reconciliation", initial_report.ok is True,
+                        initial_report.state, checked_at=initial_report.checked_at)
 
         self.state_machine.transition(RuntimeState.RUNNING)
         await self._persist_run(RuntimeState.RUNNING)
@@ -266,6 +287,136 @@ class TradingEngine:
         await self._persist_run(RuntimeState.STOPPED)
         await self.audit.log("ENGINE_STOPPED", target=self.run_id or "", run_id=self.run_id)
 
+    async def _journal_settlement(self, action, token, order_id):
+        await self.audit.log(action, target=token, run_id=self.run_id,
+                             order_id=order_id,
+                             after={"generation": self.settlement.generation,
+                                    "account_scope": "default", "authority": "EVIDENCE_ONLY"})
+
+    async def _restore_settlement_journal(self):
+        from crypto_trader.persistence.models import AuditEventORM
+
+        begin = aliased(AuditEventORM)
+        completed = aliased(AuditEventORM)
+        async with self.database.session_factory() as session:
+            unresolved = (await session.execute(select(begin.target).where(
+                begin.action == "SETTLEMENT_EXTERNAL_BEGIN",
+                ~exists(select(completed.id).where(
+                    completed.action == "SETTLEMENT_EXTERNAL_COMPLETE",
+                    completed.target == begin.target)),
+            ))).scalars().all()
+            missing_fill_facts = (await session.execute(select(AuditEventORM.target).where(
+                AuditEventORM.action == "RECOVERY_FILL_FACTS_UNAVAILABLE",
+            ).distinct())).scalars().all()
+        for token in unresolved:
+            self.settlement.fault(token, "UNRESOLVED_DURABLE_EXTERNAL_MUTATION")
+        for order_id in missing_fill_facts:
+            # A later absent/expired exchange order is not evidence that the
+            # missing fills never happened. No automatic fault clearing.
+            self.settlement.fault(order_id, "RECOVERY_FILL_FACTS_UNAVAILABLE")
+        if unresolved or missing_fill_facts:
+            self.health.set("settlement", False, "UNRESOLVED_DURABLE_SETTLEMENT")
+
+    async def _finalize_zero_position_lifecycles(self):
+        """Resume durable lifecycle processing, never execution or ledger posts.
+
+        Run after lease acquisition and before trading tasks. Missing evidence
+        is a retained fault, not a reason to fabricate an exit or flatten.
+        """
+        from crypto_trader.execution.exit_evidence import resolve_exit_evidence
+        from crypto_trader.persistence.models import (
+            AuditEventORM,
+            LedgerTransactionORM,
+            OrderORM,
+            PositionProjectionORM,
+            TradeEpisodeORM,
+            TradePlanORM,
+        )
+
+        async with self.database.session_factory() as session:
+            missing_settlement = select(
+                OrderORM.metadata_json["trade_plan_id"].as_string()
+            ).join(FillORM, FillORM.order_id == OrderORM.internal_order_id).outerjoin(
+                AuditEventORM,
+                (AuditEventORM.action == "FILL_SETTLED") &
+                (AuditEventORM.target == FillORM.fill_id),
+            ).where(
+                OrderORM.metadata_json["reduce_only"].as_boolean().is_(True),
+                AuditEventORM.id.is_(None),
+            )
+            plans = (await session.execute(select(TradePlanORM).join(
+                PositionProjectionORM, PositionProjectionORM.symbol == TradePlanORM.symbol,
+            ).where((TradePlanORM.state == "ACTIVE") | (
+                        (TradePlanORM.state == "CLOSED") & (
+                            ~exists(select(TradeEpisodeORM.episode_id).where(
+                                TradeEpisodeORM.trade_plan_id == TradePlanORM.trade_plan_id))
+                            | TradePlanORM.trade_plan_id.in_(missing_settlement))),
+                    PositionProjectionORM.quantity == Decimal("0")))).scalars().all()
+        healthy = True
+        for plan in plans:
+            try:
+                async with self.database.session_factory() as session:
+                    orders = (await session.execute(select(OrderORM).where(
+                        OrderORM.metadata_json["trade_plan_id"].as_string() == plan.trade_plan_id,
+                        OrderORM.metadata_json["reduce_only"].as_boolean().is_(True),
+                        OrderORM.status == "FILLED",
+                    ).order_by(OrderORM.updated_at.desc()))).scalars().all()
+                    if not orders:
+                        raise ValueError("LIFECYCLE_EXIT_ORDER_MISSING")
+                    order = orders[0]
+                    meta = order.metadata_json or {}
+                    decision_id = meta.get("decision_id")
+                    if not isinstance(decision_id, str) or not decision_id:
+                        raise ValueError("LIFECYCLE_EXIT_DECISION_MISSING")
+                    await resolve_exit_evidence(session, plan, decision_id)
+                    fills = (await session.execute(select(FillORM).where(
+                        FillORM.order_id == order.internal_order_id))).scalars().all()
+                    if not fills or (
+                        sum((f.quantity for f in fills), Decimal("0")) != order.filled_quantity
+                    ):
+                        raise ValueError("LIFECYCLE_EXIT_FILLS_INCOMPLETE")
+                    missing = []
+                    for fill in fills:
+                        transactions = (await session.execute(select(LedgerTransactionORM).where(
+                            LedgerTransactionORM.fill_id == fill.fill_id,
+                            LedgerTransactionORM.order_id == order.internal_order_id,
+                        ))).scalars().all()
+                        if len(transactions) != 1:
+                            raise ValueError("LIFECYCLE_LEDGER_MISSING_OR_AMBIGUOUS")
+                        settled = (await session.execute(select(AuditEventORM.id).where(
+                            AuditEventORM.action == "FILL_SETTLED",
+                            AuditEventORM.target == fill.fill_id,
+                        ).limit(1))).scalar_one_or_none()
+                        if settled is None:
+                            missing.append((fill, transactions[0].transaction_id))
+                closed = await self.trade_plans.close_from_factual_position(
+                    plan.trade_plan_id, exit_decision_id=decision_id,
+                    reason=str(meta.get("lifecycle_action") or "POSITION_CLOSED"),
+                )
+                episode = await self.trade_episodes.build_for_closed_plan(closed.trade_plan_id)
+                if episode is None:
+                    raise ValueError("LIFECYCLE_EPISODE_INCOMPLETE")
+                for fill, transaction_id in missing:
+                    await self.audit.log(
+                        "FILL_SETTLED", target=fill.fill_id, run_id=self.run_id,
+                        order_id=order.internal_order_id,
+                        after={"ledger_transaction_id": transaction_id,
+                               "recovery_plan_id": plan.trade_plan_id,
+                               "factual_fill_timestamp": fill.timestamp.isoformat()},
+                    )
+                await self.audit.log(
+                    "LIFECYCLE_RECOVERED", target=plan.trade_plan_id, run_id=self.run_id,
+                    after={"episode_id": episode.episode_id, "exit_decision_id": decision_id},
+                )
+            except Exception as exc:
+                healthy = False
+                self.settlement.fault(
+                    plan.trade_plan_id, "LIFECYCLE_RECOVERY_" + type(exc).__name__
+                )
+        self.health.set(
+            "lifecycle_recovery", healthy, "FACTUAL_FINALIZATION" if healthy else "UNRESOLVED"
+        )
+
     async def _persist_run(self, state: RuntimeState) -> None:
         async with self.database.session_factory() as session:
             row = await session.get(EngineRunORM, self.run_id)
@@ -303,6 +454,7 @@ class TradingEngine:
             # show (e.g. a PAPER simulator restart): halt new risk until a human
             # or reconciliation resolves it. Fail closed, never guess.
             self.reconciliation_halted = True
+            self.settlement.fault("recovery", "FACTUAL_EXPOSURE_DIVERGENCE")
             self.health.set("recovery_factual_state", False, "FACTUAL_EXPOSURE_DIVERGENCE")
             await self.audit.log(
                 "RECOVERY_FACTUAL_DIVERGENCE",
@@ -435,6 +587,7 @@ class TradingEngine:
         await self._event_queue.put(event)
 
     async def _event_loop(self) -> None:
+        self.health.set("event_processing", True, "event loop initialized")
         while True:
             event = await self._event_queue.get()
             try:
@@ -491,8 +644,16 @@ class TradingEngine:
         while True:
             await asyncio.sleep(self.settings.reconciliation_interval_seconds)
             report = await self.reconciliation.reconcile(self.adapter)
+            self.reconciliation_current_state = report.state
+            if report.state == "PENDING_SETTLEMENT":
+                # No successful check occurred: preserve prior result/time/halt.
+                continue
             self.reconciliation_halted = report.halt
-            self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]))
+            if report.state in {"SETTLEMENT_FAULT", "SETTLEMENT_STALE"}:
+                self.health.set("settlement", False, report.state)
+                continue
+            self.health.set("reconciliation", not report.halt, "; ".join(report.alerts[:3]),
+                            checked_at=report.checked_at)
 
     # ------------------------------------------------------------- offline
     async def enter_offline_mode(self, reason: str) -> bool:
@@ -627,6 +788,13 @@ class TradingEngine:
     # ------------------------------------------------------------------ tick
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
+        safety_failures = self.trading_safety_failures()
+        if safety_failures:
+            await self.audit.log(
+                "TRADING_SAFETY_TICK_BLOCKED", target=self.run_id or "unknown",
+                run_id=self.run_id, after={"failures": list(safety_failures)},
+            )
+            return decisions
         await self._sync_offline_mode()
         if self.news_reassessment_runtime is not None and not self.offline_mode.is_offline:
             try:
@@ -659,6 +827,8 @@ class TradingEngine:
             ctx = await self._strategy_context(desired_symbol)
             if ctx is None:
                 continue
+            if self.trading_safety_failures():
+                return decisions
             try:
                 signals = await strategy.on_market_data(ctx)
             except Exception as exc:
@@ -941,13 +1111,14 @@ class TradingEngine:
                     "requested_leverage": str(plan.requested_leverage or "1"),
                 },
             )
-            await self.audit.log(
+            intent_audit_id = await self.audit.log(
                 "DETERMINISTIC_EXIT_INTENT",
                 target=signal.signal_id,
                 run_id=self.run_id,
                 client_order_id=f"{signal.strategy_id}_{signal.signal_id}"[:60],
                 after=intent.as_dict(),
             )
+            signal.metadata["exit_intent_audit_id"] = intent_audit_id
             signals.append((signal, intent.reservation_request_id))
         return signals, wake_required
 
@@ -1098,13 +1269,14 @@ class TradingEngine:
                         "requested_leverage": str(getattr(plan, "requested_leverage", 1) or 1),
                     },
                 )
-                await self.audit.log(
+                intent_audit_id = await self.audit.log(
                     "DETERMINISTIC_EXIT_INTENT",
                     target=signal.signal_id,
                     run_id=self.run_id,
                     client_order_id=f"{signal.strategy_id}_{signal.signal_id}"[:60],
                     after={**intent.as_dict(), "leg_id": leg_id},
                 )
+                signal.metadata["exit_intent_audit_id"] = intent_audit_id
                 signals.append((signal, intent.reservation_request_id))
         return signals, wake_required
 
@@ -1577,6 +1749,8 @@ class TradingEngine:
             instrument=instrument,
             duplicate_client_order=existing is not None,
             reconciliation_halted=self.reconciliation_halted,
+            settlement_blocked=self.settlement.snapshot()["state"] != "COHERENT",
+            trading_safety=self.trading_safety_failures,
         )
         decision, notes = await self.authority.authorize(intent, auth_ctx)
         if decision != ExecutionDecision.APPROVE:
@@ -1601,9 +1775,23 @@ class TradingEngine:
             return risk_decision
 
         # Core order lifecycle: create -> validate -> submit
-        order = await self.order_manager.create_from_intent(
-            intent, trading_mode=self.settings.effective_mode()
-        )
+        try:
+            order = await self.order_manager.create_from_intent(
+                intent, trading_mode=self.settings.effective_mode(),
+                authorize_current=self.trading_safety_failures,
+            )
+        except OrderRejected as exc:
+            if trade_plan_id and is_entry:
+                await self.trade_plans.transition(
+                    trade_plan_id, TradePlanState.INVALIDATED,
+                    reason="TRADING_SAFETY_INVALID",
+                )
+            self._release_exit_reservation(intent, "ORDER_CREATE_REJECTED")
+            await self.audit.log(
+                "AUTHORITY_HOLD", target=client_order_id, run_id=run_id,
+                client_order_id=client_order_id, after={"notes": [str(exc)]},
+            )
+            return risk_decision
         if trade_plan_id and is_entry:
             await self.trade_plans.link(trade_plan_id, order_id=order.internal_order_id)
             await self.trade_plans.transition(trade_plan_id, TradePlanState.APPROVED)
@@ -1624,21 +1812,11 @@ class TradingEngine:
             )
             await self._run_recovery(run_id)
             return risk_decision
-        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
-            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
-            await self.audit.log(
-                "SUBMIT_TRANSIENT_FAILURE",
-                target=client_order_id,
-                run_id=run_id,
-                client_order_id=client_order_id,
-                order_id=order.internal_order_id,
-                after={"error": type(exc).__name__},
-            )
-            return risk_decision
         except OrderRejected as exc:
             await self.order_manager.reject(
                 order.internal_order_id, str(exc), event_id=new_id("evt")
             )
+            self._release_exit_reservation(order, "ORDER_REJECTED")
             await self._sync_terminal_entry_plan(
                 order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
             )
@@ -1649,6 +1827,16 @@ class TradingEngine:
                 client_order_id=client_order_id,
                 order_id=order.internal_order_id,
                 after={"reason": str(exc)},
+            )
+            return risk_decision
+        except (TemporaryNetworkError, RateLimited, ExchangeError) as exc:
+            # OrderRejected is an ExchangeError subclass: handle the factual
+            # rejection first, while retaining UNKNOWN for ambiguous failures.
+            await self.order_manager.mark_unknown(order.internal_order_id, str(exc))
+            await self.audit.log(
+                "SUBMIT_TRANSIENT_FAILURE", target=client_order_id, run_id=run_id,
+                client_order_id=client_order_id, order_id=order.internal_order_id,
+                after={"error": type(exc).__name__},
             )
             return risk_decision
 
@@ -1669,6 +1857,7 @@ class TradingEngine:
                 await self.order_manager.cancel_confirm(
                     order.internal_order_id, event_id=new_id("evt")
                 )
+                self._release_exit_reservation(order, "ORDER_CANCELLED")
                 await self._sync_terminal_entry_plan(
                     order, TradePlanState.CANCELLED, "ORDER_CANCELLED"
                 )
@@ -1678,6 +1867,7 @@ class TradingEngine:
                     exchange_order.rejection_reason or "rejected on exchange",
                     event_id=new_id("evt"),
                 )
+                self._release_exit_reservation(order, "ORDER_REJECTED")
                 await self._sync_terminal_entry_plan(
                     order, TradePlanState.INVALIDATED, "ORDER_REJECTED"
                 )
@@ -1716,24 +1906,6 @@ class TradingEngine:
             )
         self.health.set("submission", True)
         return risk_decision
-
-    async def _apply_exchange_order_fill(self, local: object, exchange_order: object) -> None:
-        if exchange_order.filled_quantity <= local.filled_quantity:
-            return
-        fill = Fill(
-            fill_id=f"submit_{exchange_order.exchange_order_id}_filled",
-            trade_id=new_id("trade"),
-            order_id=local.internal_order_id,
-            client_order_id=local.client_order_id,
-            exchange_order_id=exchange_order.exchange_order_id,
-            symbol=local.symbol,
-            side=local.side,
-            price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
-            quantity=exchange_order.filled_quantity - local.filled_quantity,
-            fee=Decimal("0"),
-            timestamp=datetime.now(UTC),
-        )
-        await self.order_manager.apply_fill(fill)
 
     async def _persist_risk(self, decision: RiskDecision) -> None:
         async with self.database.session_factory() as session:
@@ -1781,6 +1953,7 @@ class TradingEngine:
             await self.order_manager.apply_fill(fill)
         elif event.event_type == ExchangeEventType.ORDER_CANCELLED:
             await self.order_manager.cancel_confirm(local.internal_order_id, event_id=event_id)
+            self._release_exit_reservation(local, "ORDER_CANCELLED")
             await self._sync_terminal_entry_plan(local, TradePlanState.CANCELLED, "ORDER_CANCELLED")
         elif event.event_type == ExchangeEventType.ORDER_REJECTED:
             await self.order_manager.reject(
@@ -1788,6 +1961,7 @@ class TradingEngine:
                 payload.get("reason", "exchange rejection"),
                 event_id=event_id,
             )
+            self._release_exit_reservation(local, "ORDER_REJECTED")
             await self._sync_terminal_entry_plan(
                 local, TradePlanState.INVALIDATED, "ORDER_REJECTED"
             )
@@ -1835,10 +2009,29 @@ class TradingEngine:
         )
 
     # ----------------------------------------------------------------- ledger
+    def _release_exit_reservation(self, order_or_intent, reason: str) -> None:
+        """Release a deterministic reduce reservation once its order is terminal.
+
+        A partially filled cancel/reject can no longer consume the remainder, so
+        the stale reservation must not permanently block a later protection exit
+        for the factual remaining position. Fully filled orders release nothing
+        (the reservation is already consumed by confirm_fill).
+        """
+        metadata = getattr(order_or_intent, "metadata", None) or {}
+        request_id = metadata.get("exit_request_id")
+        if not request_id:
+            return
+        try:
+            self.exit_controller.cancel(str(request_id), reason)
+        except KeyError:
+            logger.warning("EXIT_RESERVATION_ALREADY_RELEASED request_id=%s", request_id)
+
     async def _settle_fill(self, fill: Fill) -> None:
         order = await self.order_manager.get(fill.order_id)
         if order is None:
-            return
+            # The durable fill row and its order commit together. A missing
+            # order here is a factual lineage failure, never a healthy exit.
+            raise ValueError("SETTLEMENT_ORDER_MISSING")
         exit_request_id = order.metadata.get("exit_request_id")
         if exit_request_id:
             # Deterministic reduce/close reservation is consumed by the factual fill.
@@ -1857,6 +2050,19 @@ class TradingEngine:
             after=validate_lineage(lineage),
         )
         leg_id = order.metadata.get("leg_id")
+        if leg_id and self.leg_service is None:
+            # A leg-attributed fill must be allocated before settlement can be
+            # published. Missing required wiring is a retained fault, never a
+            # silently skipped allocation.
+            self.health.set("leg_reconciliation", False, "LEG_SERVICE_MISSING")
+            await self.audit.log(
+                "LEG_ALLOCATION_UNAVAILABLE",
+                target=str(leg_id),
+                run_id=self.run_id,
+                order_id=order.internal_order_id,
+                after={"fill_id": str(fill.fill_id)},
+            )
+            raise ValueError("LEG_SERVICE_MISSING")
         if leg_id and self.leg_service is not None:
             # Every leg fill is allocated to exactly one leg and is idempotent
             # by fill_id; duplicate WS/REST delivery cannot double-apply.
@@ -1895,6 +2101,7 @@ class TradingEngine:
                     )
             except Exception:
                 logger.exception("LEG_FILL_APPLY_FAILED leg_id=%s", leg_id)
+                raise
         position = await self.portfolio.get_position(fill.symbol)
         if order.metadata.get("instrument_type") == "LINEAR_PERP":
             postings, metadata = build_derivative_trade_entries(
@@ -1967,6 +2174,7 @@ class TradingEngine:
                     run_id=self.run_id,
                     order_id=order.internal_order_id,
                 )
+                raise ValueError("TRADEPLAN_CLOSE_LINEAGE_MISSING")
             else:
                 closed_plan = await self.trade_plans.close_from_factual_position(
                     plan.trade_plan_id,
@@ -1984,6 +2192,7 @@ class TradingEngine:
                         run_id=self.run_id,
                         order_id=order.internal_order_id,
                     )
+                    raise ValueError("TRADE_EPISODE_INCOMPLETE")
                 else:
                     self.health.set("trade_episode", True)
                     await self.audit.log(
@@ -2076,8 +2285,39 @@ class TradingEngine:
     def kill_switch_snapshot(self) -> dict:
         return self.risk_engine.kill_switch.snapshot()
 
+    def trading_safety_failures(self) -> tuple[str, ...]:
+        """Live execution-safety evidence, not aggregate/cosmetic health."""
+        failures = []
+        for name in ("event_processing", "reconciliation",
+                     "recovery_factual_state", "factual_fill_lineage", "lifecycle_recovery"):
+            if self.health.components.get(name, {}).get("ok") is not True:
+                failures.append(name.upper() + "_NOT_HEALTHY")
+        if not self._running or self.state_machine.state != RuntimeState.RUNNING:
+            failures.append("RUNTIME_NOT_RUNNING")
+        for worker_name, failure in (
+            ("engine-events", "EVENT_WORKER_NOT_RUNNING"),
+            ("engine-recon", "RECONCILIATION_WORKER_NOT_RUNNING"),
+            ("engine-ticks", "TICK_WORKER_NOT_RUNNING"),
+        ):
+            if sum(t.get_name() == worker_name and not t.done() for t in self._tasks) != 1:
+                failures.append(failure)
+        if self.reconciliation_current_state != "COHERENT_OK":
+            failures.append("RECONCILIATION_NOT_COHERENT_OK")
+        if self.settlement.snapshot()["state"] != "COHERENT":
+            failures.append("SETTLEMENT_NOT_COHERENT")
+        if self.require_lease and not self._lease_valid:
+            failures.append("EXECUTION_LEASE_NOT_HELD")
+        if self.risk_engine.kill_switch.enabled:
+            failures.append("GLOBAL_KILL_SWITCH")
+        return tuple(failures)
+
     def runtime_snapshot(self) -> dict:
         lease = self.lease
+        settlement = self.settlement.snapshot()
+        health = self.health.snapshot()
+        if settlement["state"] != "COHERENT":
+            health = {**health, "overall": "PENDING_SETTLEMENT"
+                      if settlement["state"] == "PENDING_SETTLEMENT" else "UNHEALTHY"}
         return {
             "run_id": self.run_id,
             "state": self.state_machine.state.value,
@@ -2092,7 +2332,9 @@ class TradingEngine:
                 "single_writer": self._lease_valid if self.require_lease else True,
             },
             "reconciliation_halted": self.reconciliation_halted,
-            "health": self.health.snapshot(),
+            "health": health,
+            "settlement": settlement,
+            "reconciliation_current_state": self.reconciliation_current_state,
             "kill_switch": self.kill_switch_snapshot(),
             # Low-Risk V2 soak observability: provider latency percentiles,
             # failover/offline windows and the engine's offline guard state.

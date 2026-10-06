@@ -150,6 +150,7 @@ def _auth_ctx(contract: NewRiskOrderContract | None, risk: RiskDecision | None):
         symbol_tradeable=True,
         exchange_connected=True,
         balance_fresh=True,
+        trading_safety=lambda: (),  # Explicit healthy evidence for contract-only unit cases.
         risk_decision=risk,
         instrument=Instrument(
             symbol="BTCUSDT",

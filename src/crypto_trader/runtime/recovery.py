@@ -7,21 +7,14 @@ querying the exchange, not by creating new orders.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from crypto_trader.domain.enums import (
     OrderEventType,
-    OrderSide,
     OrderStatus,
-    OrderType,
-    TimeInForce,
-    TradingMode,
 )
 from crypto_trader.domain.errors import OrderNotFound
 from crypto_trader.domain.identifiers import new_id
-from crypto_trader.domain.models import Fill, OrderIntent
 
 
 def event_type_for_exchange_status(status: OrderStatus) -> OrderEventType:
@@ -47,9 +40,7 @@ class RecoveryService:
         *,
         positions_provider: Callable[[], Awaitable[dict[str, Any]]] | None = None,
         plans: Any | None = None,
-        ledger_state_provider: Callable[
-            [], Awaitable[tuple[dict[str, Any], dict[str, Any]]]
-        ]
+        ledger_state_provider: Callable[[], Awaitable[tuple[dict[str, Any], dict[str, Any]]]]
         | None = None,
     ) -> None:
         self.order_manager = order_manager
@@ -85,51 +76,28 @@ class RecoveryService:
                 continue
 
             status = exchange_order.status
-            # Fill reconciliation first (exchange truth wins)
-            if (
-                status == OrderStatus.FILLED
-                and local.filled_quantity < exchange_order.filled_quantity
-            ):
-                fill = Fill(
-                    fill_id=(
-                        f"recovery_{exchange_order.exchange_order_id}_"
-                        f"{format(exchange_order.filled_quantity, 'f').replace('.', '_')}"
-                    ),
-                    trade_id=new_id("trade"),
-                    order_id=local.internal_order_id,
-                    client_order_id=local.client_order_id,
-                    exchange_order_id=exchange_order.exchange_order_id,
-                    symbol=local.symbol,
-                    side=local.side,
-                    price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
-                    quantity=exchange_order.filled_quantity - local.filled_quantity,
-                    fee=Decimal("0"),
-                    timestamp=datetime.now(UTC),
-                    payload={"recovery": True},
-                )
-                await self.order_manager.apply_fill(fill)
-                actions.append(f"{local.client_order_id}: recovery fill {fill.quantity}")
-            if (
-                status == OrderStatus.PARTIALLY_FILLED
-                and local.filled_quantity < exchange_order.filled_quantity
-            ):
-                fill = Fill(
-                    fill_id=f"recovery_{exchange_order.exchange_order_id}_partial",
-                    trade_id=new_id("trade"),
-                    order_id=local.internal_order_id,
-                    client_order_id=local.client_order_id,
-                    exchange_order_id=exchange_order.exchange_order_id,
-                    symbol=local.symbol,
-                    side=local.side,
-                    price=exchange_order.avg_fill_price or exchange_order.price or Decimal("0"),
-                    quantity=exchange_order.filled_quantity - local.filled_quantity,
-                    fee=Decimal("0"),
-                    timestamp=datetime.now(UTC),
-                    payload={"recovery": True},
-                )
-                await self.order_manager.apply_fill(fill)
-                actions.append(f"{local.client_order_id}: recovery partial fill {fill.quantity}")
-            elif status != local.status:
+            # The adapter supplies an aggregate order, not individual fill
+            # IDs, fees or timestamps. Never invent those facts from totals.
+            if local.filled_quantity != exchange_order.filled_quantity:
+                reason = "RECOVERY_FILL_FACTS_UNAVAILABLE"
+                coordinator = self.order_manager.settlement_coordinator
+                if coordinator is not None:
+                    coordinator.fault(local.internal_order_id, reason)
+                actions.append(f"{local.client_order_id}: {reason}")
+                if self.audit is not None:
+                    await self.audit.log(
+                        reason,
+                        target=local.internal_order_id,
+                        run_id=run_id,
+                        order_id=local.internal_order_id,
+                        after={
+                            "local_filled_quantity": str(local.filled_quantity),
+                            "exchange_filled_quantity": str(exchange_order.filled_quantity),
+                            "exchange_status": status.value,
+                        },
+                    )
+                continue
+            if status != local.status:
                 event_type = event_type_for_exchange_status(status)
                 if status in (OrderStatus.OPEN, OrderStatus.ACKNOWLEDGED):
                     await self.order_manager.transition(
@@ -167,11 +135,10 @@ class RecoveryService:
         return actions
 
     async def _resync_sim_from_ledger(self, actions: list[str]) -> None:
-        """Mirror the durable ledger into the paper adapter after restoration.
+        """Mirror canonical ledger state without creating a recovery trade.
 
-        Recovery mutates the ledger (orphan closes); the volatile simulator
-        must end up an exact mirror of the ledger or the next reconciliation
-        pass reports a BALANCE_MISMATCH and halts trading.
+        The adapter's canonical restore remains generation-fenced; unresolved
+        orphan faults cannot be cleared by hydration.
         """
         restore = getattr(self.adapter, "restore_from_canonical_state", None)
         if restore is None or self.ledger_state_provider is None:
@@ -188,15 +155,10 @@ class RecoveryService:
         actions.append("sim resynced from ledger")
 
     async def _close_orphan_positions(self, run_id: str | None, actions: list[str]) -> None:
-        """Restore the open-position <-> active-trade-plan invariant.
+        """Retain unresolved exposure; recovery has no execution authority.
 
-        The LLM position lifecycle can only manage positions that belong to an
-        active trade plan (position decisions route through the plan). A
-        position without an active plan can therefore never be exited and can
-        only arise from recovery artifacts of corrupted fills. Such orphans
-        are flattened at the real market touch with a dedicated reduce-only
-        recovery order (audited). No new direction is decided here: this is
-        ledger restoration, not a trade decision.
+        A missing plan is not a factual instruction to flatten. In particular,
+        a market quote cannot justify inventing an order, fill or fee.
         """
         if self.positions_provider is None or self.plans is None:
             return
@@ -210,80 +172,18 @@ class RecoveryService:
                 continue
             if await self.plans.get_active_for_symbol(symbol) is not None:
                 continue
-            market = getattr(self.adapter, "get_market_state", None)
-            state = None
-            if market is not None:
-                try:
-                    state = await market(symbol)
-                except Exception:  # noqa: BLE001 - fail closed below
-                    state = None
-            if (
-                state is None
-                or state.health.value != "HEALTHY"
-                or state.best_bid <= 0
-                or state.best_ask <= 0
-            ):
-                actions.append(f"{symbol}: orphan close skipped (no real market)")
-                continue
-            close_side = OrderSide.BUY if position.quantity < 0 else OrderSide.SELL
-            touch = state.best_ask if close_side == OrderSide.BUY else state.best_bid
-            intent = OrderIntent(
-                client_order_id=f"recovery_flat_{symbol}_{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}",
-                symbol=symbol,
-                side=close_side,
-                order_type=OrderType.LIMIT,
-                time_in_force=TimeInForce.GTC,
-                price=touch,
-                quantity=abs(position.quantity),
-                strategy_id="recovery",
-                run_id=run_id,
-                metadata={
-                    "recovery": "orphan_position_close",
-                    "orphan_quantity": str(position.quantity),
-                    "orphan_avg_entry": str(position.avg_entry_price),
-                    "real_touch": str(touch),
-                },
-            )
-            order = await self.order_manager.create_from_intent(
-                intent, trading_mode=TradingMode.PAPER
-            )
-            await self.order_manager.validate(order.internal_order_id)
-            await self.order_manager.submitting(order.internal_order_id)
-            await self.order_manager.submitted(order.internal_order_id)
-            await self.order_manager.ack(order.internal_order_id, new_id("sim"))
-            fill = Fill(
-                fill_id=new_id("fill"),
-                trade_id=new_id("trade"),
-                order_id=order.internal_order_id,
-                client_order_id=order.client_order_id,
-                exchange_order_id=order.exchange_order_id,
-                symbol=symbol,
-                side=close_side,
-                price=touch,
-                quantity=abs(position.quantity),
-                fee=Decimal("0"),
-                timestamp=datetime.now(UTC),
-                payload={"recovery": "orphan_position_close"},
-            )
-            await self.order_manager.apply_fill(fill)
-            sim_positions = getattr(self.adapter, "positions", None)
-            if isinstance(sim_positions, dict):
-                sim_positions.pop(symbol, None)
-            actions.append(
-                f"{symbol}: orphan position {position.quantity} closed at real touch {touch}"
-            )
+            reason = "ORPHAN_POSITION_UNRESOLVED"
+            coordinator = self.order_manager.settlement_coordinator
+            if coordinator is not None:
+                coordinator.fault("orphan:" + symbol, reason)
+            actions.append(f"{symbol}: {reason} quantity={position.quantity}")
             if self.audit is not None:
                 await self.audit.log(
-                    "RECOVERY_ORPHAN_POSITION_CLOSED",
+                    "RECOVERY_ORPHAN_POSITION_UNRESOLVED",
                     target=symbol,
                     run_id=run_id,
-                    order_id=order.internal_order_id,
                     after={
                         "orphan_quantity": str(position.quantity),
                         "orphan_avg_entry": str(position.avg_entry_price),
-                        "close_side": close_side.value,
-                        "close_price": str(touch),
-                        "real_bid": str(state.best_bid),
-                        "real_ask": str(state.best_ask),
                     },
                 )

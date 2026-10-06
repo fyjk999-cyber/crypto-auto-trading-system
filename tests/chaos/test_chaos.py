@@ -184,6 +184,7 @@ async def test_cancel_fill_race_test():
         updated_at=now,
     )
     submitted = await sim.submit_order(order)
+    sim.seed_book("BTCUSDT", mid="0.9", spread="0.01")
     result = await sim.cancel_order("BTCUSDT", submitted.exchange_order_id)
     assert result.status == OrderStatus.FILLED
 

@@ -699,6 +699,16 @@ def create_app(state: AppState) -> FastAPI:
     async def paper_perpetual_open(body: dict):
         if state.engine is not None and state.engine.enforce_llm_entry_authority:
             raise HTTPException(status_code=403, detail="NEW_DIRECTION_REQUIRES_LIVE_LLM")
+        if state.engine is not None:
+            # The direct PAPER perpetual path writes positions and ledger; it
+            # must obey the same central live execution-safety predicate as the
+            # canonical order path. Missing/invalid runtime state stays closed.
+            failures = state.engine.trading_safety_failures()
+            if failures:
+                raise HTTPException(
+                    status_code=409,
+                    detail="TRADING_SAFETY_INVALID:" + ",".join(failures),
+                )
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
         pos = await engine.open_position(

@@ -99,6 +99,58 @@ async def test_duplicate_fill_never_double_applies(database) -> None:
     assert len(await service.leg_fills("leg-long")) == 1
 
 
+async def test_duplicate_fill_for_another_leg_fails_closed(database) -> None:
+    import pytest
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import PositionLegFillORM
+
+    service = PositionLegService(database.session_factory)
+    assert (await service.register(LONG)).allowed is True
+    assert (await service.register(SHORT)).allowed is True
+    await service.allocate_fill(
+        fill_id="fill-shared-id",
+        leg_id="leg-long",
+        side=OrderSide.BUY,
+        price=Decimal("100"),
+        quantity=Decimal("0.4"),
+    )
+    with pytest.raises(ValueError, match="LEG_FILL_DUPLICATE_LEG_MISMATCH"):
+        await service.allocate_fill(
+            fill_id="fill-shared-id",
+            leg_id="leg-short",
+            side=OrderSide.SELL,
+            price=Decimal("102"),
+            quantity=Decimal("0.5"),
+        )
+    short_state = await service.snapshot_state("leg-short")
+    assert short_state["remaining_quantity"] in (None, Decimal("0"))
+    assert await service.leg_fills("leg-short") == []
+    async with database.session_factory() as session:
+        rows = (await session.execute(select(PositionLegFillORM))).scalars().all()
+    assert [(row.fill_id, row.leg_id) for row in rows] == [("fill-shared-id", "leg-long")]
+
+
+async def test_fill_for_missing_leg_row_fails_closed_without_orphan_fill(database) -> None:
+    import pytest
+    from sqlalchemy import select
+
+    from crypto_trader.persistence.models import PositionLegFillORM
+
+    service = PositionLegService(database.session_factory)
+    with pytest.raises(ValueError, match="LEG_ROW_MISSING"):
+        await service.allocate_fill(
+            fill_id="fill-orphan-leg",
+            leg_id="leg-does-not-exist",
+            side=OrderSide.BUY,
+            price=Decimal("100"),
+            quantity=Decimal("0.1"),
+        )
+    async with database.session_factory() as session:
+        rows = (await session.execute(select(PositionLegFillORM))).scalars().all()
+    assert rows == []
+
+
 async def test_record_leg_order_unique_and_unknown_blocks(database) -> None:
     from crypto_trader.persistence.models import OrderORM
 

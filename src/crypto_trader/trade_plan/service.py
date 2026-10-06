@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from crypto_trader.domain.identifiers import new_id
+from crypto_trader.execution.exit_evidence import resolve_exit_evidence
 from crypto_trader.persistence.models import (
-    LLMDecisionORM,
     PositionProjectionORM,
     TradePlanORM,
 )
@@ -387,14 +387,7 @@ class TradePlanService:
             ).scalar_one_or_none()
             if position is None or position.quantity != 0:
                 raise ValueError("cannot close TradePlan with non-zero factual position")
-            exit_decision = await session.get(LLMDecisionORM, exit_decision_id)
-            if (
-                exit_decision is None
-                or exit_decision.position_state != "OPEN"
-                or exit_decision.original_trade_plan_id != trade_plan_id
-                or exit_decision.original_entry_decision_id != row.decision_id
-            ):
-                raise ValueError("factual close requires canonical OPEN decision lineage")
+            await resolve_exit_evidence(session, row, exit_decision_id)
             row.exit_decision_id = exit_decision_id
             row.state = TradePlanState.CLOSED.value
             row.updated_at = datetime.now(UTC)

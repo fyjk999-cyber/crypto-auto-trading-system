@@ -481,7 +481,7 @@ class PositionLegService:
         """
         from sqlalchemy import select
 
-        from crypto_trader.persistence.models import PositionLegFillORM
+        from crypto_trader.persistence.models import PositionLegFillORM, PositionLegORM
 
         side_str = str(getattr(side, "value", side)).upper()
         async with self._session_factory() as session:
@@ -491,12 +491,22 @@ class PositionLegService:
                 )
             ).scalar_one_or_none()
             if existing is not None:
+                if existing.leg_id != leg_id:
+                    # A fill id belongs to exactly one factual leg. A duplicate
+                    # delivered for another leg is a lineage failure, never a
+                    # silent skip that leaves the intended leg unallocated.
+                    raise ValueError("LEG_FILL_DUPLICATE_LEG_MISMATCH")
                 return {
                     "applied": False,
                     "duplicate": True,
                     "leg_id": existing.leg_id,
                     "fill_id": str(fill_id),
                 }
+            if await session.get(PositionLegORM, leg_id) is None:
+                # Never commit an orphan fill row for a leg contract that does
+                # not exist: leg accounting could not complete and settlement
+                # must fail closed instead of publishing healthy leg truth.
+                raise ValueError("LEG_ROW_MISSING")
             session.add(
                 PositionLegFillORM(
                     fill_id=str(fill_id),

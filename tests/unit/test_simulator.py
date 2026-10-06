@@ -164,6 +164,9 @@ async def test_cancel_fill_race_fill_wins():
     sim.seed_book("BTCUSDT")
     sim.cancel_fill_race = True
     order = await sim.submit_order(make_order(price="1"))
+    # A changed fixture market makes the accepted resting order marketable.
+    # The chaos flag supplies timing, not synthetic fill facts.
+    sim.seed_book("BTCUSDT", mid="0.9", spread="0.01")
     order = await sim.cancel_order("BTCUSDT", order.exchange_order_id)
     assert order.status == OrderStatus.FILLED
     assert order.filled_quantity == order.quantity

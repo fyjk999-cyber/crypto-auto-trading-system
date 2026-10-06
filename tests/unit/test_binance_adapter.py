@@ -5,7 +5,12 @@ import httpx
 import pytest
 
 from crypto_trader.domain.enums import OrderSide, OrderStatus, OrderType, TimeInForce, TradingMode
-from crypto_trader.domain.errors import AuthenticationError, ExchangeUnavailable, RateLimited
+from crypto_trader.domain.errors import (
+    AuthenticationError,
+    ExchangeUnavailable,
+    OrderRejected,
+    RateLimited,
+)
 from crypto_trader.domain.models import Order
 from crypto_trader.exchange.binance import BinanceAdapter
 from crypto_trader.exchange.bybit import BybitAdapter
@@ -154,6 +159,47 @@ async def test_submit_order_signs_and_normalizes():
     assert normalized.status == OrderStatus.ACKNOWLEDGED
     assert "signature" in seen["params"]
     assert seen["params"]["newClientOrderId"] == "c1"
+
+
+@pytest.mark.parametrize("adapter_name", ["binance", "okx"])
+async def test_real_adapter_submit_obeys_wired_execution_guard(adapter_name):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(500, text="must not be reached")
+
+    if adapter_name == "binance":
+        adapter = make_adapter(handler)
+    else:
+        transport = httpx.MockTransport(handler)
+        client = httpx.AsyncClient(base_url="https://test.okx", transport=transport)
+        adapter = OKXAdapter(
+            base_url="https://test.okx",
+            api_key="key",
+            api_secret="secret",
+            api_passphrase="pass",
+            client=client,
+        )
+    await adapter.connect()
+    adapter.execution_guard = lambda: ("EVENT_PROCESSING_NOT_HEALTHY",)
+    order = Order(
+        internal_order_id="ord_guard",
+        client_order_id="c-guard",
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        time_in_force=TimeInForce.GTC,
+        price="100",
+        quantity="0.01",
+        status=OrderStatus.SUBMITTING,
+        trading_mode=TradingMode.PAPER,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    with pytest.raises(OrderRejected, match="TRADING_SAFETY_INVALID"):
+        await adapter.submit_order(order)
+    assert calls == []
 
 
 async def test_normalize_fill_converts_floats_exactly_as_strings():

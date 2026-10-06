@@ -7,6 +7,7 @@ the execution lease is not held, or market data is unhealthy.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -58,6 +59,8 @@ class AuthorizationContext:
     instrument: Instrument | None = None
     duplicate_client_order: bool = False
     reconciliation_halted: bool = False
+    settlement_blocked: bool = False
+    trading_safety: Callable[[], tuple[str, ...]] | None = None
     rate_limiter: RateLimiter | None = None
     min_notional_ok: bool = True
     notes: list[str] = field(default_factory=list)
@@ -96,6 +99,15 @@ class ExecutionAuthority:
         # 4. reconciliation halt pauses new orders
         if ctx.reconciliation_halted:
             return hold("RECONCILIATION_HALT")
+        if ctx.settlement_blocked:
+            return hold("SETTLEMENT_NOT_COHERENT")
+        # Read current authoritative state here, not the earlier Chief/Risk
+        # snapshot. Missing wiring is unsafe, including during startup.
+        if ctx.trading_safety is None:
+            return hold("TRADING_SAFETY_NOT_INITIALIZED")
+        failures = ctx.trading_safety()
+        if failures:
+            return hold("TRADING_SAFETY_INVALID:" + ",".join(failures))
         # 5. order not expired
         if intent.expires_at is not None and intent.expires_at <= now:
             return reject("ORDER_EXPIRED")

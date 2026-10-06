@@ -6,7 +6,6 @@ the real order/ledger settlement callback receives it. No timing sleeps.
 """
 
 import asyncio
-import os
 from decimal import Decimal
 
 import pytest
@@ -23,9 +22,11 @@ class DeliveryBarrierAdapter(SimulatedExchangeAdapter):
         self.pause_delivery = False
         self.external_fill_applied = asyncio.Event()
         self.release_delivery = asyncio.Event()
+        self.paused_event = None
 
     async def _emit(self, event):
         if self.pause_delivery and event.event_type == ExchangeEventType.ORDER_FILLED:
+            self.paused_event = event
             self.external_fill_applied.set()
             await self.release_delivery.wait()
         await super()._emit(event)
@@ -45,11 +46,8 @@ async def test_real_settlement_cross_generation_window(database, iteration):
         ],
         initial_balances={"USDT": Decimal("100000")},
     )
-    engine = make_paper_engine(database, simulator=adapter)
-    await adapter.connect()
-    # Same setup and callbacks as engine startup, without unrelated schedulers.
-    await engine._seed_initial_balances()
-    engine.order_manager.settlement_callback = engine._settle_fill
+    engine = make_paper_engine(database, simulator=adapter, engine_tick_seconds=3600)
+    await engine.start()
     adapter.seed_book("NEARUSDT", mid="5.128", spread="0.001")
 
     async def submit(side, quantity, reduce_only):
@@ -83,7 +81,9 @@ async def test_real_settlement_cross_generation_window(database, iteration):
                 await engine.process_exchange_event(event)
 
         await adapter.subscribe_order_updates(receive)
-        return await adapter.submit_order(order)
+        result = await adapter.submit_order(order)
+        await engine.wait_for_event_queue()
+        return result
 
     # Aggressive limits cross the factual fixture book; no production fills.
     adapter.seed_book("NEARUSDT", mid="5.117", spread="0.001")
@@ -98,12 +98,11 @@ async def test_real_settlement_cross_generation_window(database, iteration):
         await asyncio.wait_for(adapter.external_fill_applied.wait(), timeout=5)
         # Concurrent real reconcile legally enters while delivery/settlement waits.
         inflight = await engine.reconciliation.reconcile(adapter)
-        assert inflight.halt and not inflight.ok
-        assert inflight.positions_diff["NEARUSDT"] == {
-            "local_quantity": "0.6",
-            "exchange_quantity": "0.3",
-        }
-        assert any(a.startswith("POSITION_MISMATCH NEARUSDT") for a in inflight.alerts)
+        assert not inflight.halt, "RED: real concurrent settlement permits cross-generation halt"
+        assert not inflight.ok
+        assert inflight.state == "PENDING_SETTLEMENT"
+        assert not inflight.positions_diff
+        assert not inflight.alerts
         assert (await engine.portfolio.get_position("NEARUSDT")).quantity == Decimal("0.6")
     finally:
         adapter.release_delivery.set()
@@ -113,5 +112,4 @@ async def test_real_settlement_cross_generation_window(database, iteration):
     assert after.positions_diff == {}
     assert (await engine.portfolio.get_position("NEARUSDT")).quantity == Decimal("0.3")
     assert Decimal(after.local_balances["USDT"]) == Decimal(after.exchange_balances["USDT"])
-    if os.environ.get("LOWRISK_REPRO_ASSERT_COHERENT") == "1":
-        assert not inflight.halt, "RED: real concurrent settlement permits cross-generation halt"
+    await engine.stop()

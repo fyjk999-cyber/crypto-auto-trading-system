@@ -16,10 +16,86 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-NEW_RISK_ACTIONS = ("LONG", "SHORT", "REVERSE", "HEDGE", "ADD")
+from crypto_trader.execution.exit_evidence import DETERMINISTIC_EXIT_AUTHORITIES
+from crypto_trader.llm_chief.decision import FlatAction, OpenAction
+
+NEW_RISK_ACTIONS = tuple(
+    action.value
+    for action in (
+        FlatAction.LONG,
+        FlatAction.SHORT,
+        OpenAction.REVERSE,
+        OpenAction.HEDGE,
+        OpenAction.ADD,
+    )
+)
+
+
+def order_violation(metadata: dict, mode: str, status: str) -> bool:
+    """Future observer's metadata check; NOT durable exit-provenance proof.
+
+    The actual close/recovery path independently resolves decisions, audit,
+    Risk, fills and ledger. Base-exit reason text is configurable, not an enum.
+    Keep the historical observer untouched; bind a future observer to this SHA.
+    """
+    if mode != "PAPER" or not isinstance(metadata, dict):
+        return True
+    if status == "REJECTED":
+        return False
+    if metadata.get("reduce_only") is True:
+        action = metadata.get("lifecycle_action")
+        if metadata.get("deterministic_exit") is True:
+            authority = metadata.get("exit_authority")
+            request = metadata.get("exit_request_id")
+            return not (
+                isinstance(authority, str)
+                and authority in DETERMINISTIC_EXIT_AUTHORITIES
+                and isinstance(action, str)
+                and bool(action.strip())
+                and (authority == "ACTIVE_BASE_EXIT" or action == authority)
+                and isinstance(request, str)
+                and bool(request)
+                and metadata.get("decision_id") == "det_" + request
+                and all(
+                    isinstance(metadata.get(key), str) and bool(metadata[key])
+                    for key in (
+                        "trade_plan_id",
+                        "state_version",
+                        "risk_decision_id",
+                    )
+                )
+            )
+        return not isinstance(action, str) or action not in {
+            OpenAction.EXIT,
+            OpenAction.REDUCE,
+            OpenAction.CLOSE,
+        }
+    try:
+        allocation = Decimal(str(metadata["capital_allocation_pct"]))
+        leverage = Decimal(
+            str(metadata.get("approved_leverage", metadata.get("requested_leverage")))
+        )
+        return not (
+            allocation.is_finite()
+            and 0 < allocation <= 25
+            and leverage.is_finite()
+            and 0 < leverage <= 20
+            and all(
+                bool(metadata.get(key))
+                for key in (
+                    "base_exit",
+                    "trade_plan_id",
+                    "decision_id",
+                    "risk_decision_id",
+                )
+            )
+        )
+    except (KeyError, ValueError, ArithmeticError):
+        return True
 
 
 def utc_now() -> str:
@@ -101,18 +177,14 @@ def collect_db_metrics(db_path: str, *, since: str | None = None) -> dict[str, A
             placeholders = ",".join("?" for _ in NEW_RISK_ACTIONS)
             metrics["new_risk_decisions"] = scalar(
                 conn,
-                "SELECT COUNT(*) FROM llm_decisions WHERE UPPER(action) IN ("
-                + placeholders
-                + ")",
+                "SELECT COUNT(*) FROM llm_decisions WHERE UPPER(action) IN (" + placeholders + ")",
                 params=NEW_RISK_ACTIONS,
             )
             if since:
                 metrics["new_risk_decisions_since_pause"] = scalar(
                     conn,
                     "SELECT COUNT(*) FROM llm_decisions "
-                    "WHERE UPPER(action) IN ("
-                    + placeholders
-                    + ") AND created_at >= ?",
+                    "WHERE UPPER(action) IN (" + placeholders + ") AND created_at >= ?",
                     params=(*NEW_RISK_ACTIONS, since),
                 )
         plan_cols = columns(conn, "trade_plans")
@@ -288,7 +360,7 @@ def collect_sample(args) -> tuple[dict[str, Any], dict[str, Any], list[dict[str,
     health = try_http_json(args.runtime_url + "/health")
     llm_health = try_http_json(args.runtime_url + "/llm/health")
     leg_summary = try_http_json(args.runtime_url + "/position-legs/summary")
-    pause_status = (llm_health.get("provider_call_pause") or {})
+    pause_status = llm_health.get("provider_call_pause") or {}
     if not pause_status:
         pause_status = ((ready.get("runtime") or {}).get("llm_router") or {}).get("pause") or {}
     db_metrics = collect_db_metrics(args.db, since=pause_status.get("paused_since"))

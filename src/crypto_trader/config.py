@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from crypto_trader.domain.enums import TradingMode
@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     trading_mode: TradingMode = TradingMode.PAPER
     live_trading_enabled: bool = False
+    # Local durability only: eight 15s SQLite busy-timeout stages, never a grace
+    # period for LLM/resource/freshness failures. Orders remain blocked throughout.
+    settlement_stale_seconds: float = Field(120.0, gt=0, allow_inf_nan=False)
     database_url: str = "sqlite+aiosqlite:///./data/crypto_trader.db"
 
     # OKX

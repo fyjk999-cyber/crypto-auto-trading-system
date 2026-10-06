@@ -272,6 +272,7 @@ def _auth_ctx(contract: NewRiskOrderContract | None) -> AuthorizationContext:
         symbol_tradeable=True,
         exchange_connected=True,
         balance_fresh=True,
+        trading_safety=lambda: (),  # Healthy fixture; runtime wiring is tested separately.
         risk_decision=RiskDecision(
             risk_decision_id="r1",
             client_order_id="c1",

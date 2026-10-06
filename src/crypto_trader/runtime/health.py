@@ -9,11 +9,11 @@ class HealthRegistry:
     def __init__(self) -> None:
         self.components: dict[str, dict] = {}
 
-    def set(self, name: str, ok: bool, detail: str = "") -> None:
+    def set(self, name: str, ok: bool, detail: str = "", *, checked_at=None) -> None:
         self.components[name] = {
             "ok": ok,
             "detail": detail,
-            "checked_at": datetime.now(UTC).isoformat(),
+            "checked_at": (checked_at or datetime.now(UTC)).isoformat(),
         }
 
     def overall(self) -> HealthStatus:
