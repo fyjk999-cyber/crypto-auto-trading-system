@@ -1,13 +1,16 @@
 """Acceptance diagnostics observe the real engine, never grant authority."""
 
 import asyncio
+import json
 from copy import deepcopy
+from dataclasses import replace
 
 import httpx
 import pytest
 from sqlalchemy import event
 
 from crypto_trader.api.app import create_app
+from crypto_trader.runtime.lease import LeaseManager
 from tests.conftest import make_paper_engine
 from tests.integration.test_api import make_state
 
@@ -35,7 +38,12 @@ async def test_first_actual_eligibility_is_bound_once_and_survives_later_failure
         assert first["trading_safety_failures"] == []
         assert first["runtime_running"] is True
         assert first["lease"]["current"] is True
-        assert first["lease"] == actual_authority_read
+        assert actual_authority_read.pop("token") == engine.lease.token
+        assert {k: v for k, v in first["lease"].items() if k != "token_id"} == (
+            actual_authority_read
+        )
+        assert len(first["lease"]["token_id"]) == 64
+        assert engine.lease.token not in json.dumps(first)
         assert first["lease"]["checked_epoch"] < first["lease"]["expires_at"]
         assert first["lease"]["owner_id"] == "engine_diagnostic-first-eligibility"
         assert all(worker["live_count"] == 1 for worker in first["workers"].values())
@@ -216,5 +224,38 @@ async def test_concurrent_first_evaluations_have_one_immutable_record(database):
         records = await asyncio.gather(*(evaluate() for _ in range(20)))
         assert records[0] is not None
         assert all(record == records[0] for record in records)
+    finally:
+        await engine.stop()
+
+
+async def test_optional_token_serialization_cannot_change_committed_authority(database):
+    manager = LeaseManager(database.session_factory)
+    grant = await manager.acquire("diagnostic-format-boundary", "isolated-owner", 30)
+
+    class DiagnosticEncodingUnavailable(str):
+        def encode(self, *args, **kwargs):
+            raise RuntimeError("isolated optional diagnostic encoding unavailable")
+
+    identical_grant = replace(grant, token=DiagnosticEncodingUnavailable(grant.token))
+    assert manager.is_current_now(identical_grant) is True
+
+
+async def test_token_hash_failure_remains_diagnostic_only(database, monkeypatch):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("diagnostic-hash-error")
+    try:
+        def unavailable(*args):
+            raise RuntimeError("isolated optional diagnostic hash failure")
+
+        with monkeypatch.context() as failure:
+            failure.setattr("crypto_trader.runtime.engine.sha256", unavailable)
+            assert engine.trading_safety_failures() == ()
+            assert engine.execution_lease_current() is True
+            with pytest.raises(RuntimeError, match="optional diagnostic hash"):
+                engine.acceptance_snapshot()
+        snapshot = engine.acceptance_snapshot()
+        assert snapshot["first_eligibility"] is None
+        assert snapshot["first_eligibility_error"] == "CAPTURE_UNAVAILABLE"
+        assert engine.risk_engine.kill_switch.enabled is False
     finally:
         await engine.stop()

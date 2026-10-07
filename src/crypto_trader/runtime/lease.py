@@ -14,7 +14,6 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
 
@@ -204,9 +203,9 @@ class LeaseManager:
     def observe_authority(self, lease: Lease) -> dict:
         """The same committed read/expiry check, without changing guard state."""
         observation = {
-            "owner_id": lease.owner_id,
-            "token_id": sha256(lease.token.encode()).hexdigest(),
-            "fence_generation": lease.fence_generation,
+            "owner_id": None,
+            "token": None,
+            "fence_generation": None,
             "expires_at": None,
             "checked_epoch": None,
             "clock_source": "execution_guard_utc_after_committed_read",
@@ -214,6 +213,10 @@ class LeaseManager:
             "error": None,
         }
         try:
+            observation.update(
+                owner_id=lease.owner_id, token=lease.token,
+                fence_generation=lease.fence_generation,
+            )
             with self._authority_reader.connect() as connection:
                 row = connection.execute(select(
                     RuntimeLeaseORM.expires_at,

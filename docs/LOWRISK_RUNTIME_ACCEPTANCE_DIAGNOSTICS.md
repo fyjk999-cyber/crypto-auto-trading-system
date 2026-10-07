@@ -11,6 +11,8 @@ aggregate health. Lease observations use the existing committed read-only row
 lookup and post-read expiry clock. `checked_epoch` explicitly means the existing
 execution guard's UTC clock after that committed read, not an invented SQL clock.
 The token is a SHA256 opaque identifier, never a credential.
+Hash serialization is downstream of authority, only in diagnostic formatting.
+Its failure cannot interrupt or deny the original committed authority check.
 
 The real execution guard has sticky lease-loss side effects. If current lease
 evaluation would require them, GET does not invoke them or publish an approximate

@@ -15,6 +15,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import wraps
+from hashlib import sha256
 
 from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
@@ -2531,6 +2532,11 @@ class TradingEngine:
         }
 
     def _acceptance_facts(self, failures, lease, settlement) -> dict:
+        # Optional serialization belongs ONLY to diagnostics, not authority.
+        lease = dict(lease) if lease is not None else None
+        token = lease.pop("token", None) if lease is not None else None
+        if token is not None:
+            lease["token_id"] = sha256(token.encode()).hexdigest()
         return deepcopy({
             "observed_at_utc": datetime.now(UTC).isoformat(),
             "pid": os.getpid(),
