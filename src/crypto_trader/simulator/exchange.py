@@ -57,6 +57,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self.event_log: list[ExchangeEvent] = []
         self.settlement_coordinator = None  # Bound by the account's TradingEngine.
         self.execution_guard = None
+        self.lease_mutation_guard = None
         self._matching_batch = None
 
         # chaos / fault injection hooks
@@ -313,6 +314,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
     def _match_order(self, order: Order) -> list[ExchangeEvent]:
         """Match a resting/marketable order against the simulated book."""
+        self._require_mutation_lease()
         book = self.books.get(order.symbol)
         if book is None:
             # Fail closed: fills must be market-derived. A synthetic placeholder
@@ -367,6 +369,9 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 fee_currency=instrument.quote_asset,
                 timestamp=datetime.now(UTC),
             )
+            # Durable settlement begin awaited before matching. Revalidate
+            # after that await and before each synchronous account mutation.
+            self._require_mutation_lease()
             remaining -= qty
             order.filled_quantity += qty
             if order.filled_quantity == order.quantity:
@@ -507,6 +512,10 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         pos.updated_at = fill.timestamp
         self.balances[quote] = self.balances.get(quote, Decimal("0")) + realized - fill.fee
 
+    def _require_mutation_lease(self) -> None:
+        if self.lease_mutation_guard is not None and not self.lease_mutation_guard():
+            raise OrderRejected("EXECUTION_LEASE_NOT_HELD")
+
     async def cancel_order(self, symbol: str, exchange_order_id: str) -> Order:
         self._ensure_connected()
         order = self.orders.get(exchange_order_id)
@@ -521,6 +530,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 await self._emit(fill_event)
             if order.status == OrderStatus.FILLED:
                 return order
+        self._require_mutation_lease()
         order.status = OrderStatus.CANCELLED
         await self._emit(
             self._order_event(

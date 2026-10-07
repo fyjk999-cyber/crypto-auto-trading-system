@@ -597,10 +597,8 @@ def test_okx_ticker_volume_is_derived_to_usd_turnover():
     assert snap["universe_size"] == 1
 
 
-async def test_lease_renews_after_ttl_gap_via_same_owner_recovery(database):
-    """§40 regression: a sleep/stall longer than the TTL must not permanently
-    lose the lease. Same owner+token+token may recover the expired row; a
-    DIFFERENT owner never may (fencing preserved)."""
+async def test_ttl_gap_requires_fresh_fenced_acquire_not_same_owner_renewal(database):
+    """Round18 supersedes old recovery: expiry ends even same-owner authority."""
     from crypto_trader.runtime.lease import LeaseManager
 
     lm = LeaseManager(database.session_factory)
@@ -624,17 +622,26 @@ async def test_lease_renews_after_ttl_gap_via_same_owner_recovery(database):
         fence_generation=lease.fence_generation,
     )
     assert stolen is False
-    # same owner recovers
+    # Same owner cannot resurrect its old grant either.
     ok = await lm.renew(
         "lease_recovery_key", lease.token, 10, owner_id="owner_a",
         fence_generation=lease.fence_generation,
     )
-    assert ok is True
+    assert ok is False
     held = await lm.is_held("lease_recovery_key", lease.token)
-    assert held is True
+    assert held is False
+    fresh = await lm.acquire("lease_recovery_key", "owner_a", 10)
+    assert fresh.token != lease.token
+    assert fresh.fence_generation == lease.fence_generation + 1
+    assert await lm.is_current(
+        "lease_recovery_key", lease.token, lease.fence_generation, owner_id="owner_a"
+    ) is False
+    assert await lm.is_current(
+        "lease_recovery_key", fresh.token, fresh.fence_generation, owner_id="owner_a"
+    ) is True
     await lm.release(
         "lease_recovery_key",
-        lease.token,
+        fresh.token,
         owner_id="owner_a",
-        fence_generation=lease.fence_generation,
+        fence_generation=fresh.fence_generation,
     )

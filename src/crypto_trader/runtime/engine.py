@@ -138,6 +138,7 @@ class TradingEngine:
         self.audit = audit or AuditService(database.session_factory)
         self.settlement.journal = self._journal_settlement
         self.adapter.execution_guard = self.trading_safety_failures
+        self.adapter.lease_mutation_guard = self.execution_lease_current
         self.strategies = strategies or []
         self.clock = clock or SystemClock()
         self.authority = authority or ExecutionAuthority()
@@ -173,27 +174,96 @@ class TradingEngine:
         self._account_reconciliation_halted = False
         self._event_queue: asyncio.Queue[ExchangeEvent] = asyncio.Queue()
         self._tasks: list[asyncio.Task] = []
+        self._lease_started = asyncio.Event()
         self._running = False
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
+        self.session_factory = (
+            self.lease_manager.fenced_sessions(
+                lambda: self.lease, lambda: self._lease_valid, lambda: self.run_id,
+                self._lose_execution_lease,
+            ) if self.require_lease else database.session_factory
+        )
+        self._bind_writer_services()
+
+    def _bind_writer_services(self) -> None:
+        services = [self.order_manager, self.ledger, self.portfolio, self.audit,
+                    self.reconciliation, self.trade_plans, self.trade_episodes,
+                    self.lineage_auditor, self.leg_service]
+        for strategy in self.strategies:
+            services.append(getattr(strategy, "decisions", None))
+        if self.position_manager is not None:
+            services.append(getattr(self.position_manager, "decisions", None))
+        if self.daily_review_scheduler is not None:
+            services.extend([self.daily_review_scheduler.persistence,
+                             self.daily_review_scheduler.episodes,
+                             self.daily_review_scheduler.learning])
+        if self.opportunity_service is not None:
+            services.append(getattr(self.opportunity_service, "factor_service", None))
+        for service in services:
+            factory = getattr(
+                service, "session_factory", getattr(service, "_session_factory", None),
+            )
+            if (getattr(factory, "kw", {}).get("lease_provider") is not None
+                    and factory is not self.session_factory):
+                raise LeaseNotHeld("writer services cannot be shared across engine grants")
+            if hasattr(service, "session_factory"):
+                service.session_factory = self.session_factory
+            elif hasattr(service, "_session_factory"):
+                service._session_factory = self.session_factory
 
     # ------------------------------------------------------------------ state
     async def start(self, run_id: str | None = None) -> str:
         if self._running:
+            if not self.execution_lease_current():
+                raise LeaseNotHeld("failed runtime requires fresh startup safety revalidation")
             return self.run_id
+        self._bind_writer_services()
         self.run_id = run_id or new_id("run")
+        # Recovery writes orders/plans/ledger/reconciliation, not just reads.
+        # Own and maintain the lease BEFORE the first such write. Trading is
+        # still blocked by startup health/state/workers until recovery ends.
+        if self.require_lease:
+            self.lease = await self.lease_manager.acquire(
+                self.lease_key, f"engine_{self.run_id}", self.settings.run_lease_ttl_seconds
+            )
+            if self.lease is None:
+                raise LeaseNotHeld("another engine instance holds the execution lease")
+            self._lease_valid = True
+            self._lease_started.clear()
+            self._tasks.append(asyncio.create_task(self._lease_loop(), name="engine-lease"))
+        try:
+            if self.require_lease:
+                await self._lease_started.wait()
+                if not self._lease_valid:
+                    raise LeaseNotHeld("startup lease renewal failed")
+            return await self._start_owned()
+        except BaseException:
+            # A failed/cancelled startup must not leave a heartbeat/writer.
+            await self._cancel_tasks()
+            self._running = False
+            if self.lease is not None:
+                await self.lease_manager.release(
+                    self.lease_key, self.lease.token, owner_id=self.lease.owner_id,
+                    fence_generation=self.lease.fence_generation,
+                )
+                self.lease = None
+            self._lease_valid = not self.require_lease
+            await self.adapter.disconnect()
+            if self.state_machine.state == RuntimeState.RUNNING:
+                self.state_machine.transition(RuntimeState.STOPPING)
+            if self.state_machine.state != RuntimeState.STOPPED:
+                self.state_machine.transition(RuntimeState.STOPPED)
+            raise
+
+    async def _start_owned(self) -> str:
         self.state_machine.transition(RuntimeState.STARTING)
         await self._persist_run(RuntimeState.STARTING)
         await self._restore_settlement_journal()
         await self.adapter.connect()
         self.health.set("adapter_connection", True)
 
-        # NOTE: the execution lease is acquired AFTER recovery, immediately
-        # before the trading loops start. Acquiring earlier (right after
-        # connect) lets the slow startup path (recovery, warmup, subscribe)
-        # outlive the lease TTL, so the first renewal finds expires_at in the
-        # past and the engine fails safe without a lease forever.
         self.state_machine.transition(RuntimeState.RECOVERING)
         await self._persist_run(RuntimeState.RECOVERING)
         await self._seed_initial_balances()
@@ -205,14 +275,6 @@ class TradingEngine:
         self.health.set("recovery", True)
 
         if self.require_lease:
-            self.lease = await self.lease_manager.acquire(
-                self.lease_key, f"engine_{self.run_id}", self.settings.run_lease_ttl_seconds
-            )
-            if self.lease is None:
-                await self._persist_run(RuntimeState.STOPPED)
-                self.state_machine.transition(RuntimeState.STOPPED)
-                raise LeaseNotHeld("another engine instance holds the execution lease")
-            self._lease_valid = True
             stale_runs = await self._reconcile_stale_runs()
             if stale_runs:
                 await self.audit.log(
@@ -221,7 +283,7 @@ class TradingEngine:
                     run_id=self.run_id,
                     after={"stale_run_ids": stale_runs},
                 )
-        self.health.set("execution_lease", self.lease is not None or not self.require_lease)
+        self.health.set("execution_lease", self._lease_valid)
         await self._finalize_zero_position_lifecycles()
 
         # No initial healthy reconciliation may be inferred from a live loop.
@@ -239,12 +301,10 @@ class TradingEngine:
         await self.adapter.subscribe_market_data("*", self._enqueue_event)
         await self.adapter.subscribe_account_updates(self._enqueue_event)
         self._running = True
-        self._tasks = [
+        self._tasks.extend([
             asyncio.create_task(self._event_loop(), name="engine-events"),
             asyncio.create_task(self._tick_loop(), name="engine-ticks"),
-        ]
-        if self.require_lease:
-            self._tasks.append(asyncio.create_task(self._lease_loop(), name="engine-lease"))
+        ])
         self._tasks.append(asyncio.create_task(self._reconciliation_loop(), name="engine-recon"))
         if self.daily_review_scheduler is not None:
             self._tasks.append(
@@ -266,13 +326,12 @@ class TradingEngine:
         if not self._running:
             return
         self._running = False
-        for task in self._tasks:
-            task.cancel()
-        for task in self._tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        await self._cancel_tasks()
+        await self.adapter.disconnect()
+        self.state_machine.transition(RuntimeState.STOPPING)
+        self.state_machine.transition(RuntimeState.STOPPED)
+        await self._persist_run(RuntimeState.STOPPED)
+        await self.audit.log("ENGINE_STOPPED", target=self.run_id or "", run_id=self.run_id)
         if self.lease is not None:
             await self.lease_manager.release(
                 self.lease_key,
@@ -282,11 +341,18 @@ class TradingEngine:
             )
             self.lease = None
         self._lease_valid = not self.require_lease
-        await self.adapter.disconnect()
-        self.state_machine.transition(RuntimeState.STOPPING)
-        self.state_machine.transition(RuntimeState.STOPPED)
-        await self._persist_run(RuntimeState.STOPPED)
-        await self.audit.log("ENGINE_STOPPED", target=self.run_id or "", run_id=self.run_id)
+
+    async def _cancel_tasks(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error("Stopped worker failed: %s", type(exc).__name__)
+        self._tasks.clear()
 
     async def _journal_settlement(self, action, token, order_id):
         await self.audit.log(action, target=token, run_id=self.run_id,
@@ -299,7 +365,7 @@ class TradingEngine:
 
         begin = aliased(AuditEventORM)
         completed = aliased(AuditEventORM)
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             unresolved = (await session.execute(select(begin.target).where(
                 begin.action == "SETTLEMENT_EXTERNAL_BEGIN",
                 ~exists(select(completed.id).where(
@@ -334,7 +400,7 @@ class TradingEngine:
             TradePlanORM,
         )
 
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             missing_settlement = select(
                 OrderORM.metadata_json["trade_plan_id"].as_string()
             ).join(FillORM, FillORM.order_id == OrderORM.internal_order_id).outerjoin(
@@ -356,7 +422,7 @@ class TradingEngine:
         healthy = True
         for plan in plans:
             try:
-                async with self.database.session_factory() as session:
+                async with self.session_factory() as session:
                     orders = (await session.execute(select(OrderORM).where(
                         OrderORM.metadata_json["trade_plan_id"].as_string() == plan.trade_plan_id,
                         OrderORM.metadata_json["reduce_only"].as_boolean().is_(True),
@@ -419,7 +485,7 @@ class TradingEngine:
         )
 
     async def _persist_run(self, state: RuntimeState) -> None:
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             row = await session.get(EngineRunORM, self.run_id)
             now = datetime.now(UTC)
             if row is None:
@@ -522,7 +588,7 @@ class TradingEngine:
 
     async def _factual_exposure_divergences(self) -> list[dict]:
         """Compare signed DB fill quantities with the live portfolio per symbol."""
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             rows = (
                 await session.execute(select(FillORM.symbol, FillORM.side, FillORM.quantity))
             ).all()
@@ -567,7 +633,7 @@ class TradingEngine:
 
         if self.lease is None or not self._lease_valid:
             return []
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             rows = (
                 (
                     await session.execute(
@@ -640,15 +706,22 @@ class TradingEngine:
                     )
                 except Exception:
                     ok = False
-                self._lease_valid = ok
-                self.health.set("execution_lease", ok)
+                # Renewal loss is sticky until a fresh startup/revalidation.
+                self._lease_valid = self._lease_valid and ok
+                self.health.set("execution_lease", self._lease_valid)
                 if not ok:
                     self.risk_engine.kill_switch.engage("execution lease lost")
-                    await self.audit.log(
-                        "EXECUTION_LEASE_LOST",
-                        target=self.lease_key,
-                        run_id=self.run_id,
-                    )
+                    try:
+                        await self.audit.log(
+                            "EXECUTION_LEASE_LOST",
+                            target=self.lease_key,
+                            run_id=self.run_id,
+                        )
+                    except Exception as exc:
+                        logger.error("Lease loss audit unavailable: %s", type(exc).__name__)
+                self._lease_started.set()
+                if not self._lease_valid:
+                    return  # No transparent recovery of failed authority.
             await asyncio.sleep(self.settings.run_lease_renew_interval_seconds)
 
     async def _reconciliation_loop(self) -> None:
@@ -1919,7 +1992,7 @@ class TradingEngine:
         return risk_decision
 
     async def _persist_risk(self, decision: RiskDecision) -> None:
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             session.add(
                 RiskDecisionORM(
                     risk_decision_id=decision.risk_decision_id,
@@ -2247,7 +2320,7 @@ class TradingEngine:
                 await self._sync_terminal_entry_plan(order, *target)
 
     async def _seed_initial_balances(self) -> None:
-        async with self.database.session_factory() as session:
+        async with self.session_factory() as session:
             snap = await replay_projections(session)
             if snap.balances:
                 self._initial_balances = {c: row["total"] for c, row in snap.balances.items()}
@@ -2311,6 +2384,24 @@ class TradingEngine:
                 or not self._required_leg_recovery_healthy()
                 or self.health.components.get("recovery_factual_state", {}).get("ok") is False)
 
+    def _lose_execution_lease(self) -> None:
+        self._lease_valid = False
+        self.risk_engine.kill_switch.engage("execution lease lost")
+        if self.health.components.get("execution_lease", {}).get("ok") is not False:
+            self.health.set("execution_lease", False, "NOT_CURRENT")
+
+    def execution_lease_current(self) -> bool:
+        if not self.require_lease:
+            return True
+        current = (self._lease_valid and self.lease is not None
+                   and self.lease_manager.is_current_now(self.lease))
+        if not current:
+            if self.lease is not None:
+                self._lose_execution_lease()
+            else:
+                self._lease_valid = False
+        return bool(current)
+
     def trading_safety_failures(self) -> tuple[str, ...]:
         """Live execution-safety evidence, not aggregate/cosmetic health."""
         failures = []
@@ -2333,7 +2424,7 @@ class TradingEngine:
             failures.append("RECONCILIATION_NOT_COHERENT_OK")
         if self.settlement.snapshot()["state"] != "COHERENT":
             failures.append("SETTLEMENT_NOT_COHERENT")
-        if self.require_lease and not self._lease_valid:
+        if not self.execution_lease_current():
             failures.append("EXECUTION_LEASE_NOT_HELD")
         if self.risk_engine.kill_switch.enabled:
             failures.append("GLOBAL_KILL_SWITCH")
@@ -2341,6 +2432,7 @@ class TradingEngine:
 
     def runtime_snapshot(self) -> dict:
         lease = self.lease
+        lease_current = self.execution_lease_current()
         settlement = self.settlement.snapshot()
         health = self.health.snapshot()
         if settlement["state"] != "COHERENT":
@@ -2350,14 +2442,14 @@ class TradingEngine:
             "run_id": self.run_id,
             "state": self.state_machine.state.value,
             "mode": self.settings.effective_mode().value,
-            "lease_held": self._lease_valid,
+            "lease_held": lease_current,
             "execution_lease": {
                 "required": self.require_lease,
-                "held": self._lease_valid,
+                "held": lease_current,
                 "lease_key": self.lease_key if self.require_lease else None,
                 "owner_id": lease.owner_id if lease is not None else None,
                 "fence_generation": (lease.fence_generation if lease is not None else None),
-                "single_writer": self._lease_valid if self.require_lease else True,
+                "single_writer": lease_current,
             },
             "reconciliation_halted": self.reconciliation_halted,
             "health": health,

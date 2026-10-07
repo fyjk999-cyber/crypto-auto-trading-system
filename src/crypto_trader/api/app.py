@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from starlette.websockets import WebSocketDisconnect
@@ -16,6 +17,7 @@ from starlette.websockets import WebSocketDisconnect
 from crypto_trader.api.deps import AppState
 from crypto_trader.config import get_settings
 from crypto_trader.domain.enums import OrderSide
+from crypto_trader.domain.errors import LeaseNotHeld
 from crypto_trader.domain.models import SignalIntent
 from crypto_trader.domain.money import D
 from crypto_trader.exchange.okx import OKXAdapter, OKXDiagnosticError
@@ -149,6 +151,10 @@ def create_app(state: AppState) -> FastAPI:
             await state.engine.stop()
 
     app = FastAPI(title="Crypto Automated Trading System", version="0.1.0", lifespan=lifespan)
+
+    @app.exception_handler(LeaseNotHeld)
+    async def lease_not_held(_request, _exception):
+        return JSONResponse(status_code=409, content={"detail": "EXECUTION_LEASE_NOT_HELD"})
     if state.settings.app_env == "development":
         app.add_middleware(
             CORSMiddleware,
@@ -691,7 +697,16 @@ def create_app(state: AppState) -> FastAPI:
             max_leverage=Decimal("6"),
             taker_fee_rate=Decimal("0.0005"),
         )
-        return PerpetualPaperEngine(state.database.session_factory, contract)
+        # All monetary writes use the actor-bound runtime transaction fence,
+        # not an unguarded API-local LedgerService after the initial HTTP gate.
+        def sessions():
+            if state.engine is None:
+                return state.database.session_factory()
+            return state.engine.session_factory(info={
+                "execution_guard": state.engine.trading_safety_failures,
+            })
+
+        return PerpetualPaperEngine(sessions, contract)
 
     def _require_risk_increasing_authority():
         engine = state.engine
@@ -727,6 +742,8 @@ def create_app(state: AppState) -> FastAPI:
     async def paper_perpetual_close(body: dict):
         if state.engine is not None and state.engine.enforce_llm_entry_authority:
             raise HTTPException(status_code=403, detail="POSITION_ACTION_REQUIRES_LIVE_LLM")
+        if state.engine is None or not state.engine.execution_lease_current():
+            raise HTTPException(status_code=409, detail="EXECUTION_LEASE_NOT_HELD")
         engine = _perpetual_engine()
         side = PositionSide(body["side"])
         pos = await engine.close_position(

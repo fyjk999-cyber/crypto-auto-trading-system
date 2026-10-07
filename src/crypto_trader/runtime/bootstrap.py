@@ -382,6 +382,8 @@ async def build_system(settings: Settings) -> RuntimeBundle:
         news_reassessment_runtime=news_reassessment_runtime,
     )
     engine.leg_execution_enabled = leg_execution_enabled_from_env()
+    llm_decisions.session_factory = engine.session_factory
+    factor_service.session_factory = engine.session_factory
     runtime_holder["engine"] = engine
     runtime_holder["strategy"] = live_llm
 
