@@ -29,6 +29,8 @@ startup safety gates. Lease loss never automatically clears the kill switch.
    ORM flushes and bulk DML validate ownership; commit flushes all pending DML
    then revalidates expiry. Failed authority rolls back the transaction and
    latches runtime safety failure. The lock never extends TTL or changes fence.
+   Projection refresh also locks before reading the ledger it will replay;
+   locking only at DELETE would let an old snapshot overwrite a newer result.
 3. Native PAPER submission checks central safety after submit awaits; matching
    rechecks lease after durable settlement begin and before each account fill.
    Cancellation also requires lease. Direct perpetual API monetary writes use

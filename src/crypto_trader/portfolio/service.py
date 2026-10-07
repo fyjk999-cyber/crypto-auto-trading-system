@@ -19,6 +19,11 @@ class PortfolioService:
 
     async def refresh(self, initial_balances: dict[str, Decimal] | None = None) -> None:
         async with self.session_factory() as session:
+            # A derived writer must lock before its ledger snapshot; locking
+            # only at DELETE can publish an old replay over a newer projection.
+            fence = getattr(session, "fence_writer_transaction", None)
+            if fence is not None:
+                await fence()
             await rebuild_projections(session, initial_balances=initial_balances)
 
     async def get_account(self, mode: TradingMode = TradingMode.PAPER) -> Account:

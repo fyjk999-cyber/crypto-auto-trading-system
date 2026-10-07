@@ -66,6 +66,10 @@ class _FencedSession(AsyncSession):
         self.info.update(writer_lease=lease_provider(), writer_valid=lease_valid,
                          writer_run_id=run_id_provider(), writer_failed=lease_failed)
 
+    async def fence_writer_transaction(self):
+        """Lock before reads used to derive writes, not only before their DML."""
+        await self.run_sync(_fence_write)
+
 
 def _requires_writer(session, obj):
     # Append-only failure evidence and own-run shutdown metadata cannot grant

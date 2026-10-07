@@ -1,9 +1,13 @@
 """Actual core services cannot write with expired or superseded authority."""
 
+import asyncio
+from decimal import Decimal
+
 import httpx
 import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import Session
+from sqlalchemy.util import await_only
 
 from crypto_trader.api.app import create_app
 from crypto_trader.domain.enums import TradingMode
@@ -13,6 +17,55 @@ from crypto_trader.runtime.lease import LeaseManager
 from tests.conftest import make_paper_engine
 from tests.integration.test_api import make_state
 from tests.integration.test_order_manager import make_intent
+
+
+async def test_projection_refresh_cannot_overwrite_a_concurrent_committed_trade(database):
+    """Pause the real DB read; concurrent real ledger writes must stay fenced."""
+    from crypto_trader.domain.enums import LedgerEntryType, OrderSide
+    from crypto_trader.ledger.service import build_trade_entries
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("projection-snapshot-fence")
+
+    async def trade(symbol):
+        postings, metadata = build_trade_entries(
+            side=OrderSide.BUY, symbol=symbol, quote_currency="USDT",
+            price=Decimal("1"), quantity=Decimal("1"), fee=Decimal("0"),
+        )
+        await engine.ledger.record(LedgerEntryType.TRADE, postings, metadata=metadata)
+        await engine.portfolio.refresh()
+
+    await trade("NEARUSDT")
+    read_started, release_read = asyncio.Event(), asyncio.Event()
+    armed = True
+
+    def pause_first_ledger_read(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal armed
+        if armed and statement.startswith("SELECT ledger_transactions."):
+            armed = False
+            read_started.set()
+            await_only(release_read.wait())  # Real SQLite boundary, not a fake replay.
+
+    event.listen(database.engine.sync_engine, "after_cursor_execute", pause_first_ledger_read)
+    tasks = []
+    try:
+        tasks.append(asyncio.create_task(engine.portfolio.refresh()))
+        await asyncio.wait_for(read_started.wait(), 5)
+        tasks.append(asyncio.create_task(trade("BTCUSDT")))
+        # A fenced reader holds the writer lock; an unfenced old snapshot lets
+        # the second trade publish first and then overwrites it with NEAR only.
+        await asyncio.wait([tasks[-1]], timeout=0.3)
+        release_read.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), 5)
+        positions = await engine.portfolio.get_positions()
+        assert {p.symbol: p.quantity for p in positions.values()} == {
+            "NEARUSDT": Decimal("1"), "BTCUSDT": Decimal("1"),
+        }
+    finally:
+        release_read.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        event.remove(database.engine.sync_engine, "after_cursor_execute", pause_first_ledger_read)
+        await engine.stop()
 
 
 async def test_expired_writer_cannot_create_durable_order(database, monkeypatch):
