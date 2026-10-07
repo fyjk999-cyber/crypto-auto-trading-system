@@ -217,6 +217,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         )
 
     async def submit_order(self, order: Order) -> Order:
+        execution_guard = self.execution_guard  # This invocation's actor, before any await.
         self._ensure_connected()
         if self.settlement_coordinator is not None:
             if self.settlement_coordinator.snapshot()["state"] != "COHERENT":
@@ -237,8 +238,8 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
         # Revalidate after all pre-submit awaits, immediately before native
         # PAPER acceptance. An already accepted factual fill still settles.
-        if self.execution_guard is not None:
-            failures = self.execution_guard()
+        if execution_guard is not None:
+            failures = execution_guard()
             if failures:
                 raise OrderRejected("TRADING_SAFETY_INVALID:" + ",".join(failures))
 
@@ -296,6 +297,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         )
 
     async def _match_guarded(self, order: Order) -> list[ExchangeEvent]:
+        lease_guard = self.lease_mutation_guard
         coordinator = self.settlement_coordinator
         if coordinator is None:
             return self._match_order(order)
@@ -303,6 +305,8 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         await coordinator.begin_batch(batch, order.internal_order_id)
         self._matching_batch = batch
         try:
+            if lease_guard is not None and not lease_guard():
+                raise OrderRejected("EXECUTION_LEASE_NOT_HELD")
             events = self._match_order(order)
         except BaseException as exc:
             coordinator.fault(batch, type(exc).__name__)
@@ -517,6 +521,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
             raise OrderRejected("EXECUTION_LEASE_NOT_HELD")
 
     async def cancel_order(self, symbol: str, exchange_order_id: str) -> Order:
+        lease_guard = self.lease_mutation_guard
         self._ensure_connected()
         order = self.orders.get(exchange_order_id)
         if order is None:
@@ -530,7 +535,8 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
                 await self._emit(fill_event)
             if order.status == OrderStatus.FILLED:
                 return order
-        self._require_mutation_lease()
+        if lease_guard is not None and not lease_guard():
+            raise OrderRejected("EXECUTION_LEASE_NOT_HELD")
         order.status = OrderStatus.CANCELLED
         await self._emit(
             self._order_event(

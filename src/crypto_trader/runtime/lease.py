@@ -93,22 +93,23 @@ def _fence_write(session):
         raise LeaseNotHeld("execution writer authority unavailable")
     # No-op UPDATE takes the DB writer/row lock in THIS mutation transaction.
     # Another holder cannot CAS ownership while our mutation is in flight.
-    # Recheck expiry AFTER any lock wait, and again before commit; expiry
+    # SQL evaluates expiry AFTER any lock wait, and again before commit; expiry
     # aborts/rolls back the complete transaction rather than extending the TTL.
     try:
-        expires = session.connection().execute(update(RuntimeLeaseORM).where(
+        result = session.connection().execute(update(RuntimeLeaseORM).where(
             RuntimeLeaseORM.lease_key == lease.lease_key,
             RuntimeLeaseORM.owner_id == lease.owner_id,
             RuntimeLeaseORM.token == lease.token,
             RuntimeLeaseORM.fence_generation == lease.fence_generation,
-            RuntimeLeaseORM.expires_at > _epoch(),
-        ).values(version=RuntimeLeaseORM.version).returning(
-            RuntimeLeaseORM.expires_at,
-        )).scalar_one_or_none()
+            RuntimeLeaseORM.expires_at > _db_epoch(session),
+        ).values(version=RuntimeLeaseORM.version))
     except Exception:
         session.info["writer_failed"]()
         raise
-    if expires is None or expires <= _epoch() or not session.info["writer_valid"]():
+    # Do not use RETURNING: cancellation before fetching its rows can retain
+    # an active SQLite write cursor even after connection invalidation/close.
+    # Matched-row count proves the execution-time owner/token/fence/expiry CAS.
+    if result.rowcount != 1 or not session.info["writer_valid"]():
         session.info["writer_failed"]()
         raise LeaseNotHeld("execution writer lease expired or fenced")
     guard = session.info.get("execution_guard")
@@ -116,9 +117,6 @@ def _fence_write(session):
         failures = guard()
         if failures:
             raise OrderRejected("TRADING_SAFETY_INVALID:" + ",".join(failures))
-        if expires <= _epoch():
-            session.info["writer_failed"]()
-            raise LeaseNotHeld("execution writer lease expired during final guard")
     session.info["writer_transaction"] = True
 
 

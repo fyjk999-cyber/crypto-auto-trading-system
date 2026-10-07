@@ -119,9 +119,10 @@ class TradingEngine:
         exit_controller=None,
         news_reassessment_runtime=None,
     ) -> None:
-        if isinstance(getattr(getattr(adapter, "execution_guard", None), "__self__", None),
-                      TradingEngine):
+        adapter_owner = getattr(getattr(adapter, "execution_guard", None), "__self__", None)
+        if isinstance(adapter_owner, TradingEngine) and not adapter_owner._adapter_released:
             raise LeaseNotHeld("execution adapter cannot be shared across engine actors")
+        self._adapter_released = False
         self.settings = settings
         self.database = database
         self.adapter = adapter
@@ -218,6 +219,9 @@ class TradingEngine:
 
     # ------------------------------------------------------------------ state
     async def start(self, run_id: str | None = None) -> str:
+        if getattr(self.adapter.execution_guard, "__self__", None) is not self:
+            raise LeaseNotHeld("execution adapter belongs to another engine actor")
+        self._adapter_released = False
         if self._running:
             if not self.execution_lease_current():
                 raise LeaseNotHeld("failed runtime requires fresh startup safety revalidation")
@@ -258,6 +262,7 @@ class TradingEngine:
                 self.state_machine.transition(RuntimeState.STOPPING)
             if self.state_machine.state != RuntimeState.STOPPED:
                 self.state_machine.transition(RuntimeState.STOPPED)
+            self._adapter_released = True
             raise
 
     async def _start_owned(self) -> str:
@@ -344,6 +349,7 @@ class TradingEngine:
             )
             self.lease = None
         self._lease_valid = not self.require_lease
+        self._adapter_released = True
 
     async def _cancel_tasks(self) -> None:
         for task in self._tasks:

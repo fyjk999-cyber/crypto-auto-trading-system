@@ -29,6 +29,9 @@ startup safety gates. Lease loss never automatically clears the kill switch.
    ORM flushes and bulk DML validate ownership; commit flushes all pending DML
    then revalidates expiry. Failed authority rolls back the transaction and
    latches runtime safety failure. The lock never extends TTL or changes fence.
+   The conditional UPDATE uses the DB execution-time clock and matched-row
+   count, without RETURNING; cancelled unconsumed SQLite RETURNING cursors
+   could retain the writer lock after connection invalidation/close.
    Projection refresh also locks before reading the ledger it will replay;
    locking only at DELETE would let an old snapshot overwrite a newer result.
 3. Native PAPER submission checks central safety after submit awaits; matching
@@ -47,8 +50,11 @@ Recovery/FILL_SETTLED/settlement journal writes are not exempt.
 
 Engine-level startup/order/ledger/portfolio/plan/episode/leg/reconciliation writes
 are fenced; bootstrap binds Chief decision/evidence stores to that same actor.
-An adapter already bound to an engine cannot be rebound to another actor;
-in-flight authority probes cannot undo a sticky writer/heartbeat loss.
+An adapter cannot be shared by active actors. After controlled stop/cleanup a
+fresh actor may recover it, but pending submit/match/cancel operations retain
+the old actor's guard across awaits and cannot borrow the new grant. The old
+actor cannot restart once its adapter has been rebound. In-flight authority
+probes cannot undo a sticky writer/heartbeat loss.
 Standalone tools and isolated test fixture writers have their own explicit
 factories, not runtime grants. Required tests cover expired and superseded
 writers, last-DML rollback, sticky failure, long startup, native matching and

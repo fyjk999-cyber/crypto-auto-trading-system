@@ -19,6 +19,45 @@ from tests.integration.test_api import make_state
 from tests.integration.test_order_manager import make_intent
 
 
+async def test_cancelled_fence_statement_does_not_retain_the_sqlite_writer_lock(
+    database, monkeypatch
+):
+    import aiosqlite
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("cancelled-fence-lock")
+    paused = asyncio.Event()
+    original_execute = aiosqlite.Cursor.execute
+    retained_cursors = []
+
+    async def cancel_window(cursor, sql, parameters=None):
+        result = await original_execute(cursor, sql, parameters)
+        if (not retained_cursors
+                and sql.startswith("UPDATE runtime_leases SET version=runtime_leases.version")):
+            retained_cursors.append(cursor)  # A cancelled task/traceback can retain this cursor.
+            paused.set()
+            await asyncio.Event().wait()
+        return result
+
+    monkeypatch.setattr(aiosqlite.Cursor, "execute", cancel_window)
+    writer = asyncio.create_task(engine.order_manager.create_from_intent(
+        make_intent("cancel-during-fence"), trading_mode=TradingMode.PAPER,
+    ))
+    try:
+        await asyncio.wait_for(paused.wait(), 5)
+        writer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await writer
+        # Keep the cancelled cursor alive through the real shutdown writes.
+        assert retained_cursors
+        await asyncio.wait_for(engine.stop(), 2)
+        assert await engine.order_manager.list_all() == []
+    finally:
+        # Diagnostic cleanup only; no production connection/row is involved.
+        retained_cursors.clear()
+        await engine.stop()
+
+
 async def test_inflight_current_probe_cannot_clear_latched_lease_loss(database, monkeypatch):
     from crypto_trader.llm_chief.decision_store import LLMDecisionStore
     from crypto_trader.trade_plan.service import TradePlanService
@@ -62,6 +101,48 @@ async def test_execution_adapter_cannot_be_rebound_to_another_actor(database):
         assert engine.settlement.journal.__self__ is engine
     finally:
         await engine.stop()
+
+
+async def test_waiting_native_submit_cannot_borrow_a_restarted_actors_guard(database, monkeypatch):
+    first = make_paper_engine(database, engine_tick_seconds=3600)
+    await first.start("native-old-actor")
+    order = await first.order_manager.create_from_intent(
+        make_intent("waiting-old-actor"), trading_mode=TradingMode.PAPER,
+    )
+    paused, release = asyncio.Event(), asyncio.Event()
+    original_sleep = asyncio.sleep
+
+    async def paused_submit_clock(delay):
+        if delay == 0.1234:
+            paused.set()
+            await release.wait()
+        else:
+            await original_sleep(delay)
+
+    first.adapter.submit_delay_seconds = 0.1234
+    monkeypatch.setattr("crypto_trader.simulator.exchange.asyncio.sleep", paused_submit_clock)
+    pending = asyncio.create_task(first.adapter.submit_order(order))
+    second = None
+    try:
+        await asyncio.wait_for(paused.wait(), 5)
+        await first.stop()
+        second = make_paper_engine(
+            database, simulator=first.adapter, engine_tick_seconds=3600,
+        )
+        await second.start("native-new-actor")
+        assert second.execution_lease_current() is True
+        release.set()
+        with pytest.raises(OrderRejected):
+            await asyncio.wait_for(pending, 5)
+        assert first.adapter.orders == {}
+        with pytest.raises(LeaseNotHeld, match="adapter"):
+            await first.start("cannot-reclaim-rebound-adapter")
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        if second is not None:
+            await second.stop()
+        await first.stop()
 
 
 @pytest.mark.parametrize("mutation", ["delete", "mode"])
