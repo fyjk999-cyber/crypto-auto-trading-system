@@ -19,6 +19,69 @@ from tests.integration.test_api import make_state
 from tests.integration.test_order_manager import make_intent
 
 
+async def test_inflight_current_probe_cannot_clear_latched_lease_loss(database, monkeypatch):
+    from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+    from crypto_trader.trade_plan.service import TradePlanService
+    from tests.integration.test_trading_safety_gate import _fresh_entry_signal
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("probe-cannot-restore-authority")
+    await engine._strategy_context("BTCUSDT")
+    _, signal = await _fresh_entry_signal(
+        engine, LLMDecisionStore(engine.session_factory), TradePlanService(engine.session_factory),
+        "queued-probe-race",
+    )
+    actual_query = engine.lease_manager.is_current
+
+    async def current_but_loss_during_await(*args, **kwargs):
+        current = await actual_query(*args, **kwargs)
+        assert current is True
+        engine._lose_execution_lease()  # Same callback used by actual writer/renewal failure.
+        return current
+
+    monkeypatch.setattr(engine.lease_manager, "is_current", current_but_loss_during_await)
+    try:
+        try:
+            await engine.process_signal(signal)
+        except (LeaseNotHeld, OrderRejected):
+            pass
+        assert engine.execution_lease_current() is False
+        assert await engine.order_manager.list_all() == []
+    finally:
+        await engine.stop()
+
+
+async def test_execution_adapter_cannot_be_rebound_to_another_actor(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("adapter-owner-a")
+    try:
+        with pytest.raises(LeaseNotHeld, match="adapter"):
+            make_paper_engine(database, simulator=engine.adapter, engine_tick_seconds=3600)
+        assert engine.adapter.execution_guard.__self__ is engine
+        assert engine.adapter.lease_mutation_guard.__self__ is engine
+        assert engine.settlement.journal.__self__ is engine
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.parametrize("mutation", ["delete", "mode"])
+async def test_lost_lease_shutdown_exception_cannot_delete_or_repurpose_run(database, mutation):
+    from crypto_trader.persistence.models import EngineRunORM
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("shutdown-metadata-only")
+    await engine.stop()
+    async with engine.session_factory() as session:
+        row = await session.get(EngineRunORM, engine.run_id)
+        assert row.state == "STOPPED"
+        if mutation == "delete":
+            await session.delete(row)
+        else:
+            row.mode = "LIVE"
+        with pytest.raises(LeaseNotHeld):
+            await session.commit()
+
+
 async def test_projection_refresh_cannot_overwrite_a_concurrent_committed_trade(database):
     """Pause the real DB read; concurrent real ledger writes must stay fenced."""
     from crypto_trader.domain.enums import LedgerEntryType, OrderSide

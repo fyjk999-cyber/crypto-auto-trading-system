@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from sqlalchemy import create_engine, event, func, select, update
+from sqlalchemy import create_engine, event, func, inspect, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Session
@@ -77,9 +77,12 @@ def _requires_writer(session, obj):
     if isinstance(obj, AuditEventORM) and obj in session.new:
         if obj.action in {"EXECUTION_LEASE_LOST", "ENGINE_STOPPED"}:
             return False
-    if isinstance(obj, EngineRunORM) and obj not in session.new:
+    if (isinstance(obj, EngineRunORM) and obj not in session.new
+            and obj not in session.deleted):
         if obj.state == "STOPPED" and obj.run_id == session.info["writer_run_id"]:
-            return False
+            changed = {attr.key for attr in inspect(obj).attrs if attr.history.has_changes()}
+            if changed <= {"state", "ended_at"}:
+                return False
     return True
 
 

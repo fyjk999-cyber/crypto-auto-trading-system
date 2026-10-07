@@ -119,6 +119,9 @@ class TradingEngine:
         exit_controller=None,
         news_reassessment_runtime=None,
     ) -> None:
+        if isinstance(getattr(getattr(adapter, "execution_guard", None), "__self__", None),
+                      TradingEngine):
+            raise LeaseNotHeld("execution adapter cannot be shared across engine actors")
         self.settings = settings
         self.database = database
         self.adapter = adapter
@@ -1792,6 +1795,9 @@ class TradingEngine:
                 self.lease.fence_generation,
                 owner_id=self.lease.owner_id,
             )
+            # A writer/heartbeat can latch loss while this read awaits. A
+            # current historical probe must never restore that old authority.
+            lease_held = self._lease_valid and lease_held
             self._lease_valid = lease_held
         intent = OrderIntent(
             client_order_id=client_order_id,

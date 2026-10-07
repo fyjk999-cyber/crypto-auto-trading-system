@@ -38,7 +38,8 @@ startup safety gates. Lease loss never automatically clears the kill switch.
    unfenced ledger. Lease denial produces HTTP409 without secret/SQL details.
 
 Only append-only EXECUTION_LEASE_LOST/ENGINE_STOPPED diagnostics and **own-run**
-STOPPED metadata may persist after loss. They cannot close other runtime rows,
+STOPPED state/ended_at metadata may persist after loss, not row deletion or
+unrelated column changes. They cannot close other runtime rows,
 create orders/fills/episodes, alter balances, or grant trading authority.
 Recovery/FILL_SETTLED/settlement journal writes are not exempt.
 
@@ -46,6 +47,8 @@ Recovery/FILL_SETTLED/settlement journal writes are not exempt.
 
 Engine-level startup/order/ledger/portfolio/plan/episode/leg/reconciliation writes
 are fenced; bootstrap binds Chief decision/evidence stores to that same actor.
+An adapter already bound to an engine cannot be rebound to another actor;
+in-flight authority probes cannot undo a sticky writer/heartbeat loss.
 Standalone tools and isolated test fixture writers have their own explicit
 factories, not runtime grants. Required tests cover expired and superseded
 writers, last-DML rollback, sticky failure, long startup, native matching and
