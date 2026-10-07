@@ -615,6 +615,12 @@ def create_app(state: AppState) -> FastAPI:
                 "count": len(rows),
             }
 
+    @app.get("/runtime/acceptance")
+    async def runtime_acceptance():
+        if state.engine is None:
+            raise HTTPException(status_code=503, detail="RUNTIME_UNAVAILABLE")
+        return state.engine.acceptance_snapshot()
+
     @app.get("/ready")
     async def ready():
         try:

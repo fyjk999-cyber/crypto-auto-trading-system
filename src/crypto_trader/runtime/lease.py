@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import quote
 
@@ -183,6 +184,7 @@ class LeaseManager:
                 },
             )
         self.last_authority_error = None
+        self.last_authority_observation = None
 
     def fenced_sessions(self, lease_provider, lease_valid, run_id_provider, lease_failed):
         """Actor-bound sessions; standalone tools/tests keep their own factory."""
@@ -194,6 +196,23 @@ class LeaseManager:
 
     def is_current_now(self, lease: Lease) -> bool:
         """Fresh fail-closed authority at synchronous execution boundaries."""
+        observation = self.observe_authority(lease)
+        self.last_authority_observation = observation
+        self.last_authority_error = observation["error"]
+        return observation["current"]
+
+    def observe_authority(self, lease: Lease) -> dict:
+        """The same committed read/expiry check, without changing guard state."""
+        observation = {
+            "owner_id": lease.owner_id,
+            "token_id": sha256(lease.token.encode()).hexdigest(),
+            "fence_generation": lease.fence_generation,
+            "expires_at": None,
+            "checked_epoch": None,
+            "clock_source": "execution_guard_utc_after_committed_read",
+            "current": False,
+            "error": None,
+        }
         try:
             with self._authority_reader.connect() as connection:
                 row = connection.execute(select(
@@ -204,16 +223,20 @@ class LeaseManager:
                     RuntimeLeaseORM.token == lease.token,
                     RuntimeLeaseORM.fence_generation == lease.fence_generation,
                 )).one_or_none()
-                self.last_authority_error = None
-                return row is not None and row.expires_at > _epoch()
+                now = _epoch()
+                observation.update(
+                    expires_at=row.expires_at if row is not None else None,
+                    checked_epoch=now,
+                    current=row is not None and row.expires_at > now,
+                )
         except Exception as exc:
             # Unknown is not historical authority. Never log tokens/URLs.
             error = getattr(exc, "orig", exc)
-            self.last_authority_error = {
+            observation["error"] = {
                 "type": type(error).__name__,
                 "database_error": getattr(error, "sqlite_errorname", None),
             }
-            return False
+        return observation
 
     async def acquire(self, lease_key: str, owner_id: str, ttl_seconds: float) -> Lease | None:
         token = new_id("lease")

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextvars import ContextVar
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import wraps
@@ -195,6 +197,9 @@ class TradingEngine:
         self._tasks: list[asyncio.Task] = []
         self._lease_started = asyncio.Event()
         self._running = False
+        self._first_eligibility: dict | None = None
+        self._first_eligibility_error: str | None = None
+        self._first_eligibility_attempted = False
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
@@ -2464,6 +2469,25 @@ class TradingEngine:
 
     def trading_safety_failures(self) -> tuple[str, ...]:
         """Live execution-safety evidence, not aggregate/cosmetic health."""
+        evidence = {}
+        failures = self._trading_safety_failures(self.execution_lease_current, evidence)
+        if not failures and not self._first_eligibility_attempted:
+            # Synchronous, no await: concurrent asyncio callers cannot mix
+            # generations or overwrite the first actual empty evaluation.
+            self._first_eligibility_attempted = True
+            try:
+                self._first_eligibility = self._acceptance_facts(
+                    failures, self.lease_manager.last_authority_observation
+                    if self.require_lease else {"required": False, "current": True},
+                    evidence["settlement"],
+                )
+            except Exception:
+                # Acceptance diagnostics must never change execution authority.
+                self._first_eligibility_error = "CAPTURE_UNAVAILABLE"
+        return failures
+
+    def _trading_safety_failures(self, lease_current, evidence) -> tuple[str, ...]:
+        """One predicate; diagnostic callers supply a non-mutating lease read."""
         failures = []
         for name in ("event_processing", "reconciliation",
                      "recovery_factual_state", "factual_fill_lineage", "lifecycle_recovery"):
@@ -2482,13 +2506,83 @@ class TradingEngine:
                 failures.append(failure)
         if self.reconciliation_current_state != "COHERENT_OK":
             failures.append("RECONCILIATION_NOT_COHERENT_OK")
-        if self.settlement.snapshot()["state"] != "COHERENT":
+        evidence["settlement"] = self.settlement.snapshot()
+        if evidence["settlement"]["state"] != "COHERENT":
             failures.append("SETTLEMENT_NOT_COHERENT")
-        if not self.execution_lease_current():
+        if not lease_current():
             failures.append("EXECUTION_LEASE_NOT_HELD")
         if self.risk_engine.kill_switch.enabled:
             failures.append("GLOBAL_KILL_SWITCH")
         return tuple(failures)
+
+    def _worker_topology(self) -> dict:
+        return {
+            name: {
+                "exists": bool(tasks),
+                "done": all(task.done() for task in tasks) if tasks else None,
+                "cancelled": any(task.cancelled() for task in tasks) if tasks else None,
+                "live_count": sum(not task.done() for task in tasks),
+                "tasks": [
+                    {"done": task.done(), "cancelled": task.cancelled()} for task in tasks
+                ],
+            }
+            for name in ("engine-events", "engine-recon", "engine-ticks")
+            for tasks in [[task for task in self._tasks if task.get_name() == name]]
+        }
+
+    def _acceptance_facts(self, failures, lease, settlement) -> dict:
+        return deepcopy({
+            "observed_at_utc": datetime.now(UTC).isoformat(),
+            "pid": os.getpid(),
+            "run_id": self.run_id,
+            "running_sha": os.environ.get("RUNNING_SHA", "unknown"),
+            "mode": self.settings.effective_mode().value,
+            "live_trading": self.settings.live_trading_enabled,
+            "llm_paused": os.environ.get("LLM_CALLS_PAUSED", "").strip().lower()
+                in {"1", "true", "yes", "on", "paused"},
+            "runtime_running": self._running,
+            "runtime_state": self.state_machine.state.value,
+            "trading_safety_failures": list(failures) if failures is not None else None,
+            "workers": self._worker_topology(),
+            "lease": lease,
+            "event_processing": self.health.components.get("event_processing"),
+            "reconciliation": self.reconciliation_current_state,
+            "leg_reconciliation": {
+                "required": (self._leg_recovery_required or self.leg_service is not None
+                             or self.leg_reconciler is not None or self.leg_execution_enabled),
+                "healthy": self._required_leg_recovery_healthy(),
+                "evidence": self.health.components.get("leg_reconciliation"),
+            },
+            "settlement": settlement,
+            "lifecycle_recovery": self.health.components.get("lifecycle_recovery"),
+        })
+
+    def acceptance_snapshot(self) -> dict:
+        """Read-only acceptance evidence, independent of trading authority."""
+        lease = self.lease_manager.observe_authority(self.lease) if self.lease else {
+            "current": not self.require_lease, "required": self.require_lease,
+        }
+        grant, run_id = self._execution_identity()
+        current = (not self.require_lease or (
+            grant is self.lease and run_id == self.run_id
+            and self._lease_valid and lease["current"]
+        ))
+        # The real guard has sticky lease-loss side effects. Never perform
+        # them through GET or pretend an approximate list is its actual result.
+        guard_would_fault = (self.require_lease and self.lease is not None
+                            and grant is self.lease and run_id == self.run_id
+                            and not current)
+        evidence = {}
+        failures = self._trading_safety_failures(lambda: current, evidence)
+        snapshot = self._acceptance_facts(
+            None if guard_would_fault else failures, lease, evidence["settlement"],
+        )
+        snapshot["trading_safety_evaluation_error"] = (
+            "CENTRAL_PREDICATE_REQUIRES_LEASE_LOSS_SIDE_EFFECT" if guard_would_fault else None
+        )
+        snapshot["first_eligibility"] = deepcopy(self._first_eligibility)
+        snapshot["first_eligibility_error"] = self._first_eligibility_error
+        return snapshot
 
     def runtime_snapshot(self) -> dict:
         lease = self.lease
