@@ -11,6 +11,11 @@
     "published_at_ms": 1200000,
     "resource": {"state": "NORMAL", "collected_at_ms": 1200000, "error": null},
     "scheduler": {"running": true, "collected_at_ms": 1200000, "error": null},
-    "incremental": {"last_outcome": "PASS", "completed_at_ms": 1100000, "cycle_id": "1090000"}
+    "incremental": {
+      "last_outcome": "PASS", "completed_at_ms": 1100000, "cycle_id": "1090000",
+      "current_active": false, "current_cycle_id": null,
+      "current_started_at_ms": null, "current_age_seconds": null,
+      "current_stale": false, "current_stale_limit_seconds": 300
+    }
   }
 }

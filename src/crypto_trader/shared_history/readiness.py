@@ -64,6 +64,37 @@ def operational_health_failure(
     completed = incremental.get("completed_at_ms")
     if not _timestamp(completed) or completed > published:
         return "INCREMENTAL_TIMESTAMP_INVALID"
+    active_keys = {
+        "current_active", "current_cycle_id", "current_started_at_ms",
+        "current_age_seconds", "current_stale", "current_stale_limit_seconds",
+    }
+    if (
+        not active_keys <= incremental.keys()
+        or type(incremental["current_active"]) is not bool
+        or type(incremental["current_stale"]) is not bool
+        or type(incremental["current_stale_limit_seconds"]) is not int
+        or incremental["current_stale_limit_seconds"] != 300
+    ):
+        return "ACTIVE_INCREMENTAL_STATE_UNAVAILABLE"
+    started = incremental["current_started_at_ms"]
+    age = incremental["current_age_seconds"]
+    cycle_id = incremental["current_cycle_id"]
+    if incremental["current_active"]:
+        if (
+            not isinstance(cycle_id, str) or not cycle_id.strip()
+            or not _timestamp(started) or started > published
+            or not _timestamp(age)
+        ):
+            return "ACTIVE_INCREMENTAL_STATE_UNAVAILABLE"
+        # Independent wall age plus producer monotonic stale evidence: neither
+        # snapshot delay nor a backward wall-clock jump can revive stale work.
+        if observed - started > 300000 or age > 300 or incremental["current_stale"]:
+            return "ACTIVE_INCREMENTAL_CYCLE_STALE"
+    elif (
+        cycle_id is not None or started is not None or age is not None
+        or incremental["current_stale"]
+    ):
+        return "ACTIVE_INCREMENTAL_STATE_UNAVAILABLE"
     if (
         type(health.get("writer_count")) is not int
         or health["writer_count"] != 1

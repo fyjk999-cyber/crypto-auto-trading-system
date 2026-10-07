@@ -22,7 +22,7 @@ def test_exact_producer_golden_legacy_age_is_not_operational_age():
     assert golden()["incremental_updater"] == "PASS"
     fixture = Path(__file__).parent / "fixtures/operational_health_v1.json"
     assert hashlib.sha256(fixture.read_bytes()).hexdigest() == (
-        "347de7ea3f8d46ac7309756f6ea8ab8d0e31faa9178872bbe39377a2eb8cf83e"
+        "c85373925bd54f68efd91864d8b28da9568ac8fd41a7e1a874b9d486cc4f05c6"
     )
 
 
