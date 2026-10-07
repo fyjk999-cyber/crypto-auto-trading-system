@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import wraps
 
 from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
@@ -87,6 +89,18 @@ from crypto_trader.trade_plan.service import TradePlanService, TradePlanState
 logger = logging.getLogger("crypto_trader.engine")
 
 
+def _with_execution_grant(method):
+    """Nested async work inherits its original grant, never a replacement."""
+    @wraps(method)
+    async def invoke(self, *args, **kwargs):
+        token = self._execution_context.set(self._execution_identity())
+        try:
+            return await method(self, *args, **kwargs)
+        finally:
+            self._execution_context.reset(token)
+    return invoke
+
+
 class TradingEngine:
     def __init__(
         self,
@@ -143,6 +157,7 @@ class TradingEngine:
         self.settlement.journal = self._journal_settlement
         self.adapter.execution_guard = self.trading_safety_failures
         self.adapter.lease_mutation_guard = self.execution_lease_current
+        self.adapter.lease_guard_factory = self.capture_lease_guard
         self.strategies = strategies or []
         self.clock = clock or SystemClock()
         self.authority = authority or ExecutionAuthority()
@@ -183,10 +198,11 @@ class TradingEngine:
         self._initial_balances: dict[str, Decimal] = {}
         self._instruments: dict[str, object] = {}
         self.consecutive_failures = 0
+        self._execution_context = ContextVar("execution_grant")
         self.session_factory = (
             self.lease_manager.fenced_sessions(
-                lambda: self.lease, lambda: self._lease_valid, lambda: self.run_id,
-                self._lose_execution_lease,
+                lambda: self._execution_identity()[0], lambda: self._lease_valid,
+                lambda: self._execution_identity()[1], self._lose_captured_execution_lease,
             ) if self.require_lease else database.session_factory
         )
         self._bind_writer_services()
@@ -265,6 +281,7 @@ class TradingEngine:
             self._adapter_released = True
             raise
 
+    @_with_execution_grant
     async def _start_owned(self) -> str:
         self.state_machine.transition(RuntimeState.STARTING)
         await self._persist_run(RuntimeState.STARTING)
@@ -879,6 +896,7 @@ class TradingEngine:
             await self.attempt_offline_recovery()
 
     # ------------------------------------------------------------------ tick
+    @_with_execution_grant
     async def tick(self) -> list[RiskDecision]:
         decisions: list[RiskDecision] = []
         safety_failures = self.trading_safety_failures()
@@ -1463,8 +1481,9 @@ class TradingEngine:
             )
             raise
 
+    @_with_execution_grant
     async def process_signal(self, signal: SignalIntent) -> RiskDecision | None:
-        run_id = self.run_id
+        run_id = self._execution_identity()[1]
         symbol = signal.symbol
         client_order_id = f"{signal.strategy_id}_{signal.signal_id}"[:60]
         if self.enforce_llm_entry_authority and signal.strategy_id not in {
@@ -1794,17 +1813,19 @@ class TradingEngine:
 
         instrument = self._instruments.get(symbol)
         lease_held = not self.require_lease
-        if self.require_lease and self.lease is not None and self._lease_valid:
+        grant, invocation_run = self._execution_identity()
+        if (self.require_lease and grant is not None and self._lease_valid
+                and grant is self.lease and invocation_run == self.run_id):
             lease_held = await self.lease_manager.is_current(
-                self.lease_key,
-                self.lease.token,
-                self.lease.fence_generation,
-                owner_id=self.lease.owner_id,
+                grant.lease_key, grant.token, grant.fence_generation, owner_id=grant.owner_id,
             )
             # A writer/heartbeat can latch loss while this read awaits. A
             # current historical probe must never restore that old authority.
-            lease_held = self._lease_valid and lease_held
-            self._lease_valid = lease_held
+            if grant is self.lease and invocation_run == self.run_id:
+                lease_held = self._lease_valid and lease_held
+                self._lease_valid = lease_held
+            else:
+                lease_held = False  # Do not overwrite the replacement grant's latch.
         intent = OrderIntent(
             client_order_id=client_order_id,
             symbol=symbol,
@@ -2022,6 +2043,7 @@ class TradingEngine:
             await session.commit()
 
     # --------------------------------------------------------- exchange events
+    @_with_execution_grant
     async def process_exchange_event(self, event: ExchangeEvent) -> None:
         payload = event.payload or {}
         if event.event_type in (ExchangeEventType.MARKET_DELTA, ExchangeEventType.MARKET_SNAPSHOT):
@@ -2402,9 +2424,25 @@ class TradingEngine:
         if self.health.components.get("execution_lease", {}).get("ok") is not False:
             self.health.set("execution_lease", False, "NOT_CURRENT")
 
+    def _execution_identity(self):
+        return self._execution_context.get((self.lease, self.run_id))
+
+    def _lose_captured_execution_lease(self, grant):
+        if grant is self.lease:
+            self._lose_execution_lease()
+
+    def capture_lease_guard(self):
+        """Keep an invocation on its original immutable grant across awaits."""
+        grant, run_id = self._execution_identity()
+        return lambda: (self.lease is grant and self.run_id == run_id
+                        and self.execution_lease_current())
+
     def execution_lease_current(self) -> bool:
         if not self.require_lease:
             return True
+        grant, run_id = self._execution_identity()
+        if grant is not self.lease or run_id != self.run_id:
+            return False  # An old invocation must not fault/borrow the newer actor.
         current = (self._lease_valid and self.lease is not None
                    and self.lease_manager.is_current_now(self.lease))
         if not current:

@@ -699,11 +699,16 @@ def create_app(state: AppState) -> FastAPI:
         )
         # All monetary writes use the actor-bound runtime transaction fence,
         # not an unguarded API-local LedgerService after the initial HTTP gate.
+        actor = state.engine
+        invocation_guard = actor.capture_lease_guard() if actor is not None else None
+
         def sessions():
-            if state.engine is None:
+            if actor is None:
                 return state.database.session_factory()
-            return state.engine.session_factory(info={
-                "execution_guard": state.engine.trading_safety_failures,
+            if not invocation_guard():
+                raise LeaseNotHeld("execution invocation grant changed or lost")
+            return actor.session_factory(info={
+                "execution_guard": actor.trading_safety_failures,
             })
 
         return PerpetualPaperEngine(sessions, contract)

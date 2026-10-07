@@ -52,9 +52,15 @@ Engine-level startup/order/ledger/portfolio/plan/episode/leg/reconciliation writ
 are fenced; bootstrap binds Chief decision/evidence stores to that same actor.
 An adapter cannot be shared by active actors. After controlled stop/cleanup a
 fresh actor may recover it, but pending submit/match/cancel operations retain
-the old actor's guard across awaits and cannot borrow the new grant. The old
+the original immutable grant and run identity across awaits, not merely a
+mutable actor callback; same-instance restart cannot lend them its new grant.
+Direct perpetual service sessions likewise retain their invocation grant. The old
 actor cannot restart once its adapter has been rebound. In-flight authority
 probes cannot undo a sticky writer/heartbeat loss.
+Startup workers and public signal/event/tick invocations propagate their frozen
+grant/run through Python ContextVar, so an old workflow's later service sessions
+cannot select the replacement grant after an await. Rejection of an obsolete
+invocation does not falsely mark the replacement grant lost.
 Concurrent callbacks also elect one batch-completion owner before its journal
 await. Duplicates cannot double-publish or fault a completed batch; a journal
 failure still retains the real settlement fault and blocks trading.

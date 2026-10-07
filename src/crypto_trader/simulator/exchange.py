@@ -58,6 +58,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         self.settlement_coordinator = None  # Bound by the account's TradingEngine.
         self.execution_guard = None
         self.lease_mutation_guard = None
+        self.lease_guard_factory = None
         self._matching_batch = None
 
         # chaos / fault injection hooks
@@ -218,6 +219,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
     async def submit_order(self, order: Order) -> Order:
         execution_guard = self.execution_guard  # This invocation's actor, before any await.
+        lease_guard = self._capture_mutation_lease_guard()
         self._ensure_connected()
         if self.settlement_coordinator is not None:
             if self.settlement_coordinator.snapshot()["state"] != "COHERENT":
@@ -238,6 +240,8 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
 
         # Revalidate after all pre-submit awaits, immediately before native
         # PAPER acceptance. An already accepted factual fill still settles.
+        if lease_guard is not None and not lease_guard():
+            raise OrderRejected("EXECUTION_LEASE_NOT_HELD")
         if execution_guard is not None:
             failures = execution_guard()
             if failures:
@@ -297,7 +301,7 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         )
 
     async def _match_guarded(self, order: Order) -> list[ExchangeEvent]:
-        lease_guard = self.lease_mutation_guard
+        lease_guard = self._capture_mutation_lease_guard()
         coordinator = self.settlement_coordinator
         if coordinator is None:
             return self._match_order(order)
@@ -516,12 +520,16 @@ class SimulatedExchangeAdapter(ExchangeAdapter):
         pos.updated_at = fill.timestamp
         self.balances[quote] = self.balances.get(quote, Decimal("0")) + realized - fill.fee
 
+    def _capture_mutation_lease_guard(self):
+        return (self.lease_guard_factory() if self.lease_guard_factory is not None
+                else self.lease_mutation_guard)
+
     def _require_mutation_lease(self) -> None:
         if self.lease_mutation_guard is not None and not self.lease_mutation_guard():
             raise OrderRejected("EXECUTION_LEASE_NOT_HELD")
 
     async def cancel_order(self, symbol: str, exchange_order_id: str) -> Order:
-        lease_guard = self.lease_mutation_guard
+        lease_guard = self._capture_mutation_lease_guard()
         self._ensure_connected()
         order = self.orders.get(exchange_order_id)
         if order is None:

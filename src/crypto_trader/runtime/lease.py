@@ -45,7 +45,7 @@ def _db_epoch(session):
     return func.extract("epoch", func.clock_timestamp())
 
 
-@dataclass
+@dataclass(frozen=True)
 class Lease:
     lease_key: str
     owner_id: str
@@ -63,8 +63,11 @@ class _FencedSession(AsyncSession):
         super().__init__(*args, sync_session_class=_FencedSyncSession, **kwargs)
         # Capture THIS actor/grant, not whatever owner exists after an await
         # or controlled restart. A stale session must never borrow a new grant.
-        self.info.update(writer_lease=lease_provider(), writer_valid=lease_valid,
-                         writer_run_id=run_id_provider(), writer_failed=lease_failed)
+        grant = lease_provider()
+        self.info.update(writer_lease=grant,
+                         writer_valid=lambda: lease_provider() is grant and lease_valid(),
+                         writer_run_id=run_id_provider(),
+                         writer_failed=lambda: lease_failed(grant))
 
     async def fence_writer_transaction(self):
         """Lock before reads used to derive writes, not only before their DML."""

@@ -91,7 +91,7 @@ class PaperRealMarketAdapter(SimulatedExchangeAdapter):
         real feed is unavailable the book is not faked - the order is
         rejected instead of matching against stale or synthetic prices.
         """
-        lease_guard = self.lease_mutation_guard
+        lease_guard = self._capture_mutation_lease_guard()
         try:
             inst_id = self.feed.provider_symbol(order.symbol)
             payload = await self.feed.client.get_orderbook(inst_id)

@@ -19,6 +19,133 @@ from tests.integration.test_api import make_state
 from tests.integration.test_order_manager import make_intent
 
 
+async def test_stale_probe_result_cannot_fault_the_replacement_grant(database, monkeypatch):
+    from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+    from crypto_trader.trade_plan.service import TradePlanService
+    from tests.integration.test_trading_safety_gate import _fresh_entry_signal
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("probe-original-grant")
+    await engine._strategy_context("BTCUSDT")
+    _, signal = await _fresh_entry_signal(
+        engine, LLMDecisionStore(engine.session_factory), TradePlanService(engine.session_factory),
+        "delayed-probe-grant-replacement",
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    actual_query = engine.lease_manager.is_current
+
+    async def query_after_replacement(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await actual_query(*args, **kwargs)  # Old owner/token/fence is factually false.
+
+    monkeypatch.setattr(engine.lease_manager, "is_current", query_after_replacement)
+    pending = asyncio.create_task(engine.process_signal(signal))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await engine.stop()
+        await engine.start("probe-replacement-grant")
+        assert engine.execution_lease_current() is True
+        release.set()
+        try:
+            await asyncio.wait_for(pending, 5)
+        except (LeaseNotHeld, OrderRejected):
+            pass
+        assert await engine.order_manager.list_all() == []
+        assert engine.execution_lease_current() is True
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        await engine.stop()
+
+
+async def test_queued_chief_pipeline_cannot_borrow_a_restarted_grant(database):
+    from crypto_trader.llm_chief.decision_store import LLMDecisionStore
+    from crypto_trader.trade_plan.service import TradePlanService
+    from tests.integration.test_trading_safety_gate import _fresh_entry_signal
+
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("chief-original-grant")
+    await engine._strategy_context("BTCUSDT")
+    _, signal = await _fresh_entry_signal(
+        engine, LLMDecisionStore(engine.session_factory), TradePlanService(engine.session_factory),
+        "queued-chief-grant-replacement",
+    )
+    paused, release = asyncio.Event(), asyncio.Event()
+    armed = True
+
+    def pause_first_order_read(_conn, _cursor, statement, _params, _context, _many):
+        nonlocal armed
+        if (armed and asyncio.current_task().get_name() == "chief-old-grant"
+                and statement.startswith("SELECT orders.internal_order_id")):
+            armed = False
+            paused.set()
+            await_only(release.wait())
+
+    event.listen(database.engine.sync_engine, "after_cursor_execute", pause_first_order_read)
+    pending = asyncio.create_task(engine.process_signal(signal), name="chief-old-grant")
+    try:
+        await asyncio.wait_for(paused.wait(), 5)
+        await engine.stop()
+        await engine.start("chief-replacement-grant")
+        assert engine.trading_safety_failures() == ()
+        release.set()
+        try:
+            await asyncio.wait_for(pending, 5)
+        except (LeaseNotHeld, OrderRejected):
+            pass
+        assert await engine.order_manager.list_all() == []
+        assert engine.adapter.orders == {}
+        assert engine.execution_lease_current() is True
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+        event.remove(database.engine.sync_engine, "after_cursor_execute", pause_first_order_read)
+        await engine.stop()
+
+
+async def test_waiting_perpetual_close_cannot_adopt_a_restarted_grant(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("perp-original-grant")
+    state = make_state(database)
+    state.engine = engine
+    paused, release = asyncio.Event(), asyncio.Event()
+
+    def pause_old_request_read(_conn, _cursor, statement, _params, _context, _many):
+        if (asyncio.current_task().get_name() == "perp-old-close"
+                and statement.startswith("SELECT ledger_transactions.")):
+            paused.set()
+            await_only(release.wait())
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(state)),
+                                base_url="http://isolated") as client:
+        opened = await client.post("/paper/perpetual/open", json={
+            "side": "LONG", "quantity": "1", "price": "100", "leverage": "3",
+        })
+        assert opened.status_code == 200
+        before = {r.entry_id for r in await engine.ledger.list_entries_recent(limit=200)}
+        event.listen(database.engine.sync_engine, "after_cursor_execute", pause_old_request_read)
+        pending = asyncio.create_task(client.post("/paper/perpetual/close", json={
+            "side": "LONG", "quantity": "1", "price": "100",
+        }), name="perp-old-close")
+        try:
+            await asyncio.wait_for(paused.wait(), 5)
+            await engine.stop()
+            await engine.start("perp-replacement-grant")
+            assert engine.trading_safety_failures() == ()
+            release.set()
+            response = await asyncio.wait_for(pending, 5)
+            assert response.status_code == 409
+            after = await engine.ledger.list_entries_recent(limit=200)
+            assert {r.entry_id for r in after} == before
+        finally:
+            release.set()
+            await asyncio.gather(pending, return_exceptions=True)
+            event.remove(database.engine.sync_engine, "after_cursor_execute",
+                         pause_old_request_read)
+            await engine.stop()
+
+
 async def test_concurrent_completion_publishes_one_durable_batch_completion(database):
     engine = make_paper_engine(database, engine_tick_seconds=3600)
     await engine.start("concurrent-batch-completion")
@@ -142,7 +269,10 @@ async def test_execution_adapter_cannot_be_rebound_to_another_actor(database):
         await engine.stop()
 
 
-async def test_waiting_native_submit_cannot_borrow_a_restarted_actors_guard(database, monkeypatch):
+@pytest.mark.parametrize("same_actor", [False, True])
+async def test_waiting_native_submit_cannot_borrow_a_restarted_actors_guard(
+    database, monkeypatch, same_actor
+):
     first = make_paper_engine(database, engine_tick_seconds=3600)
     await first.start("native-old-actor")
     order = await first.order_manager.create_from_intent(
@@ -165,7 +295,7 @@ async def test_waiting_native_submit_cannot_borrow_a_restarted_actors_guard(data
     try:
         await asyncio.wait_for(paused.wait(), 5)
         await first.stop()
-        second = make_paper_engine(
+        second = first if same_actor else make_paper_engine(
             database, simulator=first.adapter, engine_tick_seconds=3600,
         )
         await second.start("native-new-actor")
@@ -174,8 +304,9 @@ async def test_waiting_native_submit_cannot_borrow_a_restarted_actors_guard(data
         with pytest.raises(OrderRejected):
             await asyncio.wait_for(pending, 5)
         assert first.adapter.orders == {}
-        with pytest.raises(LeaseNotHeld, match="adapter"):
-            await first.start("cannot-reclaim-rebound-adapter")
+        if not same_actor:
+            with pytest.raises(LeaseNotHeld, match="adapter"):
+                await first.start("cannot-reclaim-rebound-adapter")
     finally:
         release.set()
         await asyncio.gather(pending, return_exceptions=True)
