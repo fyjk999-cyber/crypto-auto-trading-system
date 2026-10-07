@@ -1,12 +1,14 @@
 """AAVE-shaped multi-fill safety exit, confined to temporary PAPER fixtures."""
 
 import traceback
-from datetime import UTC
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from sqlalchemy import delete, event, update
 
+from crypto_trader.domain.enums import ExchangeEventType, OrderSide, TradingMode
+from crypto_trader.domain.models import ExchangeEvent, OrderIntent
 from crypto_trader.llm_chief.decision_store import LLMDecisionStore
 from crypto_trader.market_data.state import MarketState
 from crypto_trader.persistence.models import (
@@ -67,6 +69,71 @@ class ProfitFixtureExchange(SimulatedExchangeAdapter):
             imbalance_l5=Decimal("-0.4"),
             realized_volatility=Decimal("0.002"),
         )
+
+
+@pytest.mark.parametrize("fill_before_ack", [False, True])
+async def test_inline_events_settle_before_submit_returns(database, fill_before_ack):
+    """Deliver the real simulator events before the submit response binds its ID."""
+    class InlineExchange(ProfitFixtureExchange):
+        async def _emit(self, event):
+            await super()._emit(event)
+            await engine.wait_for_event_queue()
+
+    adapter = InlineExchange(initial_balances={"USDT": Decimal("100000")})
+    adapter.fill_before_ack = fill_before_ack
+    engine = make_paper_engine(database, simulator=adapter, engine_tick_seconds=3600)
+    await engine.start("isolated-inline-events")
+    try:
+        adapter.seed_book("BTCUSDT", mid="100", spread="0.01", depth=10)
+        await engine._strategy_context("BTCUSDT")
+        await _open_v2_position(
+            engine, LLMDecisionStore(database.session_factory),
+            TradePlanService(database.session_factory), "inline-entry", 10.0,
+        )
+        native = next(iter(adapter.orders.values()))
+        durable = await engine.order_manager.get_by_client(native.client_order_id)
+        position = await engine.portfolio.get_position("BTCUSDT")
+        assert native.filled_quantity == Decimal("10")
+        assert durable.filled_quantity == Decimal("10")
+        assert position is not None and position.quantity == Decimal("10")
+        assert engine.settlement.snapshot()["state"] == "COHERENT"
+    finally:
+        await engine.stop()
+
+
+@pytest.mark.parametrize("conflict", ["symbol", "side", "exchange_order_id"])
+async def test_early_event_cannot_rebind_conflicting_order(database, conflict):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("isolated-event-identity")
+    try:
+        order = await engine.order_manager.create_from_intent(
+            OrderIntent(client_order_id="known-client", symbol="BTCUSDT",
+                        side=OrderSide.BUY, price="100", quantity="1"),
+            trading_mode=TradingMode.PAPER,
+        )
+        await engine.order_manager.validate(order.internal_order_id)
+        await engine.order_manager.submitting(order.internal_order_id)
+        await engine.order_manager.submitted(order.internal_order_id)
+        if conflict == "exchange_order_id":
+            await engine.order_manager.ack(order.internal_order_id, "original-exchange")
+        payload = {"client_order_id": order.client_order_id,
+                   "exchange_order_id": "early-exchange", "side": "BUY"}
+        if conflict == "side":
+            payload["side"] = "SELL"
+        incoming = ExchangeEvent(
+            event_id="isolated-conflict", event_type=ExchangeEventType.ORDER_ACK,
+            symbol="ETHUSDT" if conflict == "symbol" else "BTCUSDT",
+            timestamp=datetime.now(UTC), payload=payload,
+        )
+        with pytest.raises(ValueError, match="EXCHANGE_EVENT_ORDER_IDENTITY_CONFLICT"):
+            await engine.process_exchange_event(incoming)
+        durable = await engine.order_manager.get(order.internal_order_id)
+        assert durable.exchange_order_id == (
+            "original-exchange" if conflict == "exchange_order_id" else None
+        )
+        assert durable.filled_quantity == Decimal("0")
+    finally:
+        await engine.stop()
 
 
 async def test_startup_lifecycle_discovery_avoids_per_fill_audit_scan(database):

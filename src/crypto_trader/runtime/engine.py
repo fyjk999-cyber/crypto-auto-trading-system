@@ -2053,8 +2053,18 @@ class TradingEngine:
         if not exchange_order_id:
             return
         local = await self.order_manager.get_by_exchange(str(exchange_order_id))
+        if local is None and payload.get("client_order_id"):
+            # Inline ACK/fill delivery can precede the submit response. The
+            # client ID already exists durably; never discard its factual fill
+            # merely because the exchange ID has not been bound yet.
+            local = await self.order_manager.get_by_client(str(payload["client_order_id"]))
+            if local is not None and (
+                local.exchange_order_id not in (None, str(exchange_order_id))
+                or (event.symbol is not None and local.symbol != event.symbol)
+                or (payload.get("side") is not None and local.side.value != payload["side"])
+            ):
+                raise ValueError("EXCHANGE_EVENT_ORDER_IDENTITY_CONFLICT")
         if local is None:
-            # ack may arrive before submit() returns; order was persisted before submit
             return
         event_id = event.event_id
         if event.event_type == ExchangeEventType.ORDER_ACK:
