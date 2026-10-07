@@ -55,6 +55,9 @@ fresh actor may recover it, but pending submit/match/cancel operations retain
 the old actor's guard across awaits and cannot borrow the new grant. The old
 actor cannot restart once its adapter has been rebound. In-flight authority
 probes cannot undo a sticky writer/heartbeat loss.
+Concurrent callbacks also elect one batch-completion owner before its journal
+await. Duplicates cannot double-publish or fault a completed batch; a journal
+failure still retains the real settlement fault and blocks trading.
 Standalone tools and isolated test fixture writers have their own explicit
 factories, not runtime grants. Required tests cover expired and superseded
 writers, last-DML rollback, sticky failure, long startup, native matching and

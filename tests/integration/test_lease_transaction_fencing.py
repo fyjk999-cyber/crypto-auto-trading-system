@@ -19,6 +19,45 @@ from tests.integration.test_api import make_state
 from tests.integration.test_order_manager import make_intent
 
 
+async def test_concurrent_completion_publishes_one_durable_batch_completion(database):
+    engine = make_paper_engine(database, engine_tick_seconds=3600)
+    await engine.start("concurrent-batch-completion")
+    coordinator = engine.settlement
+    journal = coordinator.journal
+    first_commit, release = asyncio.Event(), asyncio.Event()
+    completion_started = False
+
+    async def pause_after_actual_journal_commit(action, token, order_id):
+        nonlocal completion_started
+        await journal(action, token, order_id)
+        if action == "SETTLEMENT_EXTERNAL_COMPLETE" and not completion_started:
+            completion_started = True
+            first_commit.set()
+            await release.wait()
+
+    coordinator.journal = pause_after_actual_journal_commit
+    tasks = []
+    try:
+        # Isolated batch fixture, never production or lifecycle acceptance.
+        await coordinator.begin_batch("fixture-batch", "fixture-order")
+        coordinator.begin("fixture-fill", parent="fixture-batch")
+        await coordinator.seal_batch("fixture-batch")
+        tasks.append(asyncio.create_task(coordinator.complete_local("fixture-fill")))
+        await asyncio.wait_for(first_commit.wait(), 5)
+        tasks.append(asyncio.create_task(coordinator.complete_local("fixture-fill")))
+        await asyncio.wait([tasks[-1]], timeout=0.1)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), 5)
+        records = await engine.audit.list_recent(limit=100)
+        assert len([row for row in records if row.action == "SETTLEMENT_EXTERNAL_COMPLETE"
+                    and row.target == "fixture-batch"]) == 1
+        assert coordinator.snapshot()["state"] == "COHERENT"
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await engine.stop()
+
+
 async def test_cancelled_fence_statement_does_not_retain_the_sqlite_writer_lock(
     database, monkeypatch
 ):

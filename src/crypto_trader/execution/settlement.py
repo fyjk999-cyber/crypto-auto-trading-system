@@ -82,6 +82,11 @@ class SettlementCoordinator:
             return
         if any(child in self.active or child in self.faults for child in batch["children"]):
             return
+        if batch.get("completing"):
+            return
+        # Own completion before journal awaits; duplicates remain pending
+        # until this owner durably completes (or retains a real fault).
+        batch["completing"] = True
         try:
             await self.journal("SETTLEMENT_EXTERNAL_COMPLETE", token, None)
         except BaseException as exc:
