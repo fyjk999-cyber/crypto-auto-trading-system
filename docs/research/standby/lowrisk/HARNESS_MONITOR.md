@@ -1,32 +1,30 @@
-# LOWRISK — Harness 12h PAPER Diagnostic Monitor (REPORT_ONLY v1)
-> SCHEDULE Asia/Shanghai 00:00 and 12:00 every day; `0 0,12 * * *` only with a timezone-aware scheduler. No interval drift.
-> KB: `docs/research/standby/lowrisk/MODEL_KB.md` at this exact docs branch/commit. Runtime data and strategy code always read-only.
+# LOWRISK — 12 小时 PAPER 盈亏归因监控契约 V2（REPORT-ONLY）
+**Asia/Shanghai：每天 00:00 / 12:00 的日历时间窗口；仅输出报告。**
 
-## Primary mission
-At each local clock window [previous boundary, current boundary), identify the currently active Lowrisk PAPER runtime (or record STOPPED, never start it); read-only reconstruct orders, fills, positions, closed episodes, PnL, fees, funding, data quality, factor provenance. Compare 12h/7d/30d and winning/losing/no-fill examples. Decide whether losses are data/accounting, cost, wrong regime, signal quality, correlation/tail, or LLM choice. Recommend **one** primary model hypothesis (+ <=2 alternatives) from `MODEL_KB.md`, or INSUFFICIENT_EVIDENCE.
+## 知识库必须读取的两个独立层级
+1. 全量数学理论（24 项）：docs/research/model-library/v2/00_INDEX.md，以及 01–06 的理论和文献分卷。它是理论参考，不是候选实施清单。
+2. 系统重点理论：docs/research/standby/lowrisk/MODEL_KB.md（V2），说明 Lowrisk 特有因子、LLM/Quant Core 共享策略关系、未盈利事件的理论解释地图。
+不能将旧版 MODEL_KB V1 候选表的优先阶段当作执行命令；V2 生效时以当前文档为准。
 
-## Shared Quant Core strategy parity
-Read authorized Quant Core observations only as comparative evidence. Match on `strategy_package_hash` / feature version / as-of market snapshot / symbol / exact observation time. Validate same factor and strategy-candidate outcomes if both sides have equivalent inputs. Keep differences in final deterministic-vs-LLM decision separate. Never mix accounts or combine equity/fees/episodes. Inconsistent package versions => PARITY_NOT_COMPARABLE, not Alpha failure. Cross-system read unavailable => NOT_VERIFIED.
+## 唯一任务：已有 PAPER 事实的只读解释
+每次读取之前完整 12 小时窗口 [上个整点边界,当前整点边界)，并对照 7d/30d 的真实已存在资料；读取实际 Lowrisk runtime SHA、PAPER account、strategy_package_hash、LLM decisions、factor snapshots、risk、orders、fills、funding/fees、真实净损益。保留盈利样本、未盈利样本、no-fill/no-trade 与数据缺口。
+只读比对 Quant Core：必须同共享策略哈希、as-of 输入与特征版本；最终 LLM 与 deterministic 决策允许不同，不合并账本，不要求对方启动。
+首先区分：数据/合约单位/费用/账本问题；方向预测问题；市场状态解释不足；真实成交问题；风险和 LLM 差异。若缺少证据，则输出 UNKNOWN / NOT_COMPARABLE / INSUFFICIENT_EVIDENCE。
 
-## Strict permissions
-- Periodic job: READ-ONLY against **all** trading services, code trees, market/history storage and knowledge bases. No changing runtime, strategy, LLM prompts, factors, thresholds, leverage, order state, risk controls, services, Git refs, credentials, databases, or other job schedules.
-- FORBID: deploy, push, pull, git checkout/reset/clean, migration, restart, service enable/disable, launchctl mutating commands, placing/cancelling orders, auto-training, backtest or shadow experiments.
-- No hard stop/restart even if an alarm indicates losses. Existing risk authority remains unchanged. Do not write remediation tickets that execute actions.
-- Only allowed recurring writes: append-new Markdown + JSON report in `~/AI-Monitor-Reports/lowrisk/` (isolated from runtime and histories). If no safe report directory, output message-only with BLOCKED_OUTPUT.
-- Do not read or echo API keys; queries via true read-only DB connection; never attach write authorization to scheduler.
-- One run per window; no overlap, no catch-up replay if would risk concurrency; durable idempotent report names.
+## 报告内容（不含处方）
+- 窗口与实际 runtime SHA / PAPER 状态 / 数据来源，含 STOPPED 时的限制。
+- PnL：已实现、未实现、外部现金流区分，gross/net/fees/funding/slippage 对账；n 个真实闭仓 episodes。
+- 观察：哪些交易没有产生净利润、同时哪些交易盈利、订单生命周期或方向/价格关系。
+- 理论解释：每一个原因给出 SUPPORTING_FACTS / ALTERNATIVE_EXPLANATIONS / CONTRADICTING_FACTS / MISSING_EVIDENCE，谨慎使用“可能”。
+- 研究方向：可标注 1 个最相关 THEORY_TOPIC、最多 2 个 SECONDARY_TOPICS，引用 V2 理论章节及至少 1 篇真实论文，不给交易修改步骤。
+- 若与 Quant Core 可比：FACTOR_PARITY 与 DECISION_DIVERGENCE，若不可比则说明缺少的版本或行情证据。
+- RECEIPT：LOWRISK_MODEL_WATCH_REPORT_ONLY，NO_ACTION_TAKEN=YES，附 12h 窗口、源哈希与报告路径。
 
-## Evidence procedure
-1. State window, source timestamps, Git/run SHA, PAPER flag, account alias, strategy hash, factor hash, decision source, health; distinguish historical facts and present instance.
-2. If STOPPED/UNKNOWN, do **not** start anything; report status, allowed historical fact coverage and limitation.
-3. Integrity-first: contract units, timestamp point-in-time, rate/fee/funding, database reconciliation and money accounting. If failure => `BLOCKED_DATA`/`BLOCKED_ACCOUNTING`, stop Alpha assertions.
-4. Assemble lifecycle signal -> strategy candidate -> LLM proposal -> RiskDecision -> order -> fill -> closed episode. Distinguish unfilled from realized losses, MTM and cashflows.
-5. Report 12h and rolling 7/30d; compare up to five loss episodes with up to five profitable episodes; avoid post-hoc selection and duplicated market events.
-6. Map only supported explanations to KB L01–L11; every candidate: paper DOI, baseline overlap, exact observables, missing data, future isolated comparison, falsification condition. **Do not run future experiment**.
-7. Issue `LOWRISK_MONITOR_RECEIPT` with source SHA, 12h window, integrity status, net accounting, top loss buckets, strategy parity, selected hypothesis, confidence and `NO_ACTION_TAKEN=YES`.
+## 严禁事项
+周期任务对三套交易系统、知识库、代码、Git、运行 DB/资金/行情、策略包、服务与进程完全只读。禁止启动/恢复/停止 PAPER；下单/撤单/平仓；修改因子、LLM Prompt、参数、风险、策略、仓位、杠杆；下载执行脚本；自动训练、回测、Shadow、A/B 或晋升；修改知识库自身；读取或输出凭据。
+**尤其禁止根据理论索引预先生成具体优化方案**（参数数值、阈值、策略替换、代码实现顺序、部署流程）。只能根据损失事实形成理论解释与未来研究主题。
+唯一允许周期性业务写入为新建不可覆盖 Markdown/JSON 报告到 ~/AI-Monitor-Reports/lowrisk/；无安全隔离写目录则仅回传 FAIL_CLOSED 状态。
 
-## Scheduling installation / isolation
-One-time installation MAY create a monitoring-only schedule and dedicated report folder outside all trading worktrees, never modifying existing runtime/launchd trading labels. On macOS launchd StartCalendarInterval follows system timezone: if Mac timezone is not Beijing, use verified timezone-aware scheduler rather than `TZ` guess; validate next 00:00/12:00 Beijing triggers. If isolated scheduling cannot be proven, do NOT install; report MONITOR_SECURITY_FAIL.
-
-## Acceptance
-No trading code/config/runtime/database/strategy or KB modifications; no agent auto-repair; report only. Never infer production readiness or live permission. Research data lookback: recent 3 months fitting; prior 3 months backward stress only; never call it true forward OOS.
+## 调度与部署权限
+只允许一次性建立**监控自身**的隔离定时调度与报告目录，不允许触碰现存交易服务/launchd labels/历史数据 writer。使用真实时区感知调度验证北京时间 00:00 与 12:00（如果 Mac 非中国时区不能假定本地 cron 是北京时间）；避免窗口重叠与重跑重复写文件。权限无法安全隔离就不安装。
+最近三个月是未来研究假设选择窗口，较早三个月是逆时间压力参考，不可报告为独立前向测试；监控自己不执行历史模型研究。
