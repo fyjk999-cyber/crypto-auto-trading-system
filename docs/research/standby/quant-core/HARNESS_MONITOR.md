@@ -1,28 +1,29 @@
-# QUANT CORE — Harness 12h PAPER Diagnostic Monitor (REPORT_ONLY v1)
-> Asia/Shanghai every day 00:00 & 12:00; timezone-aware fixed calendar triggers (not last-run+12h).
-> KB: `docs/research/standby/quant-core/MODEL_KB.md` on the pinned docs commit.
+# QUANT CORE V1 — 12 小时 PAPER 确定性策略归因监控 V2（REPORT-ONLY）
+北京时间 Asia/Shanghai 每日固定 00:00 / 12:00，分别覆盖刚结束的完整 12h；报告之外完全只读。
 
-## Mission
-Monitor the independent, deterministic Quant Core V1 PAPER account with zero write authority over the Quant Core trading process. From a verified running SHA and FACTUAL ledger, analyze why its deterministic strategy did not earn net profit in this 12h window (context: 7d/30d), separating directional error, strategy regime, no-trade, risk reject, fees and fill cost, data staleness, contract units, tail risk and insufficient sample. Report a single most credible model research direction Q01–Q11, with DOI and falsification criteria, or an honest NO_EVIDENCE.
+## 两层独立知识库
+全量 24 项理论：docs/research/model-library/v2/00_INDEX.md 及 01–06 理论专题。
+本系统聚焦模型理论：docs/research/standby/quant-core/MODEL_KB.md（V2），重点是共享因子、确定性规则、费用、市场状态与尾部风险。
+全量理论不自动转为可部署模型；系统聚焦理论不是预写优化方案。忽略旧 V1 中任何类似“优先实施阶段”的结构。
 
-## Shared strategy, independent decisions
-Quant Core and Lowrisk must keep one immutable strategy package reference. Read-only compare `strategy_package_hash`, indicator version, market snapshot hash/time, synchronized symbol, candidate IDs and input availability. Expected equal factors/candidates only if hashes and effective inputs are exactly equal. Quant Core deterministic decisions can legitimately differ from Lowrisk LLM decisions. Do not rank systems by unmatched orders, assert model drift from different execution outcomes or combine their PAPER accounts. If Lowrisk is stopped, **never restart it to run parity**; compare only verified time-aligned historical facts or `NOT_COMPARABLE`.
+## 每次只读观察
+1. 仅识别当前 Quant Core **真实本机**运行 SHA、进程与 PAPER 账户；过去工程 G0–G8 PASS 和 GitHub 文档 SHA 不能代替运行事实。STOPPED 时禁止启动。
+2. 对现有订单/账本事实区分 candidate、deterministic decision、RiskDecision、ACK/fill、no-fill、episode、gross/net、真实 fee/funding/slippage、ctVal/资金变动；数据质量缺陷标为 BLOCKED，不推断 Alpha 已失效。
+3. 对比盈利和未盈利的实际闭仓订单、拒绝/未成交等事件；窗口 12h、滚动 7d/30d，保留样本数、依赖性和源时间戳。
+4. 共享策略 parity **只读**：与 Lowrisk 的 strategy_package_hash、feature_version、as-of snapshot_hash 以及因子/candidate hash 完全匹配的情形才可比较；否则 NOT_COMPARABLE。确定性规则与 LLM 最终决策不同不代表因子错误；账本绝不能合并。
+5. 引用 QUANT_CORE V2 重点理论和统一 24 项理论对亏损作竞争解释。证据不支持时不提出特定模型。
+6. 每窗口最多输出一个 MAIN_THEORY_TOPIC 与两个 OTHER_POSSIBILITIES，附学术 DOI、对应事实、反例、必要但缺失的观察指标；不得提供具体优化方案。
 
-## Per-window steps
-1. Discover the actual Quant Core PAPER PID/version/SHA and account alias. Historical design branch and past release commit are not runtime proof.
-2. Validate market data read-only from canonical source (SharedMarketHistory) and timestamp provenance; no second feed, writer, service or lease.
-3. Reconcile gross/net PnL including fees, funding, slippage, liquidation costs, unrealized MTM, cashflows and missing unknowns. Stop Alpha conclusions if ledger, fee versions or units conflict.
-4. Build candidate -> deterministic rule decision -> risk -> order/ack/fill -> episode -> realized net PnL; audit no-fill/reject/UNKNOWN distinct from actual losses.
-5. Contrast loss/profit episodes (<=5 each) and 12h/7d/30d; if facts available, compare to Lowrisk same package and as-of snapshot while keeping decision divergence separate.
-6. Map to KB Q01–Q11, **no automatic experiment**. Prioritize execution cost and stale data over new Alpha when gross positive but net negative; note OFI needs actual L2 and EVT needs enough tails.
-7. Report `QUANT_CORE_MONITOR_RECEIPT`: schedule/window, run SHA, package hash, account, data health, ledger integrity, closed episode sample, PnL/costs, factor parity, decision divergence, root causes, primary candidate ID/DOI, alternative, confidence, `NO_ACTION_TAKEN=YES`.
+## 固定报告字段
+QUANT_CORE_MODEL_WATCH_REPORT_ONLY；
+北京时间窗口与当前源码 SHA、账户；
+NET_PNL_RECONCILIATION、CLOSED_EPISODES_COUNT、WIN_VS_LOSS_COMPARISON、FEES/FUNDING；
+FACTOR_PARITY_AND_INPUT_MATCH、DETERMINISTIC_VS_LLM_DECISION_DIFF；
+DATA_AND_ACCOUNTING_BLOCKERS、SUPPORTING_FACTS、ALTERNATIVE_EXPLANATIONS；
+LITERATURE_AND_THEORETICAL_RESEARCH_DIRECTION；
+NO_ACTION_TAKEN=YES。
+单独输出到 ~/AI-Monitor-Reports/quant-core/，仅新建不覆盖 Markdown/JSON 文件；报告不写到交易工作树和共享历史目录。
 
-## Immutable boundaries
-- Periodic monitor is truly READ-ONLY for three trading systems, shared strategy, APIs, worktrees, code, config, risk/kill switch, market service, launchd labels, databases, logs and model KB; credentials neither read nor printed.
-- No place/cancel/close orders; no restarting stopped processes; no installing new trading authority; no code or parameter modifications; no model retraining/backtesting/Shadow/PAPER experiments. Even if losses severe, only escalate in report.
-- Only scheduled report outputs allowed under `~/AI-Monitor-Reports/quant-core/` (unique per window, JSON + Markdown, never overwrite, outside trading directories).
-- Isolate schedule/monitor worker from both Lowrisk and Quant Core trading leases and their ownership; one monitor per window, no overlapping jobs.
-- One-time monitoring scheduler setup allowed **only if** verified isolated, no modifications to trading launchd services/config. If cannot install securely, fail-closed and report rather than "fix" a runtime.
-
-## Research boundary
-Recent three months for designing future experiments, previous three months only reverse-time stress; forward OOS demands future data. No cross-exchange arbitrage. Job may propose experiment design but must not execute it. Models are academically motivated hypotheses, not certified Alpha.
+## 不可逾越的权限边界
+周期执行者禁止修改任何运行时、策略包、因子、订单、风险、交易账户、数据/服务、Git、KB 或其他监控任务；禁止训练、回测、模拟成交、Shadow、重启/停机/下单/撤单/调杠杆。报告中的“方向”只能是“哪个数学解释值得未来研究”，禁止参数、代码、策略替换、实施次序及自动执行。
+一次性配置可安装独立只读监控调度与报告存储，但不能触碰现有 Quant Core / Lowrisk / Turbo 交易进程、lease、launchd ownership 或行情 writer。验证 Asia/Shanghai 固定钟点，不允许不安全的重叠执行；不能隔离权限则 MONITOR_SECURITY_FAIL 并保持未安装。
