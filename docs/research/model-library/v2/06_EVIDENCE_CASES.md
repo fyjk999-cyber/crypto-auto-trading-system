@@ -30,6 +30,11 @@
 **论文**：McNeil & Frey (2000), Estimation of tail-related risk measures for heteroscedastic financial time series: an extreme value approach, Journal of Empirical Finance。DOI https://doi.org/10.1016/S0927-5398(00)00012-8。
 **研究方法**：将条件异方差建模与创新残差极值分布结合，以改进尾部风险预测。**边界**：研究的历史日回报风险结论不能被解释为“Turbo 1min 清算绝不会超过阈值”；异常市场时的流动性风险需单独考虑。
 
+### E07 比特币 GARCH 结果的复现实证（反证案例）
+**论文**：Volatility estimation for Bitcoin: Replication and robustness, International Economics 157 (2019), 23–32，DOI https://doi.org/10.1016/j.inteco.2018.06.004。
+**研究设计**：尝试复现 Katsiampa (2017, DOI https://doi.org/10.1016/j.econlet.2017.06.023) 在 2010–2016 样本中的 GARCH 比较，并延长观察至 2018 年；报告 Bitcoin 收益跳跃特征导致所检查的六种 GARCH 模型不能适当地描述收益。
+**研究解释**：早期样本的最佳拟合不能作为跨市场状态、跨窗口的普遍最优；任何模型推荐需要考虑反例和时期依赖。论文并未提供对三套系统 PAPER 净收益的证明。
+
 ## 二、理论原文与实证案例之间不得混淆
 - Black–Scholes/Heston 主要是衍生品定价理论；不是永续合约秒级 directional Alpha。
 - Kalman/HMM/OU/GARCH 可以有数学推导，但参数估计不能直接证明市场可预测利润。
