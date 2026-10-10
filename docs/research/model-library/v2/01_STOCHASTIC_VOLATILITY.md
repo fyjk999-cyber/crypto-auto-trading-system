@@ -20,9 +20,9 @@ v 为瞬时方差；κ 回复速度、θ 长期方差、ξ vol-of-vol、ρ 相�
 ## M05 GARCH(1,1)（条件方差）
 $$r_t=\mu_t+\epsilon_t,\ \epsilon_t=\sqrt{h_t}z_t,\ \ h_t=\omega+\alpha\epsilon_{t-1}^2+\beta h_{t-1}.$$
 z_t 常取零均值单位方差扰动；正方差标准约束 ω>0、α≥0、β≥0，α+β<1 保证常见弱平稳情形下有限无条件方差，E[h]=ω/(1−α−β)；该条件不是所有扩展模型的必要条件。可选正态/Student-t 误差分布；通过极大似然或拟似然估计。
-**评估**：下一期及多期条件方差预测，QLIKE / RMSE、VaR 覆盖、残差 ARCH；条件方差 ≠ 收益方向和盈利概率。**风险**：高频微观噪声、结构突变、样本不足、参数接近 IGARCH、正态尾部偏差。**案例**：对 Bitcoin 波动聚集进行条件方差估计，须与 ATR/NATR、EWMA、HAR-RV 同口径比较。**论文**：Bollerslev (1986), Generalized Autoregressive Conditional Heteroskedasticity, DOI 10.1016/0304-4076(86)90063-1；Katsiampa (2017), Volatility estimation for Bitcoin, DOI 10.1016/j.econlet.2017.08.023。
+**评估**：下一期及多期条件方差预测，QLIKE / RMSE、VaR 覆盖、残差 ARCH；条件方差 ≠ 收益方向和盈利概率。**风险**：高频微观噪声、结构突变、样本不足、参数接近 IGARCH、正态尾部偏差。**案例**：对 Bitcoin 波动聚集进行条件方差估计，须与 ATR/NATR、EWMA、HAR-RV 同口径比较。**论文**：Bollerslev (1986), Generalized Autoregressive Conditional Heteroskedasticity, DOI 10.1016/0304-4076(86)90063-1；Katsiampa (2017), Volatility estimation for Bitcoin, DOI 10.1016/j.econlet.2017.06.023。
 
-## M12 HAR-RV（多时间尺度的已实现方差）
+**文献复现的反证警示**：研究 Katsiampa (2017) 的复现实证（Volatility estimation for Bitcoin: Replication and robustness, 2019, DOI 10.1016/j.inteco.2018.06.004）指出在扩展样本与跳跃风险下，所检验的六种 GARCH 类模型不适宜解释 Bitcoin 收益分布；不能把早期一个样本上的最佳拟合声称为跨周期通用结论。\n\n## M12 HAR-RV（多时间尺度的已实现方差）
 若日内收益 r_{t,j}，可定义 RV_t=Σ_j r²_{t,j}；日、周、月组合为 RV^d、RV^w、RV^m。典型式：
 $$RV_{t+1}=\beta_0+\beta_dRV^d_t+\beta_wRV^w_t+\beta_mRV^m_t+\varepsilon_{t+1}.$$
 **理论**：以多尺度线性组件近似波动率长记忆，并非声称其严格具有真正长记忆。**估计**：常用 OLS、稳健损失/正值变换；需要足够历史、明确采样和日历定义。**数据风险**：交易所 24/7、采样噪声、断连、漏 K 线、不同 K 线窗口重叠。**案例**：多尺度波动率预测，不等于交易信号，不能把分钟级预测套用日周月论文结论。**论文**：Corsi (2009), A Simple Approximate Long-Memory Model of Realized Volatility, DOI 10.1093/jjfinec/nbp001。
