@@ -54,7 +54,8 @@ class FixtureCAS:
             # fixture_note is synthetic metadata, NOT an authorized production exclusion.
             protected = set(current) | set(desired)
             protected -= {'fixture_note', 'fixture_revision'}
-            if any(k not in current or k not in desired or current[k] != desired[k]
+            if any(k not in current or k not in desired
+                   or encode(current[k]) != encode(desired[k])
                    for k in protected):
                 raise ValueError('protected/unknown/origin/control changed')
             if (type(current.get('fixture_revision')) is not int

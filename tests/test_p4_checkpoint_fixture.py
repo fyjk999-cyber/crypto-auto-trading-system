@@ -53,6 +53,16 @@ def test_control_unknown_origin_changes_rejected(lab, field):
     assert lab.path.read_bytes() == old
 
 
+@pytest.mark.parametrize('field,value', [('completed', 1), ('next_cursor', 3.0),
+                                      ('unknown', {'x': True}), ('unknown', {'x': 1.0})])
+def test_json_type_drift_rejected(lab, field, value):
+    old, desired = proposal(lab)
+    desired[field] = value
+    with pytest.raises(ValueError):
+        lab.update(p4.digest(old), desired)
+    assert lab.path.read_bytes() == old
+
+
 def test_competing_owner_aborts(lab):
     old, desired = proposal(lab)
     with lab.lock.open('a+b') as second:
