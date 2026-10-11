@@ -57,7 +57,10 @@ def publish(workspace):
     destinations["IMPORT_MANIFEST.json"] = (
         json.dumps(admission, ensure_ascii=False, indent=2) + "\n").encode()
     if target.exists():
-        actual = {str(p.relative_to(target)) for p in target.rglob("*") if p.is_file()}
+        entries = list(target.rglob("*"))
+        for entry in entries:
+            no_symlinks(entry)
+        actual = {str(p.relative_to(target)) for p in entries if p.is_file()}
         if actual != set(destinations):
             raise ValueError("existing publication inventory differs")
         for name, data in destinations.items():

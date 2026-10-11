@@ -140,6 +140,14 @@ def test_static_corruption_or_symlink_never_publishes(tmp_path):
         kb.publish(tmp_path)
 
 
+def test_unused_dangling_directory_symlink_cannot_pass_publication_inventory(tmp_path):
+    candidate(tmp_path)
+    target = kb.publish(tmp_path)
+    (target / "unexpected").symlink_to(tmp_path / "absent", target_is_directory=True)
+    with pytest.raises(ValueError):
+        kb.publish(tmp_path)
+
+
 def test_static_failure_keeps_staging_not_active(tmp_path, monkeypatch):
     candidate(tmp_path)
     real = Path.write_bytes
