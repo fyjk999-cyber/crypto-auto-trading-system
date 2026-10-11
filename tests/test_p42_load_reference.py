@@ -45,3 +45,9 @@ def test_reference_never_rewrites_unknown_or_historical_bytes():
     assert classify(raw) == "CHECKPOINT_VALID"
     assert raw == before
     assert json.loads(raw)["future_control"] == {"nested": [True, 1]}
+
+
+@pytest.mark.parametrize("number", ["1e999", "-1e999"])
+def test_nested_number_overflow_is_corrupt(number):
+    raw = document().decode().removesuffix("}") + ', "unknown": {"nested": [' + number + "]}}"
+    assert classify(raw.encode()) == "CHECKPOINT_CORRUPT"

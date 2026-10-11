@@ -34,15 +34,18 @@ def test_success_bool_coercion_changes_control_semantics(actual):
     assert checkpoint(actual)["completed"] is True
 
 
-def test_permission_failure_is_not_missing(actual):
-    checkpoint(actual)
-    with patch.object(
-        actual.modules["storage.checkpoint_store"],
-        "read_json",
-        side_effect=PermissionError("fixture denial"),
-    ):
-        with pytest.raises(PermissionError):
-            checkpoint(actual)
+def test_actual_unreadable_document_looks_missing(actual):
+    cp = checkpoint(actual)
+    cp["completed"] = True
+    actual.store.save(cp)
+    path = actual.store.path_for("candles", "SYNTHETICUSDT", "1d")
+    before = path.read_bytes()
+    # Inject at the file-open boundary, leaving actual read_json handling intact.
+    with patch.object(type(path), "open", side_effect=PermissionError("fixture denial")):
+        result = checkpoint(actual)
+    assert result["completed"] is False
+    assert result["status"] == "NOT_STARTED"
+    assert path.read_bytes() == before
 
 
 def test_post_publish_overwrite_not_detected(actual):

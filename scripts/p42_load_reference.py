@@ -5,6 +5,7 @@ and all caller adaptations before implementing a production loader.
 """
 
 import json
+import math
 
 
 def unique(pairs):
@@ -20,6 +21,13 @@ def reject_constant(value):
     raise ValueError("non-finite JSON")
 
 
+def finite_float(value):
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("non-finite JSON number")
+    return parsed
+
+
 def classify(raw, *, io_error=None):
     if io_error is not None:
         return (
@@ -29,7 +37,10 @@ def classify(raw, *, io_error=None):
         )
     try:
         value = json.loads(
-            raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=reject_constant
+            raw.decode("utf-8"),
+            object_pairs_hook=unique,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
         )
     except (UnicodeDecodeError, ValueError):
         return "CHECKPOINT_CORRUPT"
