@@ -98,7 +98,7 @@ class References(ast.NodeVisitor):
             )
 
 
-def inventory(repo, version):
+def inventory(repo, version, exact_source_file=None):
     names = git(repo, "ls-tree", "-r", "--name-only", version).decode().splitlines()
     selected = [
         name
@@ -110,8 +110,8 @@ def inventory(repo, version):
     outside = [
         name for name in names if name.endswith((".py", ".sh", ".plist")) and name not in selected
     ]
-    if len(sys.argv) == 3:
-        selected = [name for name in selected if name == sys.argv[2]]
+    if exact_source_file is not None:
+        selected = [name for name in selected if name == exact_source_file]
     files = []
     for name in selected:
         raw = git(repo, "show", f"{version}:{name}")
@@ -138,8 +138,8 @@ def inventory(repo, version):
     return {
         "source_sha": version,
         "files": files,
-        "outside_scope_names": outside,
-        "outside_scope_classification": "OUTSIDE_REPOSITORY_SCOPE_NOT_PROVEN_UNREACHABLE",
+        "unreviewed_tracked_source_names": outside,
+        "unreviewed_tracked_source_classification": "UNRESOLVED_DYNAMIC_SCOPE_NOT_ESTABLISHED",
         "full_callgraph": "NOT_PROVEN",
         "metadata_exclusion_allowlist": [],
     }
@@ -150,7 +150,13 @@ def main():
         raise SystemExit("usage: p41_source_inventory.py SH_SOURCE_REPOSITORY [EXACT_SOURCE_FILE]")
     print(
         json.dumps(
-            {"schema_version": 1, "versions": [inventory(sys.argv[1], sha) for sha in VERSIONS]},
+            {
+                "schema_version": 1,
+                "versions": [
+                    inventory(sys.argv[1], sha, sys.argv[2] if len(sys.argv) == 3 else None)
+                    for sha in VERSIONS
+                ],
+            },
             sort_keys=True,
             indent=2,
         )

@@ -21,8 +21,10 @@ def test_enumeration_does_not_claim_external_or_dynamic_closure():
     for version in inventory["versions"]:
         assert version["full_callgraph"] == "NOT_PROVEN"
         assert version["metadata_exclusion_allowlist"] == []
-        assert len(version["outside_scope_names"]) == 22
-        assert version["outside_scope_classification"].endswith("NOT_PROVEN_UNREACHABLE")
+        assert len(version["unreviewed_tracked_source_names"]) == 22
+        assert version["unreviewed_tracked_source_classification"] == (
+            "UNRESOLVED_DYNAMIC_SCOPE_NOT_ESTABLISHED"
+        )
 
 
 def test_full_field_set_and_historical_origin_are_not_fabricated():

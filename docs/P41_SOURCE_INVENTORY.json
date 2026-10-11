@@ -13171,8 +13171,8 @@
       ],
       "full_callgraph": "NOT_PROVEN",
       "metadata_exclusion_allowlist": [],
-      "outside_scope_classification": "OUTSIDE_REPOSITORY_SCOPE_NOT_PROVEN_UNREACHABLE",
-      "outside_scope_names": [
+      "unreviewed_tracked_source_classification": "UNRESOLVED_DYNAMIC_SCOPE_NOT_ESTABLISHED",
+      "unreviewed_tracked_source_names": [
         "artifacts/migration-convergence/concurrent_load_monitor.py",
         "artifacts/migration-convergence/evaluate_final_convergence.py",
         "artifacts/migration-convergence/pass_observer.py",
@@ -27561,8 +27561,8 @@
       ],
       "full_callgraph": "NOT_PROVEN",
       "metadata_exclusion_allowlist": [],
-      "outside_scope_classification": "OUTSIDE_REPOSITORY_SCOPE_NOT_PROVEN_UNREACHABLE",
-      "outside_scope_names": [
+      "unreviewed_tracked_source_classification": "UNRESOLVED_DYNAMIC_SCOPE_NOT_ESTABLISHED",
+      "unreviewed_tracked_source_names": [
         "artifacts/migration-convergence/concurrent_load_monitor.py",
         "artifacts/migration-convergence/evaluate_final_convergence.py",
         "artifacts/migration-convergence/pass_observer.py",

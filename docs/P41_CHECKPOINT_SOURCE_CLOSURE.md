@@ -16,8 +16,10 @@ not automatically a checkpoint reader. This is a reproducible index, not a whole
 program points-to analysis. No missing AST match is proof of absence.
 
 22 additional tracked artifact scripts are named but not read or executed: their
-project scope includes unrelated recovery/migration work. Classification is
-OUTSIDE_REPOSITORY_SCOPE, not unreachable. Installed launchd wrappers, arbitrary
+project scope includes potentially unrelated recovery/migration work. They remain
+UNRESOLVED_DYNAMIC / UNREVIEWED_TRACKED_SOURCE, not outside the repository or
+proved unreachable. Their content audit is an explicit remaining source task;
+do not open Quant/Turbo source to fill the gap. Installed launchd wrappers, arbitrary
 external Python users and injected store/client callbacks remain unknown.
 FULL_SOURCE_CLOSURE = BLOCKED. Unknown control keys stay protected.
 
