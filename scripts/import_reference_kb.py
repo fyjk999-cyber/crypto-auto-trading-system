@@ -60,6 +60,13 @@ def import_candidate(source: Path, workspace: Path) -> Path:
         records.append({"source_path": name, "git_blob_sha": blob,
                         "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)})
     models = validate_models(payloads)
+    manifest = {"source_repository": "fyjk999-cyber/crypto-auto-trading-system",
+                "source_commit": SOURCE_SHA, "files": records, "models": models,
+                "knowledge_mode": "REFERENCE_ONLY", "local_kb_target": "UNCONFIRMED",
+                "model_auto_activation": False, "model_auto_training": False,
+                "factor_auto_replacement": False, "strategy_auto_optimization": False,
+                "llm_prompt_auto_injection": False, "runtime_publication": False}
+    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     if target.exists():
         for name, data in payloads.items():
             path = target / name
@@ -68,8 +75,7 @@ def import_candidate(source: Path, workspace: Path) -> Path:
                 raise ValueError("existing candidate differs; preserve it")
         manifest_path = target / "MODEL_LIBRARY_V2_IMPORT_MANIFEST.json"
         no_symlinks(manifest_path)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("source_commit") != SOURCE_SHA or manifest.get("files") != records:
+        if manifest_path.read_bytes() != manifest_bytes:
             raise ValueError("manifest mismatch")
         return target
     root.mkdir(parents=True, exist_ok=True)
@@ -80,15 +86,7 @@ def import_candidate(source: Path, workspace: Path) -> Path:
         path.write_bytes(data)
         if path.read_bytes() != data:
             raise ValueError("byte verification failed")
-    manifest = {"source_repository": "fyjk999-cyber/crypto-auto-trading-system",
-                "source_commit": SOURCE_SHA, "files": records, "models": models,
-                "knowledge_mode": "REFERENCE_ONLY", "local_kb_target": "UNCONFIRMED",
-                "model_auto_activation": False, "model_auto_training": False,
-                "factor_auto_replacement": False, "strategy_auto_optimization": False,
-                "llm_prompt_auto_injection": False, "runtime_publication": False}
-    (staging / "MODEL_LIBRARY_V2_IMPORT_MANIFEST.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    (staging / "MODEL_LIBRARY_V2_IMPORT_MANIFEST.json").write_bytes(manifest_bytes)
     # Publish only this previously absent candidate; never replace existing bytes.
     if target.exists():
         raise ValueError("publication conflict; staging preserved")

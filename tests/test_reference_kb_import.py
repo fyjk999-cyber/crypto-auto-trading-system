@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -75,3 +76,23 @@ def test_existing_symlink_refused_before_read(tmp_path, monkeypatch):
     doc.symlink_to(tmp_path / "outside")
     with pytest.raises(ValueError):
         kb.import_candidate(tmp_path, tmp_path)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("knowledge_mode", "ACTIVE"), ("model_auto_activation", True),
+    ("runtime_publication", True), ("model_auto_training", 0),
+    ("models", []), ("source_repository", "unknown"),
+])
+def test_tampered_manifest_is_not_accepted_or_overwritten(tmp_path, monkeypatch, field, value):
+    data = payload()
+    monkeypatch.setattr(kb.subprocess, "check_output", lambda args, **kwargs:
+                        data[args[-1].split(":", 1)[1]] if "show" in args else "a" * 40 + "\n")
+    target = kb.import_candidate(tmp_path, tmp_path)
+    manifest_path = target / "MODEL_LIBRARY_V2_IMPORT_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest[field] = value
+    changed = json.dumps(manifest).encode()
+    manifest_path.write_bytes(changed)
+    with pytest.raises(ValueError):
+        kb.import_candidate(tmp_path, tmp_path)
+    assert manifest_path.read_bytes() == changed
