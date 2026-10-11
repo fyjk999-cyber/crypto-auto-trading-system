@@ -49,10 +49,23 @@ def test_forward_negative(fault):
         else:
             m["parent_sha256"] = "0" * 64
         with pytest.raises(ValueError):
-            p3.verify_forward(m, blobs, p3.sha(p3.encode(m)), parent)
+            p3.verify_forward(m, blobs, p3.sha(p3.encode(m)),
+                              (parent, blobs, p3.sha(p3.encode(parent)), None))
         return
     with pytest.raises(ValueError):
         p3.verify_forward(m, blobs, pin)
+
+
+def test_entire_parent_artifact_chain_must_verify():
+    parent, blobs = manifest()
+    parent_pin = p3.sha(p3.encode(parent))
+    child = p3.forward_manifest(2, parent_pin, "b" * 40, blobs, "2026-10-11T01:00:00Z")
+    pinned = p3.sha(p3.encode(child))
+    prior = (parent, dict(blobs), parent_pin, None)
+    assert p3.verify_forward(child, blobs, pinned, prior)["FORMAL_EVIDENCE_GATE"] == "BLOCKED"
+    prior[1]["receipt"] = b"changed parent receipt"
+    with pytest.raises(ValueError):
+        p3.verify_forward(child, blobs, pinned, prior)
 
 
 def test_same_uid_rewrite_and_mutable_state_cannot_grant_custody():

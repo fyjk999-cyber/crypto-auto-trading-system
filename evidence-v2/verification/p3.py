@@ -41,10 +41,11 @@ def verify_forward(manifest, artifacts, pinned_sha, parent=None):
                                manifest["source_sha"], artifacts, manifest["observed_at"])
     require(encode(rebuilt) == encode(manifest), "manifest/schema/artifact mismatch")
     if manifest["version"] > 1:
-        require(parent is not None and sha(encode(parent)) == manifest["parent_sha256"],
-                "parent mismatch")
-        require(parent["version"] + 1 == manifest["version"], "version conflict")
-        require(parent["scope"] == "FORWARD_ONLY_NOT_T0", "parent scope")
+        require(type(parent) is tuple and len(parent) == 4, "complete parent evidence required")
+        prior, prior_artifacts, prior_pin, earlier = parent
+        verify_forward(prior, prior_artifacts, prior_pin, earlier)
+        require(prior_pin == manifest["parent_sha256"], "parent mismatch")
+        require(prior["version"] + 1 == manifest["version"], "version conflict")
     else:
         require(parent is None, "unexpected parent")
     return {"FORWARD_EVIDENCE_CHAIN": "PASS_LOCAL_CONTENT_ONLY",
