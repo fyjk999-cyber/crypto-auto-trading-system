@@ -1,0 +1,9 @@
+{
+  "run_id": "lowrisk-final-landing-20261005165124",
+  "source_sha": "6360a7370b31bd76ef9b048ccddbc6566f62574d",
+  "base_sha": "c314d288d68e5d75630a93fdf6f48c70cfe1a6db",
+  "observed_at": "2026-10-11T18:21:42Z",
+  "scope": "FORWARD_ONLY_NOT_T0",
+  "production_facts": "UNKNOWN_NOT_COLLECTED",
+  "legacy_sha256": "8777e17a7154f45285070bc5160fe9ba2030038dff15aff07a27528f0d088fa6"
+}

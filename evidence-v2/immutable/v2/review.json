@@ -1,0 +1,17 @@
+{
+  "source_sha": "6360a7370b31bd76ef9b048ccddbc6566f62574d",
+  "spec": {
+    "agent": "/root/p3_spec",
+    "result": "PASS_ISOLATED",
+    "tests": "50 plus 25 subtests"
+  },
+  "standards": {
+    "agent": "/root/p3_standards",
+    "result": "PASS_ISOLATED",
+    "tests": "50 plus 25 subtests"
+  },
+  "independent_custody": "NOT_ESTABLISHED",
+  "external_anchor": "NONE",
+  "formal_gate": "BLOCKED",
+  "limitations": "Review agents share filesystem/UID; independent reasoning is not independent custody."
+}

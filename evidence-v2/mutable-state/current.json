@@ -1,1 +1,1 @@
-{"run_id":"lowrisk-final-landing-20261005165124","revision":1,"task_index":1,"pointer":"P3_INDEPENDENT_REVIEW","blocker":"independent custody and production data admission not established","monitor_status":"NOT_COLLECTED_THIS_PHASE"}
+{"run_id":"lowrisk-final-landing-20261005165124","revision":2,"task_index":2,"pointer":"P3_REVIEW_DONE_AWAITING_RECEIPT_DELIVERY","blocker":"independent custody, production data admission and T1 not established","monitor_status":"NOT_COLLECTED_THIS_PHASE"}
