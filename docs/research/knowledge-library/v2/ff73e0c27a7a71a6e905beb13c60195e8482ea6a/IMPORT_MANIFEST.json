@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "source_commit": "ff73e0c27a7a71a6e905beb13c60195e8482ea6a",
+  "source_repository": "fyjk999-cyber/crypto-auto-trading-system",
+  "files": [
+    {
+      "source_path": "docs/research/model-library/v2/00_INDEX.md",
+      "git_blob_sha": "c1c6a04c48c46a61ca6edff1198eb37fd8eee3d2",
+      "sha256": "1a771050ec76f7da19bca15015ec20cb9d6976645df67a42c591145f998f8bd4",
+      "bytes": 4393
+    },
+    {
+      "source_path": "docs/research/model-library/v2/01_STOCHASTIC_VOLATILITY.md",
+      "git_blob_sha": "cd3a99f9edf86ab68f54c409e5935d7e9807210e",
+      "sha256": "bad6ec18a174ce93e6b98d40c50dbe93ad18847ab5e617b117a1659cefe1e9f7",
+      "bytes": 6125
+    },
+    {
+      "source_path": "docs/research/model-library/v2/02_STATE_MEAN_REVERSION.md",
+      "git_blob_sha": "3433e87033b5f4a3034b6a75491f3091a5c64deb",
+      "sha256": "2fd61b1e4cd3fe8f7be8354cd53ca4eed4a51075c9d2ca1c02a3e7529e6cda6e",
+      "bytes": 5062
+    },
+    {
+      "source_path": "docs/research/model-library/v2/03_MICROSTRUCTURE_EVENTS.md",
+      "git_blob_sha": "36ffb7f823ffd9e8c4b2740e760eb51d66d6b59f",
+      "sha256": "cfa68e0eab29646178e1f4036d9c83fc4bf384c5586b5be4fe8ef5b3a007074a",
+      "bytes": 4970
+    },
+    {
+      "source_path": "docs/research/model-library/v2/04_PORTFOLIO_TAIL_RISK.md",
+      "git_blob_sha": "2a4fc7025310ed9c0c1dbb10d810b951ca65c2db",
+      "sha256": "261d627704c8db40a684ce2bdedf33e0346049d689696e409ab2fe8e97a2572c",
+      "bytes": 4966
+    },
+    {
+      "source_path": "docs/research/model-library/v2/05_EXECUTION_ML_VALIDATION.md",
+      "git_blob_sha": "462cdb88dd8c9a65f4b1482e075f7af7240ac22a",
+      "sha256": "c333aea7fb67d7292c52d33291c3f3d4dd7b1e5ca3a06e83abe95bc64af4194f",
+      "bytes": 4777
+    },
+    {
+      "source_path": "docs/research/model-library/v2/06_EVIDENCE_CASES.md",
+      "git_blob_sha": "584ba5bd2e9add4a07c4c5b70ee0ba9a0e09046e",
+      "sha256": "dd745971af7202b9df98255e26fe79894fd8011cbc949212c6c9c9061730a1ad",
+      "bytes": 6325
+    },
+    {
+      "source_path": "docs/research/standby/lowrisk/MODEL_KB.md",
+      "git_blob_sha": "6879d8e998dbebfe217ac073cdcede3dc4f46487",
+      "sha256": "88760b389293608d37f516e3944a3b7ad38455f17d8426a883464442ac7cb225",
+      "bytes": 8911
+    },
+    {
+      "source_path": "docs/research/standby/lowrisk/HARNESS_MONITOR.md",
+      "git_blob_sha": "f5219dc572de53b955fa78c49ac65bdc43c086bf",
+      "sha256": "43ea6358f6645d779c37eb3eb2acfed782cfc396f3e1c0eaa0cc6d18bf2f3501",
+      "bytes": 3782
+    }
+  ],
+  "mode": "STATIC_REFERENCE_ONLY",
+  "runtime_integration": false,
+  "models": [
+    "M01",
+    "M02",
+    "M03",
+    "M04",
+    "M05",
+    "M06",
+    "M07",
+    "M08",
+    "M09",
+    "M10",
+    "M11",
+    "M12",
+    "M13",
+    "M14",
+    "M15",
+    "M16",
+    "M17",
+    "M18",
+    "M19",
+    "M20",
+    "M21",
+    "M22",
+    "M23",
+    "M24"
+  ]
+}
