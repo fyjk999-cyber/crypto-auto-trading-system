@@ -1,0 +1,557 @@
+{
+  "internal_source_evidence_closure": "BLOCKED_PENDING_MANUAL_RECONCILIATION",
+  "schema_version": 1,
+  "state": "WORKING_NOT_ACCEPTED",
+  "versions": [
+    {
+      "definitions": [
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.atomic_write_bytes",
+          "end_line": 49,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "atomic_write_bytes",
+          "line": 34,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.atomic_write_json",
+          "end_line": 60,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "atomic_write_json",
+          "line": 56,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.atomic_write_text",
+          "end_line": 53,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "atomic_write_text",
+          "line": 52,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.cleanup_stale_temp_files",
+          "end_line": 85,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "cleanup_stale_temp_files",
+          "line": 72,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.fsync_dir",
+          "end_line": 31,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "fsync_dir",
+          "line": 23,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.fsync_file",
+          "end_line": 20,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "fsync_file",
+          "line": 12,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.read_json",
+          "end_line": 69,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "read_json",
+          "line": 63,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.__init__",
+          "end_line": 22,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.__init__",
+          "line": 20,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore._dir",
+          "end_line": 42,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore._dir",
+          "line": 39,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore._observe",
+          "end_line": 37,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore._observe",
+          "line": 31,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.list_all",
+          "end_line": 139,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.list_all",
+          "line": 133,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.load",
+          "end_line": 72,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.load",
+          "line": 50,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_error",
+          "end_line": 124,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_error",
+          "line": 119,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_paused",
+          "end_line": 131,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_paused",
+          "line": 126,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_started",
+          "end_line": 89,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_started",
+          "line": 85,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_success",
+          "end_line": 117,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_success",
+          "line": 91,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.observe_current_thread",
+          "end_line": 29,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.observe_current_thread",
+          "line": 24,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.path_for",
+          "end_line": 48,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.path_for",
+          "line": 44,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.pending_count",
+          "end_line": 146,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.pending_count",
+          "line": 141,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.save",
+          "end_line": 83,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.save",
+          "line": 74,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.now_ms",
+          "end_line": 16,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "now_ms",
+          "line": 15,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.__init__",
+          "end_line": 21,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.__init__",
+          "line": 18,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.acquire",
+          "end_line": 37,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.acquire",
+          "line": 23,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.held",
+          "end_line": 50,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.held",
+          "line": 49,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.release",
+          "end_line": 46,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.release",
+          "line": 39,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.lease_owner_pid",
+          "end_line": 61,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "lease_owner_pid",
+          "line": 53,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.live_writer_count",
+          "end_line": 80,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "live_writer_count",
+          "line": 64,
+          "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+        }
+      ],
+      "source_sha": "25505ff15dd6acd623140d70c0a8eb216c59ea48"
+    },
+    {
+      "definitions": [
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.atomic_write_bytes",
+          "end_line": 49,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "atomic_write_bytes",
+          "line": 34,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.atomic_write_json",
+          "end_line": 60,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "atomic_write_json",
+          "line": 56,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.atomic_write_text",
+          "end_line": 53,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "atomic_write_text",
+          "line": 52,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.cleanup_stale_temp_files",
+          "end_line": 85,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "cleanup_stale_temp_files",
+          "line": 72,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.fsync_dir",
+          "end_line": 31,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "fsync_dir",
+          "line": 23,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.fsync_file",
+          "end_line": 20,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "fsync_file",
+          "line": 12,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.atomic.read_json",
+          "end_line": 69,
+          "file": "src/shared_market_history/storage/atomic.py",
+          "file_sha256": "8569bf041890ce36020618260031d0662d79fb5409a36e016e844a8ecf5a5979",
+          "function": "read_json",
+          "line": 63,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.__init__",
+          "end_line": 22,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.__init__",
+          "line": 20,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore._dir",
+          "end_line": 42,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore._dir",
+          "line": 39,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore._observe",
+          "end_line": 37,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore._observe",
+          "line": 31,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.list_all",
+          "end_line": 139,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.list_all",
+          "line": 133,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.load",
+          "end_line": 72,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.load",
+          "line": 50,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_error",
+          "end_line": 124,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_error",
+          "line": 119,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_paused",
+          "end_line": 131,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_paused",
+          "line": 126,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_started",
+          "end_line": 89,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_started",
+          "line": 85,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_success",
+          "end_line": 117,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.mark_success",
+          "line": 91,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.observe_current_thread",
+          "end_line": 29,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.observe_current_thread",
+          "line": 24,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.path_for",
+          "end_line": 48,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.path_for",
+          "line": 44,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.pending_count",
+          "end_line": 146,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.pending_count",
+          "line": 141,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.CheckpointStore.save",
+          "end_line": 83,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "CheckpointStore.save",
+          "line": 74,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.checkpoint_store.now_ms",
+          "end_line": 16,
+          "file": "src/shared_market_history/storage/checkpoint_store.py",
+          "file_sha256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+          "function": "now_ms",
+          "line": 15,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.__init__",
+          "end_line": 21,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.__init__",
+          "line": 18,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.acquire",
+          "end_line": 37,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.acquire",
+          "line": 23,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.held",
+          "end_line": 50,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.held",
+          "line": 49,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.WriterLease.release",
+          "end_line": 46,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "WriterLease.release",
+          "line": 39,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.lease_owner_pid",
+          "end_line": 61,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "lease_owner_pid",
+          "line": 53,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        },
+        {
+          "classification": "COMPONENT_DEFINITION_REQUIRES_SINK_CLASSIFICATION",
+          "definition_id": "shared_market_history.storage.writer_lease.live_writer_count",
+          "end_line": 80,
+          "file": "src/shared_market_history/storage/writer_lease.py",
+          "file_sha256": "b76ffad727502945890df49b4bff10ea99eff63d18ae9df3addd228abe7e0b6f",
+          "function": "live_writer_count",
+          "line": 64,
+          "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+        }
+      ],
+      "source_sha": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b"
+    }
+  ]
+}
