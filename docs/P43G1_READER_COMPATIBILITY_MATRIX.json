@@ -1,0 +1,2332 @@
+{
+  "schema_version": 1,
+  "scope": "existing P42R direct Store edges only; indirect wrappers documented separately",
+  "SEVEN_FILE_SCOPE_SUFFICIENT": "NO",
+  "ADDITIONAL_CALLER_FILES_REQUIRED": [
+    "src/shared_market_history/observability/stats.py",
+    "src/shared_market_history/maintenance.py"
+  ],
+  "API_ADAPTATION": "NO_REQUIRED_CHANGE_WITH_GENERIC_CHECKPOINT_EXCEPTION; verify exact future exception/HTTP500 before promotion",
+  "P43_C1_C4_SCOPE": "BLOCKED",
+  "rows": [
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/api/service.py",
+      "FUNCTION": "SharedHistoryAPI._metadata_coverage",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "coverage propagates; do_GET catches ValueError400 or generic exception500, no normal empty result",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "coverage propagates; do_GET catches ValueError400 or generic exception500, no normal empty result",
+      "REQUIRED_ADAPTATION": "preserve valid dict; typed checkpoint failure must not subclass request ValueError; existing500 sufficient pending exact type fixture",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/api/service.py:252:25",
+      "CALLSITE_LINE": 252,
+      "FILE_SHA256": "ac716c83f27fdee379758c0ff518da081fbda1281e4162668ac731ac8bd914e3",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "days is None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_candle_buffer",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:323:8",
+      "CALLSITE_LINE": 323,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:346:13",
+      "CALLSITE_LINE": 346,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:347:8",
+      "CALLSITE_LINE": 347,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:366:16",
+      "CALLSITE_LINE": 366,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "stop_event is not None and stop_event.is_set()"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:378:16",
+      "CALLSITE_LINE": 378,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "max_pages is not None and pages >= max_pages"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:392:20",
+      "CALLSITE_LINE": 392,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None"
+        },
+        {
+          "kind": "IF",
+          "test": "task.target_start_ms is not None and next_cursor_int <= int(task.target_start_ms)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:406:16",
+      "CALLSITE_LINE": 406,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not self._acquire_worker_slot(stop_event)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:421:16",
+      "CALLSITE_LINE": 421,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:442:16",
+      "CALLSITE_LINE": 442,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not page"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:458:16",
+      "CALLSITE_LINE": 458,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None and page_oldest >= int(next_cursor)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:492:16",
+      "CALLSITE_LINE": 492,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "task.target_start_ms is not None and page_oldest <= int(task.target_start_ms)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:599:16",
+      "CALLSITE_LINE": 599,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._persist_forward_progress",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:690:12",
+      "CALLSITE_LINE": 690,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:707:13",
+      "CALLSITE_LINE": 707,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:708:8",
+      "CALLSITE_LINE": 708,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:736:20",
+      "CALLSITE_LINE": 736,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "cp.get('completed')"
+        },
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:764:16",
+      "CALLSITE_LINE": 764,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "stop_event is not None and stop_event.is_set()"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:782:16",
+      "CALLSITE_LINE": 782,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not self._acquire_worker_slot(stop_event)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:789:16",
+      "CALLSITE_LINE": 789,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:804:16",
+      "CALLSITE_LINE": 804,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None and page_oldest >= int(next_cursor)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_funding_buffer",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:838:21",
+      "CALLSITE_LINE": 838,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_funding_buffer",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:839:16",
+      "CALLSITE_LINE": 839,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_funding_buffer",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:845:8",
+      "CALLSITE_LINE": 845,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_funding_rows",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:855:13",
+      "CALLSITE_LINE": 855,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_funding_rows",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:865:8",
+      "CALLSITE_LINE": 865,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:883:13",
+      "CALLSITE_LINE": 883,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:884:8",
+      "CALLSITE_LINE": 884,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:912:20",
+      "CALLSITE_LINE": 912,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "cp.get('completed')"
+        },
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:934:16",
+      "CALLSITE_LINE": 934,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "stop_event is not None and stop_event.is_set()"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:950:16",
+      "CALLSITE_LINE": 950,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not self._acquire_worker_slot(stop_event)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:957:16",
+      "CALLSITE_LINE": 957,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:971:16",
+      "CALLSITE_LINE": 971,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None and page_oldest >= int(next_cursor)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_oi_buffer",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1004:21",
+      "CALLSITE_LINE": 1004,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_oi_buffer",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1005:16",
+      "CALLSITE_LINE": 1005,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_oi_buffer",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1011:8",
+      "CALLSITE_LINE": 1011,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_oi_rows",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1021:13",
+      "CALLSITE_LINE": 1021,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_oi_rows",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1031:8",
+      "CALLSITE_LINE": 1031,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine.run_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1073:12",
+      "CALLSITE_LINE": 1073,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/maintenance.py",
+      "FUNCTION": "LandingController._checkpoint_index",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "index propagates; main/deferred loops catch and continue; resolution may use 20s cache",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "index propagates; main/deferred loops catch and continue; resolution may use 20s cache",
+      "REQUIRED_ADAPTATION": "LandingController invalid-read and uncertain-commit root quarantine; stop both schedulers, invalidate cached resolution",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/maintenance.py:336:21",
+      "CALLSITE_LINE": 336,
+      "FILE_SHA256": "ba3d480050ba0b3be9a212ac04337ef143d474c108eb29eb8eac5e1bf859cfc7",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/observability/stats.py",
+      "FUNCTION": "StatsService._coverage_by_timeframe",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "REQUIRED_ADAPTATION": "StatsService refresh/error cache invalidation and O(1) degraded health; explicit list_all failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/stats.py:314:18",
+      "CALLSITE_LINE": 314,
+      "FILE_SHA256": "71a252f2b0889e1fb0568496a5d2e8386d209747c6812e77c109cc6791676f3a",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/observability/stats.py",
+      "FUNCTION": "StatsService._compute_checkpoint_summary",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "REQUIRED_ADAPTATION": "StatsService refresh/error cache invalidation and O(1) degraded health; explicit list_all failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/stats.py:342:18",
+      "CALLSITE_LINE": 342,
+      "FILE_SHA256": "71a252f2b0889e1fb0568496a5d2e8386d209747c6812e77c109cc6791676f3a",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_started",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:86:13",
+      "CALLSITE_LINE": 86,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_started",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:89:15",
+      "CALLSITE_LINE": 89,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_success",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:101:13",
+      "CALLSITE_LINE": 101,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_success",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:117:15",
+      "CALLSITE_LINE": 117,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_error",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:120:13",
+      "CALLSITE_LINE": 120,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_error",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:124:15",
+      "CALLSITE_LINE": 124,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_paused",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:127:13",
+      "CALLSITE_LINE": 127,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_paused",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:131:15",
+      "CALLSITE_LINE": 131,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.pending_count",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:144:22",
+      "CALLSITE_LINE": 144,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:515:13:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 515,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:544:17:callback:self.checkpoints.save",
+      "CALLSITE_LINE": 544,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not forward_in_progress"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:554:21:callback:self.checkpoints.save",
+      "CALLSITE_LINE": 554,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "ELSE",
+          "test": "not forward_in_progress"
+        },
+        {
+          "kind": "IF",
+          "test": "policy == 'SAFE_LEGACY_UNSTARTED'"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:648:17:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 648,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "bridge_reached"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
+      "CALLSITE_LINE": 656,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "bridge_reached"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "25505ff15dd6acd623140d70c0a8eb216c59ea48",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine.run_task",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 1061,
+      "FILE_SHA256": "8f7497a8f74c00bb5bdb72b35e6991f88835c4abd3a66de351fc71c80c013294",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "task.dataset == 'candles'"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/api/service.py",
+      "FUNCTION": "SharedHistoryAPI._metadata_coverage",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "coverage propagates; do_GET catches ValueError400 or generic exception500, no normal empty result",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "coverage propagates; do_GET catches ValueError400 or generic exception500, no normal empty result",
+      "REQUIRED_ADAPTATION": "preserve valid dict; typed checkpoint failure must not subclass request ValueError; existing500 sufficient pending exact type fixture",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/api/service.py:252:25",
+      "CALLSITE_LINE": 252,
+      "FILE_SHA256": "ac716c83f27fdee379758c0ff518da081fbda1281e4162668ac731ac8bd914e3",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "days is None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_candle_buffer",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:341:8",
+      "CALLSITE_LINE": 341,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:364:13",
+      "CALLSITE_LINE": 364,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:365:8",
+      "CALLSITE_LINE": 365,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:384:16",
+      "CALLSITE_LINE": 384,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "stop_event is not None and stop_event.is_set()"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:396:16",
+      "CALLSITE_LINE": 396,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "max_pages is not None and pages >= max_pages"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:410:20",
+      "CALLSITE_LINE": 410,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None"
+        },
+        {
+          "kind": "IF",
+          "test": "task.target_start_ms is not None and next_cursor_int <= int(task.target_start_ms)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:424:16",
+      "CALLSITE_LINE": 424,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not self._acquire_worker_slot(stop_event)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:439:16",
+      "CALLSITE_LINE": 439,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:460:16",
+      "CALLSITE_LINE": 460,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not page"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:476:16",
+      "CALLSITE_LINE": 476,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None and page_oldest >= int(next_cursor)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_backfill",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:510:16",
+      "CALLSITE_LINE": 510,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "task.target_start_ms is not None and page_oldest <= int(task.target_start_ms)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:621:16",
+      "CALLSITE_LINE": 621,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._persist_forward_progress",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:715:12",
+      "CALLSITE_LINE": 715,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:732:13",
+      "CALLSITE_LINE": 732,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:733:8",
+      "CALLSITE_LINE": 733,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:761:20",
+      "CALLSITE_LINE": 761,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "cp.get('completed')"
+        },
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:789:16",
+      "CALLSITE_LINE": 789,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "stop_event is not None and stop_event.is_set()"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:807:16",
+      "CALLSITE_LINE": 807,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not self._acquire_worker_slot(stop_event)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:814:16",
+      "CALLSITE_LINE": 814,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_funding_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:829:16",
+      "CALLSITE_LINE": 829,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None and page_oldest >= int(next_cursor)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_funding_buffer",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:863:21",
+      "CALLSITE_LINE": 863,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_funding_buffer",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:864:16",
+      "CALLSITE_LINE": 864,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_funding_buffer",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:870:8",
+      "CALLSITE_LINE": 870,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_funding_rows",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:880:13",
+      "CALLSITE_LINE": 880,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_funding_rows",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:890:8",
+      "CALLSITE_LINE": 890,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:908:13",
+      "CALLSITE_LINE": 908,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_started",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:909:8",
+      "CALLSITE_LINE": 909,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:937:20",
+      "CALLSITE_LINE": 937,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "cp.get('completed')"
+        },
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:959:16",
+      "CALLSITE_LINE": 959,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "stop_event is not None and stop_event.is_set()"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_paused",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:975:16",
+      "CALLSITE_LINE": 975,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not self._acquire_worker_slot(stop_event)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:982:16",
+      "CALLSITE_LINE": 982,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_oi_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:996:16",
+      "CALLSITE_LINE": 996,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "next_cursor is not None and page_oldest >= int(next_cursor)"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_oi_buffer",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1029:21",
+      "CALLSITE_LINE": 1029,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_oi_buffer",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1030:16",
+      "CALLSITE_LINE": 1030,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not buffer"
+        },
+        {
+          "kind": "IF",
+          "test": "completed is not None"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._flush_oi_buffer",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1036:8",
+      "CALLSITE_LINE": 1036,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_oi_rows",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1046:13",
+      "CALLSITE_LINE": 1046,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._write_oi_rows",
+      "CHECKPOINT_METHOD": "mark_success",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1056:8",
+      "CALLSITE_LINE": 1056,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine.run_task",
+      "CHECKPOINT_METHOD": "mark_error",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1100:12",
+      "CALLSITE_LINE": 1100,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "exception": "Exception",
+          "kind": "EXCEPT"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/maintenance.py",
+      "FUNCTION": "LandingController._checkpoint_index",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "index propagates; main/deferred loops catch and continue; resolution may use 20s cache",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "index propagates; main/deferred loops catch and continue; resolution may use 20s cache",
+      "REQUIRED_ADAPTATION": "LandingController invalid-read and uncertain-commit root quarantine; stop both schedulers, invalidate cached resolution",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/maintenance.py:336:21",
+      "CALLSITE_LINE": 336,
+      "FILE_SHA256": "ba3d480050ba0b3be9a212ac04337ef143d474c108eb29eb8eac5e1bf859cfc7",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/observability/stats.py",
+      "FUNCTION": "StatsService._coverage_by_timeframe",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "REQUIRED_ADAPTATION": "StatsService refresh/error cache invalidation and O(1) degraded health; explicit list_all failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/stats.py:314:18",
+      "CALLSITE_LINE": 314,
+      "FILE_SHA256": "71a252f2b0889e1fb0568496a5d2e8386d209747c6812e77c109cc6791676f3a",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/observability/stats.py",
+      "FUNCTION": "StatsService._compute_checkpoint_summary",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "leaf propagates; refresher logs and retains old snapshot; health can remain OK <=600s",
+      "REQUIRED_ADAPTATION": "StatsService refresh/error cache invalidation and O(1) degraded health; explicit list_all failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/stats.py:342:18",
+      "CALLSITE_LINE": 342,
+      "FILE_SHA256": "71a252f2b0889e1fb0568496a5d2e8386d209747c6812e77c109cc6791676f3a",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_started",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:86:13",
+      "CALLSITE_LINE": 86,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_started",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:89:15",
+      "CALLSITE_LINE": 89,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_success",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:101:13",
+      "CALLSITE_LINE": 101,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_success",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:117:15",
+      "CALLSITE_LINE": 117,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_error",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:120:13",
+      "CALLSITE_LINE": 120,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_error",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:124:15",
+      "CALLSITE_LINE": 124,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_paused",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:127:13",
+      "CALLSITE_LINE": 127,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.mark_paused",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:131:15",
+      "CALLSITE_LINE": 131,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/storage/checkpoint_store.py",
+      "FUNCTION": "CheckpointStore.pending_count",
+      "CHECKPOINT_METHOD": "list_all",
+      "CURRENT_EXPECTED_RETURN_TYPE": "list[dict]",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "Store no validation, owner or CAS; load defaults; mark_* reads then writes; pending_count propagates list failure",
+      "REQUIRED_ADAPTATION": "strict valid shape plus explicit failures; initialize MISSING only under authenticated owner; pending_count must preserve strict errors",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:144:22",
+      "CALLSITE_LINE": 144,
+      "FILE_SHA256": "56a5da445e8fbfff66e3637f2b8eac9b464afb03f60bc3a07135cfc6a53c6e8d",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:533:13:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 533,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:566:17:callback:self.checkpoints.save",
+      "CALLSITE_LINE": 566,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "not forward_in_progress"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:576:21:callback:self.checkpoints.save",
+      "CALLSITE_LINE": 576,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "ELSE",
+          "test": "not forward_in_progress"
+        },
+        {
+          "kind": "IF",
+          "test": "policy == 'SAFE_LEGACY_UNSTARTED'"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:670:17:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 670,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "bridge_reached"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._run_candle_forward",
+      "CHECKPOINT_METHOD": "save",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:678:12:callback:self.checkpoints.save",
+      "CALLSITE_LINE": 678,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "bridge_reached"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine.run_task",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 1086,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": [
+        {
+          "kind": "IF",
+          "test": "task.dataset == 'candles'"
+        }
+      ]
+    },
+    {
+      "SOURCE_SHA": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b",
+      "FILE": "src/shared_market_history/backfill/engine.py",
+      "FUNCTION": "BackfillEngine._post_resume_freshness_tail",
+      "CHECKPOINT_METHOD": "load",
+      "CURRENT_EXPECTED_RETURN_TYPE": "dict",
+      "CURRENT_EXPECTED_EXCEPTION_BEHAVIOR": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "POST_FIX_EXPECTED_BEHAVIOR": "VALID retains dict/list; MISSING explicit owner-only initialization; other outcomes raise checkpoint-specific failure; unknown commit halts root",
+      "READ_SIDE_EFFECT": "legacy load/list_all mkdir; failure defaults/omissions; proposed reads no mkdir",
+      "ERROR_PROPAGATION": "load defaults hide defects; worker/run_task broad catches can mark_error/save again",
+      "REQUIRED_ADAPTATION": "classify safety exception before business recovery; no mark_error, retry or fresh default on safety failure",
+      "SAFETY_CLASSIFICATION": "FAIL_EXISTING_SOURCE; PROPOSED_NOT_IMPLEMENTED",
+      "EVIDENCE_REFERENCE": "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
+      "CALLSITE_LINE": 1112,
+      "FILE_SHA256": "b00a10c3f621c6f647c5a446119eb2f440b77773aa249812825b966c1343af81",
+      "BRANCH_CONTEXT": []
+    }
+  ]
+}
