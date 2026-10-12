@@ -64,9 +64,26 @@ def index_sources(sources, source_sha):
                     imports[alias.asname or alias.name.split(".")[0]] = (
                         alias.name if alias.asname else alias.name.split(".")[0]
                     )
+        scoped_imports = {}
+        for name, function in visitor.functions.items():
+            local = {}
+            for node in body_nodes(function):
+                if isinstance(node, ast.ImportFrom) and node.level == 0:
+                    for alias in node.names:
+                        local[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        local[alias.asname or alias.name.split(".")[0]] = (
+                            alias.name if alias.asname else alias.name.split(".")[0]
+                        )
+            scoped_imports[name] = local
         modules[module] = dict(
-            path=path, tree=tree, imports=imports,
-            digest=hashlib.sha256(raw).hexdigest(), functions=visitor.functions,
+            path=path,
+            tree=tree,
+            imports=imports,
+            digest=hashlib.sha256(raw).hexdigest(),
+            functions=visitor.functions,
+            scoped_imports=scoped_imports,
         )
         for name, node in visitor.functions.items():
             definitions[f"{module}.{name}"] = (module, name, node)
@@ -81,9 +98,10 @@ def direct_symbol(index, module, name, expression):
     first, *tail = text.split(".")
     function = index["modules"][module]["functions"].get(name)
     if function is not None and first != "self":
-        parameters = {a.arg for a in (
-            function.args.posonlyargs + function.args.args + function.args.kwonlyargs
-        )}
+        parameters = {
+            a.arg
+            for a in (function.args.posonlyargs + function.args.args + function.args.kwonlyargs)
+        }
         if function.args.vararg:
             parameters.add(function.args.vararg.arg)
         if function.args.kwarg:
@@ -94,7 +112,8 @@ def direct_symbol(index, module, name, expression):
         )
         if first in parameters or rebound:
             return None
-    imported = index["modules"][module]["imports"].get(first)
+    info = index["modules"][module]
+    imported = {**info["imports"], **info["scoped_imports"].get(name, {})}.get(first)
     if imported:
         return ".".join([imported, *tail])
     scopes = name.split(".")[:-1]
@@ -117,33 +136,49 @@ def calls_in_function(node):
         yield from calls_in_function(child)
 
 
+def body_nodes(node):
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        yield child
+        yield from body_nodes(child)
+
+
 def resolve_edges(index):
     edges = []
     for caller, (module, name, function) in index["definitions"].items():
         info = index["modules"][module]
         for call in calls_in_function(function):
             symbol = direct_symbol(index, module, name, call.func)
-            method = "IMPORT_RESOLVED" if (
-                qualified(call.func) or ""
-            ).split(".")[0] in info["imports"] else "DIRECT_STATIC"
+            method = (
+                "IMPORT_RESOLVED"
+                if (qualified(call.func) or "").split(".")[0] in info["imports"]
+                else "DIRECT_STATIC"
+            )
             if symbol in index["classes"]:
                 symbol += ".__init__"
                 method = "CONSTRUCTOR_RESOLVED"
             resolved = symbol in index["definitions"]
             callee_info = index["definitions"].get(symbol)
-            edges.append(dict(
-                edge_id=f"{index['source_sha']}:{info['path']}:{call.lineno}:{call.col_offset}",
-                caller_file=info["path"], caller_function=name, caller_id=caller,
-                callsite_line=call.lineno, callsite_column=call.col_offset,
-                expression=ast.unparse(call),
-                callee_id=symbol if resolved else None,
-                callee_file=index["modules"][callee_info[0]]["path"] if callee_info else None,
-                callee_function=callee_info[1] if callee_info else None,
-                resolution_method=method if resolved else "UNRESOLVED",
-                source_sha=index["source_sha"], caller_file_sha256=info["digest"],
-                applicability="STATIC_BINDING_CANDIDATE_ONLY; MANUAL_ROUTE_PROOF_REQUIRED",
-                safety_contract_status="NOT_ESTABLISHED_BY_CALLGRAPH",
-            ))
+            edges.append(
+                dict(
+                    edge_id=f"{index['source_sha']}:{info['path']}:{call.lineno}:{call.col_offset}",
+                    caller_file=info["path"],
+                    caller_function=name,
+                    caller_id=caller,
+                    callsite_line=call.lineno,
+                    callsite_column=call.col_offset,
+                    expression=ast.unparse(call),
+                    callee_id=symbol if resolved else None,
+                    callee_file=index["modules"][callee_info[0]]["path"] if callee_info else None,
+                    callee_function=callee_info[1] if callee_info else None,
+                    resolution_method=method if resolved else "UNRESOLVED",
+                    source_sha=index["source_sha"],
+                    caller_file_sha256=info["digest"],
+                    applicability="STATIC_BINDING_CANDIDATE_ONLY; MANUAL_ROUTE_PROOF_REQUIRED",
+                    safety_contract_status="NOT_ESTABLISHED_BY_CALLGRAPH",
+                )
+            )
     return edges
 
 
@@ -169,3 +204,130 @@ def path_crosscheck(edges, entry, sink):
     backward = entry in reachable(edges, {sink}, reverse=True)
     assert forward == backward
     return dict(forward=forward, reverse=backward, safety="NOT_PROVEN")
+
+
+def constructor_bindings(index):
+    """Actual constructor assignments, including explicit injection alternatives."""
+    bindings = {}
+    writes = {}
+    for owner, (module, name, function) in index["definitions"].items():
+        for node in body_nodes(function):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                expression = qualified(target)
+                if expression:
+                    scope = owner
+                    if expression.startswith("self.") and "." in name:
+                        scope = owner.rsplit(".", 1)[0]
+                    writes.setdefault((scope, expression), []).append(node.lineno)
+            value = node.value
+            injection = None
+            if isinstance(value, ast.BoolOp) and isinstance(value.op, ast.Or):
+                injection = ast.unparse(value.values[0])
+                value = value.values[-1]
+            if not isinstance(value, ast.Call):
+                continue
+            symbol = direct_symbol(index, module, name, value.func)
+            if symbol not in index["classes"]:
+                continue
+            for target in targets:
+                expression = qualified(target)
+                if not expression:
+                    continue
+                scope = owner
+                if expression.startswith("self.") and "." in name:
+                    scope = owner.rsplit(".", 1)[0]
+                bindings.setdefault((scope, expression), []).append(
+                    dict(
+                        constructor=symbol,
+                        assignment_line=node.lineno,
+                        assignment_file=index["modules"][module]["path"],
+                        assignment=ast.unparse(node),
+                        condition=f"{injection} is falsy"
+                        if injection
+                        else "constructor assignment",
+                        injection_alternative=injection,
+                    )
+                )
+    return {key: value for key, value in bindings.items() if len(writes[key]) == 1}
+
+
+def receiver_symbol(index, bindings, module, name, expression):
+    """Resolve only source-backed assignments; no inference from receiver names."""
+    text = qualified(expression)
+    if not text:
+        return None, []
+    direct = direct_symbol(index, module, name, expression)
+    if direct in index["definitions"] or direct in index["classes"]:
+        return direct, []
+    parts = text.split(".")
+    scope = f"{module}.{name}"
+    start = 1
+    if parts[0] == "self" and "." in name:
+        scope = f"{module}.{name.rsplit('.', 1)[0]}"
+        start = 2
+    evidence = []
+    candidate = None
+    for end in range(start, len(parts)):
+        receiver = ".".join(parts[:end]) if candidate is None else f"self.{parts[end - 1]}"
+        entries = bindings.get((scope, receiver), [])
+        if len(entries) != 1:
+            return None, evidence
+        binding = entries[0]
+        evidence.append(binding)
+        candidate = binding["constructor"]
+        scope = candidate
+    if candidate:
+        return f"{candidate}.{parts[-1]}", evidence
+    return None, evidence
+
+
+def resolved_checkpoint_edges(index, extra_bindings=None):
+    """Conditional static graph plus supplied callbacks, never runtime execution."""
+    bindings = constructor_bindings(index)
+    bindings.update(extra_bindings or {})
+    edges = resolve_edges(index)
+    locations = {(e["caller_id"], e["callsite_line"], e["callsite_column"]): e for e in edges}
+    callbacks = []
+    for caller, (module, name, function) in index["definitions"].items():
+        for call in calls_in_function(function):
+            edge = locations[(caller, call.lineno, call.col_offset)]
+            symbol, evidence = receiver_symbol(index, bindings, module, name, call.func)
+            if symbol in index["definitions"] and edge["resolution_method"] == "UNRESOLVED":
+                callee_module, callee_name, _ = index["definitions"][symbol]
+                edge.update(
+                    callee_id=symbol,
+                    callee_file=index["modules"][callee_module]["path"],
+                    callee_function=callee_name,
+                    resolution_method="CONSTRUCTOR_RESOLVED",
+                    binding_evidence=evidence,
+                    applicability="; ".join(b["condition"] for b in evidence),
+                )
+            supplied = []
+            wrapper = qualified(call.func) or ""
+            if wrapper.endswith(("._timed_ckpt", ".submit", ".cached")) and call.args:
+                position = 2 if wrapper.endswith(".cached") else 0
+                if len(call.args) > position:
+                    supplied.append(call.args[position])
+            supplied.extend(k.value for k in call.keywords if k.arg == "target")
+            for value in supplied:
+                destination, proof = receiver_symbol(index, bindings, module, name, value)
+                if destination not in index["definitions"]:
+                    continue
+                callee_module, callee_name, _ = index["definitions"][destination]
+                callbacks.append(
+                    dict(
+                        edge,
+                        edge_id=edge["edge_id"] + ":callback:" + ast.unparse(value),
+                        callee_id=destination,
+                        callee_file=index["modules"][callee_module]["path"],
+                        callee_function=callee_name,
+                        resolution_method="CALLBACK_RESOLVED",
+                        binding_evidence=proof,
+                        callback_argument=ast.unparse(value),
+                        applicability="SUPPLIED_CALLBACK_ONLY; INVOKER_MUST_BE_SOURCE_REVIEWED",
+                    )
+                )
+    return edges + callbacks, bindings
