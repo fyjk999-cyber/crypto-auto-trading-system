@@ -350,10 +350,26 @@ def resolved_checkpoint_edges(index, extra_bindings=None):
                 called = {
                     n.func.id for n in calls_in_function(invoker[2]) if isinstance(n.func, ast.Name)
                 }
+                rebound = {
+                    n.id
+                    for n in body_nodes(invoker[2])
+                    if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))
+                }
+                rebound.update(
+                    n.name
+                    for n in ast.walk(invoker[2])
+                    if isinstance(
+                        n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.ExceptHandler)
+                    )
+                    and n is not invoker[2]
+                    and n.name
+                )
                 supplied.extend(
                     call.args[position]
                     for position, parameter in enumerate(parameters)
-                    if parameter.arg in called and position < len(call.args)
+                    if parameter.arg in called
+                    and parameter.arg not in rebound
+                    and position < len(call.args)
                 )
             external = direct_symbol(index, module, name, call.func)
             if external == "threading.Thread":
@@ -370,7 +386,26 @@ def resolved_checkpoint_edges(index, extra_bindings=None):
                     and direct_symbol(index, module, name, item.context_expr.func)
                     == "concurrent.futures.ThreadPoolExecutor"
                 ]
-                if len(executors) == 1 and call.args:
+                receiver_writes = [
+                    n
+                    for n in body_nodes(function)
+                    if isinstance(n, (ast.Name, ast.Attribute))
+                    and isinstance(n.ctx, (ast.Store, ast.Del))
+                    and qualified(n) in {receiver, qualified(call.func)}
+                ]
+                proven_blocks = [
+                    n
+                    for n in body_nodes(function)
+                    if isinstance(n, ast.With)
+                    and any(item in executors for item in n.items)
+                    and any(child is call for child in body_nodes(n))
+                ]
+                if (
+                    len(executors) == 1
+                    and len(receiver_writes) == 1
+                    and len(proven_blocks) == 1
+                    and call.args
+                ):
                     supplied.append(call.args[0])
             for value in supplied:
                 destination, proof = receiver_symbol(index, bindings, module, name, value)

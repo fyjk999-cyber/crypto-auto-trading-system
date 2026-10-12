@@ -16,3 +16,11 @@ Reviewed temporary pure AST fixtures reproduce the first-candidate defects.
 These findings apply to the engineering evidence tools, not actual Shared
 History implementation patches. Original checkpoint security XFAILs remain.
 Successor fixed-commit review is required; this document does not self-approve.
+
+Successor1296d0995a3c0a6543fb23f8a61edc20a1ae6c5c:
+Spec PASS_SOURCE_EVIDENCE_ONLY; Standards REQUEST_CHANGES for two remaining
+callback identity gaps. A called parameter could have been rebound, and a
+ThreadPoolExecutor variable could have been replaced by a Noop before submit.
+Conservative parameter Store/Del/redefinition rejection and exact with-body,
+unreassigned receiver checks address these. New negative fixtures preserve
+both reproductions. Another exact successor review is required.

@@ -176,9 +176,47 @@ def test_branch_and_exception_context_is_recorded():
 
 
 def test_config_selected_store_remains_unknown():
-    edges, _ = resolved_checkpoint_edges(index_sources({
-        "src/a.py": b"def build(config):\n store = config['factory']()\n store.save()\n",
-    }, "v"))
+    edges, _ = resolved_checkpoint_edges(
+        index_sources(
+            {
+                "src/a.py": b"def build(config):\n store = config['factory']()\n store.save()\n",
+            },
+            "v",
+        )
+    )
     save = next(e for e in edges if e["expression"] == "store.save()")
     assert save["resolution_method"] == "UNRESOLVED"
     assert save["safety_contract_status"] == "NOT_ESTABLISHED_BY_CALLGRAPH"
+
+
+def test_rebound_callback_parameter_cannot_reach_original_argument():
+    for change in ("fn = lambda: None", "del fn"):
+        edges, _ = resolved_checkpoint_edges(
+            index_sources(
+                {
+                    "src/a.py": (
+                        "def sink(): pass\ndef wrapper(fn):\n "
+                        + change
+                        + "\n fn()\ndef run(): wrapper(sink)\n"
+                    ).encode(),
+                },
+                "v",
+            )
+        )
+        assert not path_crosscheck(edges, "a.run", "a.sink")["forward"]
+
+
+def test_rebound_executor_cannot_reach_supplied_callback():
+    edges, _ = resolved_checkpoint_edges(
+        index_sources(
+            {
+                "src/a.py": b"from concurrent.futures import ThreadPoolExecutor\n"
+                b"def sink(): pass\n"
+                b"class Noop:\n def __init__(self): pass\n def submit(self, fn): pass\n"
+                b"def run():\n with ThreadPoolExecutor() as e:\n"
+                b"  e = Noop()\n  e.submit(sink)\n",
+            },
+            "v",
+        )
+    )
+    assert not path_crosscheck(edges, "a.run", "a.sink")["forward"]
