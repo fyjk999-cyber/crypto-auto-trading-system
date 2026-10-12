@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="16" time="4.516" timestamp="2026-10-12T10:03:10.051404+08:00" hostname="huhongjiedeMacBook-Pro.local"><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_cli_backfill_calls_real_store_without_lease]" time="0.282" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_checkpoint_store_bypasses_an_unacquired_lease]" time="0.280" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_two_stores_allow_stale_overwrite_without_cas]" time="0.283" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_post_rename_fsync_failure_has_committed_bytes]" time="0.270" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_unknown_nested_field_lost_in_write_window]" time="0.254" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_unknown_and_historical_fields_preserved_on_success]" time="0.257" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[25505ff15dd6acd623140d70c0a8eb216c59ea48-test_retry_mark_error_is_not_idempotent]" time="0.255" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_cli_backfill_calls_real_store_without_lease]" time="0.256" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_checkpoint_store_bypasses_an_unacquired_lease]" time="0.237" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_two_stores_allow_stale_overwrite_without_cas]" time="0.261" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_post_rename_fsync_failure_has_committed_bytes]" time="0.250" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_unknown_nested_field_lost_in_write_window]" time="0.258" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_unknown_and_historical_fields_preserved_on_success]" time="0.258" /><testcase classname="tests.test_p43g0_route_baseline" name="test_old_source_route_reproduction[b1a3f97b213d062ed70375ac7aedbd0d67745a0b-test_retry_mark_error_is_not_idempotent]" time="0.263" /><testcase classname="tests.test_p43g0_route_baseline" name="test_actual_run_task_handler_resaves_after_uncertain_publish[25505ff15dd6acd623140d70c0a8eb216c59ea48]" time="0.241"><failure message="AssertionError: unexpected caller-supplied file descriptor">actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_actual_run_task_handler_resaves_after_uncertain_publish(actual):
+&gt;       source = baseline.source(actual.sha, "src/shared_market_history/backfill/engine.py")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_p43g0_route_baseline.py:29: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_p41_real_checkpoint_source.py:26: in source
+    return subprocess.check_output(["git", "-C", REPO, "show", f"{sha}:{relative}"]).decode()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/subprocess.py:466: in check_output
+    return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+../.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/subprocess.py:1016: in __init__
+    self.stdout = io.open(c2pread, 'rb', bufsize)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = 11, args = ('rb', -1), kwargs = {}
+
+    def call(path, *args, **kwargs):
+        if isinstance(path, int):
+&gt;           raise AssertionError("unexpected caller-supplied file descriptor")
+E           AssertionError: unexpected caller-supplied file descriptor
+
+tests/test_p41_real_checkpoint_source.py:74: AssertionError</failure></testcase><testcase classname="tests.test_p43g0_route_baseline" name="test_actual_run_task_handler_resaves_after_uncertain_publish[b1a3f97b213d062ed70375ac7aedbd0d67745a0b]" time="0.250"><failure message="AssertionError: unexpected caller-supplied file descriptor">actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_actual_run_task_handler_resaves_after_uncertain_publish(actual):
+&gt;       source = baseline.source(actual.sha, "src/shared_market_history/backfill/engine.py")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_p43g0_route_baseline.py:29: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_p41_real_checkpoint_source.py:26: in source
+    return subprocess.check_output(["git", "-C", REPO, "show", f"{sha}:{relative}"]).decode()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/subprocess.py:466: in check_output
+    return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+../.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+../.local/share/uv/python/cpython-3.12.13-macos-x86_64-none/lib/python3.12/subprocess.py:1016: in __init__
+    self.stdout = io.open(c2pread, 'rb', bufsize)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = 12, args = ('rb', -1), kwargs = {}
+
+    def call(path, *args, **kwargs):
+        if isinstance(path, int):
+&gt;           raise AssertionError("unexpected caller-supplied file descriptor")
+E           AssertionError: unexpected caller-supplied file descriptor
+
+tests/test_p41_real_checkpoint_source.py:74: AssertionError</failure></testcase></testsuite></testsuites>

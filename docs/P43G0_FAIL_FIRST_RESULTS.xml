@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="6" time="2.913" timestamp="2026-10-12T10:00:12.268035+08:00" hostname="huhongjiedeMacBook-Pro.local"><testcase classname="tests.test_p43g0_fail_first" name="test_corrupt_load_contract_is_not_met[25505ff15dd6acd623140d70c0a8eb216c59ea48]" time="0.420"><failure message="Failed: DID NOT RAISE ValueError">actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_corrupt_load_contract_is_not_met(actual):
+&gt;       baseline.test_required_corrupt_input_rejected(actual)
+
+tests/test_p43g0_fail_first.py:8: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="PROVEN_DEFECT: corrupt input is treated as fresh; recovery proposal pending",
+    )
+    def test_required_corrupt_input_rejected(actual):
+        actual.store.path_for("candles", "SYNTHETICUSDT", "1d").write_text("{corrupt")
+&gt;       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_p41_real_checkpoint_source.py:290: Failed</failure></testcase><testcase classname="tests.test_p43g0_fail_first" name="test_corrupt_load_contract_is_not_met[b1a3f97b213d062ed70375ac7aedbd0d67745a0b]" time="0.422"><failure message="Failed: DID NOT RAISE ValueError">actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_corrupt_load_contract_is_not_met(actual):
+&gt;       baseline.test_required_corrupt_input_rejected(actual)
+
+tests/test_p43g0_fail_first.py:8: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="PROVEN_DEFECT: corrupt input is treated as fresh; recovery proposal pending",
+    )
+    def test_required_corrupt_input_rejected(actual):
+        actual.store.path_for("candles", "SYNTHETICUSDT", "1d").write_text("{corrupt")
+&gt;       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_p41_real_checkpoint_source.py:290: Failed</failure></testcase><testcase classname="tests.test_p43g0_fail_first" name="test_full_object_cas_contract_is_not_met[25505ff15dd6acd623140d70c0a8eb216c59ea48]" time="0.417"><failure message="Failed: DID NOT RAISE RuntimeError">actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_full_object_cas_contract_is_not_met(actual):
+&gt;       baseline.test_required_stale_state_rejected(actual)
+
+tests/test_p43g0_fail_first.py:12: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    @pytest.mark.xfail(
+        strict=True, reason="PROVEN_DEFECT: stale overwrite allowed; CAS recovery proposal pending"
+    )
+    def test_required_stale_state_rejected(actual):
+        stale = checkpoint(actual)
+        actual.store.mark_success("candles", "SYNTHETICUSDT", "1d", newest_fetched=10, completed=True)
+&gt;       with pytest.raises(RuntimeError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_p41_real_checkpoint_source.py:300: Failed</failure></testcase><testcase classname="tests.test_p43g0_fail_first" name="test_full_object_cas_contract_is_not_met[b1a3f97b213d062ed70375ac7aedbd0d67745a0b]" time="0.389"><failure message="Failed: DID NOT RAISE RuntimeError">actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_full_object_cas_contract_is_not_met(actual):
+&gt;       baseline.test_required_stale_state_rejected(actual)
+
+tests/test_p43g0_fail_first.py:12: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    @pytest.mark.xfail(
+        strict=True, reason="PROVEN_DEFECT: stale overwrite allowed; CAS recovery proposal pending"
+    )
+    def test_required_stale_state_rejected(actual):
+        stale = checkpoint(actual)
+        actual.store.mark_success("candles", "SYNTHETICUSDT", "1d", newest_fetched=10, completed=True)
+&gt;       with pytest.raises(RuntimeError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_p41_real_checkpoint_source.py:300: Failed</failure></testcase><testcase classname="tests.test_p43g0_fail_first" name="test_directory_open_durability_contract_is_not_met[25505ff15dd6acd623140d70c0a8eb216c59ea48]" time="0.429"><failure message="Failed: DID NOT RAISE OSError">actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_directory_open_durability_contract_is_not_met(actual):
+&gt;       baseline.test_required_directory_open_failure_rejected(actual)
+
+tests/test_p43g0_fail_first.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = namespace(sha='25505ff15dd6acd623140d70c0a8eb216c59ea48', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="PROVEN_DEFECT: directory open failure swallowed; commit recovery proposal pending",
+    )
+    def test_required_directory_open_failure_rejected(actual):
+        with patch.object(actual.modules["storage.atomic"].os, "open", side_effect=PermissionError):
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_p41_real_checkpoint_source.py:310: Failed</failure></testcase><testcase classname="tests.test_p43g0_fail_first" name="test_directory_open_durability_contract_is_not_met[b1a3f97b213d062ed70375ac7aedbd0d67745a0b]" time="0.403"><failure message="Failed: DID NOT RAISE OSError">actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    def test_directory_open_durability_contract_is_not_met(actual):
+&gt;       baseline.test_required_directory_open_failure_rejected(actual)
+
+tests/test_p43g0_fail_first.py:16: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+actual = namespace(sha='b1a3f97b213d062ed70375ac7aedbd0d67745a0b', modules={'storage.atomic': &lt;module 'shared_market_history.st....stats(MetricsRegistry().snapshot())}))\n    return 0\n\n\nif __name__ == "__main__":\n    raise SystemExit(main())\n')
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="PROVEN_DEFECT: directory open failure swallowed; commit recovery proposal pending",
+    )
+    def test_required_directory_open_failure_rejected(actual):
+        with patch.object(actual.modules["storage.atomic"].os, "open", side_effect=PermissionError):
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_p41_real_checkpoint_source.py:310: Failed</failure></testcase></testsuite></testsuites>
