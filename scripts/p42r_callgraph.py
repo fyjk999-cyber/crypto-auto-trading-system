@@ -96,6 +96,13 @@ def direct_symbol(index, module, name, expression):
     if not text:
         return None
     first, *tail = text.split(".")
+    module_writes = [
+        qualified(n)
+        for n in body_nodes(index["modules"][module]["tree"])
+        if isinstance(n, (ast.Name, ast.Attribute)) and isinstance(n.ctx, (ast.Store, ast.Del))
+    ]
+    if any(value == first or value == text for value in module_writes):
+        return None
     function = index["modules"][module]["functions"].get(name)
     if function is not None and first != "self":
         parameters = {
@@ -144,10 +151,38 @@ def body_nodes(node):
         yield from body_nodes(child)
 
 
+def call_contexts(function):
+    contexts = {}
+
+    def walk(node, context):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return
+        if isinstance(node, ast.Call):
+            contexts[(node.lineno, node.col_offset)] = context
+        if isinstance(node, ast.If):
+            walk(node.test, context)
+            for child in node.body:
+                walk(child, context + [dict(kind="IF", test=ast.unparse(node.test))])
+            for child in node.orelse:
+                walk(child, context + [dict(kind="ELSE", test=ast.unparse(node.test))])
+            return
+        if isinstance(node, ast.ExceptHandler):
+            context = context + [
+                dict(kind="EXCEPT", exception=ast.unparse(node.type) if node.type else "BARE")
+            ]
+        for child in ast.iter_child_nodes(node):
+            walk(child, context)
+
+    for node in function.body:
+        walk(node, [])
+    return contexts
+
+
 def resolve_edges(index):
     edges = []
     for caller, (module, name, function) in index["definitions"].items():
         info = index["modules"][module]
+        contexts = call_contexts(function)
         for call in calls_in_function(function):
             symbol = direct_symbol(index, module, name, call.func)
             method = (
@@ -169,6 +204,7 @@ def resolve_edges(index):
                     callsite_line=call.lineno,
                     callsite_column=call.col_offset,
                     expression=ast.unparse(call),
+                    branch_and_handler_context=contexts.get((call.lineno, call.col_offset), []),
                     callee_id=symbol if resolved else None,
                     callee_file=index["modules"][callee_info[0]]["path"] if callee_info else None,
                     callee_function=callee_info[1] if callee_info else None,
@@ -306,12 +342,36 @@ def resolved_checkpoint_edges(index, extra_bindings=None):
                     applicability="; ".join(b["condition"] for b in evidence),
                 )
             supplied = []
-            wrapper = qualified(call.func) or ""
-            if wrapper.endswith(("._timed_ckpt", ".submit", ".cached")) and call.args:
-                position = 2 if wrapper.endswith(".cached") else 0
-                if len(call.args) > position:
-                    supplied.append(call.args[position])
-            supplied.extend(k.value for k in call.keywords if k.arg == "target")
+            invoker = index["definitions"].get(edge["callee_id"])
+            if invoker:
+                parameters = invoker[2].args.posonlyargs + invoker[2].args.args
+                if parameters and parameters[0].arg in {"self", "cls"}:
+                    parameters = parameters[1:]
+                called = {
+                    n.func.id for n in calls_in_function(invoker[2]) if isinstance(n.func, ast.Name)
+                }
+                supplied.extend(
+                    call.args[position]
+                    for position, parameter in enumerate(parameters)
+                    if parameter.arg in called and position < len(call.args)
+                )
+            external = direct_symbol(index, module, name, call.func)
+            if external == "threading.Thread":
+                supplied.extend(k.value for k in call.keywords if k.arg == "target")
+            if isinstance(call.func, ast.Attribute) and call.func.attr == "submit":
+                receiver = qualified(call.func.value)
+                executors = [
+                    item
+                    for n in body_nodes(function)
+                    if isinstance(n, ast.With)
+                    for item in n.items
+                    if qualified(item.optional_vars) == receiver
+                    and isinstance(item.context_expr, ast.Call)
+                    and direct_symbol(index, module, name, item.context_expr.func)
+                    == "concurrent.futures.ThreadPoolExecutor"
+                ]
+                if len(executors) == 1 and call.args:
+                    supplied.append(call.args[0])
             for value in supplied:
                 destination, proof = receiver_symbol(index, bindings, module, name, value)
                 if destination not in index["definitions"]:

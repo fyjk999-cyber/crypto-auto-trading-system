@@ -6,16 +6,22 @@ from pathlib import Path
 
 import pytest
 
+from scripts.p41_source_inventory import VERSIONS
+
 ROOT = Path(__file__).resolve().parents[1] / "docs"
 
 
 def validate(edges, matrix):
+    for document in (edges, matrix):
+        assert [v["source_sha"] for v in document["versions"]] == list(VERSIONS)
     versions = {v["source_sha"]: v for v in edges["versions"]}
     for version in matrix["versions"]:
         sha = version["source_sha"]
         known = {e["edge_id"]: e for e in versions[sha]["edges"]}
         assert len(version["routes"]) == 15
-        assert len({r["ROUTE_ID"] for r in version["routes"]}) == 15
+        assert {r["ROUTE_ID"] for r in version["routes"]} == {
+            f"R{number:02}" for number in range(1, 16)
+        }
         for route in version["routes"]:
             assert route["SOURCE_VERSION"] == sha
             for eid in route["CALL_CHAIN_EDGES"]:
@@ -79,3 +85,29 @@ def test_no_historical_origin_or_production_credit(package):
         restored = version["routes"][-1]
         assert "NOT_RECOVERABLE_FROM_AVAILABLE_SOURCE" in restored["EXTERNAL_BOUNDARIES"]
         assert restored["PATH_RESOLUTION_STATUS"] == "NOT_APPLICABLE_HISTORICAL"
+
+
+@pytest.mark.parametrize("fault", ["empty", "missing", "duplicate", "made_up_route"])
+def test_version_inventory_cannot_pass_vacuously(package, fault):
+    edges, matrix = copy.deepcopy(package)
+    if fault == "empty":
+        edges["versions"] = []
+        matrix["versions"] = []
+    elif fault == "missing":
+        matrix["versions"].pop()
+    elif fault == "duplicate":
+        matrix["versions"][1] = matrix["versions"][0]
+    else:
+        matrix["versions"][0]["routes"][0]["ROUTE_ID"] = "NOT_A_ROUTE"
+    with pytest.raises(AssertionError):
+        validate(edges, matrix)
+
+
+def test_direct_store_exceptions_are_not_claimed_as_engine_recovery(package):
+    _, matrix = package
+    for version in matrix["versions"]:
+        store = next(r for r in version["routes"] if r["ROUTE_ID"] == "R11")
+        assert store["EXCEPTION_PROPAGATION"] == (
+            "Exception escapes direct Store caller; retry is not certified"
+        )
+        assert store["RETRY_PATH"].startswith("Direct caller retry not proven")

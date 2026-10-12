@@ -125,3 +125,60 @@ def test_receiver_reassignment_is_unresolved_not_fake_safe():
     edge = next(e for e in edges if e["expression"] == "self.cp.save()")
     assert edge["resolution_method"] == "UNRESOLVED"
     assert ("demo.engine.Engine", "self.cp") not in bindings
+
+
+def test_module_rebinding_and_deletion_do_not_resolve_old_import():
+    for rewrite in ("sink = lambda: None", "del sink"):
+        edges = resolve_edges(
+            index_sources(
+                {
+                    "src/a.py": b"def sink(): pass\n",
+                    "src/b.py": (
+                        "from a import sink\n" + rewrite + "\ndef run(): sink()\n"
+                    ).encode(),
+                },
+                "v",
+            )
+        )
+        assert edges[-1]["resolution_method"] == "UNRESOLVED"
+
+
+def test_noop_submit_cannot_manufacture_callback_reachability():
+    index = index_sources(
+        {
+            "src/demo.py": b"def sink(): pass\n"
+            b"class Noop:\n def __init__(self): pass\n def submit(self, f): pass\n"
+            b"def entry():\n n = Noop()\n n.submit(sink)\n",
+        },
+        "v",
+    )
+    edges, _ = resolved_checkpoint_edges(index)
+    assert not any(e.get("callback_argument") for e in edges)
+    assert not path_crosscheck(edges, "demo.entry", "demo.sink")["forward"]
+
+
+def test_branch_and_exception_context_is_recorded():
+    edges = resolve_edges(
+        index_sources(
+            {
+                "src/a.py": b"def sink(): pass\n"
+                b"def run(flag):\n"
+                b" if flag:\n  sink()\n else:\n  sink()\n"
+                b" try:\n  sink()\n except OSError:\n  sink()\n",
+            },
+            "v",
+        )
+    )
+    contexts = [e["branch_and_handler_context"] for e in edges]
+    assert contexts[0] == [{"kind": "IF", "test": "flag"}]
+    assert contexts[1] == [{"kind": "ELSE", "test": "flag"}]
+    assert contexts[-1] == [{"kind": "EXCEPT", "exception": "OSError"}]
+
+
+def test_config_selected_store_remains_unknown():
+    edges, _ = resolved_checkpoint_edges(index_sources({
+        "src/a.py": b"def build(config):\n store = config['factory']()\n store.save()\n",
+    }, "v"))
+    save = next(e for e in edges if e["expression"] == "store.save()")
+    assert save["resolution_method"] == "UNRESOLVED"
+    assert save["safety_contract_status"] == "NOT_ESTABLISHED_BY_CALLGRAPH"

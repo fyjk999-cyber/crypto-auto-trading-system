@@ -715,6 +715,9 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:539:16",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:542:20",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:543:18",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
@@ -754,7 +757,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/operational_health.py:80:30:callback:self._collect",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/operational_health.py:117:23:callback:self._run",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/stats.py:185:15:callback:self.metadata.load_universe_state",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/stats.py:283:26:callback:self._refresher_loop"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/observability/stats.py:283:26:callback:self._refresher_loop",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -1430,6 +1436,7 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:119:10",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/metadata_store.py:27:18",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/metadata_store.py:34:21",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/metadata_store.py:41:8",
@@ -1442,6 +1449,11 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:633:17",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:641:68",
@@ -1475,7 +1487,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1181:29:callback:self.run_task",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -1602,7 +1617,7 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1073:12"
           ],
           "PATH_RESOLUTION_STATUS": "PROVEN_WITH_RECORDED_CONSTRUCTION_CONDITIONS",
-          "RETRY_PATH": "Scheduler cycles/resume; no persistent operation identity",
+          "RETRY_PATH": "Direct caller retry not proven; no persistent operation identity",
           "ROUTE_ID": "R02",
           "SAFETY_CONTRACT_STATUS": "FAIL_EXISTING_SOURCE",
           "SOURCE_EVIDENCE": [
@@ -1969,9 +1984,15 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:119:10",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:633:17",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:641:68",
@@ -1992,7 +2013,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1181:29:callback:self.run_task",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -2198,7 +2222,7 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1073:12"
           ],
           "PATH_RESOLUTION_STATUS": "PROVEN_WITH_RECORDED_CONSTRUCTION_CONDITIONS",
-          "RETRY_PATH": "Scheduler cycles/resume; no persistent operation identity",
+          "RETRY_PATH": "Direct caller retry not proven; no persistent operation identity",
           "ROUTE_ID": "R03",
           "SAFETY_CONTRACT_STATUS": "FAIL_EXISTING_SOURCE",
           "SOURCE_EVIDENCE": [
@@ -2635,6 +2659,7 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/duckdb_engine.py:104:20",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/duckdb_engine.py:112:13",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:90:49",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:119:10",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:137:24",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:140:12",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:143:16",
@@ -2644,6 +2669,11 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:633:17",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:641:68",
@@ -2664,7 +2694,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1181:29:callback:self.run_task",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -3180,9 +3213,15 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:119:10",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:633:17",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:641:68",
@@ -3203,7 +3242,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1181:29:callback:self.run_task",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -3709,9 +3751,15 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:119:10",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:633:17",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:641:68",
@@ -3732,7 +3780,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1181:29:callback:self.run_task",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -4248,6 +4299,7 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:135:27",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:136:22",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/checkpoint_store.py:144:22",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/layout.py:119:10",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/metadata_store.py:27:18",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/metadata_store.py:34:21",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/metadata_store.py:41:8",
@@ -4257,6 +4309,11 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:555:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:563:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:571:15",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:580:13",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:581:15",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:609:23",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:633:17",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:641:68",
@@ -4286,7 +4343,10 @@
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:656:12:callback:self.checkpoints.save",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1061:21:callback:self.checkpoints.load",
             "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1181:29:callback:self.run_task",
-            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task"
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/backfill/engine.py:1186:29:callback:self._run_traced_task",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:58:15:callback:self._candle_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._funding_partition_path",
+            "25505ff15dd6acd623140d70c0a8eb216c59ea48:src/shared_market_history/storage/parquet_store.py:78:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -5896,7 +5956,7 @@
             "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_paused"
           ],
           "ENTRY_REACHABILITY": "CLASSIFIED_SOURCE_ROUTE",
-          "EXCEPTION_PROPAGATION": "Postreplace fsync can raise; engine run_task catches then mark_error may resave",
+          "EXCEPTION_PROPAGATION": "Exception escapes direct Store caller; retry is not certified",
           "EXTERNAL_BOUNDARIES": [
             "Public object/callback injection and later external replacement not authenticated",
             "Installed wrappers/environment/interpreter not inspected"
@@ -6110,7 +6170,7 @@
           "LEASE_RELEASE_PATH": [],
           "MARK_ERROR_PATH": [],
           "PATH_RESOLUTION_STATUS": "PROVEN_WITH_RECORDED_CONSTRUCTION_CONDITIONS",
-          "RETRY_PATH": "Scheduler cycles/resume; no persistent operation identity",
+          "RETRY_PATH": "Direct caller retry not proven; no persistent operation identity",
           "ROUTE_ID": "R11",
           "SAFETY_CONTRACT_STATUS": "FAIL_EXISTING_SOURCE",
           "SOURCE_EVIDENCE": [
@@ -7230,6 +7290,9 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:584:8",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:585:16",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:587:21",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
@@ -7276,7 +7339,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/operational_health.py:80:30:callback:self._collect",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/operational_health.py:117:23:callback:self._run",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/stats.py:185:15:callback:self.metadata.load_universe_state",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/stats.py:283:26:callback:self._refresher_loop"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/observability/stats.py:283:26:callback:self._refresher_loop",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -7970,6 +8036,7 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:119:10",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/metadata_store.py:27:18",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/metadata_store.py:34:21",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/metadata_store.py:41:8",
@@ -7983,6 +8050,11 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:680:17",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:688:68",
@@ -8023,7 +8095,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1250:29:callback:self.run_task",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -8150,7 +8225,7 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1100:12"
           ],
           "PATH_RESOLUTION_STATUS": "PROVEN_WITH_RECORDED_CONSTRUCTION_CONDITIONS",
-          "RETRY_PATH": "Scheduler cycles/resume; no persistent operation identity",
+          "RETRY_PATH": "Direct caller retry not proven; no persistent operation identity",
           "ROUTE_ID": "R02",
           "SAFETY_CONTRACT_STATUS": "FAIL_EXISTING_SOURCE",
           "SOURCE_EVIDENCE": [
@@ -8535,10 +8610,16 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:119:10",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:67:16",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:680:17",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:688:68",
@@ -8566,7 +8647,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1250:29:callback:self.run_task",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -8772,7 +8856,7 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1100:12"
           ],
           "PATH_RESOLUTION_STATUS": "PROVEN_WITH_RECORDED_CONSTRUCTION_CONDITIONS",
-          "RETRY_PATH": "Scheduler cycles/resume; no persistent operation identity",
+          "RETRY_PATH": "Direct caller retry not proven; no persistent operation identity",
           "ROUTE_ID": "R03",
           "SAFETY_CONTRACT_STATUS": "FAIL_EXISTING_SOURCE",
           "SOURCE_EVIDENCE": [
@@ -9229,6 +9313,7 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/duckdb_engine.py:104:20",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/duckdb_engine.py:112:13",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:90:49",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:119:10",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:137:24",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:140:12",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:143:16",
@@ -9239,6 +9324,11 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:680:17",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:688:68",
@@ -9266,7 +9356,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1250:29:callback:self.run_task",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -9800,10 +9893,16 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:119:10",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:67:16",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:680:17",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:688:68",
@@ -9831,7 +9930,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1250:29:callback:self.run_task",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -10355,10 +10457,16 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:124:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:127:13",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:131:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:119:10",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:67:16",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:680:17",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:688:68",
@@ -10386,7 +10494,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1250:29:callback:self.run_task",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -10920,6 +11031,7 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:135:27",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:136:22",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/checkpoint_store.py:144:22",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/layout.py:119:10",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/metadata_store.py:27:18",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/metadata_store.py:34:21",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/metadata_store.py:41:8",
@@ -10930,6 +11042,11 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:598:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:606:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:614:15",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:623:13",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:624:15",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:656:23",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:680:17",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:688:68",
@@ -10966,7 +11083,10 @@
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1086:21:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1112:13:callback:self.checkpoints.load",
             "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1250:29:callback:self.run_task",
-            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task"
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/backfill/engine.py:1255:29:callback:self._run_traced_task",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:68:15:callback:self._candle_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:87:15:callback:self._funding_partition_path",
+            "b1a3f97b213d062ed70375ac7aedbd0d67745a0b:src/shared_market_history/storage/parquet_store.py:97:15:callback:self._oi_partition_path"
           ],
           "CAS_GUARD": "NONE_EXISTING_STORE",
           "CHECKPOINT_READS": [
@@ -12587,7 +12707,7 @@
             "shared_market_history.storage.checkpoint_store.CheckpointStore.mark_paused"
           ],
           "ENTRY_REACHABILITY": "CLASSIFIED_SOURCE_ROUTE",
-          "EXCEPTION_PROPAGATION": "Postreplace fsync can raise; engine run_task catches then mark_error may resave",
+          "EXCEPTION_PROPAGATION": "Exception escapes direct Store caller; retry is not certified",
           "EXTERNAL_BOUNDARIES": [
             "Public object/callback injection and later external replacement not authenticated",
             "Installed wrappers/environment/interpreter not inspected"
@@ -12801,7 +12921,7 @@
           "LEASE_RELEASE_PATH": [],
           "MARK_ERROR_PATH": [],
           "PATH_RESOLUTION_STATUS": "PROVEN_WITH_RECORDED_CONSTRUCTION_CONDITIONS",
-          "RETRY_PATH": "Scheduler cycles/resume; no persistent operation identity",
+          "RETRY_PATH": "Direct caller retry not proven; no persistent operation identity",
           "ROUTE_ID": "R11",
           "SAFETY_CONTRACT_STATUS": "FAIL_EXISTING_SOURCE",
           "SOURCE_EVIDENCE": [

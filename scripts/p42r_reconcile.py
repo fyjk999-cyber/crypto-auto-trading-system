@@ -7,7 +7,12 @@ import sys
 from pathlib import Path
 
 from scripts.p41_source_inventory import VERSIONS, git
-from scripts.p42r_callgraph import index_sources, reachable, resolved_checkpoint_edges
+from scripts.p42r_callgraph import (
+    constructor_bindings,
+    index_sources,
+    reachable,
+    resolved_checkpoint_edges,
+)
 
 PREFIX = "shared_market_history."
 CP = PREFIX + "storage.checkpoint_store.CheckpointStore."
@@ -95,7 +100,7 @@ def handler_binding(index):
     if len(assignments) != 1:
         raise ValueError("handler factory source no longer matches reviewed binding")
     proof = fact(index, module + "._make_handler")
-    return {
+    result = {
         (module + "._make_handler.Handler", "self.api_service"): [
             dict(
                 constructor=PREFIX + "api.service.SharedHistoryAPI",
@@ -110,6 +115,32 @@ def handler_binding(index):
             )
         ]
     }
+    ordinary = constructor_bindings(index)
+    runtime_owner = PREFIX + "runtime.SharedHistoryRuntime"
+    controller_owner = PREFIX + "maintenance.LandingController"
+    actual_engine = ordinary[(runtime_owner, "self.backfill_engine")]
+    controller_engine = ordinary[(controller_owner, "self.engine")]
+    runtime_constructor = index["definitions"][runtime_owner + ".__init__"][2]
+    supplied = [
+        n for n in ast.walk(runtime_constructor)
+        if isinstance(n, ast.Call) and ast.unparse(n.func) == "LandingController"
+        and any(k.arg == "engine" and ast.unparse(k.value) == "self.backfill_engine"
+                for k in n.keywords)
+    ]
+    if len(supplied) != 1 or actual_engine[0]["constructor"] != controller_engine[0]["constructor"]:
+        raise ValueError("runtime engine injection no longer matches audited constructor")
+    result[(controller_owner, "self.engine")] = [dict(
+        controller_engine[0],
+        condition="engine is falsy OR audited runtime supplies constructed BackfillEngine",
+        known_injection_proof=dict(
+            source_sha=index["source_sha"],
+            callsite_line=supplied[0].lineno,
+            call=ast.unparse(supplied[0]),
+            engine_assignment=actual_engine[0],
+            constructor_source=fact(index, runtime_owner + ".__init__"),
+        ),
+    )]
+    return result
 
 
 def boundary_kind(edge):
@@ -224,10 +255,14 @@ def one_version(sources, sha, old):
                 EXCEPTION_PROPAGATION=(
                     "Postreplace fsync can raise; engine run_task catches "
                     "then mark_error may resave"
+                    if writes and number <= 7
+                    else "Exception escapes direct Store caller; retry is not certified"
                     if writes
                     else "Read defaults merge/skip invalid state; non-CP exceptions not certified"
                 ),
                 RETRY_PATH="Scheduler cycles/resume; no persistent operation identity"
+                if writes and number in {1, 4, 5, 6, 7}
+                else "Direct caller retry not proven; no persistent operation identity"
                 if writes
                 else "NO_CHECKPOINT_WRITE_RETRY_ON_THIS_CLASSIFIED_PATH",
                 MARK_ERROR_PATH=[
